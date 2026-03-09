@@ -81,7 +81,7 @@ def call_claude(system, user, context=""):
 
 # -- VAULT BOOT -------------------------------------------
 VAULT_URL = "https://core-vault.pockiesaints7.workers.dev/v2/52c27a1a462e34878037926090ee7e833986622b17032057a3d6bbcddd1e804e"
-EXPECTED_HASH = "92402b81f147181e50778f9d5ab4b0a18fa001f952a41467e1fe4989acd989eb"
+EXPECTED_HASH = "9736a25919a83bf4c4cf322bc052880799e7a9b207c5af7fe3da88c691b4ea08"
 _vault_config = {}
 
 def boot_from_vault():
