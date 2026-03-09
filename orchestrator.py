@@ -1,4 +1,4 @@
-﻿import os, json, httpx, time, threading, random
+﻿﻿import os, json, httpx, time, threading, random
 from datetime import datetime
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
@@ -328,6 +328,12 @@ DB: {s.get("knowledge_entries",0)} knowledge | {s.get("pattern_entries",0)} patt
 Preview:
 {first}...""", cid)
 
+    # PHASE 6b - HOT REFLECTION (autonomous, no trigger needed)
+    try:
+        hot_reflect(user_task[:200], domain, [a["role"] for a in agents], score, len(mistakes) > 0, 1)
+    except Exception as e:
+        print(f"[HOT REFLECT SKIP] {e}")
+
     return context
 
 # -- TELEGRAM COMMAND HANDLER ------------------------------
@@ -419,9 +425,18 @@ class WebhookHandler(BaseHTTPRequestHandler):
     def log_message(self, *args): pass
 
 # -- QUEUE POLLER ------------------------------------------
+COLD_REFLECT_INTERVAL = 6 * 3600  # 6 hours
+_last_cold = [0]
+
 def poll_queue():
+    global _last_cold
     while True:
         try:
+            # Cold reflection every 6h
+            import time as _t
+            if _t.time() - _last_cold[0] > COLD_REFLECT_INTERVAL:
+                _last_cold[0] = _t.time()
+                threading.Thread(target=cold_reflect, daemon=True).start()
             tasks = sb_get("task_queue", "?status=eq.pending&order=priority.asc&limit=1")
             if tasks:
                 task = tasks[0]
@@ -604,6 +619,115 @@ BOT_COMMANDS = [
     {"command": "keys",   "description": "Check Gemini key rotation status"}
 ]
 
+
+# ══════════════════════════════════════════════════════════════
+# CORE AGI - AUTONOMOUS REFLECTION ENGINE v1.0
+# Hot reflection: fires after every task (no trigger needed)
+# Cold reflection: every 6h synthesis + auto-evolution
+# Confidence gate: >0.85 auto-apply | 0.60-0.85 propose to owner
+# ══════════════════════════════════════════════════════════════
+
+REFLECTION_PROMPT = """You are CORE reflection engine. Analyze task execution and output ONLY valid JSON:
+{"verify_rate":0.0,"mistake_consult_rate":0.0,"quality_score":0.0,"gaps_identified":[],"new_patterns":[{"key":"snake_case","domain":"str","description":"str","confidence":0.0}],"reflection_text":"insight"}
+Output ONLY the JSON. No explanation."""
+
+COLD_PROMPT = """You are CORE synthesis engine. Given hot reflections batch, find patterns and propose prompt improvements. Output ONLY valid JSON:
+{"patterns_found":[{"key":"str","domain":"str","description":"str","frequency":1,"confidence":0.0}],"evolution_proposals":[{"confidence":0.0,"impact":"high|medium|low","reversible":true,"change_type":"new_principle","change_summary":"str","diff_content":"str"}],"summary_text":"str"}
+Output ONLY the JSON."""
+
+def hot_reflect(task_summary, domain, used_agents, quality_score, mistakes_consulted, items_verified):
+    """Auto-runs after every execute_task. No human trigger needed."""
+    try:
+        prompt_input = f"Task: {task_summary[:200]}\nDomain: {domain}\nAgents: {used_agents}\nQuality: {quality_score}\nMistakes consulted: {mistakes_consulted}\nItems verified: {items_verified}"
+        raw = call_gemini(REFLECTION_PROMPT, prompt_input)
+        r = json.loads(raw.strip().lstrip("```json").lstrip("```").rstrip("```"))
+        rec = {
+            "task_summary": task_summary[:200], "domain": domain,
+            "verify_rate": r.get("verify_rate", 0.5),
+            "mistake_consult_rate": r.get("mistake_consult_rate", float(mistakes_consulted)),
+            "new_patterns": json.dumps(r.get("new_patterns", [])),
+            "new_mistakes": json.dumps([]),
+            "quality_score": r.get("quality_score", quality_score/100),
+            "gaps_identified": r.get("gaps_identified", []),
+            "reflection_text": r.get("reflection_text", "")
+        }
+        sb_post("hot_reflections", rec)
+        print(f"[HOT REFLECT] q={rec['quality_score']:.2f} | {rec['reflection_text'][:80]}")
+        for p in r.get("new_patterns", []):
+            _upsert_pattern(p)
+        _check_evolution_threshold()
+    except Exception as e:
+        print(f"[HOT REFLECT ERROR] {e}")
+
+def _upsert_pattern(p):
+    try:
+        existing = sb_get("pattern_frequency", f"?pattern_key=eq.{p['key']}&limit=1")
+        if existing:
+            row = existing[0]
+            new_freq = row["frequency"] + 1
+            new_conf = min(1.0, (row["confidence"] + p.get("confidence", 0.5)) / 2 + 0.05)
+            httpx.patch(f"{SUPABASE_URL}/rest/v1/pattern_frequency?id=eq.{row['id']}", headers=SB,
+                       json={"frequency": new_freq, "confidence": new_conf, "last_seen": datetime.now().isoformat()})
+        else:
+            sb_post("pattern_frequency", {"pattern_key": p["key"], "domain": p.get("domain","general"), "description": p.get("description",""), "frequency": 1, "confidence": p.get("confidence", 0.5)})
+    except Exception as e:
+        print(f"[PATTERN ERROR] {e}")
+
+def _check_evolution_threshold(freq=3, conf=0.80):
+    try:
+        ready = sb_get("pattern_frequency", f"?frequency=gte.{freq}&confidence=gte.{conf}&auto_applied=eq.false&limit=5")
+        for p in ready:
+            existing = sb_get("evolution_queue", f"?pattern_key=eq.{p['pattern_key']}&status=eq.pending&limit=1")
+            if not existing:
+                sb_post("evolution_queue", {"status":"pending","confidence":p["confidence"],"impact":"medium","reversible":True,"change_type":"new_principle","change_summary":f"Pattern {p['pattern_key']} seen {p['frequency']}x","diff_content":p["description"],"pattern_key":p["pattern_key"],"frequency":p["frequency"]})
+                notify(f"CORE EVOLUTION QUEUED\nPattern: {p['pattern_key']}\nSeen {p['frequency']}x @ {p['confidence']:.0%}\n\n{p['description'][:200]}")
+    except Exception as e:
+        print(f"[EVOLUTION THRESHOLD ERROR] {e}")
+
+LAST_COLD_REFLECT = [None]
+
+def cold_reflect():
+    """Synthesizes hot reflections every 6h. Auto-evolves master prompt."""
+    try:
+        from datetime import timedelta
+        period_start = (datetime.now() - timedelta(hours=6)).isoformat()
+        hot = sb_get("hot_reflections", f"?processed_by_cold=eq.false&created_at=gte.{period_start}&limit=50")
+        if not hot:
+            return
+        print(f"[COLD REFLECT] Processing {len(hot)} reflections...")
+        lines = [f"[{h['domain']}] q={h['quality_score']:.2f} v={h['verify_rate']:.2f} | {h['reflection_text']}" for h in hot]
+        raw = call_gemini(COLD_PROMPT, "Hot reflections:\n" + "\n".join(lines[:40]))
+        s = json.loads(raw.strip().lstrip("```json").lstrip("```").rstrip("```"))
+        for p in s.get("patterns_found", []):
+            _upsert_pattern(p)
+        auto_applied = 0
+        for prop in s.get("evolution_proposals", []):
+            c = prop.get("confidence", 0)
+            if c >= 0.85 and prop.get("reversible", True):
+                _auto_apply_evolution(prop)
+                auto_applied += 1
+            elif c >= 0.60:
+                sb_post("evolution_queue", {"status":"pending","confidence":c,"impact":prop.get("impact","medium"),"reversible":prop.get("reversible",True),"change_type":prop.get("change_type","new_principle"),"change_summary":prop.get("change_summary",""),"diff_content":prop.get("diff_content",""),"pattern_key":"cold_synthesis"})
+                notify(f"CORE EVOLUTION PROPOSAL\nConf: {c:.0%} | {prop.get('change_summary','')[:100]}\n\nDiff: {prop.get('diff_content','')[:200]}")
+        httpx.patch(f"{SUPABASE_URL}/rest/v1/hot_reflections?processed_by_cold=eq.false&created_at=gte.{period_start}", headers=SB, json={"processed_by_cold": True})
+        sb_post("cold_reflections", {"period_start":period_start,"period_end":datetime.now().isoformat(),"hot_count":len(hot),"patterns_found":len(s.get("patterns_found",[])),"evolutions_queued":len(s.get("evolution_proposals",[])),"auto_applied":auto_applied,"summary_text":s.get("summary_text","")})
+        notify(f"CORE Cold Reflect Done\nHot processed: {len(hot)} | Patterns: {len(s.get('patterns_found',[]))}\nAuto-applied: {auto_applied}\n\n{s.get('summary_text','')[:200]}")
+    except Exception as e:
+        print(f"[COLD REFLECT ERROR] {e}")
+
+def _auto_apply_evolution(proposal):
+    try:
+        content, version = load_master_prompt()
+        new_v = version + 1
+        new_content = content + f"\n\n[AUTO-EVOLVED v{new_v}] {proposal.get('change_summary','')}\n{proposal.get('diff_content','')}"
+        update_master_prompt(new_content, f"Cold reflect auto-evolve: {proposal.get('change_summary','')[:60]}", 90)
+        push_to_github("master_prompt.md", new_content, f"CORE auto-evolve v{new_v}", f"MASTER SYSTEM PROMPT v{new_v}")
+        notify(f"CORE AUTO-EVOLVED v{new_v}\n{proposal.get('change_summary','')[:100]}")
+        print(f"[AUTO-EVOLVE] v{new_v}")
+    except Exception as e:
+        print(f"[AUTO-EVOLVE ERROR] {e}")
+
+
 if __name__ == "__main__":
     print(f"[CORE] Starting on port {PORT}")
     print(f"[CORE] Gemini keys loaded: {len(GEMINI_KEYS)}")
@@ -632,3 +756,4 @@ Send any task.""")
     server = HTTPServer(("0.0.0.0", PORT), WebhookHandler)
     print(f"[CORE] Listening on port {PORT}")
     server.serve_forever()
+
