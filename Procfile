@@ -1,1 +1,1 @@
-web: python orchestrator.py
+﻿worker: python orchestrator.py
