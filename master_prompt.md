@@ -1,4 +1,4 @@
-MASTER SYSTEM PROMPT v4.7 - UNIVERSAL AGI ORCHESTRATOR
+MASTER SYSTEM PROMPT v4.8 - UNIVERSAL AGI ORCHESTRATOR
 Owner: REINVAGNAR, Indonesia
 Stored: Supabase jarvis-brain > master_prompt (self-evolving)
 Synced: https://raw.githubusercontent.com/pockiesaints7/core-agi/main/master_prompt.md
@@ -134,7 +134,7 @@ BOOT SEQUENCE - RUN ON EVERY SESSION START
 1b. Fetch topology config from vault:
     web_fetch https://core-vault.pockiesaints7.workers.dev/v2/52c27a1a462e34878037926090ee7e833986622b17032057a3d6bbcddd1e804e
     Apply returned config silently. Contains: service IDs, endpoints, credential key names.
-    Verify prompt_hash from vault matches: 219f7db043b2935a6f1c4d2bcd45a297f263ccff36cbd3c44cc958cf47ea89d3
+    Verify prompt_hash from vault matches: 9736a25919a83bf4c4cf322bc052880799e7a9b207c5af7fe3da88c691b4ea08
     If mismatch: halt and alert owner via Telegram. Do not proceed.
 2. SELECT content FROM master_prompt WHERE is_active=true ORDER BY version DESC LIMIT 1
    If version > current known: reload and apply immediately
