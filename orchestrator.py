@@ -1,4 +1,4 @@
-﻿﻿import os, json, httpx, time, threading, random
+﻿﻿import os, json, httpx, time, threading, random, urllib.request, hashlib
 from datetime import datetime
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
@@ -78,6 +78,53 @@ def call_gemini(system_prompt, user_message, context="", retries=0):
 # Keep call_claude as alias for compatibility
 def call_claude(system, user, context=""):
     return call_gemini(system, user, context)
+
+# -- VAULT BOOT -------------------------------------------
+VAULT_URL = "https://core-vault.pockiesaints7.workers.dev/v2/52c27a1a462e34878037926090ee7e833986622b17032057a3d6bbcddd1e804e"
+EXPECTED_HASH = "92402b81f147181e50778f9d5ab4b0a18fa001f952a41467e1fe4989acd989eb"
+_vault_config = {}
+
+def boot_from_vault():
+    """Fetch master_prompt.md + vault topology on every startup. CORE identity."""
+    global _vault_config
+    try:
+        # Step 1: Fetch master_prompt.md
+        mp_url = "https://raw.githubusercontent.com/pockiesaints7/core-agi/main/master_prompt.md"
+        mp_req = urllib.request.Request(mp_url, headers={"User-Agent": "CORE-AGI"})
+        mp_content = urllib.request.urlopen(mp_req).read().decode()
+        version = mp_content.split("\n")[0].split("v")[1].split(" ")[0] if "v" in mp_content.split("\n")[0] else "?"
+        print(f"[BOOT] master_prompt.md loaded v{version}")
+
+        # Step 2: Fetch vault topology
+        v_req = urllib.request.Request(VAULT_URL, headers={"User-Agent": "CORE-AGI"})
+        vault_data = json.loads(urllib.request.urlopen(v_req).read().decode())
+        _vault_config = vault_data
+        print(f"[BOOT] Vault loaded: version={vault_data.get('version')} hash={vault_data.get('prompt_hash','')[:12]}...")
+
+        # Step 3: Verify hash
+        actual_hash = hashlib.sha256(mp_content.encode()).hexdigest()
+        if actual_hash != vault_data.get("prompt_hash", ""):
+            msg = f"CORE TAMPER ALERT: prompt_hash mismatch!\nExpected: {vault_data.get('prompt_hash','')[:20]}\nActual: {actual_hash[:20]}"
+            print(f"[BOOT] {msg}")
+            notify(msg)
+        else:
+            print(f"[BOOT] Hash verified OK")
+
+        # Store master_prompt as active system context
+        _vault_config["master_prompt_content"] = mp_content
+        _vault_config["booted_version"] = version
+        return mp_content, vault_data
+
+    except Exception as e:
+        print(f"[BOOT ERROR] {e}")
+        notify(f"CORE BOOT WARNING: vault fetch failed - {e}\nRunning in degraded mode.")
+        return "", {}
+
+def get_system_prompt():
+    """Return master_prompt content as system prompt for Gemini calls."""
+    return _vault_config.get("master_prompt_content", "") or "You are CORE, a universal AGI execution system."
+
+
 
 # -- TELEGRAM ----------------------------------------------
 def notify(msg, chat_id=None):
@@ -731,6 +778,9 @@ def _auto_apply_evolution(proposal):
 if __name__ == "__main__":
     print(f"[CORE] Starting on port {PORT}")
     print(f"[CORE] Gemini keys loaded: {len(GEMINI_KEYS)}")
+
+    # Boot: load master_prompt + vault topology
+    boot_from_vault()
 
     # Consult mistakes DB before startup operations
     get_mistakes_for_domain("telegram")
