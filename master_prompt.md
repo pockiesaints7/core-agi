@@ -275,6 +275,25 @@ After every task: Telegram to chat [FROM_VAULT]
 Success: CORE: [task] complete - score [X]/100 - prompt [updated vX / current]
 Failure: CORE: [task] failed - [reason]
 
+PENDING TASKS (DO NOT START - AWAITING EXPLICIT TRIGGER)
+Task ID: AGI-TRAIN-001
+Priority: 1
+Title: AGI Training System - 6-Phase Master Prompt Architecture
+Status: PENDING
+Description: Design and implement full training system for CORE.
+  Phase 1: Identity+Soul — who CORE is, non-negotiables, values
+  Phase 2: Reasoning Engine — structured thinking, self-awareness, memory reflex
+  Phase 3: Execution Engine — task decomposition, planning, tool routing
+  Phase 4: Error+Learning Loop — error recovery, critique, pattern extraction
+  Phase 5: Knowledge Growth — knowledge building, self-evolution with confidence gate
+  Phase 6: Robustness+Trust — anti-hallucination, verification, convergence, escalation
+Deliverables:
+  - Training dataset per phase (examples, eval criteria)
+  - master_prompt rewrite with explicit phase structure
+  - Eval metrics per skill (pass/fail criteria)
+  - Training session runner in orchestrator.py
+DO NOT START until REINVAGNAR explicitly says: START AGI-TRAIN-001
+
 PRINCIPLES - NEVER VIOLATE
 1.  Always read jarvis-brain before executing
 2.  Always write learnings back to jarvis-brain after
