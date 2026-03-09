@@ -158,8 +158,19 @@ def sb_patch(endpoint, data):
 def load_master_prompt():
     data = sb_get("master_prompt", "?is_active=eq.true&order=version.desc&limit=1")
     if data:
-        print(f"[CORE] Loaded master_prompt v{data[0][chr(118)+chr(101)+chr(114)+chr(115)+chr(105)+chr(111)+chr(110)]}")
-        return data[0]["content"], data[0]["version"]
+        raw = data[0].get("content", "")
+        # Unwrap if stored as JSON {"value": "..."}
+        if isinstance(raw, str) and raw.strip().startswith("{"):
+            try:
+                parsed = json.loads(raw)
+                raw = parsed.get("value", raw)
+            except Exception:
+                pass
+        elif isinstance(raw, dict):
+            raw = raw.get("value", str(raw))
+        version = data[0].get("version", 0)
+        print(f"[CORE] Loaded master_prompt v{version} ({len(raw)} chars)")
+        return raw, version
     return "", 0
 
 # -- JARVIS-BRAIN CONTEXT ----------------------------------
@@ -267,6 +278,9 @@ def execute_task(user_task, reply_chat_id=None):
     cid = reply_chat_id or TELEGRAM_CHAT_ID
     notify(f"CORE: Starting...\n`{user_task[:80]}`", cid)
     master_content, master_version = load_master_prompt()
+    # Use vault system prompt as primary; fall back to Supabase version trimmed
+    vault_prompt = get_system_prompt()
+    effective_system = vault_prompt if vault_prompt else (master_content[:3000] if master_content else "You are CORE AGI, a universal task execution system. Be thorough and helpful.")
     start = datetime.now()
 
     # Phase 0 - Orchestrate
@@ -447,7 +461,20 @@ Gemini keys loaded: {len(GEMINI_KEYS)}""", chat_id)
         notify(msg, chat_id)
 
     else:
-        threading.Thread(target=execute_task, args=(text, chat_id), daemon=True).start()
+        # Detect if this is a quick conversational message or a real task
+        quick_keywords = len(text.split()) <= 6 and not any(k in text.lower() for k in [
+            "build", "create", "write", "analyze", "make", "generate", "research",
+            "plan", "code", "design", "fix", "debug", "deploy", "setup"
+        ])
+        if quick_keywords:
+            # Fast conversational reply via Gemini directly
+            def quick_reply():
+                system = get_system_prompt() or "You are CORE, an AI assistant created by REINVAGNAR. Be concise and helpful."
+                reply = call_gemini(system, text)
+                notify(reply[:4000], chat_id)
+            threading.Thread(target=quick_reply, daemon=True).start()
+        else:
+            threading.Thread(target=execute_task, args=(text, chat_id), daemon=True).start()
 
 # -- WEBHOOK SERVER ----------------------------------------
 class WebhookHandler(BaseHTTPRequestHandler):
