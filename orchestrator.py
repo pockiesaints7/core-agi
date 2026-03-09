@@ -286,10 +286,15 @@ Preview:
     return context
 
 # ── TELEGRAM COMMANDS ─────────────────────────────────────
+OWNER_ID = "838737537"
+
 def handle_message(message):
     chat_id = str(message.get("chat",{}).get("id",""))
     text    = message.get("text","").strip()
     if not text: return
+    if chat_id != OWNER_ID:
+        notify("Unauthorized.", chat_id)
+        return
     print(f"[CORE] {chat_id}: {text[:60]}")
 
     if text == "/start":
