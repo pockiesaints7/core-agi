@@ -1,113 +1,4 @@
 ﻿import os, json, httpx, time, threading, random
-
-
-# ── VERIFY-AFTER-WRITE MODULE ─────────────────────────────
-# Principle 17: Never assume a remote write succeeded. Always verify.
-# Every write to GitHub/Supabase/Railway/Telegram must call verify_* after.
-
-def verify_github_file(filename, expected_first_line):
-    """Read file back from GitHub and confirm first line matches."""
-    try:
-        import base64
-        h = {"Authorization": f"Bearer {GITHUB_PAT}", "User-Agent": "CORE"}
-        r = httpx.get(f"https://api.github.com/repos/{GITHUB_USERNAME}/core-agi/contents/{filename}", headers=h, timeout=10)
-        actual_content = base64.b64decode(r.json().get("content","").replace("\\n","")).decode("utf-8","ignore")
-        first = actual_content.split("\n")[0].strip()
-        if first == expected_first_line:
-            print(f"[VERIFY OK] GitHub {filename}: {first[:60]}")
-            return True
-        else:
-            msg = f"CORE ALERT: GitHub {filename} verify FAILED.\nExpected: {expected_first_line}\nGot: {first[:80]}"
-            print(f"[VERIFY FAIL] {msg}")
-            notify(msg)
-            return False
-    except Exception as e:
-        print(f"[VERIFY ERROR] GitHub {filename}: {e}")
-        notify(f"CORE ALERT: GitHub verify error for {filename}: {e}")
-        return False
-
-def verify_supabase_row(table, filter_param, expected_count=1, label=""):
-    """Query table and confirm expected rows exist."""
-    try:
-        rows = sb_get(table, f"?{filter_param}&limit=10")
-        count = len(rows) if isinstance(rows, list) else 0
-        if count >= expected_count:
-            print(f"[VERIFY OK] Supabase {table} ({label}): {count} rows found")
-            return True
-        else:
-            msg = f"CORE ALERT: Supabase {table} verify FAILED ({label}).\nExpected >={expected_count} rows, got {count}"
-            print(f"[VERIFY FAIL] {msg}")
-            notify(msg)
-            return False
-    except Exception as e:
-        print(f"[VERIFY ERROR] Supabase {table}: {e}")
-        notify(f"CORE ALERT: Supabase verify error for {table}: {e}")
-        return False
-
-def verify_telegram_webhook(expected_url):
-    """Confirm webhook URL is set correctly."""
-    try:
-        r = httpx.get(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/getWebhookInfo", timeout=10).json()
-        actual = r.get("result", {}).get("url", "")
-        if actual == expected_url:
-            print(f"[VERIFY OK] Telegram webhook: {actual}")
-            return True
-        else:
-            msg = f"CORE ALERT: Webhook verify FAILED.\nExpected: {expected_url}\nGot: {actual}"
-            print(f"[VERIFY FAIL] {msg}")
-            notify(msg)
-            return False
-    except Exception as e:
-        print(f"[VERIFY ERROR] Telegram webhook: {e}")
-        return False
-
-def verify_telegram_commands(expected_count):
-    """Confirm bot commands are registered."""
-    try:
-        r = httpx.get(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/getMyCommands", timeout=10).json()
-        count = len(r.get("result", []))
-        if count >= expected_count:
-            print(f"[VERIFY OK] Telegram commands: {count} registered")
-            return True
-        else:
-            msg = f"CORE ALERT: Bot commands verify FAILED. Expected >={expected_count}, got {count}"
-            print(f"[VERIFY FAIL] {msg}")
-            notify(msg)
-            return False
-    except Exception as e:
-        print(f"[VERIFY ERROR] Telegram commands: {e}")
-        return False
-
-def verified_sync_to_github(content, version):
-    """sync_to_github + immediate read-back verification."""
-    if not GITHUB_PAT: return False
-    import base64
-    repo = f"{GITHUB_USERNAME}/core-agi"
-    h = {"Authorization": f"Bearer {GITHUB_PAT}", "Content-Type": "application/json", "User-Agent": "CORE"}
-    encoded = base64.b64encode(content.encode()).decode()
-    sha = None
-    try:
-        sha = httpx.get(f"https://api.github.com/repos/{repo}/contents/master_prompt.md", headers=h).json().get("sha")
-    except: pass
-    payload = {"message": f"Auto-sync master_prompt v{version}", "content": encoded}
-    if sha: payload["sha"] = sha
-    httpx.put(f"https://api.github.com/repos/{repo}/contents/master_prompt.md", headers=h, json=payload)
-    # VERIFY: read back and check version line
-    expected_first = f"MASTER SYSTEM PROMPT v{version}"
-    return verify_github_file("master_prompt.md", expected_first)
-
-def verified_set_webhook():
-    """set_webhook + immediate verification."""
-    domain = os.environ.get("RAILWAY_PUBLIC_DOMAIN", "")
-    if not domain:
-        print("[CORE] WARN: No RAILWAY_PUBLIC_DOMAIN - webhook not set")
-        return False
-    expected = f"https://{domain}/webhook"
-    httpx.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/setWebhook",
-               data={"url": expected})
-    return verify_telegram_webhook(expected)
-
-import os, json, httpx, time, threading, random
 from datetime import datetime
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
@@ -418,7 +309,7 @@ MISTAKES TO AVOID ({len(mistakes)} entries):
         evolved = call_gemini(PROMPT_EVOLVER, f"Current:\n{master_content[:800]}\n\nTask: {user_task}\nScore: {score}")
         if evolved.strip() != "NO_CHANGE" and len(evolved) > 100:
             new_v = update_master_prompt(evolved, f"Auto-evolved: {user_task[:60]}", score)
-            verified_sync_to_github(evolved, new_v)
+            push_to_github("master_prompt.md", evolved, f"CORE auto-evolve v{new_v}", f"MASTER SYSTEM PROMPT v{new_v}")
             notify(f"Master prompt evolved to v{new_v}", cid)
     except Exception as e:
         print(f"[CORE] Prompt evolution error: {e}")
@@ -546,27 +437,197 @@ def poll_queue():
         time.sleep(30)
 
 # -- MAIN --------------------------------------------------
+
+# ══════════════════════════════════════════════════════════
+# CORE AGI - ANTI-HALLUCINATION + SELF-LEARNING SYSTEM
+# Principle 17: Never assume. Always verify.
+# Principle 18: Every failure writes to mistakes DB.
+# Principle 19: Every operation reads mistakes DB first.
+# ══════════════════════════════════════════════════════════
+
+# ── MISTAKE GUARD - read before every operation type ──────
+def get_mistakes_for_domain(domain):
+    """Query mistakes DB before any operation. CORE learns from past failures."""
+    try:
+        rows = sb_get("mistakes", f"?domain=eq.{domain}&order=severity.desc&limit=5")
+        if rows:
+            print(f"[MISTAKE_GUARD] {len(rows)} known mistakes for domain={domain}:")
+            for r in rows:
+                print(f"  AVOID: {r.get('what_failed','')[:80]}")
+                print(f"  DO: {r.get('correct_approach','')[:80]}")
+        return rows
+    except Exception as e:
+        print(f"[MISTAKE_GUARD] Could not load mistakes for {domain}: {e}")
+        return []
+
+def store_mistake_now(domain, what_failed, root_cause, correct_approach, tags, severity="high"):
+    """Immediately store a failure to mistakes DB so it never repeats."""
+    try:
+        sb_post("mistakes", {
+            "domain": domain,
+            "context": f"CORE operation: {domain}",
+            "what_failed": what_failed,
+            "root_cause": root_cause,
+            "correct_approach": correct_approach,
+            "how_to_avoid": correct_approach,
+            "tags": tags,
+            "severity": severity
+        })
+        print(f"[MISTAKE_STORED] [{domain}] {what_failed[:60]}")
+    except Exception as e:
+        print(f"[MISTAKE_STORE_ERROR] {e}")
+
+# ── REMOTE_OP - universal write+verify wrapper ─────────────
+def remote_op(op_name, domain, write_fn, verify_fn, on_fail_advice=""):
+    """
+    Universal pattern for ALL remote write operations.
+    1. Read mistakes for this domain first
+    2. Execute write
+    3. Verify immediately
+    4. On fail: store to mistakes DB + notify owner
+    5. Never report success without verify confirmation
+    """
+    # Step 1: consult mistakes DB before acting
+    get_mistakes_for_domain(domain)
+
+    # Step 2: execute write
+    try:
+        write_result = write_fn()
+    except Exception as e:
+        msg = f"CORE ALERT: {op_name} write EXCEPTION: {e}"
+        print(f"[REMOTE_OP FAIL] {msg}")
+        notify(msg)
+        store_mistake_now(domain, f"{op_name} threw exception: {str(e)[:100]}",
+                         "Unexpected exception during write", on_fail_advice or str(e), [domain, "exception"])
+        return False
+
+    # Step 3: verify
+    try:
+        ok = verify_fn(write_result)
+    except Exception as e:
+        ok = False
+        print(f"[REMOTE_OP] Verify function threw: {e}")
+
+    # Step 4: handle result
+    if ok:
+        print(f"[REMOTE_OP OK] {op_name} verified successfully")
+        return True
+    else:
+        msg = f"CORE ALERT: {op_name} VERIFY FAILED.\n{on_fail_advice}"
+        print(f"[REMOTE_OP FAIL] {op_name}")
+        notify(msg)
+        store_mistake_now(domain,
+            f"{op_name} passed but verify failed - assumed success was wrong",
+            "Operation returned success but read-back showed different state",
+            on_fail_advice or f"Always verify {op_name} with read-back",
+            [domain, "verify-fail", "silent-failure"])
+        return False
+
+# ── VERIFIED GITHUB PUSH (uses remote_op) ─────────────────
+def push_to_github(filename, new_content, commit_msg, expected_first_line):
+    """Always fetch fresh SHA, push, verify. Uses remote_op wrapper."""
+    get_mistakes_for_domain("github")  # consult before acting
+    import base64
+    repo = f"{GITHUB_USERNAME}/core-agi"
+    h = {"Authorization": f"Bearer {GITHUB_PAT}", "Content-Type": "application/json", "User-Agent": "CORE"}
+
+    def do_write():
+        # Always fetch fresh SHA immediately before push - never reuse stale SHA
+        fresh = httpx.get(f"https://api.github.com/repos/{repo}/contents/{filename}", headers=h, timeout=10).json()
+        fresh_sha = fresh.get("sha")
+        encoded = base64.b64encode(new_content.encode()).decode()
+        payload = {"message": commit_msg, "content": encoded, "branch": "main"}
+        if fresh_sha: payload["sha"] = fresh_sha
+        r = httpx.put(f"https://api.github.com/repos/{repo}/contents/{filename}", headers=h, json=payload, timeout=15)
+        return r.json()
+
+    def do_verify(write_result):
+        import time; time.sleep(2)  # brief settle
+        check = httpx.get(f"https://api.github.com/repos/{repo}/contents/{filename}?t={int(time.time())}", headers=h, timeout=10).json()
+        actual_content = base64.b64decode(check.get("content","").replace("\n","")).decode("utf-8","ignore")
+        first = actual_content.split("\n")[0].strip()
+        if first == expected_first_line:
+            print(f"[VERIFY OK] GitHub {filename} first line: {first[:60]}")
+            return True
+        print(f"[VERIFY FAIL] GitHub {filename}: expected '{expected_first_line}' got '{first[:60]}'")
+        return False
+
+    return remote_op(f"GitHub push {filename}", "github", do_write, do_verify,
+                     "Fetch fresh SHA immediately before push. Never reuse stale SHA from earlier in session.")
+
+# ── VERIFIED SUPABASE WRITE (uses remote_op) ──────────────
+def write_to_supabase(table, data, verify_filter, verify_label=""):
+    """Post to Supabase + verify row exists. Uses remote_op wrapper."""
+    get_mistakes_for_domain("supabase")
+
+    def do_write():
+        return sb_post(table, data)
+
+    def do_verify(_):
+        rows = sb_get(table, f"?{verify_filter}&limit=1")
+        return isinstance(rows, list) and len(rows) > 0
+
+    return remote_op(f"Supabase write {table}", "supabase", do_write, do_verify,
+                     f"Always SELECT after INSERT to confirm row exists in {table}.")
+
+# ── VERIFIED TELEGRAM COMMANDS (uses remote_op) ───────────
+def register_bot_commands(commands_list):
+    """Register commands + verify they stuck. Uses remote_op wrapper."""
+    get_mistakes_for_domain("telegram")
+
+    def do_write():
+        import json
+        r = httpx.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/setMyCommands",
+                       content=json.dumps(commands_list), headers={"Content-Type": "application/json"}, timeout=10)
+        return r.json()
+
+    def do_verify(_):
+        import time; time.sleep(1)
+        r = httpx.get(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/getMyCommands", timeout=10).json()
+        count = len(r.get("result", []))
+        expected = len(commands_list)
+        if count >= expected:
+            print(f"[VERIFY OK] Bot commands: {count} registered")
+            return True
+        print(f"[VERIFY FAIL] Bot commands: expected {expected}, got {count}")
+        return False
+
+    return remote_op("Telegram setMyCommands", "telegram", do_write, do_verify,
+                     "Re-register commands after every deploy. Redeploys wipe command registrations.")
+
+BOT_COMMANDS = [
+    {"command": "start",  "description": "System status and welcome"},
+    {"command": "status", "description": "Full system health"},
+    {"command": "prompt", "description": "Current master prompt"},
+    {"command": "tasks",  "description": "Recent tasks"},
+    {"command": "ask",    "description": "Search knowledge base: /ask [query]"},
+    {"command": "keys",   "description": "Check Gemini key rotation status"}
+]
+
 if __name__ == "__main__":
     print(f"[CORE] Starting on port {PORT}")
     print(f"[CORE] Gemini keys loaded: {len(GEMINI_KEYS)}")
 
-    # VERIFY: webhook set correctly
+    # Consult mistakes DB before startup operations
+    get_mistakes_for_domain("telegram")
+    get_mistakes_for_domain("railway")
+
+    # Verified webhook set
     verified_set_webhook()
 
-    # VERIFY: bot commands registered
-    verify_telegram_commands(5)
+    # Register + verify bot commands (always on boot - redeploys wipe them)
+    register_bot_commands(BOT_COMMANDS)
 
-    # VERIFY: Supabase core tables exist
+    # Verify core Supabase tables
     verify_supabase_row("agent_registry", "status=eq.active", 7, "core agents")
     verify_supabase_row("stack_registry", "status=eq.active", 5, "core stack")
 
     s = get_agi_status()
     notify(f"""CORE Online (Gemini 2.0 Flash)
-Keys: {len(GEMINI_KEYS)} rotating | Model: {GEMINI_MODEL}
-Knowledge: {s.get("knowledge_entries",0)} entries
-Master prompt: v{s.get("master_prompt_version","?")}
-
-Startup verified. Send any task. Free forever.""")
+Keys: {len(GEMINI_KEYS)} | Model: {GEMINI_MODEL}
+Knowledge: {s.get("knowledge_entries",0)} | Prompt: v{s.get("master_prompt_version","?")}
+Anti-hallucination: ACTIVE | Mistake guard: ACTIVE
+Send any task.""")
     threading.Thread(target=poll_queue, daemon=True).start()
     server = HTTPServer(("0.0.0.0", PORT), WebhookHandler)
     print(f"[CORE] Listening on port {PORT}")
