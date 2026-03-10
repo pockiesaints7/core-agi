@@ -1,0 +1,33 @@
+{
+  "_note": "Static tool rules + tombstone only. active_tables & step_status ada di SESSION.md. Update file ini hanya kalau: (1) ada breaking change di tool params/schema, atau (2) ada tabel baru yang di-drop.",
+  "_last_updated": "2026-03-11",
+
+  "repo": "pockiesaints7/core-agi",
+
+  "tool_rules": {
+    "read_file":   "OMIT repo arg — default pockiesaints7/core-agi sudah benar",
+    "write_file":  "OMIT repo arg — default pockiesaints7/core-agi sudah benar",
+    "sb_query":    "param adalah 'filters' BUKAN 'query_string'. contoh: filters='domain=eq.mcp'",
+    "log_mistake": "required: context, what_failed, fix. optional: domain, root_cause, how_to_avoid, severity",
+    "sb_insert":   "data harus valid JSON string. sessions required: summary(str), actions(array), interface(str)"
+  },
+
+  "conventions": {
+    "read_before_write": true,
+    "check_mistakes_before_write": true,
+    "always_readback_after_write": true
+  },
+
+  "schema": {
+    "mistakes": "domain, context, what_failed, correct_approach, root_cause, how_to_avoid, severity, tags",
+    "sessions": "summary(str), actions(array), interface(str)"
+  },
+
+  "tombstone_tables": [
+    "playbook", "memory", "master_prompt", "patterns", "projects",
+    "training_sessions", "training_sessions_v2", "training_flags",
+    "session_learning", "agent_registry", "knowledge_blocks",
+    "agi_mistakes", "stack_registry", "vault_logs", "vault"
+  ],
+  "_tombstone_note": "Tabel ini sudah dihapus permanen. JANGAN query. Kalau ada tabel baru yang di-drop, append ke list ini."
+}

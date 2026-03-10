@@ -9,6 +9,9 @@ Fix (2026-03-11c): Tool audit fixes — get_mistakes/add_knowledge use svc key, 
   correctly, read_file default repo clarified in description.
 Fix (2026-03-11d): t_log_mistake now sends root_cause, how_to_avoid, severity fields
   to match actual mistakes table schema. MCP tool args updated to include these fields.
+Fix (2026-03-11e): t_state() now fetches operating_context.json (static tool rules +
+  tombstone tables) and SESSION.md (living state: active tables, step status, next action)
+  from GitHub on every call. Fresh sessions are fully oriented after 1x get_state().
 """
 import asyncio
 import base64
@@ -201,13 +204,27 @@ def t_state():
     session = get_latest_session()
     counts  = get_system_counts()
     pending = sb_get("task_queue", "select=id,task,status&status=eq.pending&limit=5")
+
+    # Static: tool rules, schema, tombstone tables (update only on breaking changes)
+    try:
+        operating_context = json.loads(gh_read("operating_context.json"))
+    except Exception as e:
+        operating_context = {"error": f"failed to load operating_context.json: {e}"}
+
+    # Dynamic: active tables, step status, next action (Claude updates every session)
+    try:
+        session_md = gh_read("SESSION.md")[:2000]
+    except Exception as e:
+        session_md = f"SESSION.md unavailable: {e}"
+
     return {
-        "last_session":    session.get("summary", "No sessions yet."),
-        "last_actions":    session.get("actions", []),
-        "last_session_ts": session.get("created_at", ""),
-        "counts":          counts,
-        "pending_tasks":   pending,
-        "note":            "Training starts Step 3.",
+        "last_session":      session.get("summary", "No sessions yet."),
+        "last_actions":      session.get("actions", []),
+        "last_session_ts":   session.get("created_at", ""),
+        "counts":            counts,
+        "pending_tasks":     pending,
+        "operating_context": operating_context,
+        "session_md":        session_md,
     }
 
 def t_health():
@@ -299,7 +316,7 @@ def t_write_file(path, content, message, repo=""):
 
 def t_notify(message, level="info"):
     icons = {"info": "\u2139\ufe0f", "warn": "\u26a0\ufe0f", "alert": "\U0001f6a8", "ok": "\u2705"}
-    return {"ok": notify(f"{icons.get(level, '»')} CORE\n{message}")}
+    return {"ok": notify(f"{icons.get(level, '\u00bb')} CORE\n{message}")}
 
 def t_sb_query(table, filters="", limit=20):
     """FIX: param renamed query_string→filters for clarity, svc=True to bypass RLS."""
@@ -324,7 +341,7 @@ def t_training_status():
 # ── Tool registry ─────────────────────────────────────────────────────────────
 TOOLS = {
     "get_state":           {"fn": t_state,           "perm": "READ",    "args": [],
-                            "desc": "Get current CORE state: last session, counts, pending tasks"},
+                            "desc": "Get current CORE state: last session, counts, pending tasks, operating_context (tool rules), session_md (step status + active tables)"},
     "get_system_health":   {"fn": t_health,          "perm": "READ",    "args": [],
                             "desc": "Check health of all components: Supabase, Groq, Telegram, GitHub"},
     "get_constitution":    {"fn": t_constitution,    "perm": "READ",    "args": [],
