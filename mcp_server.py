@@ -18,6 +18,19 @@ Session startup (3 auto-calls):
 """
 
 import hashlib
+import sys, os
+sys.path.insert(0, os.path.dirname(__file__))
+
+# ── mcp_tools wiring ──────────────────────────────────────
+try:
+    from mcp_tools.db import sql as _mcp_sql, dq as _mcp_dq
+    from mcp_tools.actions import action_boot, action_brain_write, action_context
+    from mcp_tools.brain_health import run_scan as _run_health_scan
+    _MCP_TOOLS_LOADED = True
+    print("[CORE MCP] mcp_tools loaded OK")
+except Exception as _e:
+    _MCP_TOOLS_LOADED = False
+    print(f"[CORE MCP] mcp_tools load warning: {_e} (falling back to inline)")
 import json
 import os
 import time
@@ -205,6 +218,23 @@ def tool_get_state() -> dict:
     }
 
 def tool_get_system_health() -> dict:
+    # If mcp_tools loaded, also run brain health scan
+    if _MCP_TOOLS_LOADED:
+        try:
+            import asyncio
+            scan = asyncio.run(_run_health_scan())
+            health_extra = {
+                "brain_counts": scan.get("brain_counts", {}),
+                "maintenance_flags": len(scan.get("maintenance_flags", [])),
+                "growth_flags": len(scan.get("growth_flags", [])),
+                "needs_attention": scan.get("needs_attention", False),
+            }
+        except Exception as _se:
+            health_extra = {"scan_error": str(_se)}
+    else:
+        health_extra = {"mcp_tools": "not loaded"}
+    # Original health check below — result merged at end
+    _health_extra_ref = health_extra
     """READ â€” Check system health across all components"""
     health = {"timestamp": datetime.utcnow().isoformat(), "components": {}}
     # Supabase
@@ -230,6 +260,8 @@ def tool_get_system_health() -> dict:
         "sessions_active": len(_sessions),
     }
     health["overall"] = "ok" if all(v == "ok" for v in health["components"].values()) else "degraded"
+    health["mcp_tools_loaded"] = _MCP_TOOLS_LOADED
+    health.update(_health_extra_ref)
     return health
 
 def tool_get_constitution() -> dict:
