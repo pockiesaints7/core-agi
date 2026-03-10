@@ -3,20 +3,17 @@
 **Last updated:** 2026-03-11
 **Owner:** REINVAGNAR
 
-## Current Step: Step 2 ✅ DONE → Next: Step 3
+## Current Step: Step 4 — Simulation
 
 ---
 
 ## Next Action
-Step 3: Implementasi training pipeline di core.py — auto_hot_reflection, cold_processor_loop, evolution applier, MCP tools baru, Telegram commands baru.
-
----
-
-## Step 2 Progress
-- ✅ 2.1: Schema audit — semua 4 tabel confirmed
-- ✅ 2.2: Pipeline design — trigger, flow, produce/consume
-- ✅ 2.3: Schema migration — tidak diperlukan, schema sudah matang
-- ✅ 2.4: TRAINING_DESIGN.md dibuat di repo
+Step 4: Simulate training loop end-to-end:
+1. Insert test hot_reflections (with new_patterns)
+2. Trigger cold processor via MCP
+3. Verify pattern_frequency upsert
+4. Verify evolution_queue entry (if frequency >= 3)
+5. Test approve/reject flow via Telegram + MCP tool
 
 ---
 
@@ -31,30 +28,24 @@ hot_reflections, cold_reflections, evolution_queue, pattern_frequency
 - ✅ Step 1: Claude Desktop Live Connection
 - ✅ PRE-STEP 2: Fix t_state() — operating_context.json + SESSION.md fetch + sb_query param
 - ✅ Step 2: Audit Training Logic — DONE 2026-03-11
-- ⏳ Step 3: Apply New Training Design — NEXT
-- ⏳ Step 4: Simulation
+- ✅ Step 3: Training Pipeline Implemented — DONE 2026-03-11 (commit fda0388)
+- 🔄 Step 4: Simulation — IN PROGRESS
 - ⏳ Step 5: Deploy & Monitor
 
----
-
-## Step 3 Scope (dari TRAINING_DESIGN.md)
-Fungsi baru di core.py:
-- `auto_hot_reflection()` — auto-write saat session di-insert
-- `run_cold_processor()` — batch processor, dipanggil thread ATAU MCP
-- `apply_evolution()` — apply setelah owner approve
-- `cold_processor_loop()` — background thread, check tiap 30 menit
-
-MCP tools baru:
-- `trigger_cold_processor`, `list_evolutions`, `approve_evolution`
-
-Telegram commands baru:
-- `/approve <id>`, `/reject <id>`, `/evolutions`
+## Step 3 — What was built
+- `auto_hot_reflection()` — auto-write hot_reflections on every session insert
+- `run_cold_processor()` — batch: distill patterns, upsert pattern_frequency, queue evolutions
+- `cold_processor_loop()` — background thread, check every 30min (10 hot OR 24h)
+- `apply_evolution()` — apply approved evolutions (knowledge/code/behavior)
+- `reject_evolution()` — reject + log as mistake
+- MCP tools: `list_evolutions`, `trigger_cold_processor`, `approve_evolution`, `reject_evolution` (17 total)
+- Telegram: `/evolutions`, `/approve <id>`, `/reject <id>`
 
 ---
 
 ## System State
-- Railway: live at core-agi-production.up.railway.app
-- MCP: Streamable HTTP, protocol 2024-11-05, 14 tools active
+- Railway: Step 3 live (commit fda0388)
+- MCP: 17 tools active
 - Supabase: ok | Groq: ok | Telegram: ok | GitHub: ok
 - Knowledge base: 330+ | Sessions: 180+ | Mistakes: 80+
 
