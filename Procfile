@@ -1,1 +1,1 @@
-web: python orchestrator.py
+web: python core.py
