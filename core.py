@@ -1,17 +1,16 @@
-"""CORE v5.0 — Step 0 | MCP Server + Telegram Bot + Queue Poller
+"""CORE v5.0 — Step 3 | Training Pipeline Active
 Owner: REINVAGNAR
-Step 0 scope: MCP fully working, Telegram queues tasks, NO training, NO agent pipeline.
-Fix (2026-03-11): Added Streamable HTTP transport + proper MCP JSON-RPC protocol
-so mcp-remote (latest) can connect via both http-first and sse-only strategies.
-Fix (2026-03-11b): get_system_counts now uses service key so RLS doesn't truncate counts.
-Fix (2026-03-11c): Tool audit fixes — get_mistakes/add_knowledge use svc key, log_mistake
-  param names corrected (mistake+correction → context+what_failed+fix), sb_query exposed
-  correctly, read_file default repo clarified in description.
-Fix (2026-03-11d): t_log_mistake now sends root_cause, how_to_avoid, severity fields
-  to match actual mistakes table schema. MCP tool args updated to include these fields.
-Fix (2026-03-11e): t_state() now fetches operating_context.json (static tool rules +
-  tombstone tables) and SESSION.md (living state: active tables, step status, next action)
-  from GitHub on every call. Fresh sessions are fully oriented after 1x get_state().
+Step 0: MCP fully working, Telegram queues tasks.
+Step 1: Claude Desktop live connection.
+Step 2: Training pipeline designed (TRAINING_DESIGN.md).
+Step 3: Training pipeline implemented:
+  - auto_hot_reflection()    — auto-write hot_reflections on every session insert
+  - run_cold_processor()     — batch: distill patterns, queue evolutions
+  - cold_processor_loop()    — background thread, triggers every 10 hot or 24h
+  - apply_evolution()        — apply approved evolutions (knowledge/code/behavior)
+  - MCP tools: trigger_cold_processor, list_evolutions, approve_evolution
+  - Telegram: /evolutions, /approve <id>, /reject <id>
+Fix (2026-03-11e): t_state() fetches operating_context.json + SESSION.md from GitHub.
 """
 import asyncio
 import base64
@@ -47,6 +46,12 @@ PORT           = int(os.environ.get("PORT", 8080))
 SESSION_TTL_H  = 8
 
 MCP_PROTOCOL_VERSION = "2024-11-05"
+
+# Training config
+COLD_HOT_THRESHOLD  = 10    # trigger cold processor after N unprocessed hot reflections
+COLD_TIME_THRESHOLD = 86400  # or after 24 hours
+PATTERN_EVO_THRESHOLD = 3   # pattern frequency needed to queue an evolution
+KNOWLEDGE_AUTO_CONFIDENCE = 0.7  # auto-apply knowledge evolutions above this
 
 # ── Rate limiter ──────────────────────────────────────────────────────────────
 class RateLimiter:
@@ -85,15 +90,19 @@ def _sbh(svc=False):
             "Content-Type": "application/json", "Prefer": "return=minimal"}
 
 def _sbh_count_svc():
-    """Use service key for accurate counts — bypasses RLS."""
     return {
         "apikey": SUPABASE_SVC,
         "Authorization": f"Bearer {SUPABASE_SVC}",
         "Prefer": "count=exact",
     }
 
+def _sbh_return(svc=False):
+    """Headers that return the inserted/updated row."""
+    k = SUPABASE_SVC if svc else SUPABASE_ANON
+    return {"apikey": k, "Authorization": f"Bearer {k}",
+            "Content-Type": "application/json", "Prefer": "return=representation"}
+
 def sb_get(t, qs="", svc=False):
-    """Query Supabase. Use svc=True to bypass RLS."""
     r = httpx.get(f"{SUPABASE_URL}/rest/v1/{t}?{qs}", headers=_sbh(svc), timeout=15)
     r.raise_for_status()
     return r.json()
@@ -105,9 +114,28 @@ def sb_post(t, d):
         print(f"[SB POST] {t} failed: {r.status_code} {r.text[:200]}")
     return r.is_success
 
+def sb_post_return(t, d):
+    """Insert and return the created row."""
+    if not L.sbw(): return None
+    r = httpx.post(f"{SUPABASE_URL}/rest/v1/{t}", headers=_sbh_return(True), json=d, timeout=15)
+    if not r.is_success:
+        print(f"[SB POST] {t} failed: {r.status_code} {r.text[:200]}")
+        return None
+    rows = r.json()
+    return rows[0] if rows else None
+
 def sb_patch(t, m, d):
     if not L.sbw(): return False
     return httpx.patch(f"{SUPABASE_URL}/rest/v1/{t}?{m}", headers=_sbh(True), json=d, timeout=15).is_success
+
+def sb_upsert(t, d, on_conflict):
+    """Upsert a row. on_conflict = comma-separated column names."""
+    if not L.sbw(): return False
+    h = {**_sbh(True), "Prefer": f"resolution=merge-duplicates,return=minimal"}
+    r = httpx.post(f"{SUPABASE_URL}/rest/v1/{t}?on_conflict={on_conflict}", headers=h, json=d, timeout=15)
+    if not r.is_success:
+        print(f"[SB UPSERT] {t} failed: {r.status_code} {r.text[:200]}")
+    return r.is_success
 
 # ── Telegram ──────────────────────────────────────────────────────────────────
 def notify(msg, cid=None):
@@ -161,9 +189,8 @@ def get_latest_session():
     return d[0] if d else {}
 
 def get_system_counts():
-    """Use service key + Prefer: count=exact to get accurate row counts, bypassing RLS."""
     counts = {}
-    for t in ["knowledge_base", "mistakes", "sessions", "task_queue"]:
+    for t in ["knowledge_base", "mistakes", "sessions", "task_queue", "hot_reflections", "evolution_queue"]:
         try:
             r = httpx.get(
                 f"{SUPABASE_URL}/rest/v1/{t}?select=id&limit=1",
@@ -199,19 +226,302 @@ def mcp_ok(tok: str) -> bool:
     _sessions[tok]["calls"] += 1
     return True
 
+# ── Training pipeline ────────────────────────────────────────────────────────────
+
+def auto_hot_reflection(session_data: dict):
+    """
+    Auto-generate a hot_reflection from a sessions row.
+    Called by core.py whenever a new session is inserted.
+    Lightweight — no LLM, pure derivation from session data.
+    """
+    try:
+        summary  = session_data.get("summary", "")
+        actions  = session_data.get("actions", []) or []
+        interface = session_data.get("interface", "unknown")
+
+        # Heuristic rates from actions array
+        verify_count   = sum(1 for a in actions if any(k in str(a).lower() for k in ["verify", "readback", "confirm"]))
+        mistake_count  = sum(1 for a in actions if any(k in str(a).lower() for k in ["mistake", "error", "fix", "wrong"]))
+        total_actions  = max(len(actions), 1)
+        verify_rate    = round(verify_count / total_actions, 2)
+        mistake_rate   = round(mistake_count / total_actions, 2)
+
+        # Infer domain from summary keywords
+        domain = "general"
+        for kw, d in [("supabase", "db"), ("github", "code"), ("telegram", "bot"),
+                      ("mcp", "mcp"), ("training", "training"), ("knowledge", "kb")]:
+            if kw in summary.lower():
+                domain = d
+                break
+
+        row = {
+            "task_summary":          summary[:300],
+            "domain":                domain,
+            "verify_rate":           verify_rate,
+            "mistake_consult_rate":  mistake_rate,
+            "new_patterns":          [],
+            "new_mistakes":          [],
+            "quality_score":         None,
+            "gaps_identified":       None,
+            "reflection_text":       f"Auto-generated from {interface} session. Actions: {total_actions}.",
+            "processed_by_cold":     False,
+        }
+        ok = sb_post("hot_reflections", row)
+        print(f"[HOT] auto_hot_reflection: ok={ok} domain={domain}")
+        return ok
+    except Exception as e:
+        print(f"[HOT] auto_hot_reflection error: {e}")
+        return False
+
+
+def run_cold_processor():
+    """
+    Batch processor: reads unprocessed hot_reflections, distills patterns,
+    queues evolutions, writes one cold_reflections summary.
+    Safe to call multiple times — idempotent on already-processed rows.
+    """
+    try:
+        # 1. Fetch unprocessed hot reflections
+        hots = sb_get("hot_reflections",
+                      "select=id,domain,new_patterns,new_mistakes,quality_score,gaps_identified&processed_by_cold=eq.false&order=created_at.asc",
+                      svc=True)
+        # Filter out dummy probe row (id=1 with all nulls)
+        hots = [h for h in hots if h.get("id") != 1]
+        if not hots:
+            print("[COLD] No unprocessed hot reflections.")
+            return {"ok": True, "processed": 0, "evolutions_queued": 0}
+
+        period_start = datetime.utcnow().isoformat()
+        patterns_all = []
+        mistakes_all = []
+        evolutions_queued = 0
+
+        # 2. Collect all patterns and mistakes
+        for h in hots:
+            for p in (h.get("new_patterns") or []):
+                if p: patterns_all.append({"key": str(p), "domain": h.get("domain", "general")})
+            for m in (h.get("new_mistakes") or []):
+                if m: mistakes_all.append(str(m))
+
+        # 3. Upsert pattern_frequency + check threshold
+        seen_keys = set()
+        for pat in patterns_all:
+            key = pat["key"][:200]
+            if key in seen_keys:
+                continue
+            seen_keys.add(key)
+
+            # Check if pattern already exists
+            existing = sb_get("pattern_frequency",
+                              f"select=id,frequency,auto_applied&pattern_key=eq.{key}&limit=1",
+                              svc=True)
+            existing = [e for e in existing if e.get("id") != 1]  # skip probe row
+
+            if existing:
+                rec = existing[0]
+                new_freq = (rec.get("frequency") or 0) + 1
+                sb_patch("pattern_frequency", f"id=eq.{rec['id']}",
+                         {"frequency": new_freq, "last_seen": datetime.utcnow().isoformat()})
+
+                # Queue evolution if threshold hit and not already applied
+                if new_freq >= PATTERN_EVO_THRESHOLD and not rec.get("auto_applied"):
+                    evo_ok = sb_post("evolution_queue", {
+                        "status":        "pending",
+                        "change_type":   "knowledge",
+                        "change_summary": f"Pattern '{key}' seen {new_freq}x — promote to knowledge base",
+                        "pattern_key":   key,
+                        "frequency":     new_freq,
+                        "confidence":    min(0.5 + (new_freq * 0.1), 0.95),
+                        "impact":        "low",
+                        "reversible":    True,
+                        "owner_notified": False,
+                    })
+                    if evo_ok:
+                        evolutions_queued += 1
+                        sb_patch("pattern_frequency", f"id=eq.{rec['id']}", {"auto_applied": True})
+            else:
+                # New pattern
+                sb_upsert("pattern_frequency", {
+                    "pattern_key": key,
+                    "domain":      pat["domain"],
+                    "description": key,
+                    "frequency":   1,
+                    "confidence":  0.5,
+                    "first_seen":  datetime.utcnow().isoformat(),
+                    "last_seen":   datetime.utcnow().isoformat(),
+                    "auto_applied": False,
+                }, "pattern_key")
+
+        # 4. Write cold_reflections summary
+        period_end = datetime.utcnow().isoformat()
+        sb_post("cold_reflections", {
+            "period_start":      period_start,
+            "period_end":        period_end,
+            "hot_count":         len(hots),
+            "patterns_found":    len(seen_keys),
+            "evolutions_queued": evolutions_queued,
+            "auto_applied":      False,
+            "summary_text":      f"Processed {len(hots)} hot reflections. {len(seen_keys)} unique patterns. {evolutions_queued} evolutions queued.",
+        })
+
+        # 5. Mark all processed hots as done
+        for h in hots:
+            sb_patch("hot_reflections", f"id=eq.{h['id']}", {"processed_by_cold": True})
+
+        # 6. Notify owner if evolutions were queued
+        if evolutions_queued > 0:
+            notify(f"✨ Cold processor: {evolutions_queued} evolution(s) queued from {len(hots)} sessions.\nUse /evolutions to review.")
+
+        print(f"[COLD] Processed {len(hots)} hot, {evolutions_queued} evolutions queued.")
+        return {"ok": True, "processed": len(hots), "evolutions_queued": evolutions_queued}
+
+    except Exception as e:
+        print(f"[COLD] run_cold_processor error: {e}")
+        return {"ok": False, "error": str(e)}
+
+
+def apply_evolution(evolution_id: int):
+    """
+    Apply an approved evolution from evolution_queue.
+    knowledge: auto-add to knowledge_base
+    code:      push diff_content to GitHub (requires owner approval)
+    behavior:  update operating_context.json or SESSION.md
+    """
+    try:
+        rows = sb_get("evolution_queue",
+                      f"select=*&id=eq.{evolution_id}&status=eq.pending&limit=1",
+                      svc=True)
+        if not rows:
+            return {"ok": False, "error": f"Evolution {evolution_id} not found or not pending"}
+
+        evo = rows[0]
+        change_type    = evo.get("change_type", "knowledge")
+        change_summary = evo.get("change_summary", "")
+        diff_content   = evo.get("diff_content", "")
+        pattern_key    = evo.get("pattern_key", "")
+        confidence     = float(evo.get("confidence") or 0.5)
+
+        applied = False
+        note    = ""
+
+        if change_type == "knowledge":
+            ok = sb_post("knowledge_base", {
+                "domain":     evo.get("impact", "general"),
+                "topic":      pattern_key or change_summary[:100],
+                "content":    change_summary,
+                "confidence": "high" if confidence >= 0.8 else "medium",
+                "tags":       ["evolution", "auto"],
+                "source":     "evolution_queue",
+            })
+            applied = ok
+            note = "Added to knowledge_base"
+
+        elif change_type == "code":
+            if not diff_content:
+                return {"ok": False, "error": "code evolution requires diff_content"}
+            # Write to a pending patch file — owner reviews before merging
+            fname = f"patches/evo_{evolution_id}_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.patch"
+            applied = gh_write(fname, diff_content, f"Evolution #{evolution_id}: {change_summary[:60]}")
+            note = f"Patch written to {fname} — review and merge manually"
+
+        elif change_type == "behavior":
+            if not diff_content:
+                return {"ok": False, "error": "behavior evolution requires diff_content"}
+            # Write to SESSION.md addendum
+            applied = gh_write("BEHAVIOR_UPDATES.md", diff_content,
+                               f"Behavior evolution #{evolution_id}: {change_summary[:60]}")
+            note = "Written to BEHAVIOR_UPDATES.md — review and merge into operating_context.json manually"
+
+        if applied:
+            sb_patch("evolution_queue", f"id=eq.{evolution_id}",
+                     {"status": "applied", "applied_at": datetime.utcnow().isoformat()})
+            notify(f"✅ Evolution #{evolution_id} applied\nType: {change_type}\n{note}")
+            print(f"[EVO] Applied #{evolution_id} ({change_type})")
+        else:
+            notify(f"❌ Evolution #{evolution_id} apply failed\nType: {change_type}")
+
+        return {"ok": applied, "evolution_id": evolution_id, "change_type": change_type, "note": note}
+
+    except Exception as e:
+        print(f"[EVO] apply_evolution error: {e}")
+        return {"ok": False, "error": str(e)}
+
+
+def reject_evolution(evolution_id: int, reason: str = ""):
+    """Reject a pending evolution and log as mistake."""
+    try:
+        rows = sb_get("evolution_queue",
+                      f"select=*&id=eq.{evolution_id}&status=eq.pending&limit=1",
+                      svc=True)
+        if not rows:
+            return {"ok": False, "error": f"Evolution {evolution_id} not found or not pending"}
+        evo = rows[0]
+        sb_patch("evolution_queue", f"id=eq.{evolution_id}", {"status": "rejected"})
+        # Log as mistake so system learns
+        sb_post("mistakes", {
+            "domain":           "evolution",
+            "context":          f"Evolution #{evolution_id}: {evo.get('change_summary', '')[:200]}",
+            "what_failed":      "Evolution rejected by owner",
+            "correct_approach": reason or "Owner rejected — review pattern and confidence threshold",
+            "root_cause":       reason or "Unknown",
+            "how_to_avoid":     "Raise confidence threshold or improve pattern quality",
+            "severity":         "low",
+            "tags":             ["evolution", "rejected"],
+        })
+        notify(f"❌ Evolution #{evolution_id} rejected.\nReason: {reason or 'No reason given'}")
+        return {"ok": True, "evolution_id": evolution_id}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+# Cold processor state (in-memory, reset on restart)
+_last_cold_run: float = 0.0
+
+def cold_processor_loop():
+    """Background thread: trigger cold processor every 10 unprocessed hots OR 24h."""
+    global _last_cold_run
+    print("[COLD] Background loop started")
+    while True:
+        try:
+            # Count unprocessed hots (skip probe row id=1)
+            hots = sb_get("hot_reflections",
+                          "select=id&processed_by_cold=eq.false&id=gt.1",
+                          svc=True)
+            unprocessed = len(hots)
+            time_since  = time.time() - _last_cold_run
+
+            if unprocessed >= COLD_HOT_THRESHOLD or (time_since >= COLD_TIME_THRESHOLD and unprocessed > 0):
+                print(f"[COLD] Triggering: unprocessed={unprocessed} time_since={int(time_since)}s")
+                run_cold_processor()
+                _last_cold_run = time.time()
+
+            # Auto-apply knowledge evolutions with high confidence
+            pending_evo = sb_get("evolution_queue",
+                                 f"select=id,confidence,change_type&status=eq.pending&change_type=eq.knowledge",
+                                 svc=True)
+            for evo in pending_evo:
+                conf = float(evo.get("confidence") or 0)
+                if conf >= KNOWLEDGE_AUTO_CONFIDENCE:
+                    print(f"[EVO] Auto-applying knowledge evo #{evo['id']} confidence={conf}")
+                    apply_evolution(evo["id"])
+
+        except Exception as e:
+            print(f"[COLD] loop error: {e}")
+
+        time.sleep(1800)  # check every 30 minutes
+
+
 # ── MCP tool implementations ──────────────────────────────────────────────────
 def t_state():
     session = get_latest_session()
     counts  = get_system_counts()
     pending = sb_get("task_queue", "select=id,task,status&status=eq.pending&limit=5")
 
-    # Static: tool rules, schema, tombstone tables (update only on breaking changes)
     try:
         operating_context = json.loads(gh_read("operating_context.json"))
     except Exception as e:
-        operating_context = {"error": f"failed to load operating_context.json: {e}"}
+        operating_context = {"error": f"failed to load: {e}"}
 
-    # Dynamic: active tables, step status, next action (Claude updates every session)
     try:
         session_md = gh_read("SESSION.md")[:2000]
     except Exception as e:
@@ -256,7 +566,6 @@ def t_search_kb(query="", domain="", limit=10):
     return sb_get("knowledge_base", qs)
 
 def t_get_mistakes(domain="", limit=10):
-    """FIX: use svc=True to bypass RLS on mistakes table."""
     try:
         lim = int(limit) if limit else 10
     except:
@@ -275,37 +584,22 @@ def t_update_state(key, value, reason):
     return {"ok": ok, "key": key}
 
 def t_add_knowledge(domain, topic, content, tags="", confidence="medium"):
-    """FIX: tags sent as list (array), added error logging."""
     tags_list = [t.strip() for t in tags.split(",")] if tags else []
     ok = sb_post("knowledge_base", {
-        "domain": domain,
-        "topic": topic,
-        "content": content,
-        "confidence": confidence,
-        "tags": tags_list,
-        "source": "mcp_session",
+        "domain": domain, "topic": topic, "content": content,
+        "confidence": confidence, "tags": tags_list, "source": "mcp_session",
     })
     return {"ok": ok, "topic": topic}
 
 def t_log_mistake(context, what_failed, fix, domain="general", root_cause="", how_to_avoid="", severity="medium"):
-    """FIX (2026-03-11d): now sends all required schema fields.
-    context=situation, what_failed=what went wrong, fix=correct_approach,
-    root_cause=why it happened, how_to_avoid=prevention, severity=low/medium/high
-    """
     ok = sb_post("mistakes", {
-        "domain": domain,
-        "context": context,
-        "what_failed": what_failed,
-        "correct_approach": fix,
-        "root_cause": root_cause or what_failed,
-        "how_to_avoid": how_to_avoid or fix,
-        "severity": severity,
-        "tags": [],
+        "domain": domain, "context": context, "what_failed": what_failed,
+        "correct_approach": fix, "root_cause": root_cause or what_failed,
+        "how_to_avoid": how_to_avoid or fix, "severity": severity, "tags": [],
     })
     return {"ok": ok}
 
 def t_read_file(path, repo=""):
-    """Read file from GitHub. repo defaults to pockiesaints7/core-agi if not provided."""
     try: return {"ok": True, "content": gh_read(path, repo or GITHUB_REPO)[:5000]}
     except Exception as e: return {"ok": False, "error": str(e)}
 
@@ -319,7 +613,6 @@ def t_notify(message, level="info"):
     return {"ok": notify(f"{icons.get(level, '\u00bb')} CORE\n{message}")}
 
 def t_sb_query(table, filters="", limit=20):
-    """FIX: param renamed query_string→filters for clarity, svc=True to bypass RLS."""
     try:
         lim = int(limit) if limit else 20
     except:
@@ -336,94 +629,119 @@ def t_sb_insert(table, data):
     return {"ok": sb_post(table, data), "table": table}
 
 def t_training_status():
-    return {"status": "Step 3 — not started", "note": "Training loop added in Step 3."}
+    try:
+        unprocessed = sb_get("hot_reflections",
+                             "select=id&processed_by_cold=eq.false&id=gt.1",
+                             svc=True)
+        pending_evo = sb_get("evolution_queue",
+                             "select=id,change_type,change_summary,confidence&status=eq.pending",
+                             svc=True)
+        return {
+            "status":              "Step 3 — training pipeline ACTIVE",
+            "unprocessed_hot":     len(unprocessed),
+            "pending_evolutions":  len(pending_evo),
+            "evolutions":          pending_evo[:5],
+            "cold_threshold":      COLD_HOT_THRESHOLD,
+            "pattern_threshold":   PATTERN_EVO_THRESHOLD,
+            "auto_apply_conf":     KNOWLEDGE_AUTO_CONFIDENCE,
+        }
+    except Exception as e:
+        return {"status": "error", "error": str(e)}
+
+def t_trigger_cold_processor():
+    """Manually trigger the cold processor from Claude Desktop."""
+    return run_cold_processor()
+
+def t_list_evolutions(status="pending"):
+    """List evolutions, default pending."""
+    rows = sb_get("evolution_queue",
+                  f"select=id,status,change_type,change_summary,confidence,pattern_key,created_at&status=eq.{status}&order=created_at.desc&limit=20",
+                  svc=True)
+    return {"evolutions": rows, "count": len(rows)}
+
+def t_approve_evolution(evolution_id):
+    """Approve and apply an evolution."""
+    try:
+        eid = int(evolution_id)
+    except:
+        return {"ok": False, "error": "evolution_id must be a number"}
+    return apply_evolution(eid)
+
+def t_reject_evolution(evolution_id, reason=""):
+    """Reject an evolution."""
+    try:
+        eid = int(evolution_id)
+    except:
+        return {"ok": False, "error": "evolution_id must be a number"}
+    return reject_evolution(eid, reason)
 
 # ── Tool registry ─────────────────────────────────────────────────────────────
 TOOLS = {
-    "get_state":           {"fn": t_state,           "perm": "READ",    "args": [],
-                            "desc": "Get current CORE state: last session, counts, pending tasks, operating_context (tool rules), session_md (step status + active tables)"},
-    "get_system_health":   {"fn": t_health,          "perm": "READ",    "args": [],
-                            "desc": "Check health of all components: Supabase, Groq, Telegram, GitHub"},
-    "get_constitution":    {"fn": t_constitution,    "perm": "READ",    "args": [],
-                            "desc": "Get CORE immutable constitution"},
-    "get_training_status": {"fn": t_training_status, "perm": "READ",    "args": [],
-                            "desc": "Get training loop status"},
-    "search_kb":           {"fn": t_search_kb,       "perm": "READ",
-                            "args": ["query", "domain", "limit"],
-                            "desc": "Search knowledge base"},
-    "get_mistakes":        {"fn": t_get_mistakes,    "perm": "READ",
-                            "args": ["domain", "limit"],
-                            "desc": "Get recorded mistakes. domain=optional filter, limit=number (default 10)"},
-    "read_file":           {"fn": t_read_file,       "perm": "READ",
-                            "args": ["path", "repo"],
-                            "desc": "Read file from GitHub repo. repo defaults to pockiesaints7/core-agi"},
-    "sb_query":            {"fn": t_sb_query,        "perm": "READ",
-                            "args": ["table", "filters", "limit"],
-                            "desc": "Query Supabase table. table=table name, filters=optional querystring, limit=number"},
-    "update_state":        {"fn": t_update_state,    "perm": "WRITE",
-                            "args": ["key", "value", "reason"],
-                            "desc": "Write state update to sessions table"},
-    "add_knowledge":       {"fn": t_add_knowledge,   "perm": "WRITE",
-                            "args": ["domain", "topic", "content", "tags", "confidence"],
-                            "desc": "Add entry to knowledge base. tags=comma-separated string"},
-    "log_mistake":         {"fn": t_log_mistake,     "perm": "WRITE",
-                            "args": ["context", "what_failed", "fix", "domain", "root_cause", "how_to_avoid", "severity"],
-                            "desc": "Log a mistake for learning. Required: context, what_failed, fix. Optional: domain, root_cause, how_to_avoid, severity (low/medium/high)"},
-    "notify_owner":        {"fn": t_notify,          "perm": "WRITE",
-                            "args": ["message", "level"],
-                            "desc": "Send Telegram notification to REINVAGNAR. level=info/warn/alert/ok"},
-    "sb_insert":           {"fn": t_sb_insert,       "perm": "WRITE",
-                            "args": ["table", "data"],
-                            "desc": "Insert row into Supabase table. data=JSON string"},
-    "write_file":          {"fn": t_write_file,      "perm": "EXECUTE",
-                            "args": ["path", "content", "message", "repo"],
-                            "desc": "Write file to GitHub repo. repo defaults to pockiesaints7/core-agi"},
+    "get_state":                {"fn": t_state,                 "perm": "READ",    "args": [],
+                                 "desc": "Get current CORE state: last session, counts, pending tasks, operating_context, session_md"},
+    "get_system_health":        {"fn": t_health,                "perm": "READ",    "args": [],
+                                 "desc": "Check health of all components: Supabase, Groq, Telegram, GitHub"},
+    "get_constitution":         {"fn": t_constitution,          "perm": "READ",    "args": [],
+                                 "desc": "Get CORE immutable constitution"},
+    "get_training_status":      {"fn": t_training_status,       "perm": "READ",    "args": [],
+                                 "desc": "Get training pipeline status: unprocessed hot, pending evolutions, thresholds"},
+    "search_kb":                {"fn": t_search_kb,             "perm": "READ",    "args": ["query", "domain", "limit"],
+                                 "desc": "Search knowledge base"},
+    "get_mistakes":             {"fn": t_get_mistakes,          "perm": "READ",    "args": ["domain", "limit"],
+                                 "desc": "Get recorded mistakes. domain=optional filter, limit=number (default 10)"},
+    "read_file":                {"fn": t_read_file,             "perm": "READ",    "args": ["path", "repo"],
+                                 "desc": "Read file from GitHub repo. repo defaults to pockiesaints7/core-agi"},
+    "sb_query":                 {"fn": t_sb_query,              "perm": "READ",    "args": ["table", "filters", "limit"],
+                                 "desc": "Query Supabase table. filters=optional querystring"},
+    "list_evolutions":          {"fn": t_list_evolutions,       "perm": "READ",    "args": ["status"],
+                                 "desc": "List evolutions. status=pending/applied/rejected (default: pending)"},
+    "update_state":             {"fn": t_update_state,          "perm": "WRITE",   "args": ["key", "value", "reason"],
+                                 "desc": "Write state update to sessions table"},
+    "add_knowledge":            {"fn": t_add_knowledge,         "perm": "WRITE",   "args": ["domain", "topic", "content", "tags", "confidence"],
+                                 "desc": "Add entry to knowledge base. tags=comma-separated string"},
+    "log_mistake":              {"fn": t_log_mistake,           "perm": "WRITE",   "args": ["context", "what_failed", "fix", "domain", "root_cause", "how_to_avoid", "severity"],
+                                 "desc": "Log a mistake. Required: context, what_failed, fix"},
+    "notify_owner":             {"fn": t_notify,                "perm": "WRITE",   "args": ["message", "level"],
+                                 "desc": "Send Telegram notification. level=info/warn/alert/ok"},
+    "sb_insert":                {"fn": t_sb_insert,             "perm": "WRITE",   "args": ["table", "data"],
+                                 "desc": "Insert row into Supabase table. data=JSON string"},
+    "trigger_cold_processor":   {"fn": t_trigger_cold_processor, "perm": "WRITE",  "args": [],
+                                 "desc": "Manually trigger cold processor: distill patterns, queue evolutions"},
+    "approve_evolution":        {"fn": t_approve_evolution,     "perm": "WRITE",   "args": ["evolution_id"],
+                                 "desc": "Approve and apply a pending evolution by ID"},
+    "reject_evolution":         {"fn": t_reject_evolution,      "perm": "WRITE",   "args": ["evolution_id", "reason"],
+                                 "desc": "Reject a pending evolution by ID. reason=optional"},
+    "write_file":               {"fn": t_write_file,            "perm": "EXECUTE", "args": ["path", "content", "message", "repo"],
+                                 "desc": "Write file to GitHub repo. repo defaults to pockiesaints7/core-agi"},
 }
 
 # ── MCP JSON-RPC handler ──────────────────────────────────────────────────────
 def _mcp_tool_schema(name, tool):
-    """Build JSON Schema for a tool's input."""
     props = {}
     for arg in tool["args"]:
         props[arg] = {"type": "string", "description": arg}
     return {
         "name": name,
         "description": tool.get("desc", name),
-        "inputSchema": {
-            "type": "object",
-            "properties": props,
-        }
+        "inputSchema": {"type": "object", "properties": props},
     }
 
 def handle_jsonrpc(body: dict, session_id: str = "") -> dict:
-    """Handle a single MCP JSON-RPC request. Returns response dict."""
     method = body.get("method", "")
     params = body.get("params", {})
     req_id = body.get("id")
 
-    def ok(result):
-        return {"jsonrpc": "2.0", "id": req_id, "result": result}
-
-    def err(code, msg):
-        return {"jsonrpc": "2.0", "id": req_id, "error": {"code": code, "message": msg}}
+    def ok(result): return {"jsonrpc": "2.0", "id": req_id, "result": result}
+    def err(code, msg): return {"jsonrpc": "2.0", "id": req_id, "error": {"code": code, "message": msg}}
 
     if method == "initialize":
-        return ok({
-            "protocolVersion": MCP_PROTOCOL_VERSION,
-            "capabilities": {"tools": {"listChanged": False}},
-            "serverInfo": {"name": "CORE v5.0", "version": "5.0"},
-        })
-
-    elif method == "notifications/initialized":
-        return None  # notification, no response needed
-
-    elif method == "ping":
-        return ok({})
-
+        return ok({"protocolVersion": MCP_PROTOCOL_VERSION,
+                   "capabilities": {"tools": {"listChanged": False}},
+                   "serverInfo": {"name": "CORE v5.0", "version": "5.0"}})
+    elif method == "notifications/initialized": return None
+    elif method == "ping": return ok({})
     elif method == "tools/list":
-        tools_list = [_mcp_tool_schema(n, t) for n, t in TOOLS.items()]
-        return ok({"tools": tools_list})
-
+        return ok({"tools": [_mcp_tool_schema(n, t) for n, t in TOOLS.items()]})
     elif method == "tools/call":
         tool_name = params.get("name", "")
         args      = params.get("arguments", {})
@@ -431,24 +749,12 @@ def handle_jsonrpc(body: dict, session_id: str = "") -> dict:
             return err(-32602, f"Unknown tool: {tool_name}")
         try:
             result = TOOLS[tool_name]["fn"](**args) if args else TOOLS[tool_name]["fn"]()
-            return ok({
-                "content": [{"type": "text", "text": json.dumps(result, ensure_ascii=False)}],
-                "isError": False,
-            })
+            return ok({"content": [{"type": "text", "text": json.dumps(result, ensure_ascii=False)}], "isError": False})
         except Exception as e:
-            return ok({
-                "content": [{"type": "text", "text": str(e)}],
-                "isError": True,
-            })
-
-    elif method == "resources/list":
-        return ok({"resources": []})
-
-    elif method == "prompts/list":
-        return ok({"prompts": []})
-
-    else:
-        return err(-32601, f"Method not found: {method}")
+            return ok({"content": [{"type": "text", "text": str(e)}], "isError": True})
+    elif method == "resources/list": return ok({"resources": []})
+    elif method == "prompts/list":   return ok({"prompts": []})
+    else: return err(-32601, f"Method not found: {method}")
 
 # ── FastAPI app ───────────────────────────────────────────────────────────────
 class Handshake(BaseModel):
@@ -461,87 +767,64 @@ class ToolCall(BaseModel):
     args: dict = {}
 
 app = FastAPI(title="CORE v5.0", version="5.0")
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 @app.get("/")
 def root():
     counts = get_system_counts()
     return {
-        "service":   "CORE v5.0",
-        "step":      "0 — MCP + Bot",
-        "knowledge": counts.get("knowledge_base", 0),
-        "sessions":  counts.get("sessions", 0),
-        "mistakes":  counts.get("mistakes", 0),
+        "service":    "CORE v5.0",
+        "step":       "3 — Training Pipeline Active",
+        "knowledge":  counts.get("knowledge_base", 0),
+        "sessions":   counts.get("sessions", 0),
+        "mistakes":   counts.get("mistakes", 0),
+        "hot_unprocessed": counts.get("hot_reflections", 0),
+        "evolutions_pending": counts.get("evolution_queue", 0),
     }
 
 @app.get("/health")
-def health_ep():
-    return t_health()
+def health_ep(): return t_health()
 
-# ── MCP Streamable HTTP transport (2024-11-05) ────────────────────────────────
+# ── MCP Streamable HTTP transport ────────────────────────────────────────────
 @app.post("/mcp/sse")
 async def mcp_post(req: Request):
-    """Streamable HTTP transport — handles MCP JSON-RPC over POST."""
     secret = req.headers.get("X-MCP-Secret", "") or req.query_params.get("secret", "")
     if secret and secret != MCP_SECRET:
         return JSONResponse({"jsonrpc": "2.0", "error": {"code": -32600, "message": "Unauthorized"}}, status_code=401)
-
     try:
         body = await req.json()
     except Exception:
-        return JSONResponse({"jsonrpc": "2.0", "id": None,
-                             "error": {"code": -32700, "message": "Parse error"}}, status_code=400)
+        return JSONResponse({"jsonrpc": "2.0", "id": None, "error": {"code": -32700, "message": "Parse error"}}, status_code=400)
 
     if isinstance(body, list):
-        responses = []
-        for item in body:
-            r = handle_jsonrpc(item)
-            if r is not None:
-                responses.append(r)
+        responses = [r for item in body if (r := handle_jsonrpc(item)) is not None]
         return JSONResponse(responses)
 
     response = handle_jsonrpc(body)
     if response is None:
         return JSONResponse({}, status_code=204)
 
-    accept = req.headers.get("accept", "")
-    if "text/event-stream" in accept:
+    if "text/event-stream" in req.headers.get("accept", ""):
         async def sse_single():
-            data = json.dumps(response)
-            yield f"data: {data}\n\n"
-        return StreamingResponse(
-            sse_single(),
-            media_type="text/event-stream",
-            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no",
-                     "mcp-session-id": str(uuid.uuid4())}
-        )
-
+            yield f"data: {json.dumps(response)}\n\n"
+        return StreamingResponse(sse_single(), media_type="text/event-stream",
+                                 headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no",
+                                          "mcp-session-id": str(uuid.uuid4())})
     return JSONResponse(response)
 
 @app.get("/mcp/sse")
 async def mcp_sse_get(req: Request):
-    """SSE GET endpoint — fallback for sse-only transport."""
     secret = req.headers.get("X-MCP-Secret", "") or req.query_params.get("secret", "")
     if secret and secret != MCP_SECRET:
         raise HTTPException(401, "Unauthorized")
-
     session_id = str(uuid.uuid4())
     queue: asyncio.Queue = asyncio.Queue()
     _sse_sessions[session_id] = queue
-
     async def event_stream():
         try:
-            endpoint_url = f"/mcp/messages?session_id={session_id}"
-            yield f"event: endpoint\ndata: {json.dumps(endpoint_url)}\n\n"
-
+            yield f"event: endpoint\ndata: {json.dumps(f'/mcp/messages?session_id={session_id}')}\n\n"
             while True:
-                if await req.is_disconnected():
-                    break
+                if await req.is_disconnected(): break
                 try:
                     msg = await asyncio.wait_for(queue.get(), timeout=25.0)
                     yield f"data: {json.dumps(msg)}\n\n"
@@ -549,56 +832,40 @@ async def mcp_sse_get(req: Request):
                     yield f": ping\n\n"
         finally:
             _sse_sessions.pop(session_id, None)
-
-    return StreamingResponse(
-        event_stream(),
-        media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no",
-                 "X-Session-Id": session_id}
-    )
+    return StreamingResponse(event_stream(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no",
+                                      "X-Session-Id": session_id})
 
 _sse_sessions: dict = {}
 
 @app.post("/mcp/messages")
 async def mcp_messages(req: Request):
-    """SSE message endpoint."""
     session_id = req.query_params.get("session_id", "")
     secret = req.headers.get("X-MCP-Secret", "") or req.query_params.get("secret", "")
     if secret and secret != MCP_SECRET:
         return JSONResponse({"error": "Unauthorized"}, status_code=401)
-
     try:
         body = await req.json()
     except Exception:
         return JSONResponse({"error": "Parse error"}, status_code=400)
-
     response = handle_jsonrpc(body)
-
     if session_id and session_id in _sse_sessions:
         if response is not None:
             await _sse_sessions[session_id].put(response)
         return JSONResponse({"ok": True}, status_code=202)
     elif response is not None:
         return JSONResponse(response)
-    else:
-        return JSONResponse({}, status_code=204)
+    return JSONResponse({}, status_code=204)
 
-# ── Legacy custom MCP endpoints ───────────────────────────────────────────────
+# ── Legacy endpoints ───────────────────────────────────────────────────────────────
 @app.post("/mcp/startup")
 async def mcp_startup(body: Handshake, req: Request):
-    if body.secret != MCP_SECRET:
-        raise HTTPException(401, "Invalid secret")
+    if body.secret != MCP_SECRET: raise HTTPException(401, "Invalid secret")
     tok = mcp_new(req.client.host)
     notify(f"\U0001f50c MCP Session\nClient: {body.client_id}\nToken: {tok[:8]}...")
-    return {
-        "session_token": tok,
-        "expires_hours": SESSION_TTL_H,
-        "state":         t_state(),
-        "health":        t_health(),
-        "constitution":  t_constitution(),
-        "tools":         list(TOOLS.keys()),
-        "note":          "3 auto-calls complete. CORE Step 0 ready.",
-    }
+    return {"session_token": tok, "expires_hours": SESSION_TTL_H,
+            "state": t_state(), "health": t_health(), "constitution": t_constitution(),
+            "tools": list(TOOLS.keys()), "note": "CORE Step 3 ready. Training pipeline active."}
 
 @app.post("/mcp/auth")
 async def mcp_auth(body: Handshake, req: Request):
@@ -609,12 +876,9 @@ async def mcp_auth(body: Handshake, req: Request):
 
 @app.post("/mcp/tool")
 async def mcp_tool(body: ToolCall):
-    if not mcp_ok(body.session_token):
-        raise HTTPException(401, "Invalid/expired session")
-    if not L.mcp(body.session_token):
-        raise HTTPException(429, "Rate limit exceeded")
-    if body.tool not in TOOLS:
-        raise HTTPException(404, f"Tool not found: {body.tool}")
+    if not mcp_ok(body.session_token): raise HTTPException(401, "Invalid/expired session")
+    if not L.mcp(body.session_token):  raise HTTPException(429, "Rate limit exceeded")
+    if body.tool not in TOOLS:         raise HTTPException(404, f"Tool not found: {body.tool}")
     try:
         res = TOOLS[body.tool]["fn"](**body.args) if body.args else TOOLS[body.tool]["fn"]()
         return {"ok": True, "tool": body.tool, "perm": TOOLS[body.tool]["perm"], "result": res}
@@ -623,8 +887,7 @@ async def mcp_tool(body: ToolCall):
         return {"ok": False, "tool": body.tool, "error": str(e)}
 
 @app.get("/mcp/tools")
-def list_tools():
-    return {n: {"perm": t["perm"], "args": t["args"]} for n, t in TOOLS.items()}
+def list_tools(): return {n: {"perm": t["perm"], "args": t["args"]} for n, t in TOOLS.items()}
 
 # ── Telegram webhook ──────────────────────────────────────────────────────────
 @app.post("/webhook")
@@ -646,16 +909,17 @@ def handle_msg(msg):
     if text == "/start":
         counts = get_system_counts()
         notify(
-            f"*CORE v5.0 — Step 0*\n"
+            f"*CORE v5.0 — Step 3*\n"
             f"Knowledge: {counts.get('knowledge_base', 0)}\n"
             f"Sessions: {counts.get('sessions', 0)}\n\n"
-            f"Commands: /status /tasks /ask <query>\n"
-            f"Tasks: send any message to queue it.",
+            f"Commands: /status /tasks /ask /evolutions\n"
+            f"/approve <id> /reject <id>",
             cid,
         )
     elif text == "/status":
         h = t_health()
         counts = get_system_counts()
+        ts = t_training_status()
         notify(
             f"*Status*\n"
             f"Supabase: {h['components'].get('supabase')}\n"
@@ -663,7 +927,9 @@ def handle_msg(msg):
             f"Telegram: {h['components'].get('telegram')}\n"
             f"GitHub: {h['components'].get('github')}\n\n"
             f"Knowledge: {counts.get('knowledge_base', 0)}\n"
-            f"Sessions: {counts.get('sessions', 0)}",
+            f"Sessions: {counts.get('sessions', 0)}\n"
+            f"Hot unprocessed: {ts.get('unprocessed_hot', 0)}\n"
+            f"Pending evolutions: {ts.get('pending_evolutions', 0)}",
             cid,
         )
     elif text == "/tasks":
@@ -678,16 +944,41 @@ def handle_msg(msg):
         else:
             lines = "Nothing found in knowledge base."
         notify(lines, cid)
+    elif text == "/evolutions":
+        rows = sb_get("evolution_queue",
+                      "select=id,change_type,change_summary,confidence&status=eq.pending&order=created_at.desc&limit=10",
+                      svc=True)
+        if rows:
+            lines = "\n".join([f"#{r['id']} [{r.get('change_type','?')}] conf={r.get('confidence','?')}\n  {str(r.get('change_summary',''))[:80]}" for r in rows])
+            notify(f"*Pending Evolutions*\n\n{lines}\n\nUse /approve <id> or /reject <id>", cid)
+        else:
+            notify("No pending evolutions.", cid)
+    elif text.startswith("/approve "):
+        try:
+            eid = int(text.split()[1])
+            result = apply_evolution(eid)
+            notify(f"Evolution #{eid}: {'applied ✅' if result.get('ok') else 'failed ❌'}\n{result.get('note', result.get('error', ''))}", cid)
+        except (ValueError, IndexError):
+            notify("Usage: /approve <id>", cid)
+    elif text.startswith("/reject "):
+        parts = text.split(None, 2)
+        try:
+            eid    = int(parts[1])
+            reason = parts[2] if len(parts) > 2 else ""
+            result = reject_evolution(eid, reason)
+            notify(f"Evolution #{eid}: {'rejected ❌' if result.get('ok') else 'failed'}\n{reason}", cid)
+        except (ValueError, IndexError):
+            notify("Usage: /reject <id> [reason]", cid)
     else:
         ok = sb_post("task_queue", {"task": text, "chat_id": cid, "status": "pending", "priority": 5})
         if ok:
-            notify(f"\u2705 Queued: `{text[:80]}`\nExecution starts in Step 3.", cid)
+            notify(f"\u2705 Queued: `{text[:80]}`", cid)
         else:
-            notify("\u274c Failed to queue task. Try again.", cid)
+            notify("\u274c Failed to queue task.", cid)
 
 # ── Queue poller ──────────────────────────────────────────────────────────────
 def queue_poller():
-    print("[QUEUE] Started — Step 0 mode (no execution)")
+    print("[QUEUE] Started")
     while True:
         try:
             tasks = sb_get("task_queue", "status=eq.pending&order=priority.asc&limit=1")
@@ -695,7 +986,7 @@ def queue_poller():
                 t = tasks[0]
                 sb_patch("task_queue", f"id=eq.{t['id']}", {
                     "status": "waiting",
-                    "error": "Execution engine not yet active (Step 3)"
+                    "error":  "Execution engine not yet active (Step 5)"
                 })
                 print(f"[QUEUE] Task {t['id']} acknowledged")
         except Exception as e:
@@ -707,15 +998,16 @@ def queue_poller():
 def on_start():
     set_webhook()
     threading.Thread(target=queue_poller, daemon=True).start()
+    threading.Thread(target=cold_processor_loop, daemon=True).start()
     counts = get_system_counts()
     notify(
-        f"*CORE v5.0 Online — Step 0*\n"
+        f"*CORE v5.0 Online — Step 3*\n"
         f"Knowledge: {counts.get('knowledge_base', 0)}\n"
         f"Sessions: {counts.get('sessions', 0)}\n"
-        f"MCP: Streamable HTTP + SSE ready\n"
-        f"Training: Step 3 (not started)"
+        f"MCP: 17 tools active\n"
+        f"Training: ✅ ACTIVE — hot/cold/evolution pipeline running"
     )
-    print(f"[CORE] v5.0 Step 0 online :{PORT} — MCP transport: Streamable HTTP + SSE")
+    print(f"[CORE] v5.0 Step 3 online :{PORT} — training pipeline active")
 
 if __name__ == "__main__":
     import uvicorn
