@@ -1,20 +1,28 @@
 """CORE v5.0 — Step 0 | MCP Server + Telegram Bot + Queue Poller
 Owner: REINVAGNAR
 Step 0 scope: MCP fully working, Telegram queues tasks, NO training, NO agent pipeline.
-Training + agents added in Step 3.
+Fix (2026-03-11): Added Streamable HTTP transport + proper MCP JSON-RPC protocol
+so mcp-remote (latest) can connect via both http-first and sse-only strategies.
 """
-import base64, hashlib, json, os, threading, time
+import asyncio
+import base64
+import hashlib
+import json
+import os
+import threading
+import time
+import uuid
 from collections import defaultdict
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from typing import Optional
 
 import httpx
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
-# ── Env vars ────────────────────────────────────────────────────────────────
+# ── Env vars ─────────────────────────────────────────────────────────────────
 GROQ_API_KEY   = os.environ["GROQ_API_KEY"]
 GROQ_MODEL     = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
 GROQ_FAST      = os.environ.get("GROQ_MODEL_FAST", "llama-3.1-8b-instant")
@@ -29,7 +37,9 @@ MCP_SECRET     = os.environ["MCP_SECRET"]
 PORT           = int(os.environ.get("PORT", 8080))
 SESSION_TTL_H  = 8
 
-# ── Rate limiter ─────────────────────────────────────────────────────────────
+MCP_PROTOCOL_VERSION = "2024-11-05"
+
+# ── Rate limiter ──────────────────────────────────────────────────────────────
 class RateLimiter:
     def __init__(self):
         self.calls = defaultdict(list)
@@ -52,21 +62,20 @@ class RateLimiter:
         self.calls[key].append(now)
         return True
 
-    def tg(self):  return self._ok("tg",  3600, self.c.get("telegram_messages_per_hour", 30))
-    def gh(self):  return self._ok("gh",  3600, self.c.get("github_pushes_per_hour", 20))
-    def sbw(self): return self._ok("sbw", 3600, self.c.get("supabase_writes_per_hour", 500))
+    def tg(self):       return self._ok("tg",  3600, self.c.get("telegram_messages_per_hour", 30))
+    def gh(self):       return self._ok("gh",  3600, self.c.get("github_pushes_per_hour", 20))
+    def sbw(self):      return self._ok("sbw", 3600, self.c.get("supabase_writes_per_hour", 500))
     def mcp(self, sid): return self._ok(f"mcp:{sid}", 60, self.c.get("mcp_tool_calls_per_minute", 30))
 
 L = RateLimiter()
 
-# ── Supabase ─────────────────────────────────────────────────────────────────
+# ── Supabase ──────────────────────────────────────────────────────────────────
 def _sbh(svc=False):
     k = SUPABASE_SVC if svc else SUPABASE_ANON
     return {"apikey": k, "Authorization": f"Bearer {k}",
             "Content-Type": "application/json", "Prefer": "return=minimal"}
 
 def _sbh_count():
-    """Headers for count queries — separate from _sbh to avoid Prefer conflict."""
     return {"apikey": SUPABASE_ANON, "Authorization": f"Bearer {SUPABASE_ANON}",
             "Prefer": "count=exact"}
 
@@ -128,20 +137,14 @@ def gh_write(path, content, msg, repo=None):
 
 # ── Supabase helpers ──────────────────────────────────────────────────────────
 def get_latest_session():
-    """Get latest session summary — single source of truth for state."""
     d = sb_get("sessions", "select=summary,actions,created_at&order=created_at.desc&limit=1")
     return d[0] if d else {}
 
 def get_system_counts():
-    """Return row counts for key tables using count=exact header."""
     counts = {}
     for t in ["knowledge_base", "mistakes", "sessions", "task_queue"]:
         try:
-            r = httpx.get(
-                f"{SUPABASE_URL}/rest/v1/{t}?select=id",
-                headers=_sbh_count(),
-                timeout=10,
-            )
+            r = httpx.get(f"{SUPABASE_URL}/rest/v1/{t}?select=id", headers=_sbh_count(), timeout=10)
             cr = r.headers.get("content-range", "*/0")
             counts[t] = int(cr.split("/")[-1]) if "/" in cr else 0
         except:
@@ -188,10 +191,11 @@ def t_state():
 def t_health():
     h = {"ts": datetime.utcnow().isoformat(), "components": {}}
     checks = [
-        ("supabase",  lambda: sb_get("sessions", "select=id&limit=1")),
-        ("groq",      lambda: httpx.get("https://api.groq.com/openai/v1/models", headers={"Authorization": f"Bearer {GROQ_API_KEY}"}, timeout=5).raise_for_status()),
-        ("telegram",  lambda: httpx.get(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getMe", timeout=5).raise_for_status()),
-        ("github",    lambda: gh_read("README.md")),
+        ("supabase", lambda: sb_get("sessions", "select=id&limit=1")),
+        ("groq",     lambda: httpx.get("https://api.groq.com/openai/v1/models",
+                             headers={"Authorization": f"Bearer {GROQ_API_KEY}"}, timeout=5).raise_for_status()),
+        ("telegram", lambda: httpx.get(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getMe", timeout=5).raise_for_status()),
+        ("github",   lambda: gh_read("README.md")),
     ]
     for name, fn in checks:
         try: fn(); h["components"][name] = "ok"
@@ -218,7 +222,6 @@ def t_get_mistakes(domain="general", limit=10):
     return sb_get("mistakes", qs)
 
 def t_update_state(key, value, reason):
-    """Write state update to sessions table."""
     ok = sb_post("sessions", {
         "summary": f"[state_update] {key}: {str(value)[:200]}",
         "actions": [f"{key}={str(value)[:100]} — {reason}"],
@@ -244,7 +247,7 @@ def t_write_file(path, content, message, repo=""):
     return {"ok": ok, "path": path}
 
 def t_notify(message, level="info"):
-    icons = {"info": "ℹ️", "warn": "⚠️", "alert": "🚨", "ok": "✅"}
+    icons = {"info": "\u2139\ufe0f", "warn": "\u26a0\ufe0f", "alert": "\U0001f6a8", "ok": "\u2705"}
     return {"ok": notify(f"{icons.get(level, '»')} CORE\n{message}")}
 
 def t_sb_query(table, query_string="", limit=20):
@@ -258,23 +261,117 @@ def t_training_status():
 
 # ── Tool registry ─────────────────────────────────────────────────────────────
 TOOLS = {
-    "get_state":           {"fn": t_state,           "perm": "READ",    "args": []},
-    "get_system_health":   {"fn": t_health,           "perm": "READ",    "args": []},
-    "get_constitution":    {"fn": t_constitution,     "perm": "READ",    "args": []},
-    "get_training_status": {"fn": t_training_status,  "perm": "READ",    "args": []},
-    "search_kb":           {"fn": t_search_kb,        "perm": "READ",    "args": ["query", "domain", "limit"]},
-    "get_mistakes":        {"fn": t_get_mistakes,     "perm": "READ",    "args": ["domain", "limit"]},
-    "read_file":           {"fn": t_read_file,        "perm": "READ",    "args": ["path", "repo"]},
-    "sb_query":            {"fn": t_sb_query,         "perm": "READ",    "args": ["table", "query_string", "limit"]},
-    "update_state":        {"fn": t_update_state,     "perm": "WRITE",   "args": ["key", "value", "reason"]},
-    "add_knowledge":       {"fn": t_add_knowledge,    "perm": "WRITE",   "args": ["domain", "topic", "content", "tags", "confidence"]},
-    "log_mistake":         {"fn": t_log_mistake,      "perm": "WRITE",   "args": ["context", "what_failed", "fix", "domain"]},
-    "notify_owner":        {"fn": t_notify,           "perm": "WRITE",   "args": ["message", "level"]},
-    "sb_insert":           {"fn": t_sb_insert,        "perm": "WRITE",   "args": ["table", "data"]},
-    "write_file":          {"fn": t_write_file,       "perm": "EXECUTE", "args": ["path", "content", "message", "repo"]},
+    "get_state":           {"fn": t_state,           "perm": "READ",    "args": [],
+                            "desc": "Get current CORE state: last session, counts, pending tasks"},
+    "get_system_health":   {"fn": t_health,          "perm": "READ",    "args": [],
+                            "desc": "Check health of all components: Supabase, Groq, Telegram, GitHub"},
+    "get_constitution":    {"fn": t_constitution,    "perm": "READ",    "args": [],
+                            "desc": "Get CORE immutable constitution"},
+    "get_training_status": {"fn": t_training_status, "perm": "READ",    "args": [],
+                            "desc": "Get training loop status"},
+    "search_kb":           {"fn": t_search_kb,       "perm": "READ",
+                            "args": ["query", "domain", "limit"],
+                            "desc": "Search knowledge base"},
+    "get_mistakes":        {"fn": t_get_mistakes,    "perm": "READ",
+                            "args": ["domain", "limit"],
+                            "desc": "Get recorded mistakes"},
+    "read_file":           {"fn": t_read_file,       "perm": "READ",
+                            "args": ["path", "repo"],
+                            "desc": "Read file from GitHub repo"},
+    "sb_query":            {"fn": t_sb_query,        "perm": "READ",
+                            "args": ["table", "query_string", "limit"],
+                            "desc": "Query Supabase table"},
+    "update_state":        {"fn": t_update_state,    "perm": "WRITE",
+                            "args": ["key", "value", "reason"],
+                            "desc": "Write state update to sessions table"},
+    "add_knowledge":       {"fn": t_add_knowledge,   "perm": "WRITE",
+                            "args": ["domain", "topic", "content", "tags", "confidence"],
+                            "desc": "Add entry to knowledge base"},
+    "log_mistake":         {"fn": t_log_mistake,     "perm": "WRITE",
+                            "args": ["context", "what_failed", "fix", "domain"],
+                            "desc": "Log a mistake for learning"},
+    "notify_owner":        {"fn": t_notify,          "perm": "WRITE",
+                            "args": ["message", "level"],
+                            "desc": "Send Telegram notification to REINVAGNAR"},
+    "sb_insert":           {"fn": t_sb_insert,       "perm": "WRITE",
+                            "args": ["table", "data"],
+                            "desc": "Insert row into Supabase table"},
+    "write_file":          {"fn": t_write_file,      "perm": "EXECUTE",
+                            "args": ["path", "content", "message", "repo"],
+                            "desc": "Write file to GitHub repo"},
 }
 
-# ── FastAPI ───────────────────────────────────────────────────────────────────
+# ── MCP JSON-RPC handler ──────────────────────────────────────────────────────
+def _mcp_tool_schema(name, tool):
+    """Build JSON Schema for a tool's input."""
+    props = {}
+    for arg in tool["args"]:
+        props[arg] = {"type": "string", "description": arg}
+    return {
+        "name": name,
+        "description": tool.get("desc", name),
+        "inputSchema": {
+            "type": "object",
+            "properties": props,
+        }
+    }
+
+def handle_jsonrpc(body: dict, session_id: str = "") -> dict:
+    """Handle a single MCP JSON-RPC request. Returns response dict."""
+    method = body.get("method", "")
+    params = body.get("params", {})
+    req_id = body.get("id")
+
+    def ok(result):
+        return {"jsonrpc": "2.0", "id": req_id, "result": result}
+
+    def err(code, msg):
+        return {"jsonrpc": "2.0", "id": req_id, "error": {"code": code, "message": msg}}
+
+    if method == "initialize":
+        return ok({
+            "protocolVersion": MCP_PROTOCOL_VERSION,
+            "capabilities": {"tools": {"listChanged": False}},
+            "serverInfo": {"name": "CORE v5.0", "version": "5.0"},
+        })
+
+    elif method == "notifications/initialized":
+        return None  # notification, no response needed
+
+    elif method == "ping":
+        return ok({})
+
+    elif method == "tools/list":
+        tools_list = [_mcp_tool_schema(n, t) for n, t in TOOLS.items()]
+        return ok({"tools": tools_list})
+
+    elif method == "tools/call":
+        tool_name = params.get("name", "")
+        args      = params.get("arguments", {})
+        if tool_name not in TOOLS:
+            return err(-32602, f"Unknown tool: {tool_name}")
+        try:
+            result = TOOLS[tool_name]["fn"](**args) if args else TOOLS[tool_name]["fn"]()
+            return ok({
+                "content": [{"type": "text", "text": json.dumps(result, ensure_ascii=False)}],
+                "isError": False,
+            })
+        except Exception as e:
+            return ok({
+                "content": [{"type": "text", "text": str(e)}],
+                "isError": True,
+            })
+
+    elif method == "resources/list":
+        return ok({"resources": []})
+
+    elif method == "prompts/list":
+        return ok({"prompts": []})
+
+    else:
+        return err(-32601, f"Method not found: {method}")
+
+# ── FastAPI app ───────────────────────────────────────────────────────────────
 class Handshake(BaseModel):
     secret: str
     client_id: Optional[str] = "claude_desktop"
@@ -284,8 +381,13 @@ class ToolCall(BaseModel):
     tool: str
     args: dict = {}
 
-app = FastAPI(title="CORE v5.0 — Step 0", version="5.0")
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+app = FastAPI(title="CORE v5.0", version="5.0")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 @app.get("/")
 def root():
@@ -302,12 +404,127 @@ def root():
 def health_ep():
     return t_health()
 
+# ── MCP Streamable HTTP transport (2024-11-05) ────────────────────────────────
+# mcp-remote uses http-first: POST to this endpoint with JSON-RPC body.
+# On success returns JSON-RPC response directly (or SSE stream if Accept: text/event-stream).
+
+@app.post("/mcp/sse")
+async def mcp_post(req: Request):
+    """Streamable HTTP transport — handles MCP JSON-RPC over POST.
+    mcp-remote sends initialize, tools/list, tools/call etc. here."""
+    # Auth via header or query param
+    secret = req.headers.get("X-MCP-Secret", "") or req.query_params.get("secret", "")
+    if secret and secret != MCP_SECRET:
+        return JSONResponse({"jsonrpc": "2.0", "error": {"code": -32600, "message": "Unauthorized"}}, status_code=401)
+
+    try:
+        body = await req.json()
+    except Exception:
+        return JSONResponse({"jsonrpc": "2.0", "id": None,
+                             "error": {"code": -32700, "message": "Parse error"}}, status_code=400)
+
+    # Handle batch (list of requests)
+    if isinstance(body, list):
+        responses = []
+        for item in body:
+            r = handle_jsonrpc(item)
+            if r is not None:
+                responses.append(r)
+        return JSONResponse(responses)
+
+    # Single request
+    response = handle_jsonrpc(body)
+    if response is None:
+        # Notification — return 204
+        return JSONResponse({}, status_code=204)
+
+    # Check if client wants SSE stream response
+    accept = req.headers.get("accept", "")
+    if "text/event-stream" in accept:
+        session_id = str(uuid.uuid4())
+        async def sse_single():
+            data = json.dumps(response)
+            yield f"data: {data}\n\n"
+        return StreamingResponse(
+            sse_single(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no",
+                     "mcp-session-id": str(uuid.uuid4())}
+        )
+
+    return JSONResponse(response)
+
+@app.get("/mcp/sse")
+async def mcp_sse_get(req: Request):
+    """SSE GET endpoint — fallback for sse-only transport.
+    Implements proper MCP SSE protocol with endpoint event."""
+    secret = req.headers.get("X-MCP-Secret", "") or req.query_params.get("secret", "")
+    if secret and secret != MCP_SECRET:
+        raise HTTPException(401, "Unauthorized")
+
+    session_id = str(uuid.uuid4())
+    # SSE queue for this session
+    queue: asyncio.Queue = asyncio.Queue()
+    _sse_sessions[session_id] = queue
+
+    async def event_stream():
+        try:
+            # MCP SSE protocol: first event MUST be 'endpoint' with POST URL
+            endpoint_url = f"/mcp/messages?session_id={session_id}"
+            yield f"event: endpoint\ndata: {json.dumps(endpoint_url)}\n\n"
+
+            while True:
+                if await req.is_disconnected():
+                    break
+                try:
+                    msg = await asyncio.wait_for(queue.get(), timeout=25.0)
+                    yield f"data: {json.dumps(msg)}\n\n"
+                except asyncio.TimeoutError:
+                    yield f": ping\n\n"  # SSE keep-alive comment
+        finally:
+            _sse_sessions.pop(session_id, None)
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no",
+                 "X-Session-Id": session_id}
+    )
+
+# SSE session store
+_sse_sessions: dict = {}
+
+@app.post("/mcp/messages")
+async def mcp_messages(req: Request):
+    """SSE message endpoint — receives JSON-RPC from client, pushes response to SSE stream."""
+    session_id = req.query_params.get("session_id", "")
+    secret = req.headers.get("X-MCP-Secret", "") or req.query_params.get("secret", "")
+    if secret and secret != MCP_SECRET:
+        return JSONResponse({"error": "Unauthorized"}, status_code=401)
+
+    try:
+        body = await req.json()
+    except Exception:
+        return JSONResponse({"error": "Parse error"}, status_code=400)
+
+    response = handle_jsonrpc(body)
+
+    if session_id and session_id in _sse_sessions:
+        if response is not None:
+            await _sse_sessions[session_id].put(response)
+        return JSONResponse({"ok": True}, status_code=202)
+    elif response is not None:
+        return JSONResponse(response)
+    else:
+        return JSONResponse({}, status_code=204)
+
+# ── Legacy custom MCP endpoints (keep for backward compat) ────────────────────
 @app.post("/mcp/startup")
 async def mcp_startup(body: Handshake, req: Request):
     if body.secret != MCP_SECRET:
         raise HTTPException(401, "Invalid secret")
     tok = mcp_new(req.client.host)
-    notify(f"🔌 MCP Session\nClient: {body.client_id}\nToken: {tok[:8]}...")
+    notify(f"\U0001f50c MCP Session\nClient: {body.client_id}\nToken: {tok[:8]}...")
     return {
         "session_token": tok,
         "expires_hours": SESSION_TTL_H,
@@ -321,7 +538,7 @@ async def mcp_startup(body: Handshake, req: Request):
 @app.post("/mcp/auth")
 async def mcp_auth(body: Handshake, req: Request):
     if body.secret != MCP_SECRET:
-        notify(f"⚠️ Invalid MCP auth from {req.client.host}")
+        notify(f"\u26a0\ufe0f Invalid MCP auth from {req.client.host}")
         raise HTTPException(401, "Invalid secret")
     return {"session_token": mcp_new(req.client.host), "expires_hours": SESSION_TTL_H}
 
@@ -344,19 +561,7 @@ async def mcp_tool(body: ToolCall):
 def list_tools():
     return {n: {"perm": t["perm"], "args": t["args"]} for n, t in TOOLS.items()}
 
-@app.get("/mcp/sse")
-async def mcp_sse(req: Request):
-    """SSE endpoint — Claude Desktop connects here. Step 0: keep-alive stream."""
-    async def event_stream():
-        yield "data: {\"type\":\"connected\",\"service\":\"CORE v5.0\",\"step\":\"0\"}\n\n"
-        while True:
-            if await req.is_disconnected():
-                break
-            yield f"data: {{\"type\":\"ping\",\"ts\":\"{datetime.utcnow().isoformat()}\"}}\n\n"
-            await __import__("asyncio").sleep(30)
-    return StreamingResponse(event_stream(), media_type="text/event-stream",
-                              headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
-
+# ── Telegram webhook ──────────────────────────────────────────────────────────
 @app.post("/webhook")
 async def webhook(req: Request):
     try:
@@ -367,7 +572,7 @@ async def webhook(req: Request):
         print(f"[WEBHOOK] {e}")
     return {"ok": True}
 
-# ── Telegram handler ─────────────────────────────────────────────────────────
+# ── Telegram handler ──────────────────────────────────────────────────────────
 def handle_msg(msg):
     cid  = str(msg.get("chat", {}).get("id", ""))
     text = msg.get("text", "").strip()
@@ -383,7 +588,6 @@ def handle_msg(msg):
             f"Tasks: send any message to queue it.",
             cid,
         )
-
     elif text == "/status":
         h = t_health()
         counts = get_system_counts()
@@ -397,12 +601,10 @@ def handle_msg(msg):
             f"Sessions: {counts.get('sessions', 0)}",
             cid,
         )
-
     elif text == "/tasks":
         tasks = sb_get("task_queue", "select=task,status&order=created_at.desc&limit=5")
         lines = "\n".join([f"- [{t.get('status')}] {t.get('task', '')[:60]}" for t in tasks])
         notify(f"*Recent Tasks*\n\n{lines}" if tasks else "No tasks yet.", cid)
-
     elif text.startswith("/ask "):
         q   = text[5:].strip()
         res = t_search_kb(q, limit=5)
@@ -411,15 +613,14 @@ def handle_msg(msg):
         else:
             lines = "Nothing found in knowledge base."
         notify(lines, cid)
-
     else:
         ok = sb_post("task_queue", {"task": text, "chat_id": cid, "status": "pending", "priority": 5})
         if ok:
-            notify(f"✅ Queued: `{text[:80]}`\nExecution starts in Step 3.", cid)
+            notify(f"\u2705 Queued: `{text[:80]}`\nExecution starts in Step 3.", cid)
         else:
-            notify("❌ Failed to queue task. Try again.", cid)
+            notify("\u274c Failed to queue task. Try again.", cid)
 
-# ── Queue poller ─────────────────────────────────────────────────────────────
+# ── Queue poller ──────────────────────────────────────────────────────────────
 def queue_poller():
     print("[QUEUE] Started — Step 0 mode (no execution)")
     while True:
@@ -446,10 +647,10 @@ def on_start():
         f"*CORE v5.0 Online — Step 0*\n"
         f"Knowledge: {counts.get('knowledge_base', 0)}\n"
         f"Sessions: {counts.get('sessions', 0)}\n"
-        f"MCP: ready on /mcp/*\n"
+        f"MCP: Streamable HTTP + SSE ready\n"
         f"Training: Step 3 (not started)"
     )
-    print(f"[CORE] v5.0 Step 0 online :{PORT}")
+    print(f"[CORE] v5.0 Step 0 online :{PORT} — MCP transport: Streamable HTTP + SSE")
 
 if __name__ == "__main__":
     import uvicorn
