@@ -1,78 +1,39 @@
-# CORE v5.0 — Session Summary
-**Date:** 2026-03-11
-**Status:** Step 0 COMPLETE ✅
+# CORE v5.0 — Session State
 
----
+**Last updated:** 2026-03-11
+**Owner:** REINVAGNAR
 
-## Step 0 — COMPLETE (2026-03-11)
+## Current Step: Step 1 COMPLETE ✅
 
-### Full Audit Results: 32/32 PASSED ✅
+### What was done this session (2026-03-11)
+- ✅ Step 0 already complete (core.py live on Railway, all health green)
+- ✅ Diagnosed MCP connection failure: mcp-remote using http-first (Streamable HTTP), core.py only had SSE GET → 405 error
+- ✅ Fixed core.py: added `POST /mcp/sse` Streamable HTTP transport + proper MCP JSON-RPC handler (initialize, tools/list, tools/call)
+- ✅ Added `GET /mcp/sse` with correct SSE protocol (endpoint event first)
+- ✅ Added `POST /mcp/messages` for SSE session routing
+- ✅ Pushed fix to GitHub → Railway auto-deployed
+- ✅ Claude Desktop connected: `Connected to remote server using StreamableHTTPClientTransport`
+- ✅ tools/list returned all 14 tools
+- ✅ Step 1 COMPLETE
 
-| Test | Result |
-|---|---|
-| `GET /` — root health | ✅ step=0, kb=329, sessions=176 |
-| `GET /health` — all components | ✅ supabase=ok, groq=ok, telegram=ok, github=ok |
-| `POST /mcp/auth` | ✅ token generated, 8h expiry |
-| `GET /mcp/tools` | ✅ 14 tools listed |
-| `POST /mcp/startup` (3-in-1) | ✅ state + health + constitution |
-| All 14 MCP tools | ✅ all READ/WRITE/EXECUTE working |
-| Rate limit (rapid calls) | ✅ no false positives |
-| Supabase 9 tables | ✅ 9/9 accessible |
-| Stress test 10x concurrent | ✅ 10/10 OK, zero failures |
-| SSE endpoint `/mcp/sse` | ✅ text/event-stream streaming |
-| Bad secret → 401 | ✅ security check passed |
+### System state
+- Railway: live at core-agi-production.up.railway.app
+- MCP transport: Streamable HTTP (http-first strategy)
+- MCP protocol version: 2024-11-05
+- Tools: 14 active (get_state, get_system_health, get_constitution, get_training_status, search_kb, get_mistakes, read_file, sb_query, update_state, add_knowledge, log_mistake, notify_owner, sb_insert, write_file)
+- Supabase: ok | Groq: ok | Telegram: ok | GitHub: ok
+- Knowledge base: 329 entries
+- Sessions: 177+
+- Mistakes: 79
 
-### What was done this session
-1. **core.py refactored** — `orchestrator.py` + `mcp_server.py` merged into single `core.py`
-2. **Cloudflare Vault v5.0** — 12 keys, all legacy (Gemini x11 etc.) removed
-3. **GitHub repo cleaned** — made private, `master_prompt.md` deleted
-4. **Supabase cleaned** — 27 tables → 9 tables, all legacy dropped
-5. **CORE_v5_plan.md updated** — reflects actual repo + schema
-6. **Railway deployed** — live, all health checks green
-7. **Full audit passed** — 32/32
+### Next step: Step 2 — Audit Training Logic
+- Audit checklist: input/output clear, offline-safe, constitution check, rollback trigger, convergence rules, token budget
+- Design hot_reflections → cold_reflections → evolution_queue pipeline
+- Tables already exist in Supabase (empty, schema correct)
 
----
-
-## Current System State
-
-| Component | Status |
-|---|---|
-| Railway / core.py | ✅ Live — Step 0 |
-| Cloudflare Vault | ✅ Live — 12 keys |
-| Supabase | ✅ Clean — 9 tables |
-| GitHub repo | ✅ Private, clean |
-| MCP Desktop config | ✅ Ready — 16 MCP servers |
-
-## Supabase Tables (v5.0 clean)
-```
-ACTIVE:   task_queue, knowledge_base, mistakes, changelog, sessions
-STEP 3:   hot_reflections, cold_reflections, evolution_queue, pattern_frequency
-```
-Data: knowledge_base=329, mistakes=79, sessions=176, changelog=48
-
-## Repo State
-| File | Status |
-|---|---|
-| `core.py` | ✅ Step 0 — live on Railway |
-| `vault/worker.js` | ✅ CF v5.0 live |
-| `constitution.txt` | ✅ Unchanged |
-| `resource_ceilings.json` | ✅ Unchanged |
-| `MANIFEST.md` | ✅ Step 0 current |
-| `mcp_tools/` | ⏸️ Available, activates Step 3 |
-
----
-
-## Next Session — Step 1
-
-1. Connect Claude Desktop to `core-agi` MCP entry
-2. Verify 3 auto-calls fire on session start (get_state, get_system_health, get_constitution)
-3. First real MCP session — use tools live from Claude Desktop
-4. Mark **Step 1 COMPLETE**
-5. Begin **Step 2**: Audit training logic / pipeline design
-
-## Live URLs
-| Service | URL |
-|---|---|
-| Railway | https://core-agi-production.up.railway.app |
-| MCP SSE | https://core-agi-production.up.railway.app/mcp/sse |
-| Vault | https://core-vault.pockiesaints7.workers.dev |
+### IMPORTANT for Claude Desktop sessions
+- Step 1 is COMPLETE. MCP is connected.
+- Do NOT say Step 0 is pending or /mcp/startup needs testing — that is outdated.
+- Current status: Step 2 is next.
+- Always call get_state(), get_system_health(), get_constitution() at session start.
+- Never hallucinate state — always call the actual MCP tools.
