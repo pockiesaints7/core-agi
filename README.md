@@ -1,5 +1,5 @@
-# CORE AGI 🧠
-### Universal Self-Improving AI Orchestrator
+# CORE v5.0 🧠
+### Personal AGI Orchestration System
 
 > Built by **REINVAGNAR** 🇮🇩 — Indonesia
 
@@ -7,50 +7,27 @@
 
 ## What is CORE?
 
-CORE is a self-improving AGI orchestration system that gets smarter after every single task.
+CORE is a personal AGI system — a persistent, always-on brain that lives in the cloud, connects to Claude Desktop via MCP, and accepts tasks from anywhere via Telegram.
 
-You give it one line. It figures out everything else.
-
-```
-"Make a website like Netflix but better"     → researches, designs, codes, deploys
-"Project plan for Tier IV data center"       → researches standards, plans, documents
-"Cost estimate for 47 floor building"        → researches rates, calculates, reports
-```
+Currently at **Step 0** — MCP server fully operational, memory connected, bot live.
 
 ---
 
 ## Architecture
 
 ```
-You (anywhere)
-    ↓ Telegram / Claude.ai / task_queue
-Railway CORE orchestrator (24/7 online)
-    ↓ calls Claude API with full context
-Supabase jarvis-brain (memory & knowledge)
-    ↓ 600+ knowledge entries injected per task
-Claude Agents (researcher, engineer, designer, writer, analyst, qa)
-    ↓ critic scores output, retries if <85
-Results stored back → system gets smarter
-Master prompt evolves → GitHub synced
+You (Claude Desktop / Telegram)
+    ↓ MCP protocol / Telegram webhook
+Railway — core.py (single process, port 8080)
+    ├── FastAPI HTTP server
+    ├── MCP server (/mcp/*)
+    ├── Telegram bot (/webhook)
+    └── Queue poller (30s)
+    ↓
+Supabase — jarvis-brain (memory & knowledge)
+    ↓
+GitHub — pockiesaints7/core-agi (source of truth)
 ```
-
----
-
-## Self-Improving Loop
-
-```
-Task arrives
-    → reads 600+ knowledge entries from jarvis-brain
-    → reads 154 proven playbook methods
-    → reads 72 mistakes to avoid
-    → executes specialist agents
-    → critic scores 0-100
-    → stores new knowledge back
-    → master prompt evolves if needed
-    → GitHub synced (this file updates automatically)
-```
-
-Every run makes the next run better. Forever.
 
 ---
 
@@ -58,44 +35,45 @@ Every run makes the next run better. Forever.
 
 | Service | Role |
 |---------|------|
-| Claude API | Brain — all agent calls |
-| Supabase | Memory — 600+ knowledge entries |
-| Railway | Host — 24/7 orchestrator |
-| GitHub | Code + offline master prompt sync |
-| Telegram | Universal remote control |
-| Vercel | Frontend |
-| Google Drive/Sheets/Gmail | Files & data |
+| Railway | Host — single process, 24/7 |
+| Groq | LLM — llama-3.3-70b (main), llama-3.1-8b (fast) |
+| Supabase | Memory — knowledge, mistakes, playbook, state |
+| GitHub | Source of truth — code + master prompt |
+| Telegram | Remote control — @reinvagnarbot |
+| Cloudflare | Credential vault — core-vault worker |
 
 ---
 
-## Use From Anywhere
+## MCP Tools (14)
 
-**Phone (Telegram):**
+Claude Desktop connects via `/mcp/startup` and gets full system context.
+
+| Permission | Tools |
+|-----------|-------|
+| READ | `get_state`, `get_system_health`, `get_constitution`, `get_training_status`, `search_kb`, `get_mistakes`, `read_file`, `sb_query` |
+| WRITE | `update_state`, `add_knowledge`, `log_mistake`, `notify_owner`, `sb_insert` |
+| EXECUTE | `write_file` |
+
+---
+
+## Telegram Commands
+
 ```
-Open @reinvagnarbot
-Send any task → executes fully automatically
-/status  — system health
-/prompt  — current master prompt version
-/tasks   — recent tasks
+/start   — system status overview
+/status  — component health check
+/tasks   — recent task queue
 /ask X   — search knowledge base
-```
 
-**Claude.ai / Claude Desktop:**
-```
-Preference prompt fetches master_prompt.md from this repo
-Full system context loaded every session
-You design → Railway executes → results stored
+Any other message → queued for execution (Step 3)
 ```
 
 ---
 
 ## Master Prompt
 
-The master prompt lives in two places simultaneously:
-- **Supabase** `master_prompt` table (source of truth, self-evolves)
-- **GitHub** `master_prompt.md` (this repo, offline reference)
-
-Both stay in sync automatically after every task.
+Lives in two places simultaneously:
+- **Supabase** `master_prompt` table — live source of truth
+- **GitHub** `master_prompt.md` — offline reference
 
 Fetch latest:
 ```
@@ -104,18 +82,14 @@ https://raw.githubusercontent.com/pockiesaints7/core-agi/main/master_prompt.md
 
 ---
 
-## Database (Supabase jarvis-brain)
+## Roadmap
 
-| Table | Rows | Purpose |
-|-------|------|---------|
-| knowledge_base | 326+ | Domain knowledge |
-| playbook | 154+ | Proven methods |
-| mistakes | 72+ | Errors to avoid |
-| memory | 121+ | System facts |
-| patterns | growing | Task patterns |
-| master_prompt | versioned | Self-evolving prompt |
-| task_queue | - | Async job queue |
-| session_learning | growing | Per-session learnings |
+| Step | Scope | Status |
+|------|-------|--------|
+| 0 | MCP server + Telegram bot + queue | 🔄 In progress |
+| 1 | Claude Desktop fully connected | ⏳ Pending |
+| 2 | Task execution via MCP tools | ⏳ Pending |
+| 3 | 24/7 training loop + agent pipeline | ⏳ Pending |
 
 ---
 
@@ -125,9 +99,3 @@ https://raw.githubusercontent.com/pockiesaints7/core-agi/main/master_prompt.md
 Indonesia  
 GitHub: [@pockiesaints7](https://github.com/pockiesaints7)  
 Telegram Bot: [@reinvagnarbot](https://t.me/reinvagnarbot)
-
----
-
-*The future belongs to those who tinker with software like this. — Greg Isenberg*
-
-*REINVAGNAR is tinkering from Indonesia. 🇮🇩*
