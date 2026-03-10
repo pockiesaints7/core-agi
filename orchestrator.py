@@ -353,26 +353,34 @@ Last updated: {str(s.get('prompt_last_updated','?'))[:10]}""", chat_id)
 # ── MCP PROXY ─────────────────────────────────────────────
 # Forwards /mcp/* requests from public port 8080 → mcp_server on localhost:8081
 def _proxy_to_mcp(handler, method="GET", body=None):
-    """Forward request to mcp_server running on localhost:8081."""
+    """Forward request to mcp_server running on localhost:8081.
+    Retries up to 5x with 1s delay to handle MCP server startup race condition."""
     MCP_PORT = int(os.environ.get("MCP_PORT", 8081))
     target = f"http://localhost:{MCP_PORT}{handler.path}"
     fwd_headers = {k: v for k, v in handler.headers.items()
                    if k.lower() not in ("host", "content-length")}
-    try:
-        if method == "GET":
-            resp = httpx.get(target, headers=fwd_headers, timeout=30)
-        else:
-            resp = httpx.post(target, headers=fwd_headers, content=body, timeout=30)
-        handler.send_response(resp.status_code)
-        for k, v in resp.headers.items():
-            if k.lower() not in ("transfer-encoding", "content-encoding"):
-                handler.send_header(k, v)
-        handler.end_headers()
-        handler.wfile.write(resp.content)
-    except Exception as e:
-        handler.send_response(502)
-        handler.end_headers()
-        handler.wfile.write(f'{{"error":"MCP proxy error: {e}"}}'.encode())
+    last_err = None
+    for attempt in range(5):
+        try:
+            if method == "GET":
+                resp = httpx.get(target, headers=fwd_headers, timeout=30)
+            else:
+                resp = httpx.post(target, headers=fwd_headers, content=body, timeout=30)
+            handler.send_response(resp.status_code)
+            for k, v in resp.headers.items():
+                if k.lower() not in ("transfer-encoding", "content-encoding"):
+                    handler.send_header(k, v)
+            handler.end_headers()
+            handler.wfile.write(resp.content)
+            return
+        except Exception as e:
+            last_err = e
+            if attempt < 4:
+                time.sleep(1)
+    handler.send_response(502)
+    handler.send_header("Content-Type", "application/json")
+    handler.end_headers()
+    handler.wfile.write(f'{{"error":"MCP server not ready: {last_err}","hint":"MCP server may still be starting up, retry in a few seconds"}}'.encode())
 class WebhookHandler(BaseHTTPRequestHandler):
     def do_POST(self):
         if self.path.startswith("/mcp/"):
