@@ -3,6 +3,7 @@ Owner: REINVAGNAR
 Step 0 scope: MCP fully working, Telegram queues tasks, NO training, NO agent pipeline.
 Fix (2026-03-11): Added Streamable HTTP transport + proper MCP JSON-RPC protocol
 so mcp-remote (latest) can connect via both http-first and sse-only strategies.
+Fix (2026-03-11b): get_system_counts now uses service key so RLS doesn't truncate counts.
 """
 import asyncio
 import base64
@@ -75,9 +76,13 @@ def _sbh(svc=False):
     return {"apikey": k, "Authorization": f"Bearer {k}",
             "Content-Type": "application/json", "Prefer": "return=minimal"}
 
-def _sbh_count():
-    return {"apikey": SUPABASE_ANON, "Authorization": f"Bearer {SUPABASE_ANON}",
-            "Prefer": "count=exact"}
+def _sbh_count_svc():
+    """Use service key for accurate counts — bypasses RLS."""
+    return {
+        "apikey": SUPABASE_SVC,
+        "Authorization": f"Bearer {SUPABASE_SVC}",
+        "Prefer": "count=exact",
+    }
 
 def sb_get(t, qs=""):
     r = httpx.get(f"{SUPABASE_URL}/rest/v1/{t}?{qs}", headers=_sbh(), timeout=15)
@@ -141,10 +146,16 @@ def get_latest_session():
     return d[0] if d else {}
 
 def get_system_counts():
+    """Use service key + Prefer: count=exact to get accurate row counts, bypassing RLS."""
     counts = {}
     for t in ["knowledge_base", "mistakes", "sessions", "task_queue"]:
         try:
-            r = httpx.get(f"{SUPABASE_URL}/rest/v1/{t}?select=id", headers=_sbh_count(), timeout=10)
+            r = httpx.get(
+                f"{SUPABASE_URL}/rest/v1/{t}?select=id&limit=1",
+                headers=_sbh_count_svc(),
+                timeout=10,
+            )
+            # Supabase returns content-range: 0-0/TOTAL or */TOTAL
             cr = r.headers.get("content-range", "*/0")
             counts[t] = int(cr.split("/")[-1]) if "/" in cr else 0
         except:
@@ -405,14 +416,9 @@ def health_ep():
     return t_health()
 
 # ── MCP Streamable HTTP transport (2024-11-05) ────────────────────────────────
-# mcp-remote uses http-first: POST to this endpoint with JSON-RPC body.
-# On success returns JSON-RPC response directly (or SSE stream if Accept: text/event-stream).
-
 @app.post("/mcp/sse")
 async def mcp_post(req: Request):
-    """Streamable HTTP transport — handles MCP JSON-RPC over POST.
-    mcp-remote sends initialize, tools/list, tools/call etc. here."""
-    # Auth via header or query param
+    """Streamable HTTP transport — handles MCP JSON-RPC over POST."""
     secret = req.headers.get("X-MCP-Secret", "") or req.query_params.get("secret", "")
     if secret and secret != MCP_SECRET:
         return JSONResponse({"jsonrpc": "2.0", "error": {"code": -32600, "message": "Unauthorized"}}, status_code=401)
@@ -423,7 +429,6 @@ async def mcp_post(req: Request):
         return JSONResponse({"jsonrpc": "2.0", "id": None,
                              "error": {"code": -32700, "message": "Parse error"}}, status_code=400)
 
-    # Handle batch (list of requests)
     if isinstance(body, list):
         responses = []
         for item in body:
@@ -432,16 +437,12 @@ async def mcp_post(req: Request):
                 responses.append(r)
         return JSONResponse(responses)
 
-    # Single request
     response = handle_jsonrpc(body)
     if response is None:
-        # Notification — return 204
         return JSONResponse({}, status_code=204)
 
-    # Check if client wants SSE stream response
     accept = req.headers.get("accept", "")
     if "text/event-stream" in accept:
-        session_id = str(uuid.uuid4())
         async def sse_single():
             data = json.dumps(response)
             yield f"data: {data}\n\n"
@@ -456,20 +457,17 @@ async def mcp_post(req: Request):
 
 @app.get("/mcp/sse")
 async def mcp_sse_get(req: Request):
-    """SSE GET endpoint — fallback for sse-only transport.
-    Implements proper MCP SSE protocol with endpoint event."""
+    """SSE GET endpoint — fallback for sse-only transport."""
     secret = req.headers.get("X-MCP-Secret", "") or req.query_params.get("secret", "")
     if secret and secret != MCP_SECRET:
         raise HTTPException(401, "Unauthorized")
 
     session_id = str(uuid.uuid4())
-    # SSE queue for this session
     queue: asyncio.Queue = asyncio.Queue()
     _sse_sessions[session_id] = queue
 
     async def event_stream():
         try:
-            # MCP SSE protocol: first event MUST be 'endpoint' with POST URL
             endpoint_url = f"/mcp/messages?session_id={session_id}"
             yield f"event: endpoint\ndata: {json.dumps(endpoint_url)}\n\n"
 
@@ -480,7 +478,7 @@ async def mcp_sse_get(req: Request):
                     msg = await asyncio.wait_for(queue.get(), timeout=25.0)
                     yield f"data: {json.dumps(msg)}\n\n"
                 except asyncio.TimeoutError:
-                    yield f": ping\n\n"  # SSE keep-alive comment
+                    yield f": ping\n\n"
         finally:
             _sse_sessions.pop(session_id, None)
 
@@ -491,12 +489,11 @@ async def mcp_sse_get(req: Request):
                  "X-Session-Id": session_id}
     )
 
-# SSE session store
 _sse_sessions: dict = {}
 
 @app.post("/mcp/messages")
 async def mcp_messages(req: Request):
-    """SSE message endpoint — receives JSON-RPC from client, pushes response to SSE stream."""
+    """SSE message endpoint."""
     session_id = req.query_params.get("session_id", "")
     secret = req.headers.get("X-MCP-Secret", "") or req.query_params.get("secret", "")
     if secret and secret != MCP_SECRET:
@@ -518,7 +515,7 @@ async def mcp_messages(req: Request):
     else:
         return JSONResponse({}, status_code=204)
 
-# ── Legacy custom MCP endpoints (keep for backward compat) ────────────────────
+# ── Legacy custom MCP endpoints ───────────────────────────────────────────────
 @app.post("/mcp/startup")
 async def mcp_startup(body: Handshake, req: Request):
     if body.secret != MCP_SECRET:
