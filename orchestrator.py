@@ -389,7 +389,21 @@ def poll_queue():
         time.sleep(30)
 
 # ── MAIN ─────────────────────────────────────────────────
+
+# -- MCP SERVER THREAD ---------------------------------------------------------
+def start_mcp_server():
+    "Launch mcp_server.py as a background thread on port 8081."
+    try:
+        import uvicorn
+        from mcp_server import app as mcp_app
+        MCP_PORT = int(os.environ.get("MCP_PORT", 8081))
+        print(f"[CORE] MCP Server starting on port {MCP_PORT}")
+        uvicorn.run(mcp_app, host="0.0.0.0", port=MCP_PORT, log_level="warning")
+    except Exception as e:
+        print(f"[CORE] MCP Server failed to start: {e}")
 if __name__ == "__main__":
+    print(f"[CORE] Starting MCP Server thread...")
+    threading.Thread(target=start_mcp_server, daemon=True).start()
     print(f"[CORE] Starting on port {PORT}")
     set_webhook()
     s = get_agi_status()
