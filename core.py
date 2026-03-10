@@ -11,6 +11,7 @@ from typing import Optional
 import httpx
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 # ── Env vars ────────────────────────────────────────────────────────────────
@@ -121,13 +122,25 @@ def gh_write(path, content, msg, repo=None):
     return httpx.put(f"https://api.github.com/repos/{repo}/contents/{path}", headers=h, json=p, timeout=20).is_success
 
 # ── Supabase helpers ──────────────────────────────────────────────────────────
-def load_master_prompt():
-    d = sb_get("master_prompt", "is_active=eq.true&order=version.desc&limit=1")
-    return (d[0]["content"], d[0]["version"]) if d else ("", 0)
-
-def get_agi_status():
-    d = sb_get("agi_status", "limit=1")
+def get_latest_session():
+    """Get latest session summary — single source of truth for state."""
+    d = sb_get("sessions", "select=summary,actions,created_at&order=created_at.desc&limit=1")
     return d[0] if d else {}
+
+def get_system_counts():
+    """Return row counts for key tables."""
+    counts = {}
+    for t in ["knowledge_base", "mistakes", "sessions", "task_queue"]:
+        try:
+            r = httpx.get(
+                f"{SUPABASE_URL}/rest/v1/{t}?select=id",
+                headers={**_sbh(), "Prefer": "count=exact"},
+                timeout=10,
+            )
+            counts[t] = int(r.headers.get("content-range", "0/0").split("/")[-1])
+        except:
+            counts[t] = -1
+    return counts
 
 # ── MCP session management ────────────────────────────────────────────────────
 _sessions: dict = {}
@@ -139,7 +152,6 @@ def mcp_new(ip: str) -> str:
         "expires": (datetime.utcnow() + timedelta(hours=SESSION_TTL_H)).isoformat(),
         "calls": 0,
     }
-    # Clean expired sessions
     now = datetime.utcnow()
     expired = [k for k, v in _sessions.items() if datetime.fromisoformat(v["expires"]) < now]
     for k in expired: del _sessions[k]
@@ -155,21 +167,22 @@ def mcp_ok(tok: str) -> bool:
 
 # ── MCP tool implementations ──────────────────────────────────────────────────
 def t_state():
-    mp = sb_get("master_prompt", "select=version,content&is_active=eq.true&limit=1")
-    st = sb_get("agi_status", "limit=1")
-    tq = sb_get("task_queue", "select=id,task,status&status=eq.pending&limit=5")
+    session = get_latest_session()
+    counts  = get_system_counts()
+    pending = sb_get("task_queue", "select=id,task,status&status=eq.pending&limit=5")
     return {
-        "prompt_version": mp[0]["version"] if mp else "?",
-        "prompt_preview": mp[0]["content"][:500] if mp else "",
-        "system": st[0] if st else {},
-        "pending_tasks": tq,
-        "note": "Training starts Step 3.",
+        "last_session":   session.get("summary", "No sessions yet."),
+        "last_actions":   session.get("actions", []),
+        "last_session_ts": session.get("created_at", ""),
+        "counts":         counts,
+        "pending_tasks":  pending,
+        "note":           "Training starts Step 3.",
     }
 
 def t_health():
     h = {"ts": datetime.utcnow().isoformat(), "components": {}}
     checks = [
-        ("supabase",  lambda: sb_get("master_prompt", "select=id&limit=1")),
+        ("supabase",  lambda: sb_get("sessions", "select=id&limit=1")),
         ("groq",      lambda: httpx.get("https://api.groq.com/openai/v1/models", headers={"Authorization": f"Bearer {GROQ_API_KEY}"}, timeout=5).raise_for_status()),
         ("telegram",  lambda: httpx.get(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getMe", timeout=5).raise_for_status()),
         ("github",    lambda: gh_read("README.md")),
@@ -199,7 +212,13 @@ def t_get_mistakes(domain="general", limit=10):
     return sb_get("mistakes", qs)
 
 def t_update_state(key, value, reason):
-    return {"ok": sb_post("memory", {"category": "mcp_state", "key": key, "value": str(value), "note": reason}), "key": key}
+    """Write state update to sessions table."""
+    ok = sb_post("sessions", {
+        "summary": f"[state_update] {key}: {str(value)[:200]}",
+        "actions": [f"{key}={str(value)[:100]} — {reason}"],
+        "interface": "mcp",
+    })
+    return {"ok": ok, "key": key}
 
 def t_add_knowledge(domain, topic, content, tags, confidence="medium"):
     return {"ok": sb_post("knowledge_base", {"domain": domain, "topic": topic, "content": content,
@@ -264,12 +283,13 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], all
 
 @app.get("/")
 def root():
-    s = get_agi_status()
+    counts = get_system_counts()
     return {
         "service": "CORE v5.0",
         "step": "0 — MCP + Bot",
-        "prompt_v": s.get("master_prompt_version", "?"),
-        "knowledge": s.get("knowledge_entries", 0),
+        "knowledge": counts.get("knowledge_base", 0),
+        "sessions": counts.get("sessions", 0),
+        "mistakes": counts.get("mistakes", 0),
     }
 
 @app.get("/health")
@@ -285,11 +305,11 @@ async def mcp_startup(body: Handshake, req: Request):
     return {
         "session_token": tok,
         "expires_hours": SESSION_TTL_H,
-        "state":        t_state(),
-        "health":       t_health(),
-        "constitution": t_constitution(),
-        "tools":        list(TOOLS.keys()),
-        "note":         "3 auto-calls complete. CORE Step 0 ready.",
+        "state":         t_state(),
+        "health":        t_health(),
+        "constitution":  t_constitution(),
+        "tools":         list(TOOLS.keys()),
+        "note":          "3 auto-calls complete. CORE Step 0 ready.",
     }
 
 @app.post("/mcp/auth")
@@ -318,6 +338,19 @@ async def mcp_tool(body: ToolCall):
 def list_tools():
     return {n: {"perm": t["perm"], "args": t["args"]} for n, t in TOOLS.items()}
 
+@app.get("/mcp/sse")
+async def mcp_sse(req: Request):
+    """SSE endpoint — Claude Desktop connects here. Step 0: keep-alive stream."""
+    async def event_stream():
+        yield "data: {\"type\":\"connected\",\"service\":\"CORE v5.0\",\"step\":\"0\"}\n\n"
+        while True:
+            if await req.is_disconnected():
+                break
+            yield f"data: {{\"type\":\"ping\",\"ts\":\"{datetime.utcnow().isoformat()}\"}}\n\n"
+            await __import__("asyncio").sleep(30)
+    return StreamingResponse(event_stream(), media_type="text/event-stream",
+                              headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
 @app.post("/webhook")
 async def webhook(req: Request):
     try:
@@ -335,27 +368,27 @@ def handle_msg(msg):
     if not text: return
 
     if text == "/start":
-        s = get_agi_status()
+        counts = get_system_counts()
         notify(
             f"*CORE v5.0 — Step 0*\n"
-            f"Knowledge: {s.get('knowledge_entries', 0)}\n"
-            f"Prompt: v{s.get('master_prompt_version', '?')}\n\n"
+            f"Knowledge: {counts.get('knowledge_base', 0)}\n"
+            f"Sessions: {counts.get('sessions', 0)}\n\n"
             f"Commands: /status /tasks /ask <query>\n"
             f"Tasks: send any message to queue it.",
             cid,
         )
 
     elif text == "/status":
-        s = get_agi_status()
         h = t_health()
+        counts = get_system_counts()
         notify(
             f"*Status*\n"
             f"Supabase: {h['components'].get('supabase')}\n"
             f"Groq: {h['components'].get('groq')}\n"
             f"Telegram: {h['components'].get('telegram')}\n"
             f"GitHub: {h['components'].get('github')}\n\n"
-            f"Knowledge: {s.get('knowledge_entries', 0)}\n"
-            f"Prompt: v{s.get('master_prompt_version', '?')}",
+            f"Knowledge: {counts.get('knowledge_base', 0)}\n"
+            f"Sessions: {counts.get('sessions', 0)}",
             cid,
         )
 
@@ -374,7 +407,6 @@ def handle_msg(msg):
         notify(lines, cid)
 
     else:
-        # Queue the task — execution added in Step 3
         ok = sb_post("task_queue", {"task": text, "chat_id": cid, "status": "pending", "priority": 5})
         if ok:
             notify(f"✅ Queued: `{text[:80]}`\nExecution starts in Step 3.", cid)
@@ -389,12 +421,11 @@ def queue_poller():
             tasks = sb_get("task_queue", "status=eq.pending&order=priority.asc&limit=1")
             if tasks:
                 t = tasks[0]
-                # Step 0: just acknowledge — execution engine added Step 3
                 sb_patch("task_queue", f"id=eq.{t['id']}", {
                     "status": "waiting",
                     "error": "Execution engine not yet active (Step 3)"
                 })
-                print(f"[QUEUE] Task {t['id']} acknowledged, waiting for Step 3 executor")
+                print(f"[QUEUE] Task {t['id']} acknowledged")
         except Exception as e:
             print(f"[QUEUE] {e}")
         time.sleep(30)
@@ -404,11 +435,11 @@ def queue_poller():
 def on_start():
     set_webhook()
     threading.Thread(target=queue_poller, daemon=True).start()
-    s = get_agi_status()
+    counts = get_system_counts()
     notify(
         f"*CORE v5.0 Online — Step 0*\n"
-        f"Knowledge: {s.get('knowledge_entries', 0)}\n"
-        f"Prompt: v{s.get('master_prompt_version', '?')}\n"
+        f"Knowledge: {counts.get('knowledge_base', 0)}\n"
+        f"Sessions: {counts.get('sessions', 0)}\n"
         f"MCP: ready on /mcp/*\n"
         f"Training: Step 3 (not started)"
     )
