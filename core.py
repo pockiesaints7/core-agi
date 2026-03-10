@@ -7,6 +7,8 @@ Fix (2026-03-11b): get_system_counts now uses service key so RLS doesn't truncat
 Fix (2026-03-11c): Tool audit fixes — get_mistakes/add_knowledge use svc key, log_mistake
   param names corrected (mistake+correction → context+what_failed+fix), sb_query exposed
   correctly, read_file default repo clarified in description.
+Fix (2026-03-11d): t_log_mistake now sends root_cause, how_to_avoid, severity fields
+  to match actual mistakes table schema. MCP tool args updated to include these fields.
 """
 import asyncio
 import base64
@@ -268,13 +270,20 @@ def t_add_knowledge(domain, topic, content, tags="", confidence="medium"):
     })
     return {"ok": ok, "topic": topic}
 
-def t_log_mistake(context, what_failed, fix, domain="general"):
-    """FIX: param names are context/what_failed/fix — matches MCP schema."""
+def t_log_mistake(context, what_failed, fix, domain="general", root_cause="", how_to_avoid="", severity="medium"):
+    """FIX (2026-03-11d): now sends all required schema fields.
+    context=situation, what_failed=what went wrong, fix=correct_approach,
+    root_cause=why it happened, how_to_avoid=prevention, severity=low/medium/high
+    """
     ok = sb_post("mistakes", {
         "domain": domain,
         "context": context,
         "what_failed": what_failed,
         "correct_approach": fix,
+        "root_cause": root_cause or what_failed,
+        "how_to_avoid": how_to_avoid or fix,
+        "severity": severity,
+        "tags": [],
     })
     return {"ok": ok}
 
@@ -341,8 +350,8 @@ TOOLS = {
                             "args": ["domain", "topic", "content", "tags", "confidence"],
                             "desc": "Add entry to knowledge base. tags=comma-separated string"},
     "log_mistake":         {"fn": t_log_mistake,     "perm": "WRITE",
-                            "args": ["context", "what_failed", "fix", "domain"],
-                            "desc": "Log a mistake for learning. context=situation, what_failed=what went wrong, fix=correct approach"},
+                            "args": ["context", "what_failed", "fix", "domain", "root_cause", "how_to_avoid", "severity"],
+                            "desc": "Log a mistake for learning. Required: context, what_failed, fix. Optional: domain, root_cause, how_to_avoid, severity (low/medium/high)"},
     "notify_owner":        {"fn": t_notify,          "perm": "WRITE",
                             "args": ["message", "level"],
                             "desc": "Send Telegram notification to REINVAGNAR. level=info/warn/alert/ok"},
