@@ -1,1 +1,2 @@
-﻿worker: python orchestrator.py
+web: python orchestrator.py
+mcp: python mcp_server.py
