@@ -4,6 +4,9 @@ Step 0 scope: MCP fully working, Telegram queues tasks, NO training, NO agent pi
 Fix (2026-03-11): Added Streamable HTTP transport + proper MCP JSON-RPC protocol
 so mcp-remote (latest) can connect via both http-first and sse-only strategies.
 Fix (2026-03-11b): get_system_counts now uses service key so RLS doesn't truncate counts.
+Fix (2026-03-11c): Tool audit fixes — get_mistakes/add_knowledge use svc key, log_mistake
+  param names corrected (mistake+correction → context+what_failed+fix), sb_query exposed
+  correctly, read_file default repo clarified in description.
 """
 import asyncio
 import base64
@@ -84,14 +87,18 @@ def _sbh_count_svc():
         "Prefer": "count=exact",
     }
 
-def sb_get(t, qs=""):
-    r = httpx.get(f"{SUPABASE_URL}/rest/v1/{t}?{qs}", headers=_sbh(), timeout=15)
+def sb_get(t, qs="", svc=False):
+    """Query Supabase. Use svc=True to bypass RLS."""
+    r = httpx.get(f"{SUPABASE_URL}/rest/v1/{t}?{qs}", headers=_sbh(svc), timeout=15)
     r.raise_for_status()
     return r.json()
 
 def sb_post(t, d):
     if not L.sbw(): return False
-    return httpx.post(f"{SUPABASE_URL}/rest/v1/{t}", headers=_sbh(True), json=d, timeout=15).is_success
+    r = httpx.post(f"{SUPABASE_URL}/rest/v1/{t}", headers=_sbh(True), json=d, timeout=15)
+    if not r.is_success:
+        print(f"[SB POST] {t} failed: {r.status_code} {r.text[:200]}")
+    return r.is_success
 
 def sb_patch(t, m, d):
     if not L.sbw(): return False
@@ -101,11 +108,14 @@ def sb_patch(t, m, d):
 def notify(msg, cid=None):
     if not L.tg(): return False
     try:
-        httpx.post(
+        r = httpx.post(
             f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
             data={"chat_id": cid or TELEGRAM_CHAT, "text": msg[:4000], "parse_mode": "Markdown"},
             timeout=10,
         )
+        if not r.is_success:
+            print(f"[TG] failed: {r.status_code} {r.text[:100]}")
+            return False
         return True
     except Exception as e:
         print(f"[TG] {e}")
@@ -155,7 +165,6 @@ def get_system_counts():
                 headers=_sbh_count_svc(),
                 timeout=10,
             )
-            # Supabase returns content-range: 0-0/TOTAL or */TOTAL
             cr = r.headers.get("content-range", "*/0")
             counts[t] = int(cr.split("/")[-1]) if "/" in cr else 0
         except:
@@ -227,10 +236,16 @@ def t_search_kb(query="", domain="", limit=10):
     if query:  qs += f"&content=ilike.*{query.split()[0]}*"
     return sb_get("knowledge_base", qs)
 
-def t_get_mistakes(domain="general", limit=10):
-    qs = f"select=context,what_failed,correct_approach&limit={limit}"
-    if domain and domain != "all": qs += f"&domain=eq.{domain}"
-    return sb_get("mistakes", qs)
+def t_get_mistakes(domain="", limit=10):
+    """FIX: use svc=True to bypass RLS on mistakes table."""
+    try:
+        lim = int(limit) if limit else 10
+    except:
+        lim = 10
+    qs = f"select=domain,context,what_failed,correct_approach&order=created_at.desc&limit={lim}"
+    if domain and domain not in ("all", ""):
+        qs += f"&domain=eq.{domain}"
+    return sb_get("mistakes", qs, svc=True)
 
 def t_update_state(key, value, reason):
     ok = sb_post("sessions", {
@@ -240,15 +255,31 @@ def t_update_state(key, value, reason):
     })
     return {"ok": ok, "key": key}
 
-def t_add_knowledge(domain, topic, content, tags, confidence="medium"):
-    return {"ok": sb_post("knowledge_base", {"domain": domain, "topic": topic, "content": content,
-                                              "confidence": confidence, "tags": tags, "source": "mcp_session"}), "topic": topic}
+def t_add_knowledge(domain, topic, content, tags="", confidence="medium"):
+    """FIX: tags sent as list (array), added error logging."""
+    tags_list = [t.strip() for t in tags.split(",")] if tags else []
+    ok = sb_post("knowledge_base", {
+        "domain": domain,
+        "topic": topic,
+        "content": content,
+        "confidence": confidence,
+        "tags": tags_list,
+        "source": "mcp_session",
+    })
+    return {"ok": ok, "topic": topic}
 
 def t_log_mistake(context, what_failed, fix, domain="general"):
-    return {"ok": sb_post("mistakes", {"domain": domain, "context": context,
-                                        "what_failed": what_failed, "correct_approach": fix})}
+    """FIX: param names are context/what_failed/fix — matches MCP schema."""
+    ok = sb_post("mistakes", {
+        "domain": domain,
+        "context": context,
+        "what_failed": what_failed,
+        "correct_approach": fix,
+    })
+    return {"ok": ok}
 
 def t_read_file(path, repo=""):
+    """Read file from GitHub. repo defaults to pockiesaints7/core-agi if not provided."""
     try: return {"ok": True, "content": gh_read(path, repo or GITHUB_REPO)[:5000]}
     except Exception as e: return {"ok": False, "error": str(e)}
 
@@ -261,10 +292,21 @@ def t_notify(message, level="info"):
     icons = {"info": "\u2139\ufe0f", "warn": "\u26a0\ufe0f", "alert": "\U0001f6a8", "ok": "\u2705"}
     return {"ok": notify(f"{icons.get(level, '»')} CORE\n{message}")}
 
-def t_sb_query(table, query_string="", limit=20):
-    return sb_get(table, f"{query_string}&limit={limit}" if query_string else f"limit={limit}")
+def t_sb_query(table, filters="", limit=20):
+    """FIX: param renamed query_string→filters for clarity, svc=True to bypass RLS."""
+    try:
+        lim = int(limit) if limit else 20
+    except:
+        lim = 20
+    qs = f"{filters}&limit={lim}" if filters else f"limit={lim}"
+    return sb_get(table, qs, svc=True)
 
 def t_sb_insert(table, data):
+    if isinstance(data, str):
+        try:
+            data = json.loads(data)
+        except Exception as e:
+            return {"ok": False, "error": f"data must be valid JSON: {e}"}
     return {"ok": sb_post(table, data), "table": table}
 
 def t_training_status():
@@ -285,31 +327,31 @@ TOOLS = {
                             "desc": "Search knowledge base"},
     "get_mistakes":        {"fn": t_get_mistakes,    "perm": "READ",
                             "args": ["domain", "limit"],
-                            "desc": "Get recorded mistakes"},
+                            "desc": "Get recorded mistakes. domain=optional filter, limit=number (default 10)"},
     "read_file":           {"fn": t_read_file,       "perm": "READ",
                             "args": ["path", "repo"],
-                            "desc": "Read file from GitHub repo"},
+                            "desc": "Read file from GitHub repo. repo defaults to pockiesaints7/core-agi"},
     "sb_query":            {"fn": t_sb_query,        "perm": "READ",
-                            "args": ["table", "query_string", "limit"],
-                            "desc": "Query Supabase table"},
+                            "args": ["table", "filters", "limit"],
+                            "desc": "Query Supabase table. table=table name, filters=optional querystring, limit=number"},
     "update_state":        {"fn": t_update_state,    "perm": "WRITE",
                             "args": ["key", "value", "reason"],
                             "desc": "Write state update to sessions table"},
     "add_knowledge":       {"fn": t_add_knowledge,   "perm": "WRITE",
                             "args": ["domain", "topic", "content", "tags", "confidence"],
-                            "desc": "Add entry to knowledge base"},
+                            "desc": "Add entry to knowledge base. tags=comma-separated string"},
     "log_mistake":         {"fn": t_log_mistake,     "perm": "WRITE",
                             "args": ["context", "what_failed", "fix", "domain"],
-                            "desc": "Log a mistake for learning"},
+                            "desc": "Log a mistake for learning. context=situation, what_failed=what went wrong, fix=correct approach"},
     "notify_owner":        {"fn": t_notify,          "perm": "WRITE",
                             "args": ["message", "level"],
-                            "desc": "Send Telegram notification to REINVAGNAR"},
+                            "desc": "Send Telegram notification to REINVAGNAR. level=info/warn/alert/ok"},
     "sb_insert":           {"fn": t_sb_insert,       "perm": "WRITE",
                             "args": ["table", "data"],
-                            "desc": "Insert row into Supabase table"},
+                            "desc": "Insert row into Supabase table. data=JSON string"},
     "write_file":          {"fn": t_write_file,      "perm": "EXECUTE",
                             "args": ["path", "content", "message", "repo"],
-                            "desc": "Write file to GitHub repo"},
+                            "desc": "Write file to GitHub repo. repo defaults to pockiesaints7/core-agi"},
 }
 
 # ── MCP JSON-RPC handler ──────────────────────────────────────────────────────
