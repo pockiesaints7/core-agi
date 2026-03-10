@@ -1,86 +1,78 @@
 # CORE v5.0 — Session Summary
 **Date:** 2026-03-11
-**Status:** Step 0 in progress — blocked on Railway platform outage
+**Status:** Step 0 COMPLETE ✅
 
 ---
 
-## Completed This Session
+## Step 0 — COMPLETE (2026-03-11)
 
-### 1. core.py — Step 0 Refactor ✅
-- Removed: `training_loop`, `execute_task`, all agent systems (ORCH/CRITIC/EVOLVER), `call_groq`
-- Kept: FastAPI, 14 MCP tools, Telegram bot (queue only), queue_poller (acknowledge only)
-- Size: 23KB → ~10KB, zero Groq calls on idle
-- Commit: `3322feb` — queued on Railway (platform outage)
+### Full Audit Results: 32/32 PASSED ✅
 
-### 2. Cloudflare Vault — v5.0 ✅
-- Worker JS redeployed — mirrors `core.py` env vars exactly (12 keys)
-- All old vars deleted: Gemini ×11, Jarvis, Anthropic, Google, Vercel, etc.
-- `vault/worker.js` + `wrangler.toml` pushed to GitHub for auto-deploy
-- Verified live: all 12 keys correct
+| Test | Result |
+|---|---|
+| `GET /` — root health | ✅ step=0, kb=329, sessions=176 |
+| `GET /health` — all components | ✅ supabase=ok, groq=ok, telegram=ok, github=ok |
+| `POST /mcp/auth` | ✅ token generated, 8h expiry |
+| `GET /mcp/tools` | ✅ 14 tools listed |
+| `POST /mcp/startup` (3-in-1) | ✅ state + health + constitution |
+| All 14 MCP tools | ✅ all READ/WRITE/EXECUTE working |
+| Rate limit (rapid calls) | ✅ no false positives |
+| Supabase 9 tables | ✅ 9/9 accessible |
+| Stress test 10x concurrent | ✅ 10/10 OK, zero failures |
+| SSE endpoint `/mcp/sse` | ✅ text/event-stream streaming |
+| Bad secret → 401 | ✅ security check passed |
 
-### 3. GitHub Repo — Cleaned ✅
-- Made **private**
-- README.md + MANIFEST.md rewritten for Step 0
-- `master_prompt.md` deleted — Supabase is single source of truth
-- Repo description + topics updated
-
-### 4. Master Prompt — v6 in Supabase ✅
-- Old corrupt v5 deactivated
-- Clean v6 inserted — Step 0 scope, MCP-loaded, no legacy
-- Loaded via `get_state()` on every session boot
-
-### 5. Security Audit ✅
-- No hardcoded secrets in any file or commit diff
-- Cloudflare vars all `secret_text` encrypted
-- `claude_desktop_config.json` already had correct `MCP_SECRET`
-
-### 6. userPreferences — Simplified ✅
-- Clean 3-line boot: connect MCP → 3 auto-calls → confirm ready
-- No GitHub fetch, no vault fetch, no credential loading
+### What was done this session
+1. **core.py refactored** — `orchestrator.py` + `mcp_server.py` merged into single `core.py`
+2. **Cloudflare Vault v5.0** — 12 keys, all legacy (Gemini x11 etc.) removed
+3. **GitHub repo cleaned** — made private, `master_prompt.md` deleted
+4. **Supabase cleaned** — 27 tables → 9 tables, all legacy dropped
+5. **CORE_v5_plan.md updated** — reflects actual repo + schema
+6. **Railway deployed** — live, all health checks green
+7. **Full audit passed** — 32/32
 
 ---
 
-## Blocked — Railway Platform Outage ⏸️
-Railway paused all Hobby deploys due to elevated load (2026-03-11 01:58 AM WIB).
-Clean `core.py` commit `3322feb` is queued — will auto-deploy when Railway resumes.
+## Current System State
 
----
+| Component | Status |
+|---|---|
+| Railway / core.py | ✅ Live — Step 0 |
+| Cloudflare Vault | ✅ Live — 12 keys |
+| Supabase | ✅ Clean — 9 tables |
+| GitHub repo | ✅ Private, clean |
+| MCP Desktop config | ✅ Ready — 16 MCP servers |
 
-## Next Session — In Order
+## Supabase Tables (v5.0 clean)
+```
+ACTIVE:   task_queue, knowledge_base, mistakes, changelog, sessions
+STEP 3:   hot_reflections, cold_reflections, evolution_queue, pattern_frequency
+```
+Data: knowledge_base=329, mistakes=79, sessions=176, changelog=48
 
-1. Check Railway deploy: `GET https://core-agi-production.up.railway.app/`
-   - Should return `"step": "0 — MCP + Bot"`
-2. Test MCP startup: `POST /mcp/startup` with `secret=core_mcp_secret_2026_REINVAGNAR`
-3. Verify 3 auto-calls return correct data
-4. Verify Claude Desktop connects via `core-agi` MCP entry
-5. ✅ Mark **Step 0 COMPLETE**
-6. Begin **Step 1**: Claude Desktop fully connected + first real MCP session
-
----
-
-## Current Repo State
-
+## Repo State
 | File | Status |
-|------|--------|
-| `core.py` | ✅ Step 0 clean — queued Railway deploy |
-| `vault/worker.js` | ✅ Cloudflare v5.0 live |
-| `wrangler.toml` | ✅ Auto-deploy config |
+|---|---|
+| `core.py` | ✅ Step 0 — live on Railway |
+| `vault/worker.js` | ✅ CF v5.0 live |
 | `constitution.txt` | ✅ Unchanged |
 | `resource_ceilings.json` | ✅ Unchanged |
-| `requirements.txt` | ✅ Unchanged |
-| `README.md` | ✅ Updated Step 0 |
-| `MANIFEST.md` | ✅ Updated Step 0 |
-| `mcp_tools/` | ⏸️ Available, not active until Step 3 |
+| `MANIFEST.md` | ✅ Step 0 current |
+| `mcp_tools/` | ⏸️ Available, activates Step 3 |
 
-## Railway Env Vars
-All 12 set and verified:
-`GROQ_API_KEY` `GROQ_MODEL` `GROQ_MODEL_FAST` `SUPABASE_URL` `SUPABASE_SERVICE_KEY`
-`SUPABASE_ANON_KEY` `TELEGRAM_BOT_TOKEN` `TELEGRAM_CHAT_ID` `GITHUB_PAT`
-`GITHUB_USERNAME` `MCP_SECRET` `PORT`
+---
+
+## Next Session — Step 1
+
+1. Connect Claude Desktop to `core-agi` MCP entry
+2. Verify 3 auto-calls fire on session start (get_state, get_system_health, get_constitution)
+3. First real MCP session — use tools live from Claude Desktop
+4. Mark **Step 1 COMPLETE**
+5. Begin **Step 2**: Audit training logic / pipeline design
 
 ## Live URLs
 | Service | URL |
-|---------|-----|
+|---|---|
 | Railway | https://core-agi-production.up.railway.app |
 | MCP SSE | https://core-agi-production.up.railway.app/mcp/sse |
 | Vault | https://core-vault.pockiesaints7.workers.dev |
