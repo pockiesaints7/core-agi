@@ -1,4 +1,4 @@
-﻿"""CORE v5.0 - Single Process | Owner: REINVAGNAR | Groq only LLM"""
+"""CORE v5.0 - Single Process | Owner: REINVAGNAR | Groq only LLM"""
 import base64,hashlib,json,os,threading,time
 from collections import defaultdict
 from datetime import datetime,timedelta,timezone
@@ -51,7 +51,6 @@ class RateLimiter:
     def sbw(self): return self._ok("sbw",3600,self.c.get("supabase_writes_per_hour",500))
     def mcp(self,sid): return self._ok(f"mcp:{sid}",60,self.c.get("mcp_tool_calls_per_minute",30))
 L=RateLimiter()
-
 
 def _sbh(svc=False):
     k=SUPABASE_SVC if svc else SUPABASE_ANON
@@ -118,7 +117,6 @@ def update_master_prompt(content,reason,score=90):
     sb_post("master_prompt",{"version":v,"content":content,"change_reason":reason,"quality_score":score,"is_active":True})
     return v
 
-
 AGENTS={"researcher":"You are a world-class researcher. Be comprehensive. State what you know vs uncertain.",
 "planner":"You are a master project planner. Clear phases, milestones, dependencies, risk mitigations.",
 "engineer":"You are a senior software engineer. Write clean, production-ready, well-commented code.",
@@ -140,9 +138,10 @@ def execute_task(task,cid=None):
     except: plan={"domain":"general","task_type":"unknown","agents":[{"role":"writer","task":task}],"services":[]}
     domain=plan.get("domain","general"); agents=plan.get("agents",[{"role":"writer","task":task}])
     kb=get_context(domain,task); mk=get_mistakes(domain); pb=get_playbook(domain)
-    ctx=(f"Task: {task}\n\nKNOWLEDGE ({len(kb)}):\n"+"\n".join([f"- {x.get(\"key\",\"\")}: {str(x.get(\"value\",\"\"))[:150]}" for x in kb])+
-         "\n\nMETHODS:\n"+"\n".join([f"- {p.get(\"topic\",\"\")}: {p.get(\"method\",\"\")[:120]}" for p in pb])+
-         "\n\nAVOID:\n"+"\n".join([f"- {m.get(\"what_failed\",\"\")[:80]}" for m in mk]))
+    kb_lines="\n".join([f"- {x.get('key','')}: {str(x.get('value',''))[:150]}" for x in kb])
+    pb_lines="\n".join([f"- {p.get('topic','')}: {p.get('method','')[:120]}" for p in pb])
+    mk_lines="\n".join([f"- {m.get('what_failed','')[:80]}" for m in mk])
+    ctx=f"Task: {task}\n\nKNOWLEDGE ({len(kb)}):\n{kb_lines}\n\nMETHODS:\n{pb_lines}\n\nAVOID:\n{mk_lines}"
     results={}
     for a in agents:
         role=a.get("role","writer"); t=a.get("task",task)
@@ -155,7 +154,7 @@ def execute_task(task,cid=None):
     while score<85 and attempts<3:
         if not L.groq(): break
         role=agents[-1].get("role","writer") if agents else "writer"
-        retry=call_groq(AGENTS.get(role,AGENTS["writer"]),f"Fix:{critic.get(\"issues\",[])}\nTask:{task}\n\nCtx:\n{ctx}")
+        retry=call_groq(AGENTS.get(role,AGENTS["writer"]),f"Fix:{critic.get('issues',[])}\nTask:{task}\n\nCtx:\n{ctx}")
         ctx+=f"\n\nIMPROVED:\n{retry}"
         try: critic=json.loads(call_groq_fast(CRITIC_SYS,f"Task:{task}\n\nOutput:\n{ctx[:3000]}")); score=critic.get("score",75)
         except: score=75
@@ -176,9 +175,8 @@ def execute_task(task,cid=None):
             notify(f"Prompt evolved to v{v}",cid)
     dur=(datetime.now(timezone.utc)-start).seconds
     prev=list(results.values())[0][:400] if results else ""
-    notify(f"CORE Done\nTask: {task[:60]}\nScore: {score}/100\nAgents: {str([a[\"role\"] for a in agents])}\nTime: {dur}s\n\n{prev}...",cid)
+    notify(f"CORE Done\nTask: {task[:60]}\nScore: {score}/100\nAgents: {str([a['role'] for a in agents])}\nTime: {dur}s\n\n{prev}...",cid)
     return ctx
-
 
 TRAIN_SYS="You are CORE internal trainer. Generate and solve a self-improvement task. Output ONLY valid JSON: {\"task\":\"\",\"domain\":\"\",\"reasoning\":\"\",\"output\":\"\",\"score\":85,\"new_knowledge\":[{\"domain\":\"X\",\"topic\":\"Y\",\"content\":\"Z\",\"tags\":[\"a\"]}],\"new_mistakes\":[{\"what\":\"\",\"avoid\":\"\"}],\"gap_found\":\"\"}"
 AUDIT_SYS="You are CORE self-auditor. Output ONLY valid JSON: {\"gap\":\"\",\"fix\":\"\",\"priority\":\"high|medium|low\"}"
@@ -203,7 +201,7 @@ def training_loop():
                         sb_post("memory",{"category":"training_gap","key":f"gap_{_cycles}","value":json.dumps(audit)})
                 except: pass
             _cycles+=1; _last_train=datetime.now(timezone.utc).isoformat()
-            print(f"[TRAINING] Cycle {_cycles} score={res.get(\"score\",\"?\")} domain={res.get(\"domain\",\"?\")}")
+            print(f"[TRAINING] Cycle {_cycles} score={res.get('score','?')} domain={res.get('domain','?')}")
             time.sleep(45)
         except Exception as e: print(f"[TRAINING] {e}"); time.sleep(60)
 
@@ -213,12 +211,12 @@ def queue_poller():
         try:
             tasks=sb_get("task_queue","status=eq.pending&order=priority.asc&limit=1")
             if tasks:
-                t=tasks[0]; sb_patch("task_queue",f"id=eq.{t[\"id\"]}",{"status":"running"})
+                t=tasks[0]; sb_patch("task_queue",f"id=eq.{t['id']}",{"status":"running"})
                 try:
                     res=execute_task(t["task"],t.get("chat_id"))
-                    sb_patch("task_queue",f"id=eq.{t[\"id\"]}",{"status":"done","result":res[:5000]})
+                    sb_patch("task_queue",f"id=eq.{t['id']}",{"status":"done","result":res[:5000]})
                 except Exception as e:
-                    sb_patch("task_queue",f"id=eq.{t[\"id\"]}",{"status":"failed","error":str(e)})
+                    sb_patch("task_queue",f"id=eq.{t['id']}",{"status":"failed","error":str(e)})
                     notify(f"Queue failed: {str(e)[:100]}")
         except Exception as e: print(f"[QUEUE] {e}")
         time.sleep(30)
@@ -232,7 +230,6 @@ def mcp_ok(tok):
     if tok not in _sessions: return False
     if datetime.utcnow()>datetime.fromisoformat(_sessions[tok]["expires"]): del _sessions[tok]; return False
     _sessions[tok]["calls"]+=1; return True
-
 
 def t_state():
     mp=sb_get("master_prompt","select=version,content&is_active=eq.true&limit=1")
@@ -267,7 +264,7 @@ def t_get_mistakes(domain="general",limit=10):
 def t_update_state(key,value,reason): return {"ok":sb_post("memory",{"category":"mcp_state","key":key,"value":str(value),"note":reason}),"key":key}
 def t_add_knowledge(domain,topic,content,tags,confidence="medium"): return {"ok":sb_post("knowledge_base",{"domain":domain,"topic":topic,"content":content,"confidence":confidence,"tags":tags,"source":"mcp_session"}),"topic":topic}
 def t_log_mistake(context,what_failed,fix,domain="general"): return {"ok":sb_post("mistakes",{"domain":domain,"context":context,"what_failed":what_failed,"correct_approach":fix})}
-def t_read_file(path,repo=""): 
+def t_read_file(path,repo=""):
     try: return {"ok":True,"content":gh_read(path,repo or GITHUB_REPO)[:5000]}
     except Exception as e: return {"ok":False,"error":str(e)}
 def t_write_file(path,content,message,repo=""):
@@ -355,18 +352,18 @@ def handle_msg(msg):
     if not text: return
     if text=="/start":
         s=get_agi_status()
-        notify(f"*CORE v5.0*\nKnowledge: {s.get(\"knowledge_entries\",0)}\nPlaybook: {s.get(\"playbook_entries\",0)}\nMistakes: {s.get(\"mistake_entries\",0)}\nTraining: {_cycles} cycles\nPrompt: v{s.get(\"master_prompt_version\",\"?\")}\n\n/status /prompt /tasks /ask <q>\nOr send any task.",cid)
+        notify(f"*CORE v5.0*\nKnowledge: {s.get('knowledge_entries',0)}\nPlaybook: {s.get('playbook_entries',0)}\nMistakes: {s.get('mistake_entries',0)}\nTraining: {_cycles} cycles\nPrompt: v{s.get('master_prompt_version','?')}\n\n/status /prompt /tasks /ask <q>\nOr send any task.",cid)
     elif text=="/status":
         s=get_agi_status(); h=t_health()
-        notify(f"*Status*\nSupabase: {h[\"components\"].get(\"supabase\")}\nGroq: {h[\"components\"].get(\"groq\")}\nTelegram: {h[\"components\"].get(\"telegram\")}\nGitHub: {h[\"components\"].get(\"github\")}\n\nKnowledge: {s.get(\"knowledge_entries\",0)}\nTraining: {_cycles} cycles\nPrompt: v{s.get(\"master_prompt_version\",\"?\")}",cid)
+        notify(f"*Status*\nSupabase: {h['components'].get('supabase')}\nGroq: {h['components'].get('groq')}\nTelegram: {h['components'].get('telegram')}\nGitHub: {h['components'].get('github')}\n\nKnowledge: {s.get('knowledge_entries',0)}\nTraining: {_cycles} cycles\nPrompt: v{s.get('master_prompt_version','?')}",cid)
     elif text=="/prompt":
         c,v=load_master_prompt(); notify(f"*Prompt v{v}*\n\n{c[:800]}...",cid)
     elif text=="/tasks":
         t=sb_get("patterns","order=created_at.desc&limit=5")
-        notify("*Recent*\n\n"+"\n".join([f"- {x.get(\"notes\",\"?\")[:50]} ({x.get(\"quality_score\",0)})" for x in t]) if t else "No tasks yet.",cid)
+        notify("*Recent*\n\n"+"\n".join([f"- {x.get('notes','?')[:50]} ({x.get('quality_score',0)})" for x in t]) if t else "No tasks yet.",cid)
     elif text.startswith("/ask "):
         r=t_search_kb(text[5:].strip(),limit=5)
-        notify("\n\n".join([f"*{x.get(\"topic\",\"\")}*\n{str(x.get(\"content\",\"\"))[:200]}" for x in r]) if r else "Nothing found.",cid)
+        notify("\n\n".join([f"*{x.get('topic','')}*\n{str(x.get('content',''))[:200]}" for x in r]) if r else "Nothing found.",cid)
     else:
         threading.Thread(target=execute_task,args=(text,cid),daemon=True).start()
 
@@ -376,10 +373,9 @@ def on_start():
     threading.Thread(target=queue_poller,daemon=True).start()
     threading.Thread(target=training_loop,daemon=True).start()
     s=get_agi_status()
-    notify(f"*CORE v5.0 Online*\nKnowledge: {s.get(\"knowledge_entries\",0)}\nPrompt: v{s.get(\"master_prompt_version\",\"?\")}\nGroq: {GROQ_MODEL}\nMCP: ready on /mcp/*")
+    notify(f"*CORE v5.0 Online*\nKnowledge: {s.get('knowledge_entries',0)}\nPrompt: v{s.get('master_prompt_version','?')}\nGroq: {GROQ_MODEL}\nMCP: ready on /mcp/*")
     print(f"[CORE] v5.0 online :{PORT}")
 
 if __name__=="__main__":
     import uvicorn
     uvicorn.run("core:app",host="0.0.0.0",port=PORT,reload=False)
-
