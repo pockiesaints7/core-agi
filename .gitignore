@@ -1,3 +1,17 @@
 .env
 __pycache__/
 *.pyc
+
+# Training scripts (contain hardcoded credentials — local only, never push)
+train_*.py
+autonomous_train.py
+*_train*.py
+train_writer.py
+ck.py
+check_tasks.py
+
+# Credential files
+CREDENTIALS.md
+*.secret
+secrets.json
+gemini-secrets.json
