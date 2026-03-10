@@ -171,7 +171,7 @@ def call_claude(system, user, context=""):
     content = f"{user}\n\nContext:\n{context}" if context else user
     r = httpx.post("https://api.anthropic.com/v1/messages",
         headers={"x-api-key": ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json"},
-        json={"model": "claude-sonnet-4-5", "max_tokens": 4096, "system": system,
+        json={"model": "claude-sonnet-4-6", "max_tokens": 4096, "system": system,
               "messages": [{"role": "user", "content": content}]}, timeout=90)
     data = r.json()
     return data["content"][0]["text"] if data.get("content") else ""
