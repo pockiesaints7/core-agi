@@ -11,6 +11,9 @@ Step 3: Training pipeline implemented:
   - MCP tools: trigger_cold_processor, list_evolutions, approve_evolution
   - Telegram: /evolutions, /approve <id>, /reject <id>
 Fix (2026-03-11e): t_state() fetches operating_context.json + SESSION.md from GitHub.
+Fix (2026-03-11f): cold_processor batch frequency counting — pattern frequency now
+  correctly counts all occurrences in the batch (via Counter), not de-dup to 1.
+  Also adds print logging to cold_reflections insert for easier debugging.
 """
 import asyncio
 import base64
@@ -20,7 +23,7 @@ import os
 import threading
 import time
 import uuid
-from collections import defaultdict
+from collections import Counter, defaultdict
 from datetime import datetime, timedelta
 from typing import Optional
 
@@ -279,39 +282,37 @@ def run_cold_processor():
     Batch processor: reads unprocessed hot_reflections, distills patterns,
     queues evolutions, writes one cold_reflections summary.
     Safe to call multiple times — idempotent on already-processed rows.
+
+    Fix (2026-03-11f): Uses Counter to aggregate pattern frequency across the
+    entire batch before upserting. A pattern seen 3x in one batch now correctly
+    gets frequency=3 (or existing+3), not frequency=1.
     """
     try:
-        # 1. Fetch unprocessed hot reflections
+        # 1. Fetch unprocessed hot reflections (skip dummy probe row id=1)
         hots = sb_get("hot_reflections",
-                      "select=id,domain,new_patterns,new_mistakes,quality_score,gaps_identified&processed_by_cold=eq.false&order=created_at.asc",
+                      "select=id,domain,new_patterns,new_mistakes,quality_score&processed_by_cold=eq.false&id=gt.1&order=created_at.asc",
                       svc=True)
-        # Filter out dummy probe row (id=1 with all nulls)
-        hots = [h for h in hots if h.get("id") != 1]
         if not hots:
             print("[COLD] No unprocessed hot reflections.")
             return {"ok": True, "processed": 0, "evolutions_queued": 0}
 
         period_start = datetime.utcnow().isoformat()
-        patterns_all = []
-        mistakes_all = []
         evolutions_queued = 0
 
-        # 2. Collect all patterns and mistakes
+        # 2. Aggregate pattern counts across entire batch using Counter
+        #    key = pattern_key[:200], value = {count, domain}
+        batch_pattern_counts: Counter = Counter()
+        batch_pattern_domain: dict = {}
         for h in hots:
             for p in (h.get("new_patterns") or []):
-                if p: patterns_all.append({"key": str(p), "domain": h.get("domain", "general")})
-            for m in (h.get("new_mistakes") or []):
-                if m: mistakes_all.append(str(m))
+                if p:
+                    key = str(p)[:200]
+                    batch_pattern_counts[key] += 1
+                    if key not in batch_pattern_domain:
+                        batch_pattern_domain[key] = h.get("domain", "general")
 
-        # 3. Upsert pattern_frequency + check threshold
-        seen_keys = set()
-        for pat in patterns_all:
-            key = pat["key"][:200]
-            if key in seen_keys:
-                continue
-            seen_keys.add(key)
-
-            # Check if pattern already exists
+        # 3. Upsert pattern_frequency with correct batch count
+        for key, batch_count in batch_pattern_counts.items():
             existing = sb_get("pattern_frequency",
                               f"select=id,frequency,auto_applied&pattern_key=eq.{key}&limit=1",
                               svc=True)
@@ -319,11 +320,12 @@ def run_cold_processor():
 
             if existing:
                 rec = existing[0]
-                new_freq = (rec.get("frequency") or 0) + 1
+                new_freq = (rec.get("frequency") or 0) + batch_count
                 sb_patch("pattern_frequency", f"id=eq.{rec['id']}",
                          {"frequency": new_freq, "last_seen": datetime.utcnow().isoformat()})
+                print(f"[COLD] pattern '{key[:50]}' updated freq={new_freq}")
 
-                # Queue evolution if threshold hit and not already applied
+                # Queue evolution if threshold hit and not already queued
                 if new_freq >= PATTERN_EVO_THRESHOLD and not rec.get("auto_applied"):
                     evo_ok = sb_post("evolution_queue", {
                         "status":        "pending",
@@ -339,30 +341,52 @@ def run_cold_processor():
                     if evo_ok:
                         evolutions_queued += 1
                         sb_patch("pattern_frequency", f"id=eq.{rec['id']}", {"auto_applied": True})
+                        print(f"[COLD] evolution queued for '{key[:50]}'")
             else:
-                # New pattern
+                # New pattern — insert with actual batch count
+                new_freq = batch_count
                 sb_upsert("pattern_frequency", {
                     "pattern_key": key,
-                    "domain":      pat["domain"],
+                    "domain":      batch_pattern_domain.get(key, "general"),
                     "description": key,
-                    "frequency":   1,
+                    "frequency":   new_freq,
                     "confidence":  0.5,
                     "first_seen":  datetime.utcnow().isoformat(),
                     "last_seen":   datetime.utcnow().isoformat(),
                     "auto_applied": False,
                 }, "pattern_key")
+                print(f"[COLD] new pattern '{key[:50]}' freq={new_freq}")
+
+                # Also check threshold for brand-new patterns (e.g. seen 3x in first batch)
+                if new_freq >= PATTERN_EVO_THRESHOLD:
+                    evo_ok = sb_post("evolution_queue", {
+                        "status":        "pending",
+                        "change_type":   "knowledge",
+                        "change_summary": f"New pattern '{key}' seen {new_freq}x in first batch — promote to knowledge base",
+                        "pattern_key":   key,
+                        "frequency":     new_freq,
+                        "confidence":    min(0.5 + (new_freq * 0.1), 0.95),
+                        "impact":        "low",
+                        "reversible":    True,
+                        "owner_notified": False,
+                    })
+                    if evo_ok:
+                        evolutions_queued += 1
+                        print(f"[COLD] evolution queued for new pattern '{key[:50]}'")
 
         # 4. Write cold_reflections summary
         period_end = datetime.utcnow().isoformat()
-        sb_post("cold_reflections", {
+        cold_row = {
             "period_start":      period_start,
             "period_end":        period_end,
             "hot_count":         len(hots),
-            "patterns_found":    len(seen_keys),
+            "patterns_found":    len(batch_pattern_counts),
             "evolutions_queued": evolutions_queued,
             "auto_applied":      False,
-            "summary_text":      f"Processed {len(hots)} hot reflections. {len(seen_keys)} unique patterns. {evolutions_queued} evolutions queued.",
-        })
+            "summary_text":      f"Processed {len(hots)} hot reflections. {len(batch_pattern_counts)} unique patterns. {evolutions_queued} evolutions queued.",
+        }
+        cold_ok = sb_post("cold_reflections", cold_row)
+        print(f"[COLD] cold_reflections insert ok={cold_ok} row={cold_row}")
 
         # 5. Mark all processed hots as done
         for h in hots:
@@ -372,8 +396,8 @@ def run_cold_processor():
         if evolutions_queued > 0:
             notify(f"✨ Cold processor: {evolutions_queued} evolution(s) queued from {len(hots)} sessions.\nUse /evolutions to review.")
 
-        print(f"[COLD] Processed {len(hots)} hot, {evolutions_queued} evolutions queued.")
-        return {"ok": True, "processed": len(hots), "evolutions_queued": evolutions_queued}
+        print(f"[COLD] Done: processed={len(hots)} patterns={len(batch_pattern_counts)} evolutions={evolutions_queued}")
+        return {"ok": True, "processed": len(hots), "patterns_found": len(batch_pattern_counts), "evolutions_queued": evolutions_queued}
 
     except Exception as e:
         print(f"[COLD] run_cold_processor error: {e}")
@@ -419,7 +443,6 @@ def apply_evolution(evolution_id: int):
         elif change_type == "code":
             if not diff_content:
                 return {"ok": False, "error": "code evolution requires diff_content"}
-            # Write to a pending patch file — owner reviews before merging
             fname = f"patches/evo_{evolution_id}_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.patch"
             applied = gh_write(fname, diff_content, f"Evolution #{evolution_id}: {change_summary[:60]}")
             note = f"Patch written to {fname} — review and merge manually"
@@ -427,7 +450,6 @@ def apply_evolution(evolution_id: int):
         elif change_type == "behavior":
             if not diff_content:
                 return {"ok": False, "error": "behavior evolution requires diff_content"}
-            # Write to SESSION.md addendum
             applied = gh_write("BEHAVIOR_UPDATES.md", diff_content,
                                f"Behavior evolution #{evolution_id}: {change_summary[:60]}")
             note = "Written to BEHAVIOR_UPDATES.md — review and merge into operating_context.json manually"
@@ -457,7 +479,6 @@ def reject_evolution(evolution_id: int, reason: str = ""):
             return {"ok": False, "error": f"Evolution {evolution_id} not found or not pending"}
         evo = rows[0]
         sb_patch("evolution_queue", f"id=eq.{evolution_id}", {"status": "rejected"})
-        # Log as mistake so system learns
         sb_post("mistakes", {
             "domain":           "evolution",
             "context":          f"Evolution #{evolution_id}: {evo.get('change_summary', '')[:200]}",
@@ -483,7 +504,6 @@ def cold_processor_loop():
     print("[COLD] Background loop started")
     while True:
         try:
-            # Count unprocessed hots (skip probe row id=1)
             hots = sb_get("hot_reflections",
                           "select=id&processed_by_cold=eq.false&id=gt.1",
                           svc=True)
@@ -497,7 +517,7 @@ def cold_processor_loop():
 
             # Auto-apply knowledge evolutions with high confidence
             pending_evo = sb_get("evolution_queue",
-                                 f"select=id,confidence,change_type&status=eq.pending&change_type=eq.knowledge",
+                                 "select=id,confidence,change_type&status=eq.pending&change_type=eq.knowledge&id=gt.1",
                                  svc=True)
             for evo in pending_evo:
                 conf = float(evo.get("confidence") or 0)
@@ -634,7 +654,7 @@ def t_training_status():
                              "select=id&processed_by_cold=eq.false&id=gt.1",
                              svc=True)
         pending_evo = sb_get("evolution_queue",
-                             "select=id,change_type,change_summary,confidence&status=eq.pending",
+                             "select=id,change_type,change_summary,confidence&status=eq.pending&id=gt.1",
                              svc=True)
         return {
             "status":              "Step 3 — training pipeline ACTIVE",
@@ -655,7 +675,7 @@ def t_trigger_cold_processor():
 def t_list_evolutions(status="pending"):
     """List evolutions, default pending."""
     rows = sb_get("evolution_queue",
-                  f"select=id,status,change_type,change_summary,confidence,pattern_key,created_at&status=eq.{status}&order=created_at.desc&limit=20",
+                  f"select=id,status,change_type,change_summary,confidence,pattern_key,created_at&status=eq.{status}&id=gt.1&order=created_at.desc&limit=20",
                   svc=True)
     return {"evolutions": rows, "count": len(rows)}
 
@@ -946,7 +966,7 @@ def handle_msg(msg):
         notify(lines, cid)
     elif text == "/evolutions":
         rows = sb_get("evolution_queue",
-                      "select=id,change_type,change_summary,confidence&status=eq.pending&order=created_at.desc&limit=10",
+                      "select=id,change_type,change_summary,confidence&status=eq.pending&id=gt.1&order=created_at.desc&limit=10",
                       svc=True)
         if rows:
             lines = "\n".join([f"#{r['id']} [{r.get('change_type','?')}] conf={r.get('confidence','?')}\n  {str(r.get('change_summary',''))[:80]}" for r in rows])
