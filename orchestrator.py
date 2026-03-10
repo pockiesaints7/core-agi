@@ -349,8 +349,36 @@ Last updated: {str(s.get('prompt_last_updated','?'))[:10]}""", chat_id)
         threading.Thread(target=execute_task, args=(text, chat_id), daemon=True).start()
 
 # ── WEBHOOK SERVER ────────────────────────────────────────
+
+# ── MCP PROXY ─────────────────────────────────────────────
+# Forwards /mcp/* requests from public port 8080 → mcp_server on localhost:8081
+def _proxy_to_mcp(handler, method="GET", body=None):
+    """Forward request to mcp_server running on localhost:8081."""
+    MCP_PORT = int(os.environ.get("MCP_PORT", 8081))
+    target = f"http://localhost:{MCP_PORT}{handler.path}"
+    fwd_headers = {k: v for k, v in handler.headers.items()
+                   if k.lower() not in ("host", "content-length")}
+    try:
+        if method == "GET":
+            resp = httpx.get(target, headers=fwd_headers, timeout=30)
+        else:
+            resp = httpx.post(target, headers=fwd_headers, content=body, timeout=30)
+        handler.send_response(resp.status_code)
+        for k, v in resp.headers.items():
+            if k.lower() not in ("transfer-encoding", "content-encoding"):
+                handler.send_header(k, v)
+        handler.end_headers()
+        handler.wfile.write(resp.content)
+    except Exception as e:
+        handler.send_response(502)
+        handler.end_headers()
+        handler.wfile.write(f'{{"error":"MCP proxy error: {e}"}}'.encode())
 class WebhookHandler(BaseHTTPRequestHandler):
     def do_POST(self):
+        if self.path.startswith("/mcp/"):
+            body = self.rfile.read(int(self.headers.get("Content-Length", 0)))
+            _proxy_to_mcp(self, "POST", body)
+            return
         if self.path == "/webhook":
             body = self.rfile.read(int(self.headers.get("Content-Length",0)))
             self.send_response(200); self.end_headers()
@@ -364,6 +392,9 @@ class WebhookHandler(BaseHTTPRequestHandler):
             self.send_response(404); self.end_headers()
 
     def do_GET(self):
+        if self.path.startswith("/mcp/"):
+            _proxy_to_mcp(self, "GET")
+            return
         self.send_response(200); self.end_headers()
         s = get_agi_status()
         self.wfile.write(f"CORE v3 | Prompt v{s.get('master_prompt_version','?')} | Knowledge: {s.get('knowledge_entries',0)} | Patterns: {s.get('pattern_entries',0)}".encode())
