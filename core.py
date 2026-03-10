@@ -65,6 +65,11 @@ def _sbh(svc=False):
     return {"apikey": k, "Authorization": f"Bearer {k}",
             "Content-Type": "application/json", "Prefer": "return=minimal"}
 
+def _sbh_count():
+    """Headers for count queries — separate from _sbh to avoid Prefer conflict."""
+    return {"apikey": SUPABASE_ANON, "Authorization": f"Bearer {SUPABASE_ANON}",
+            "Prefer": "count=exact"}
+
 def sb_get(t, qs=""):
     r = httpx.get(f"{SUPABASE_URL}/rest/v1/{t}?{qs}", headers=_sbh(), timeout=15)
     r.raise_for_status()
@@ -128,16 +133,17 @@ def get_latest_session():
     return d[0] if d else {}
 
 def get_system_counts():
-    """Return row counts for key tables."""
+    """Return row counts for key tables using count=exact header."""
     counts = {}
     for t in ["knowledge_base", "mistakes", "sessions", "task_queue"]:
         try:
             r = httpx.get(
                 f"{SUPABASE_URL}/rest/v1/{t}?select=id",
-                headers={**_sbh(), "Prefer": "count=exact"},
+                headers=_sbh_count(),
                 timeout=10,
             )
-            counts[t] = int(r.headers.get("content-range", "0/0").split("/")[-1])
+            cr = r.headers.get("content-range", "*/0")
+            counts[t] = int(cr.split("/")[-1]) if "/" in cr else 0
         except:
             counts[t] = -1
     return counts
@@ -171,12 +177,12 @@ def t_state():
     counts  = get_system_counts()
     pending = sb_get("task_queue", "select=id,task,status&status=eq.pending&limit=5")
     return {
-        "last_session":   session.get("summary", "No sessions yet."),
-        "last_actions":   session.get("actions", []),
+        "last_session":    session.get("summary", "No sessions yet."),
+        "last_actions":    session.get("actions", []),
         "last_session_ts": session.get("created_at", ""),
-        "counts":         counts,
-        "pending_tasks":  pending,
-        "note":           "Training starts Step 3.",
+        "counts":          counts,
+        "pending_tasks":   pending,
+        "note":            "Training starts Step 3.",
     }
 
 def t_health():
@@ -285,11 +291,11 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], all
 def root():
     counts = get_system_counts()
     return {
-        "service": "CORE v5.0",
-        "step": "0 — MCP + Bot",
+        "service":   "CORE v5.0",
+        "step":      "0 — MCP + Bot",
         "knowledge": counts.get("knowledge_base", 0),
-        "sessions": counts.get("sessions", 0),
-        "mistakes": counts.get("mistakes", 0),
+        "sessions":  counts.get("sessions", 0),
+        "mistakes":  counts.get("mistakes", 0),
     }
 
 @app.get("/health")
@@ -361,7 +367,7 @@ async def webhook(req: Request):
         print(f"[WEBHOOK] {e}")
     return {"ok": True}
 
-# ── Telegram handler (Step 0: queue only, no Groq) ────────────────────────────
+# ── Telegram handler ─────────────────────────────────────────────────────────
 def handle_msg(msg):
     cid  = str(msg.get("chat", {}).get("id", ""))
     text = msg.get("text", "").strip()
@@ -413,7 +419,7 @@ def handle_msg(msg):
         else:
             notify("❌ Failed to queue task. Try again.", cid)
 
-# ── Queue poller (Step 0: marks tasks, no execution yet) ─────────────────────
+# ── Queue poller ─────────────────────────────────────────────────────────────
 def queue_poller():
     print("[QUEUE] Started — Step 0 mode (no execution)")
     while True:
