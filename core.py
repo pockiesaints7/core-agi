@@ -25,6 +25,16 @@ Fix log:
                Detects stale CORE_SELF.md (>7 days with active sessions) → Telegram warning.
                Structural evolutions (schema/tool/architecture/file) without
                core_self_updated=true in diff_content trigger automatic Telegram reminder.
+  2026-03-11M: CORE v5.1 — System actually evolves, not just documents.
+               Added: t_route() real routing engine v2.0 with signal extraction + Groq execution.
+               Added: t_ask() — MCP tool to query CORE with full KB context via Groq.
+               Added: t_reflect() — single-call hot reflection logger (replaces manual sb_insert).
+               Added: t_stats() — analytics: domain breakdown, top patterns, routing distribution.
+               Added: t_search_mistakes() — semantic mistake search with domain filter.
+               Telegram upgraded: /ask now uses Groq (not just KB keyword search).
+               Telegram new: /mistakes [domain], /stats, /route <task>.
+               queue_poller upgraded: tasks now actually executed via t_route() + Groq, not just acknowledged.
+               TOOLS: 20 → 25 tools. Core is now a working AGI executor, not just a data store.
 """
 import asyncio
 import base64
