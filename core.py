@@ -1001,21 +1001,30 @@ def _backlog_add(items: list) -> list:
                 # Push actionable items (P3+) to evolution_queue for owner approval
                 priority = int(item.get("priority", 1))
                 if priority >= 3:
-                    itype = item.get("type", "other")
-                    # Map backlog type to evolution change_type
-                    change_type = "knowledge" if itype == "new_kb" else "backlog"
+                    itype  = item.get("type", "other")
                     effort = item.get("effort", "medium")
-                    # Auto-approve low-effort new_kb items - no owner review needed
-                    auto_apply = (itype == "new_kb" and effort == "low")
+                    # executor: who runs this when approved
+                    # claude_desktop = needs code patch / new function
+                    # groq           = data/KB ops CORE can self-execute
+                    # auto           = decide at apply-time based on complexity
+                    executor = (
+                        "claude_desktop" if itype in ("new_tool", "telegram_command") else
+                        "groq"           if itype in ("new_kb", "missing_data") else
+                        "auto"
+                    )
+                    change_type = "knowledge" if itype == "new_kb" else "backlog"
+                    auto_apply  = (itype == "new_kb" and effort == "low" and executor == "groq")
                     sb_post_critical("evolution_queue", {
                         "change_type": change_type,
-                        "change_summary": f"[BACKLOG P{priority}] {title}: {item.get('description','')[:200]}",
+                        "change_summary": f"[BACKLOG P{priority}][{executor}] {title}: {item.get('description','')[:180]}",
                         "diff_content": json.dumps({
                             "backlog_type": itype,
+                            "executor": executor,
                             "domain": item.get("domain", "general"),
                             "effort": effort,
                             "impact": item.get("impact", "medium"),
                             "title": title,
+                            "description": item.get("description", ""),
                         }),
                         "pattern_key": f"backlog:{itype}:{title[:60]}",
                         "confidence": round(0.5 + priority * 0.08, 2),
