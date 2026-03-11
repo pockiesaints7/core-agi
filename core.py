@@ -356,8 +356,10 @@ def run_cold_processor():
                     batch_domain.setdefault(key, h.get("domain", "general"))
 
         for key, batch_count in batch_counts.items():
+            from urllib.parse import quote
+            key_enc = quote(key, safe="")
             existing = [e for e in sb_get("pattern_frequency",
-                        f"select=id,frequency,auto_applied&pattern_key=eq.{key}&limit=1", svc=True)
+                        f"select=id,frequency,auto_applied&pattern_key=eq.{key_enc}&limit=1", svc=True)
                         if e.get("id") != 1]
             if existing:
                 rec      = existing[0]
