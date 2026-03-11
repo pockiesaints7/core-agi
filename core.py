@@ -941,8 +941,10 @@ _RESEARCH_DOMAINS = [
 
 _IMPROVEMENT_INTERVAL = 3600  # 60 min — free Groq tier safe
 _last_research_run: float = 0.0
-_backlog_lock = threading.Lock()
-_backlog: list = []
+# NOTE: _backlog in-memory removed — all backlog state lives in Supabase `backlog` table.
+# Schema: id(int), title(text), type(text), priority(int), description(text),
+#         domain(text), effort(text), impact(text), status(text), discovered_at(timestamptz)
+# This makes backlog fully restart-proof.
 
 
 def _research_simulate_batch() -> list:
