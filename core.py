@@ -712,6 +712,291 @@ def t_gh_read_lines(path, start_line=1, end_line=50, repo=""):
         return {"ok": False, "error": str(ex), "path": path}
 
 
+# ── Groq LLM call ────────────────────────────────────────────────────────────
+def groq_chat(system: str, user: str, model: str = None, max_tokens: int = 1024) -> str:
+    """Single Groq chat completion. Returns text or raises."""
+    m = model or GROQ_MODEL
+    r = httpx.post(
+        "https://api.groq.com/openai/v1/chat/completions",
+        headers={"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"},
+        json={"model": m, "max_tokens": max_tokens,
+              "messages": [{"role": "system", "content": system},
+                           {"role": "user", "content": user}]},
+        timeout=30,
+    )
+    r.raise_for_status()
+    return r.json()["choices"][0]["message"]["content"].strip()
+
+
+# ── Signal extraction (v2.0 routing pre-layer) ────────────────────────────────
+def extract_signals(task: str) -> dict:
+    """
+    Extract 5 routing signals from raw task text.
+    S1=intent, S2=domain, S3=expertise(1-5), S4=emotion, S5=scope/stakes
+    Fast path: keyword-based, no LLM needed.
+    """
+    t = task.lower()
+
+    # S1: Intent verb
+    intent = "generate"
+    for kw, v in [("fix","fix"),("debug","fix"),("error","fix"),("broken","fix"),
+                  ("explain","explain"),("what is","explain"),("how does","explain"),("teach","explain"),
+                  ("find","lookup"),("search","lookup"),("who is","lookup"),("when did","lookup"),
+                  ("analyze","analyze"),("review","analyze"),("check","validate"),("is this","validate"),
+                  ("write","generate"),("create","generate"),("build","build"),("make","build"),
+                  ("should i","decide"),("which","decide"),("recommend","decide"),
+                  ("help","support"),("overwhelmed","support"),("worried","support"),("scared","support"),
+                  ("plan","orchestrate"),("steps to","orchestrate"),("how to","orchestrate")]:
+        if kw in t: intent = v; break
+
+    # S2: Domain fingerprint
+    domain = "general"
+    for kw, d in [("def ","code"),("function","code"),("import ","code"),("class ","code"),("sql","code"),
+                  ("contract","legal"),("liability","legal"),("clause","legal"),("lawsuit","legal"),
+                  ("invoice","finance"),("revenue","finance"),("cash flow","finance"),("tax","finance"),
+                  ("patient","medical"),("symptoms","medical"),("diagnosis","medical"),("medication","medical"),
+                  ("marketing","business"),("customers","business"),("startup","business"),("sales","business"),
+                  ("essay","academic"),("research","academic"),("thesis","academic"),("cite","academic"),
+                  ("content","creative"),("story","creative"),("blog","creative"),("design","creative")]:
+        if kw in t: domain = d; break
+
+    # S3: Expertise (1=beginner, 5=expert)
+    expertise = 3
+    beginner_markers = ["what is", "how do i", "i don't know", "explain", "simple", "basic", "beginner", "noob", "untuk pemula", "apa itu", "gimana caranya"]
+    expert_markers   = ["implement", "optimize", "architecture", "idiomatic", "edge case", "tradeoff", "latency", "throughput", "refactor", "scalab"]
+    if any(m in t for m in beginner_markers): expertise = 2
+    if any(m in t for m in expert_markers):   expertise = 4
+    # Very short terse query = probably expert
+    if len(task.split()) <= 5 and "?" not in task: expertise = max(expertise, 4)
+
+    # S4: Emotional signal
+    emotion = "neutral"
+    if any(m in t for m in ["asap","urgent","deadline","help!","tolong","buru","cepat"]): emotion = "urgent"
+    elif any(m in t for m in ["still","again","doesn't work","still not","masih ga","kenapa ga"]): emotion = "frustrated"
+    elif any(m in t for m in ["worried","scared","overwhelmed","anxious","takut","bingung banget","ga tau harus"]): emotion = "vulnerable"
+    elif any(m in t for m in ["lol","btw","just wondering","haha","wkwk","iseng","santai"]): emotion = "casual"
+
+    # S5: Stakes/scope
+    stakes = "medium"
+    if any(m in t for m in ["quick","short","brief","simple","just","cepet","singkat"]): stakes = "low"
+    if any(m in t for m in ["production","deploy","contract","legal","medical","critical","penting banget","serius"]): stakes = "high"
+    if any(m in t for m in ["life","death","emergency","darurat","nyawa","hukum","lawsuit"]): stakes = "critical"
+
+    # Archetype mapping
+    archetype_map = {
+        "lookup": "A1", "explain": "A4", "generate": "A3", "fix": "A4",
+        "analyze": "A4", "validate": "A8", "build": "A5", "decide": "A6",
+        "orchestrate": "A7", "support": "A9",
+    }
+
+    return {
+        "intent": intent,
+        "domain": domain,
+        "expertise": expertise,
+        "emotion": emotion,
+        "stakes": stakes,
+        "archetype": archetype_map.get(intent, "A3"),
+    }
+
+
+def t_route(task: str, execute: bool = False):
+    """
+    Route a task through CORE Routing Engine v2.0.
+    Extracts signals → determines archetype → builds system prompt → optionally executes via Groq.
+    execute=True: actually runs the task and returns response.
+    execute=False: returns routing analysis only (for inspection).
+    """
+    if not task: return {"ok": False, "error": "task required"}
+
+    sig = extract_signals(task)
+
+    # Complexity score
+    complexity = 3  # base
+    if sig["expertise"] <= 2:  complexity += 1
+    if sig["emotion"] in ("urgent", "frustrated"): complexity += 1
+    if sig["stakes"] == "critical": complexity += 2
+    if sig["stakes"] == "high":     complexity += 1
+    if sig["expertise"] >= 5:  complexity -= 1
+    if sig["stakes"] == "low": complexity -= 1
+    complexity = max(1, min(12, complexity))
+
+    # Build system prompt calibrated to signals
+    tone_map = {
+        "urgent":     "Be concise and direct. Lead with the answer immediately.",
+        "frustrated": "Acknowledge the difficulty briefly, then provide the fix directly.",
+        "vulnerable": "Be warm and supportive. Slow down. Acknowledge before solving.",
+        "casual":     "Match casual energy. Keep it natural and brief.",
+        "neutral":    "Be clear and structured.",
+    }
+    expertise_map = {
+        1: "Explain everything simply. Use analogies. Avoid jargon.",
+        2: "Define non-obvious terms. Provide step-by-step guidance.",
+        3: "Assume basic familiarity. Provide context where needed.",
+        4: "Skip basics. Use domain vocabulary. Be precise.",
+        5: "Expert-to-expert. Dense, precise, no hand-holding.",
+    }
+    disclaimer = ""
+    if sig["domain"] in ("legal","medical","finance") and sig["expertise"] <= 2:
+        disclaimer = "Add a brief note to verify with a professional for consequential decisions."
+
+    system_prompt = (
+        f"You are CORE, a personal AGI. "
+        f"{tone_map.get(sig['emotion'], tone_map['neutral'])} "
+        f"{expertise_map.get(sig['expertise'], expertise_map[3])} "
+        f"Domain context: {sig['domain']}. "
+        f"Stakes level: {sig['stakes']}. "
+        f"{disclaimer} "
+        "Be genuinely helpful. If you see a gap the user didn't ask about but should know, mention it briefly."
+    )
+
+    routing_info = {
+        "signals": sig,
+        "complexity": complexity,
+        "system_prompt_preview": system_prompt[:120] + "...",
+        "archetype": sig["archetype"],
+    }
+
+    if not execute:
+        return {"ok": True, "routing": routing_info}
+
+    # Execute via Groq
+    try:
+        model = GROQ_FAST if complexity <= 4 else GROQ_MODEL
+        response = groq_chat(system_prompt, task, model=model)
+        # Log to task_queue as completed
+        sb_post("task_queue", {
+            "task": task[:300], "status": "completed", "priority": 5,
+            "error": None,
+            "chat_id": "",
+        })
+        return {"ok": True, "routing": routing_info, "response": response, "model_used": model}
+    except Exception as e:
+        return {"ok": False, "routing": routing_info, "error": str(e)}
+
+
+def t_ask(question: str, domain: str = ""):
+    """
+    Ask CORE anything. Pulls relevant KB context + Groq generates answer.
+    This is the main AGI query interface — smarter than raw search_kb.
+    """
+    if not question: return {"ok": False, "error": "question required"}
+
+    # Pull KB context
+    kb_results = t_search_kb(question, domain=domain, limit=5)
+    kb_context = ""
+    if kb_results:
+        kb_context = "\n\n".join([
+            f"[KB: {r.get('topic','')}]\n{str(r.get('content',''))[:300]}"
+            for r in kb_results
+        ])
+
+    # Pull recent mistakes for the domain
+    mistakes = t_get_mistakes(domain=domain or "general", limit=3)
+    mistake_context = ""
+    if mistakes:
+        mistake_context = "\n".join([
+            f"- Avoid: {m.get('what_failed','')} → {m.get('correct_approach','')[:100]}"
+            for m in mistakes
+        ])
+
+    system = (
+        "You are CORE, a personal AGI assistant with accumulated knowledge from many sessions. "
+        "Answer using the knowledge base context provided. Be specific and actionable. "
+        "If KB context is insufficient, say so and answer from general knowledge."
+    )
+    user = f"Question: {question}\n\n"
+    if kb_context: user += f"Relevant knowledge:\n{kb_context}\n\n"
+    if mistake_context: user += f"Known pitfalls to avoid:\n{mistake_context}\n\n"
+    user += "Answer:"
+
+    try:
+        answer = groq_chat(system, user, model=GROQ_FAST, max_tokens=512)
+        return {"ok": True, "answer": answer, "kb_hits": len(kb_results), "question": question}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def t_reflect(task_summary: str, domain: str = "general", patterns: list = None,
+              quality: float = None, notes: str = ""):
+    """
+    Single-call hot reflection logger. Replaces manual sb_insert to hot_reflections.
+    Use at end of any significant session or task.
+    """
+    ok = sb_post("hot_reflections", {
+        "task_summary": task_summary[:300],
+        "domain": domain,
+        "verify_rate": 0.0,
+        "mistake_consult_rate": 0.0,
+        "new_patterns": patterns or [],
+        "new_mistakes": [],
+        "quality_score": quality,
+        "gaps_identified": None,
+        "reflection_text": notes or f"Logged via t_reflect. Domain: {domain}.",
+        "processed_by_cold": False,
+    })
+    return {"ok": ok, "domain": domain, "patterns_count": len(patterns or [])}
+
+
+def t_stats():
+    """
+    Analytics dashboard: domain breakdown, top patterns, routing distribution, mistake frequency.
+    Derived from hot_reflections + pattern_frequency + mistakes tables.
+    """
+    try:
+        # Domain breakdown from hot_reflections
+        hots = sb_get("hot_reflections", "select=domain,quality_score&limit=200", svc=True)
+        domain_counts: Counter = Counter(h.get("domain","general") for h in hots)
+
+        # Top patterns
+        patterns = sb_get("pattern_frequency",
+                          "select=pattern_key,frequency,domain&order=frequency.desc&limit=10", svc=True)
+
+        # Mistake frequency by domain
+        mistakes = sb_get("mistakes", "select=domain&limit=200", svc=True)
+        mistake_counts: Counter = Counter(m.get("domain","general") for m in mistakes)
+
+        # Avg quality score
+        scores = [h["quality_score"] for h in hots if h.get("quality_score") is not None]
+        avg_quality = round(sum(scores) / len(scores), 2) if scores else None
+
+        # Counts
+        counts = get_system_counts()
+
+        return {
+            "ok": True,
+            "total_sessions": counts.get("sessions", 0),
+            "knowledge_entries": counts.get("knowledge_base", 0),
+            "total_mistakes": counts.get("mistakes", 0),
+            "hot_reflections": len(hots),
+            "avg_quality_score": avg_quality,
+            "domain_distribution": dict(domain_counts.most_common(8)),
+            "mistake_distribution": dict(mistake_counts.most_common(6)),
+            "top_patterns": [{"pattern": p.get("pattern_key","")[:80],
+                              "freq": p.get("frequency",0),
+                              "domain": p.get("domain","")} for p in patterns],
+        }
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def t_search_mistakes(query: str = "", domain: str = "", limit: int = 10):
+    """
+    Semantic mistake search. Returns what failed + correct approach.
+    Better than get_mistakes for specific lookups.
+    """
+    try:
+        lim = int(limit) if limit else 10
+        qs = f"select=domain,context,what_failed,correct_approach,root_cause,severity&order=created_at.desc&limit={lim}"
+        if domain and domain not in ("all", ""): qs += f"&domain=eq.{domain}"
+        if query:
+            word = query.split()[0]
+            qs += f"&what_failed=ilike.*{word}*"
+        results = sb_get("mistakes", qs, svc=True)
+        return {"ok": True, "count": len(results), "mistakes": results}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
 # ── Tool registry ─────────────────────────────────────────────────────────────
 TOOLS = {
     "get_state":              {"fn": t_state,                  "perm": "READ",    "args": [],
