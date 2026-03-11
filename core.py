@@ -991,61 +991,65 @@ Output ONLY valid JSON array, no preamble."""
 
 
 def _backlog_add(items: list) -> list:
-    global _backlog
-    with _backlog_lock:
-        existing_titles = {b["title"].lower() for b in _backlog}
-        new_items = []
-        for item in items:
-            title = item.get("title", "").strip()
-            if title and title.lower() not in existing_titles:
-                existing_titles.add(title.lower())
-                _backlog.append(item)
-                new_items.append(item)
-                sb_post("knowledge_base", {
-                    "domain": "backlog",
-                    "topic": f"[BACKLOG-{item.get('priority','?')}] {title}",
-                    "content": (f"type={item.get('type')} effort={item.get('effort')} "
-                                f"impact={item.get('impact')} domain={item.get('domain')}\n"
-                                f"{item.get('description','')}"),
-                    "confidence": "medium",
-                    "tags": ["backlog", item.get("type",""), item.get("domain","")],
-                    "source": "background_researcher",
-                })
-                # Push actionable items (P3+) to evolution_queue for owner approval
-                priority = int(item.get("priority", 1))
-                if priority >= 3:
-                    itype  = item.get("type", "other")
-                    effort = item.get("effort", "medium")
-                    # executor: who runs this when approved
-                    # claude_desktop = needs code patch / new function
-                    # groq           = data/KB ops CORE can self-execute
-                    # auto           = decide at apply-time based on complexity
-                    executor = (
-                        "claude_desktop" if itype in ("new_tool", "telegram_command") else
-                        "groq"           if itype in ("new_kb", "missing_data") else
-                        "auto"
-                    )
-                    change_type = "knowledge" if itype == "new_kb" else "backlog"
-                    auto_apply  = (itype == "new_kb" and effort == "low" and executor == "groq")
-                    sb_post_critical("evolution_queue", {
-                        "change_type": change_type,
-                        "change_summary": f"[BACKLOG P{priority}][{executor}] {title}: {item.get('description','')[:180]}",
-                        "diff_content": json.dumps({
-                            "backlog_type": itype,
-                            "executor": executor,
-                            "domain": item.get("domain", "general"),
-                            "effort": effort,
-                            "impact": item.get("impact", "medium"),
-                            "title": title,
-                            "description": item.get("description", ""),
-                        }),
-                        "pattern_key": f"backlog:{itype}:{title[:60]}",
-                        "confidence": round(0.5 + priority * 0.08, 2),
-                        "status": "applied" if auto_apply else "pending",
-                        "source": "background_researcher",
-                        "impact": item.get("domain", "general"),
-                    })
-        return new_items
+    """Write new backlog items directly to Supabase `backlog` table. No in-memory list."""
+    try:
+        existing_rows = sb_get("backlog", "select=title&order=id.asc&limit=500", svc=True)
+        existing_titles = {r.get("title", "").lower() for r in existing_rows}
+    except Exception as e:
+        print(f"[BACKLOG] fetch existing error: {e}")
+        existing_titles = set()
+
+    new_items = []
+    for item in items:
+        title = item.get("title", "").strip()
+        if not title or title.lower() in existing_titles:
+            continue
+        existing_titles.add(title.lower())
+        priority = int(item.get("priority", 1))
+        itype    = item.get("type", "other")
+        effort   = item.get("effort", "medium")
+        domain   = item.get("domain", "general")
+
+        # Write to Supabase backlog table (source of truth)
+        ok = sb_post("backlog", {
+            "title":        title,
+            "type":         itype,
+            "priority":     priority,
+            "description":  item.get("description", "")[:500],
+            "domain":       domain,
+            "effort":       effort,
+            "impact":       item.get("impact", "medium"),
+            "status":       "pending",
+            "discovered_at": item.get("discovered_at", datetime.utcnow().isoformat()),
+        })
+        if ok:
+            new_items.append(item)
+
+        # Push P3+ to evolution_queue for owner approval
+        if priority >= 3:
+            executor = (
+                "claude_desktop" if itype in ("new_tool", "telegram_command") else
+                "groq"           if itype in ("new_kb", "missing_data") else
+                "auto"
+            )
+            change_type = "knowledge" if itype == "new_kb" else "backlog"
+            auto_apply  = (itype == "new_kb" and effort == "low" and executor == "groq")
+            sb_post_critical("evolution_queue", {
+                "change_type":    change_type,
+                "change_summary": f"[BACKLOG P{priority}][{executor}] {title}: {item.get('description','')[:180]}",
+                "diff_content":   json.dumps({
+                    "backlog_type": itype, "executor": executor,
+                    "domain": domain, "effort": effort,
+                    "impact": item.get("impact", "medium"),
+                    "title": title, "description": item.get("description", ""),
+                }),
+                "pattern_key": f"backlog:{itype}:{title[:60]}",
+                "confidence":  round(0.5 + priority * 0.08, 2),
+                "status":      "applied" if auto_apply else "pending",
+                "source":      "background_researcher",
+                "impact":      domain,
+            })
+    return new_items
 
 
 def _sync_backlog_status():
