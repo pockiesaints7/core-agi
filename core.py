@@ -1390,19 +1390,308 @@ def queue_poller():
             print(f"[QUEUE] {e}")
         time.sleep(10)
 
+# ── Background Researcher — runs 24/7 without owner ──────────────────────────
+# Simulation domains and task archetypes for autonomous discovery
+_RESEARCH_DOMAINS = [
+    ("code",     ["debug this python function", "optimize SQL query", "refactor async code",
+                  "explain this error", "design REST API", "review this architecture"]),
+    ("business", ["improve cash flow", "write investor pitch", "reduce churn", 
+                  "hire first employee", "expand to new market", "price my product"]),
+    ("legal",    ["draft NDA", "understand terms of service", "employment contract review",
+                  "IP protection for startup", "GDPR compliance checklist"]),
+    ("creative", ["write product description", "social media strategy", "brand voice guide",
+                  "content calendar", "email newsletter"]),
+    ("academic", ["summarize research paper", "explain statistical method",
+                  "literature review outline", "thesis argument structure"]),
+    ("medical",  ["explain diagnosis", "medication interaction check", "symptom checker",
+                  "treatment options", "second opinion research"]),
+    ("finance",  ["build financial model", "tax optimization", "runway calculation",
+                  "fundraising strategy", "unit economics"]),
+    ("data",     ["clean messy dataset", "visualize trends", "build dashboard",
+                  "anomaly detection", "A/B test analysis"]),
+]
+
+_IMPROVEMENT_INTERVAL = 3600   # run researcher every 60 min
+_last_research_run: float = 0.0
+_backlog_lock = threading.Lock()
+
+# In-memory backlog (persisted to KB + BACKLOG.md)
+_backlog: list = []   # [{id, priority, type, title, description, discovered_at}]
+
+
+def _research_simulate_batch() -> list[dict]:
+    """
+    Run one simulation batch: pick random domain/tasks, route them,
+    ask Groq to identify gaps, missing tools, or logic improvements.
+    Returns list of improvement candidates.
+    """
+    import random
+    domain, tasks = random.choice(_RESEARCH_DOMAINS)
+    sample = random.sample(tasks, min(3, len(tasks)))
+
+    # Build routing analysis for the sample
+    routing_analyses = []
+    for task in sample:
+        sig = extract_signals(task)
+        routing_analyses.append(f"Task: '{task}' → archetype={sig['archetype']}, "
+                                 f"domain={sig['domain']}, expertise={sig['expertise']}, "
+                                 f"emotion={sig['emotion']}, stakes={sig['stakes']}")
+
+    # Pull current KB state for context
+    kb_count = 0
+    tool_list = list(TOOLS.keys())
+    try:
+        counts = get_system_counts()
+        kb_count = counts.get("knowledge_base", 0)
+    except: pass
+
+    # Ask Groq to think like an AGI researcher
+    system = """You are CORE's internal research engine. Your job is to find gaps, missing capabilities,
+and improvement opportunities in an AGI system by simulating real user tasks.
+
+You will be given:
+- A domain and sample tasks
+- Current routing analysis for those tasks
+- Current system capabilities
+
+Your output MUST be a JSON array of improvement items. Each item:
+{
+  "priority": 1-5 (5=critical, 1=nice-to-have),
+  "type": "new_tool" | "logic_improvement" | "new_kb" | "telegram_command" | "performance" | "missing_data",
+  "title": "short title (max 60 chars)",
+  "description": "specific, actionable description of what to build/change/add (max 200 chars)",
+  "effort": "low" | "medium" | "high",
+  "impact": "low" | "medium" | "high"
+}
+
+Be specific. Don't suggest vague things like "improve performance". 
+Suggest concrete things like "add t_summarize() tool that condenses long KB entries to 2 sentences".
+Output ONLY valid JSON array, no preamble."""
+
+    user = (f"Domain: {domain}\n"
+            f"Sample tasks: {sample}\n"
+            f"Routing analyses:\n" + "\n".join(routing_analyses) + "\n\n"
+            f"Current tools ({len(tool_list)}): {', '.join(tool_list)}\n"
+            f"KB entries: {kb_count}\n\n"
+            f"What are 3-5 concrete improvements CORE needs to handle this domain better?")
+
+    try:
+        raw = groq_chat(system, user, model=GROQ_FAST, max_tokens=600)
+        # Strip possible markdown fences
+        raw = raw.strip()
+        if raw.startswith("```"): raw = raw.split("```")[1]
+        if raw.startswith("json"): raw = raw[4:]
+        items = json.loads(raw.strip())
+        # Stamp each item
+        for item in items:
+            item["domain"] = domain
+            item["discovered_at"] = datetime.utcnow().isoformat()
+            item["status"] = "pending"   # pending | in_progress | done | dismissed
+        return items if isinstance(items, list) else []
+    except Exception as e:
+        print(f"[RESEARCH] parse error: {e} | raw: {str(raw)[:100]}")
+        return []
+
+
+def _backlog_add(items: list[dict]):
+    """Deduplicate by title and add to in-memory backlog + KB."""
+    global _backlog
+    with _backlog_lock:
+        existing_titles = {b["title"].lower() for b in _backlog}
+        new_items = []
+        for item in items:
+            title = item.get("title", "").strip()
+            if title and title.lower() not in existing_titles:
+                existing_titles.add(title.lower())
+                _backlog.append(item)
+                new_items.append(item)
+                # Persist to KB so it survives Railway restarts
+                sb_post("knowledge_base", {
+                    "domain": "backlog",
+                    "topic": f"[BACKLOG-{item.get('priority','?')}] {title}",
+                    "content": (f"type={item.get('type')} effort={item.get('effort')} "
+                                f"impact={item.get('impact')} domain={item.get('domain')}\n"
+                                f"{item.get('description','')}"),
+                    "confidence": "medium",
+                    "tags": ["backlog", item.get("type",""), item.get("domain","")],
+                    "source": "background_researcher",
+                })
+        return new_items
+
+
+def _backlog_to_markdown() -> str:
+    """Render current backlog as markdown for BACKLOG.md."""
+    with _backlog_lock:
+        if not _backlog:
+            return "# CORE Improvement Backlog\n\n_No items yet. Background researcher hasn't run._\n"
+
+        # Sort by priority desc
+        sorted_b = sorted(_backlog, key=lambda x: -int(x.get("priority", 1)))
+
+        lines = [
+            "# CORE Improvement Backlog",
+            f"\n_Auto-generated by background_researcher. Last updated: {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}_",
+            f"_Total items: {len(sorted_b)} | Pending: {sum(1 for b in sorted_b if b.get('status')=='pending')}_\n",
+            "---\n",
+        ]
+
+        # Group by type
+        by_type: dict = {}
+        for item in sorted_b:
+            t = item.get("type", "other")
+            by_type.setdefault(t, []).append(item)
+
+        type_labels = {
+            "new_tool": "🔧 New Tools",
+            "logic_improvement": "🧠 Logic Improvements",
+            "new_kb": "📚 Knowledge Gaps",
+            "telegram_command": "📱 Telegram Commands",
+            "performance": "⚡ Performance",
+            "missing_data": "🗄️ Missing Data",
+            "other": "📌 Other",
+        }
+
+        for t, items in by_type.items():
+            lines.append(f"## {type_labels.get(t, t)}\n")
+            for item in items:
+                p = item.get("priority", 1)
+                stars = "🔴" if p >= 4 else ("🟡" if p == 3 else "🟢")
+                status = item.get("status", "pending")
+                status_icon = "✅" if status == "done" else ("🚧" if status == "in_progress" else "⬜")
+                lines.append(f"### {status_icon} {stars} P{p}: {item.get('title','')}")
+                lines.append(f"- **Type:** {t} | **Effort:** {item.get('effort','?')} | **Impact:** {item.get('impact','?')} | **Domain:** {item.get('domain','?')}")
+                lines.append(f"- **What:** {item.get('description','')}")
+                lines.append(f"- **Discovered:** {item.get('discovered_at','')[:16]}")
+                lines.append("")
+
+        lines.append("---")
+        lines.append(f"\n_CORE runs background_researcher every hour. Items auto-added when new gaps discovered._")
+        lines.append("_To act on an item: use `/backlog` in Telegram or `read_file(BACKLOG.md)` in MCP._")
+        return "\n".join(lines)
+
+
+def background_researcher():
+    """
+    24/7 autonomous loop. Runs on Railway without owner.
+    Every hour: simulate tasks, discover gaps, update BACKLOG.md, log to KB.
+    Sends Telegram digest to owner when high-priority items found.
+    """
+    global _last_research_run
+    print("[RESEARCH] Background researcher started — autonomous 24/7 mode")
+
+    # On startup: reload existing backlog from KB
+    try:
+        existing = sb_get("knowledge_base",
+                          "select=topic,content&domain=eq.backlog&order=created_at.desc&limit=100",
+                          svc=True)
+        with _backlog_lock:
+            for row in existing:
+                title = row.get("topic", "").replace("[BACKLOG-", "").split("] ", 1)[-1]
+                content = row.get("content", "")
+                # Parse type from content
+                type_ = "other"
+                for t in ["new_tool","logic_improvement","new_kb","telegram_command","performance","missing_data"]:
+                    if t in content: type_ = t; break
+                priority = 3
+                try:
+                    p_str = row.get("topic","")
+                    if "P" in p_str:
+                        priority = int(p_str.split("-")[1].split("]")[0])
+                except: pass
+                _backlog.append({
+                    "title": title, "type": type_, "priority": priority,
+                    "description": content[:200], "domain": "loaded",
+                    "discovered_at": "previous_session", "status": "pending",
+                    "effort": "medium", "impact": "medium",
+                })
+        print(f"[RESEARCH] Loaded {len(_backlog)} existing backlog items from KB")
+    except Exception as e:
+        print(f"[RESEARCH] startup load error: {e}")
+
+    while True:
+        try:
+            time_since = time.time() - _last_research_run
+            if time_since >= _IMPROVEMENT_INTERVAL:
+                print("[RESEARCH] Running simulation batch...")
+                _last_research_run = time.time()
+
+                # Run multiple domain simulations
+                all_new = []
+                for _ in range(3):   # 3 domains per cycle
+                    items = _research_simulate_batch()
+                    new = _backlog_add(items)
+                    all_new.extend(new)
+                    time.sleep(2)  # avoid Groq rate limit
+
+                # Write BACKLOG.md to GitHub
+                md = _backlog_to_markdown()
+                gh_write("BACKLOG.md", md,
+                         f"chore(backlog): auto-update {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')} — {len(all_new)} new items")
+                print(f"[RESEARCH] Cycle done. New: {len(all_new)}, Total: {len(_backlog)}")
+
+                # Notify owner if high-priority items found
+                critical_new = [i for i in all_new if int(i.get("priority", 1)) >= 4]
+                if critical_new:
+                    lines = "\n".join([f"🔴 P{i['priority']}: {i['title']}" for i in critical_new[:5]])
+                    notify(f"🔬 *CORE Research Update*\n{len(all_new)} new improvements discovered\n\n"
+                           f"*High priority:*\n{lines}\n\n"
+                           f"Full list: /backlog or BACKLOG.md on GitHub")
+
+        except Exception as e:
+            print(f"[RESEARCH] loop error: {e}")
+
+        time.sleep(300)  # check every 5 min, runs sim every 60 min
+
+
+def t_get_backlog(status: str = "pending", limit: int = 20, min_priority: int = 1):
+    """Return current improvement backlog, filtered and sorted."""
+    with _backlog_lock:
+        items = [b for b in _backlog
+                 if b.get("status", "pending") == status
+                 and int(b.get("priority", 1)) >= int(min_priority)]
+        items_sorted = sorted(items, key=lambda x: -int(x.get("priority", 1)))
+        return {
+            "ok": True,
+            "total": len(_backlog),
+            "filtered": len(items_sorted),
+            "items": items_sorted[:int(limit)],
+        }
+
+
+def t_backlog_update(title: str, status: str):
+    """Mark a backlog item as in_progress / done / dismissed."""
+    with _backlog_lock:
+        for item in _backlog:
+            if item.get("title", "").lower() == title.lower():
+                item["status"] = status
+                # Update in KB too
+                sb_post("knowledge_base", {
+                    "domain": "backlog",
+                    "topic": f"[STATUS UPDATE] {title}",
+                    "content": f"Status changed to: {status}",
+                    "confidence": "high",
+                    "tags": ["backlog", "status_update"],
+                    "source": "mcp_session",
+                })
+                return {"ok": True, "title": title, "new_status": status}
+        return {"ok": False, "error": f"Item not found: {title}"}
+
+
 @app.on_event("startup")
 def on_start():
     set_webhook()
     threading.Thread(target=queue_poller, daemon=True).start()
     threading.Thread(target=cold_processor_loop, daemon=True).start()
-    # Fix 2026-03-11L: self_sync_check on every startup
     threading.Thread(target=self_sync_check, daemon=True).start()
+    threading.Thread(target=background_researcher, daemon=True).start()
     counts = get_system_counts()
-    step = get_current_step()  # dynamic — never hardcode
-    notify(f"*CORE v5.0 Online*\n{step}\nKnowledge: {counts.get('knowledge_base',0)}\n"
-           f"Sessions: {counts.get('sessions',0)}\nMCP: {len(TOOLS)} tools active\n"
-           f"Training: ✅ ACTIVE — hot/cold/evolution pipeline running")
-    print(f"[CORE] v5.0 online :{PORT} — {step}")
+    step = get_current_step()
+    notify(f"*CORE v5.2 Online*\n{step}\n"
+           f"Knowledge: {counts.get('knowledge_base',0)} | Sessions: {counts.get('sessions',0)}\n"
+           f"MCP: {len(TOOLS)+2} tools active\n"
+           f"🔬 Background researcher: ACTIVE (hourly simulation)\n"
+           f"📋 Backlog auto-updates to BACKLOG.md on GitHub")
+    print(f"[CORE] v5.2 online :{PORT} — {step}")
 
 if __name__ == "__main__":
     import uvicorn
