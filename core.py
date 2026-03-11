@@ -664,6 +664,7 @@ def t_training_status():
             backlog_pending = sum(1 for b in _backlog if b.get("status") == "pending")
         return {"status": f"Training pipeline ACTIVE — {get_current_step()}",
                 "unprocessed_hot": len(unprocessed), "pending_evolutions": len(pending_evo),
+                "backlog_pending_inmem": backlog_pending,
                 "evolutions": pending_evo[:5], "cold_threshold": COLD_HOT_THRESHOLD,
                 "pattern_threshold": PATTERN_EVO_THRESHOLD, "auto_apply_conf": KNOWLEDGE_AUTO_CONFIDENCE}
     except Exception as e:
