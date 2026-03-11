@@ -401,7 +401,7 @@ def run_cold_processor():
             "summary_text": f"Processed {len(hots)} hots. {len(batch_counts)} unique patterns. {evolutions_queued} evolutions queued.",
         })
         for h in hots:
-            sb_patch("hot_reflections", f"id=eq.{h['id']}", {"processed_by_cold": True})
+            sb_patch("hot_reflections", f"id=eq.{h['id']}", {"processed_by_cold": 1})
         if evolutions_queued > 0:
             notify(f"✨ Cold processor: {evolutions_queued} evolution(s) queued from {len(hots)} sessions.\nUse /evolutions to review.")
         print(f"[COLD] Done: processed={len(hots)} patterns={len(batch_counts)} evolutions={evolutions_queued}")
