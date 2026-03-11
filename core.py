@@ -35,6 +35,16 @@ Fix log:
                Telegram new: /mistakes [domain], /stats, /route <task>.
                queue_poller upgraded: tasks now actually executed via t_route() + Groq, not just acknowledged.
                TOOLS: 20 → 25 tools. Core is now a working AGI executor, not just a data store.
+  2026-03-11N: CORE v5.2 — 24/7 autonomous improvement discovery.
+               Added: background_researcher() — runs every hour on Railway without owner.
+               Simulates tasks across 8 domains, asks Groq to identify gaps/missing tools/logic.
+               Discovered items persisted to KB (domain=backlog) + written to BACKLOG.md on GitHub.
+               High-priority items trigger Telegram notification to owner.
+               Added: t_get_backlog() — MCP tool to read improvement backlog.
+               Added: t_backlog_update() — mark items in_progress/done/dismissed.
+               Telegram new: /backlog [min_priority] — see what CORE discovered while you were away.
+               TOOLS: 25 → 27 tools.
+               CORE now works 24/7: simulate → discover → document → notify → owner executes.
 """
 import asyncio
 import base64
