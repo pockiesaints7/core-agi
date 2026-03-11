@@ -544,3 +544,102 @@ When CORE has full GitHub awareness, patches are validated before apply, rolled 
 | `t_tools_audit` runs on startup | Proactive | Catch broken TOOLS registrations before they cause 404 on tool call |
 | `t_changelog_append` after every evolution | Always | Permanent institutional memory of every code change |
 | High-risk evolutions use branch + PR | Safety | Never push architectural changes directly to main |
+
+---
+
+## Phase 9: Telegram AGI Tools — CORE Owns Its Entire Communication Layer
+**Designed:** 2026-03-12
+**Status:** PENDING IMPLEMENTATION
+**Vision:** Not just notifications — full two-way intelligence. CORE understands who's talking, maintains conversation memory, schedules itself, and becomes a genuine conversational AGI interface that gets smarter with every exchange.
+
+### Why This Matters
+Current `notify()` is fire-and-forget — no memory, no context, breaks on special chars, spams on cascading failures.
+Owner has to type `/approve 42` on mobile instead of tapping a button.
+CORE has no idea if owner even saw the alert.
+When CORE owns the full Telegram layer, it communicates like an intelligent colleague, not a log printer.
+
+### Tool Tiers
+
+#### Tier 1: Conversation Self-Awareness
+| Tool | Purpose |
+|---|---|
+| `t_tg_get_updates` | Poll all unread messages. CORE knows what was said while offline — catches missed commands during Railway restarts. |
+| `t_tg_conversation_history` | Last N messages from `tg_messages` Supabase table. CORE has memory of every conversation. |
+| `t_tg_get_chat_info` | Chat metadata — username, language, first seen. CORE knows its users. |
+| `t_tg_message_status` | Check if a message was delivered or failed. CORE knows if owner saw the alert. |
+| `t_tg_bot_info` | Bot username, ID, capabilities. CORE knows its own Telegram identity. |
+
+#### Tier 2: Rich Communication
+| Tool | Purpose |
+|---|---|
+| `t_notify` | Send text notification. Already built ✅. |
+| `t_tg_send_markdown` | Properly escaped MarkdownV2 — bold, italic, code blocks, links, inline buttons. Current notify() breaks on `_`, `.`, `(` chars. |
+| `t_tg_send_document` | Send a file — BACKLOG.md, TRAINING_DESIGN.md, snapshot JSON — directly to Telegram. Owner reads reports without opening GitHub. |
+| `t_tg_send_table` | Format dict/list as clean monospace table. Evolution lists, stats, KB entries — readable on mobile. |
+| `t_tg_edit_message` | Edit a previously sent message. CORE sends "⏳ Processing..." then edits to result — no message spam. |
+| `t_tg_delete_message` | Delete stale status messages after operation completes. Keeps chat clean. |
+
+#### Tier 3: Conversation Intelligence
+| Tool | Purpose |
+|---|---|
+| `t_tg_parse_intent` | Run incoming message through `extract_signals()`. CORE understands natural language, not just `/slash` commands. |
+| `t_tg_context_window` | Load last 10 messages from `tg_messages` as Groq context. CORE maintains conversation continuity across messages. |
+| `t_tg_remember` | Store a fact about the conversation to `tg_context` table. "Owner prefers concise answers", "Currently debugging cold processor". |
+| `t_tg_multi_turn` | Handle multi-step conversation — CORE asks a question, waits for reply, proceeds. Enables confirmation flows for risky evolutions. |
+| `t_tg_inline_keyboard` | Send message with inline buttons (Approve/Reject, Yes/No, Show More). One tap instead of typing `/approve 42`. |
+
+#### Tier 4: Autonomous Scheduling & Alerting
+| Tool | Purpose |
+|---|---|
+| `t_tg_daily_brief` | Every morning at Jakarta time: KB count, mistakes logged, evolutions pending, backlog top 3, system health. One message, full picture. |
+| `t_tg_alert_escalation` | If owner doesn't respond to critical alert within 30min, escalate with higher urgency. Track state in Supabase. |
+| `t_tg_silence_window` | No notifications between 11pm–8am Jakarta unless severity=critical. |
+| `t_tg_rate_limiter` | Deduplicate alerts — same error 10x in 5min sends once with count. Prevents cascade spam. |
+| `t_tg_scheduled_report` | Weekly Sunday summary: evolutions applied, mistakes logged, KB growth, top patterns. CORE reports its own progress. |
+
+#### Tier 5: CORE as Autonomous AGI Interface
+| Tool | Purpose |
+|---|---|
+| `t_tg_voice_note` | Transcribe incoming voice messages via Groq Whisper. Owner speaks commands on mobile instead of typing. |
+| `t_tg_image_input` | Accept screenshot from owner, describe it, route to appropriate tool. Debug by photo. |
+| `t_tg_proactive_insight` | When cold processor finds high-confidence pattern, CORE messages owner unprompted with specific actionable insight — not just "evolutions queued". |
+| `t_tg_command_registry` | Dynamic /help — as new tools are added to CORE, command list updates automatically. No hardcoded list. |
+| `t_tg_conversation_mode` | Toggle between command mode (/slash only) and natural language mode (full Groq routing on every message). |
+
+### Key Pain Points From CORE History This Solves
+| Pain Point | Tool That Fixes It |
+|---|---|
+| `notify()` breaks on `_`, `*`, `.` in MarkdownV2 | `t_tg_send_markdown` with proper V2 escaping |
+| Owner misses alerts during sleep | `t_tg_silence_window` + `t_tg_alert_escalation` |
+| Same error sends 10 notifications in a row | `t_tg_rate_limiter` deduplicates cascading alerts |
+| `/evolutions` dumps raw text wall on mobile | `t_tg_send_table` + `t_tg_inline_keyboard` for tap-to-approve |
+| CORE forgets conversation context between messages | `t_tg_context_window` loads recent history into Groq |
+| `/help` gets stale when new tools are added | `t_tg_command_registry` auto-generates from TOOLS dict |
+| No morning summary — owner must ask manually | `t_tg_daily_brief` runs on schedule |
+| Can't approve evolution from phone without typing | `t_tg_inline_keyboard` with Approve/Reject buttons |
+
+### Implementation Order
+1. `t_tg_send_markdown` — fix broken notify immediately, highest daily impact
+2. `t_tg_rate_limiter` + `t_tg_silence_window` — stop notification spam
+3. `t_tg_inline_keyboard` — tap-to-approve evolutions from mobile
+4. `t_tg_daily_brief` — scheduled morning summary
+5. `t_tg_context_window` + `t_tg_remember` — conversation memory
+6. `t_tg_command_registry` — dynamic /help always stays current
+7. `t_tg_voice_note` + `t_tg_proactive_insight` — full AGI interface
+
+### Compounding Effect
+- Month 1: No notification spam, proper markdown, tap-to-approve on mobile
+- Month 3: Daily brief every morning, CORE maintains conversation context
+- Month 6: Owner speaks voice commands, CORE transcribes and executes
+- Year 1: CORE proactively surfaces insights before owner asks
+- Year 5: Telegram feels like talking to a real colleague — context-aware, proactive, intelligent
+- Year 10: Full AGI interface — owner and CORE collaborate like two colleagues, one human one machine
+
+### Design Decisions
+| Decision | Value | Reason |
+|---|---|---|
+| `tg_messages` table stores all incoming messages | Required | CORE needs conversation memory to be intelligent |
+| `t_tg_silence_window` respects Jakarta timezone | Always | Owner is human, sleep matters |
+| `t_tg_inline_keyboard` for all approval flows | UX | Typing `/approve 42` on mobile at 2am is a barrier to owner engagement |
+| `t_tg_rate_limiter` deduplicates by content hash | Precision | Same message same content = one delivery, not N |
+| `t_tg_proactive_insight` triggered by confidence >= 0.85 | Threshold | Only surface insights worth interrupting owner for |
