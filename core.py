@@ -1317,6 +1317,26 @@ def handle_msg(msg):
         else:
             notify("No mistakes found" + (f" for domain: {domain}" if domain else ""), cid)
 
+    elif text.startswith("/backlog"):
+        parts = text.split(None, 1)
+        min_p = 1
+        try: min_p = int(parts[1]) if len(parts) > 1 else 1
+        except: pass
+        result = t_get_backlog(status="pending", limit=10, min_priority=min_p)
+        total = result.get("total", 0)
+        items = result.get("items", [])
+        if items:
+            lines = []
+            for item in items[:8]:
+                p = item.get("priority", 1)
+                star = "🔴" if p >= 4 else ("🟡" if p == 3 else "🟢")
+                lines.append(f"{star} P{p} [{item.get('type','?')[:10]}] *{item.get('title','')[:50]}*")
+                lines.append(f"  ↳ {item.get('description','')[:80]}")
+            notify(f"📋 *Backlog* ({result['filtered']} pending / {total} total)\n\n" +
+                   "\n".join(lines) + "\n\n_Full list: BACKLOG.md on GitHub_", cid)
+        else:
+            notify(f"📋 Backlog empty (total: {total}). Researcher runs every hour.", cid)
+
     elif text == "/tasks":
         tasks = sb_get("task_queue", "select=task,status&order=created_at.desc&limit=5")
         lines = "\n".join([f"- [{t.get('status')}] {t.get('task','')[:60]}" for t in tasks])
