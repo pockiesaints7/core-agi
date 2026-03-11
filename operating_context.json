@@ -1,26 +1,134 @@
 {
-  "_note": "Static tool rules + tombstone only. active_tables & step_status ada di SESSION.md. Update file ini hanya kalau: (1) ada breaking change di tool params/schema, atau (2) ada tabel baru yang di-drop.",
+  "_note": "Static tool rules + tombstone + FULL SCHEMA all active tables. Update ini kalau: (1) breaking change tool params, (2) tabel baru di-drop, (3) schema tabel berubah, (4) architecture berubah.",
   "_last_updated": "2026-03-11",
+  "_version": "2.0",
 
-  "repo": "pockiesaints7/core-agi",
+  "architecture": {
+    "system_name": "CORE v5.0 — Recursive Self-Improvement AGI",
+    "owner": "REINVAGNAR",
+    "repo": "pockiesaints7/core-agi",
+    "railway_url": "https://core-agi-production.up.railway.app",
+    "railway_service": "core-agi",
+    "entry_point": "core.py",
+    "language": "Python (FastAPI)",
+    "ai_model": "Groq llama-3.3-70b-versatile (primary), llama-3.1-8b-instant (fast)",
+    "database": "Supabase (PostgreSQL via PostgREST)",
+    "state_files": {
+      "SESSION.md": "Dynamic: active tables, step status, next action — update every session",
+      "operating_context.json": "Static: tool rules, full schema, tombstone tables — update only on structural change",
+      "TRAINING_DESIGN.md": "Pipeline design reference — read-only reference"
+    },
+    "key_endpoints": {
+      "GET /": "Health check + current step",
+      "GET /state": "Full system state (same as get_state MCP tool)",
+      "POST /patch": "Surgical file edit — {secret, path, old_str, new_str, message}",
+      "POST /telegram": "Telegram webhook",
+      "POST /mcp": "MCP tool dispatcher"
+    },
+    "training_config": {
+      "COLD_HOT_THRESHOLD": 10,
+      "COLD_TIME_THRESHOLD": 86400,
+      "PATTERN_EVO_THRESHOLD": 3,
+      "KNOWLEDGE_AUTO_CONFIDENCE": 0.7
+    },
+    "resource_ceilings": {
+      "groq_calls_per_hour": 200,
+      "supabase_writes_per_hour": 500,
+      "github_pushes_per_hour": 20,
+      "telegram_messages_per_hour": 30,
+      "mcp_tool_calls_per_minute": 30
+    },
+    "mcp_tools_count": 20,
+    "interfaces": ["claude.ai (primary)", "Claude Desktop (MCP direct)"]
+  },
 
   "tool_rules": {
     "read_file":   "OMIT repo arg — default pockiesaints7/core-agi sudah benar",
     "write_file":  "OMIT repo arg — default pockiesaints7/core-agi sudah benar",
     "sb_query":    "param adalah 'filters' BUKAN 'query_string'. contoh: filters='domain=eq.mcp'",
     "log_mistake": "required: context, what_failed, fix. optional: domain, root_cause, how_to_avoid, severity",
-    "sb_insert":   "data harus valid JSON string. sessions required: summary(str), actions(array), interface(str)"
+    "sb_insert":   "data harus valid JSON string. sessions required: summary(str), actions(array), interface(str)",
+    "add_knowledge": "prefer over sb_insert untuk knowledge_base. required: topic, content. optional: domain, confidence, tags",
+    "sb_insert_hot_reflections": "required: task_summary(str), domain(str), new_patterns(array), quality_score(float), reflection_text(str)"
   },
 
   "conventions": {
     "read_before_write": true,
     "check_mistakes_before_write": true,
-    "always_readback_after_write": true
+    "always_readback_after_write": true,
+    "schema_check_before_insert": "ALWAYS search KB 'CORE DB Schema [table]' OR sb_query limit=1 before first insert to any table in a new session",
+    "session_end": "ALWAYS update SESSION.md if step/state changed"
   },
 
-  "schema": {
-    "mistakes": "domain, context, what_failed, correct_approach, root_cause, how_to_avoid, severity, tags",
-    "sessions": "summary(str), actions(array), interface(str)"
+  "active_tables": {
+    "knowledge_base": {
+      "purpose": "Long-term knowledge store — domain expertise, SOPs, routing rules",
+      "insert_via": "add_knowledge tool (preferred) or sb_insert",
+      "required_fields": ["domain", "topic", "content", "confidence"],
+      "optional_fields": ["tags (array)", "source"],
+      "auto_fields": ["id (int)", "created_at", "updated_at"],
+      "confidence_values": ["proven", "high", "medium", "low"],
+      "read_via": "search_kb tool"
+    },
+    "mistakes": {
+      "purpose": "Error log — prevent repeat failures across sessions",
+      "insert_via": "log_mistake tool (preferred) or sb_insert",
+      "required_fields": ["context", "what_failed", "fix (=correct_approach in DB)"],
+      "optional_fields": ["domain", "root_cause", "how_to_avoid", "severity (low/medium/high/critical)", "tags (array)"],
+      "auto_fields": ["id (int)", "created_at"],
+      "read_schema": "id, context, what_failed, root_cause, correct_approach, tags, domain, how_to_avoid, severity"
+    },
+    "hot_reflections": {
+      "purpose": "Post-session learning capture — raw material for cold processor",
+      "insert_via": "sb_insert only",
+      "required_fields": ["task_summary", "domain", "new_patterns (array of str)", "quality_score (float 0-1)", "reflection_text"],
+      "optional_fields": ["verify_rate (float)", "mistake_consult_rate (float)", "new_mistakes (array)", "gaps_identified (str)"],
+      "auto_fields": ["id (int)", "created_at", "processed_by_cold (bool, default false)"],
+      "note": "Cold processor polls for processed_by_cold=0 rows. Use integer 0/1 in querystring filters, NOT true/false."
+    },
+    "cold_reflections": {
+      "purpose": "Distilled output of cold processor runs — read-only from Claude side",
+      "insert_via": "SYSTEM ONLY (cold_processor in core.py)",
+      "read_schema": "id, created_at, period_start, period_end, hot_count(int), patterns_found(int), evolutions_queued(int), auto_applied(int), summary_text(str)",
+      "note": "Never insert manually. Check here to verify cold processor ran."
+    },
+    "evolution_queue": {
+      "purpose": "Proposed system changes pending owner approval",
+      "insert_via": "SYSTEM ONLY (cold_processor) or manual for explicit proposals",
+      "required_fields_manual": ["change_summary", "change_type", "reversible (bool)"],
+      "read_schema": "id, created_at, status(pending/approved/rejected/applied), confidence, impact, reversible(bool), change_type, change_summary, diff_content, pattern_key, frequency, owner_notified(bool), applied_at",
+      "approve_via": "approve_evolution tool",
+      "reject_via": "reject_evolution tool"
+    },
+    "pattern_frequency": {
+      "purpose": "Tracks how often a pattern appears across hot_reflections — drives evolution threshold",
+      "insert_via": "SYSTEM ONLY (cold_processor)",
+      "read_schema": "id, pattern_key(str), domain(str), description(str), frequency(int), confidence(float), first_seen, last_seen, auto_applied(bool)",
+      "evo_threshold": "frequency >= 3 triggers evolution_queue entry"
+    },
+    "sessions": {
+      "purpose": "Session log — human-readable record of what happened each session",
+      "insert_via": "sb_insert",
+      "required_fields": ["summary (str)", "actions (array of str)", "interface (str)"],
+      "auto_fields": ["id (int)", "created_at"],
+      "interface_values": ["claude.ai", "claude-desktop", "telegram"]
+    },
+    "task_queue": {
+      "purpose": "Persistent task storage across sessions",
+      "read_schema": "id(uuid), task(str), status(str), priority(int), result, error, created_at, updated_at, source, chat_id",
+      "status_values": ["pending", "in_progress", "done", "failed"]
+    },
+    "changelog": {
+      "purpose": "System version history — major changes, upgrades, architecture shifts",
+      "insert_via": "sb_insert",
+      "read_schema": "id, version, change_type, component, title, description, triggered_by, growth_flag_type, before_state, after_state, files_changed(array), session_id, created_at"
+    }
+  },
+
+  "schema_evolution_protocol": {
+    "when_table_added": ["Add to active_tables in this file", "Add KB entry: 'CORE DB Schema — [table_name]'", "Update SESSION.md Active Tables section", "Update TRAINING_DESIGN.md if affects training pipeline"],
+    "when_table_dropped": ["Move from active_tables to tombstone_tables", "Add KB entry marking table as tombstone", "Update SESSION.md", "Remove from all queries in core.py"],
+    "when_schema_changes": ["Update schema in this file under active_tables", "Update KB entry for that table", "Add changelog entry", "Add migration note in core.py fix log"]
   },
 
   "tombstone_tables": [
@@ -29,5 +137,5 @@
     "session_learning", "agent_registry", "knowledge_blocks",
     "agi_mistakes", "stack_registry", "vault_logs", "vault"
   ],
-  "_tombstone_note": "Tabel ini sudah dihapus permanen. JANGAN query. Kalau ada tabel baru yang di-drop, append ke list ini."
+  "_tombstone_note": "Tabel ini sudah dihapus permanen. JANGAN query. Kalau ada tabel baru yang di-drop, append ke list ini + update KB."
 }
