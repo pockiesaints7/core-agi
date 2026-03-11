@@ -371,12 +371,16 @@ def run_cold_processor():
         evolutions_queued = 0
         batch_counts: Counter = Counter()
         batch_domain: dict    = {}
+        batch_sources: dict   = {}   # pattern_key -> set of sources seen
+
         for h in hots:
+            src = h.get("source") or "real"
             for p in (h.get("new_patterns") or []):
                 if p:
                     key = str(p)[:200]
                     batch_counts[key] += 1
                     batch_domain.setdefault(key, h.get("domain", "general"))
+                    batch_sources.setdefault(key, set()).add(src)
 
         for key, batch_count in batch_counts.items():
             from urllib.parse import quote
