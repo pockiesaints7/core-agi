@@ -1312,12 +1312,7 @@ Output ONLY valid JSON array, no preamble, no explanation."""
 
             time.sleep(3)  # pace Groq calls — 200/hr limit on free tier
 
-        # Refresh BACKLOG.md with new items
-        try:
-            gh_write("BACKLOG.md", _backlog_to_markdown(),
-                     f"chore(backlog): KB mining complete — {total_new} new items from {batches_done} batches")
-        except Exception as be:
-            print(f"[KB MINE] backlog refresh error: {be}")
+        # BACKLOG.md write removed — Supabase is source of truth, no GitHub commit needed
 
         final_count = int(httpx.get(
             f"{SUPABASE_URL}/rest/v1/backlog?select=id&limit=1",
