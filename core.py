@@ -443,34 +443,58 @@ def apply_evolution(evolution_id: int):
                                f"Behavior evolution #{evolution_id}: {change_summary[:60]}")
             note = "Written to BEHAVIOR_UPDATES.md"
         elif change_type == "backlog":
-            # Execute backlog items - route by backlog_type
+            # Execute backlog items â€” route by executor field in diff_content
             try:
                 meta = json.loads(diff_content) if diff_content else {}
             except Exception:
                 meta = {}
-            btype  = meta.get("backlog_type", "other")
-            domain = meta.get("domain", "general")
-            title  = meta.get("title", change_summary[:80])
-            if btype == "new_kb":
-                applied = bool(sb_post("knowledge_base", {
-                    "domain": domain, "topic": title,
-                    "content": change_summary.replace(f"[BACKLOG P{evo.get('confidence',0)}] {title}: ", ""),
-                    "confidence": "medium", "tags": ["backlog", "auto_applied"],
-                    "source": "evolution_queue",
-                }))
-                note = f"KB entry added: {title}"
-            elif btype in ("logic_improvement", "performance", "missing_data"):
-                applied = bool(sb_post("task_queue", {
-                    "type": "improvement", "payload": json.dumps(meta),
-                    "status": "pending", "priority": int(evo.get("confidence", 0.5) * 10),
-                    "source": "backlog_evolution",
-                }))
-                note = f"Task queued for execution: {title}"
-            else:
-                # new_tool / telegram_command - needs manual dev, just notify
-                notify(f"?? *Backlog item approved (manual dev needed)*\nP{int(meta.get('effort','medium')=='low')+3}: {title}\nType: {btype} | Effort: {meta.get('effort')}")
+            btype    = meta.get("backlog_type", "other")
+            executor = meta.get("executor", "auto")
+            domain   = meta.get("domain", "general")
+            title    = meta.get("title", change_summary[:80])
+            desc     = meta.get("description", change_summary)
+
+            if executor == "groq" or (executor == "auto" and btype in ("new_kb", "missing_data")):
+                # GROQ PATH: CORE self-executes
+                if btype == "new_kb":
+                    applied = bool(sb_post("knowledge_base", {
+                        "domain": domain, "topic": title, "content": desc,
+                        "confidence": "medium", "tags": ["backlog", "auto_applied"],
+                        "source": "evolution_queue",
+                    }))
+                    note = f"[groq] KB entry added: {title}"
+                else:
+                    task_payload = json.dumps({"task": desc, "domain": domain, "source": "backlog", "title": title})
+                    applied = bool(sb_post("task_queue", {
+                        "type": "improvement", "payload": task_payload, "status": "pending",
+                        "priority": int(evo.get("confidence", 0.5) * 10), "source": "backlog_evolution",
+                    }))
+                    note = f"[groq] Task queued: {title}"
+
+            elif executor == "claude_desktop" or (executor == "auto" and btype in ("new_tool", "telegram_command")):
+                # CLAUDE DESKTOP PATH: flag for next Claude Desktop session
+                sb_patch("evolution_queue", f"id=eq.{evolution_id}", {"status": "pending_desktop"})
+                notify(
+                    f"[BACKLOG] Approved - needs Claude Desktop\n"
+                    f"Type: {btype} | {title}\n\n"
+                    f"Action: In next Claude Desktop session, implement:\n{desc[:300]}\n\n"
+                    f"Evolution ID: {evolution_id}"
+                )
                 applied = True
-                note = f"Owner notified - manual implementation needed: {btype}"
+                note = f"[claude_desktop] Flagged for Desktop session: {title}"
+
+            else:
+                # auto + complex: Groq generates plan, queued for execution
+                plan_prompt = f"Generate a concise implementation plan for: {title}\nDescription: {desc}\nOutput as numbered steps, max 5 steps."
+                plan = groq_chat("You are CORE planning engine. Be concise.", plan_prompt,
+                                 model=GROQ_FAST, max_tokens=300)
+                applied = bool(sb_post("task_queue", {
+                    "type": "improvement",
+                    "payload": json.dumps({"title": title, "plan": plan, "domain": domain}),
+                    "status": "pending", "priority": 5, "source": "backlog_evolution",
+                }))
+                note = f"[auto] Plan generated + queued: {title}"
+
             # Update backlog in-memory status
             with _backlog_lock:
                 for b in _backlog:
