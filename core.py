@@ -1953,6 +1953,10 @@ TOOLS = {
                                "desc": "Re-push all P3+ backlog items to evolution_queue. Use when evolution_queue is empty after restart."},
     "mine_kb":                {"fn": t_mine_kb,                "perm": "WRITE",   "args": ["max_batches", "force"],
                                "desc": "Mine KB entries in batches to generate backlog items. max_batches=50 default. force=true to skip ratio check."},
+    "list_templates":         {"fn": t_list_templates,         "perm": "READ",    "args": ["limit"],
+                               "desc": "List reusable script templates generated from evolved patterns. Templates are auto-created when mistakes repeat 3x."},
+    "run_template":           {"fn": t_run_template,           "perm": "EXECUTE", "args": ["name", "params"],
+                               "desc": "Retrieve a stored script template by name. Increments use_count. params=optional JSON substitution vars."},
 }
 
 # ── MCP JSON-RPC ──────────────────────────────────────────────────────────────
