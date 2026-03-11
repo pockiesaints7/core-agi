@@ -354,10 +354,14 @@ def auto_hot_reflection(session_data: dict):
         return False
 
 
+# Source confidence multipliers (Phase 3)
+_SRC_CONF = {"real": 1.0, "simulation": 0.7, "both": 1.3}
+
+
 def run_cold_processor():
     try:
         hots = sb_get("hot_reflections",
-                      "select=id,domain,new_patterns,new_mistakes,quality_score&processed_by_cold=eq.0&id=gt.1&order=created_at.asc",
+                      "select=id,domain,new_patterns,new_mistakes,quality_score,source&processed_by_cold=eq.0&id=gt.1&order=created_at.asc",
                       svc=True)
         if not hots:
             print("[COLD] No unprocessed hot reflections.")
