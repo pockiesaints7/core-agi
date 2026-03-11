@@ -939,6 +939,31 @@ def _backlog_add(items: list) -> list:
                     "tags": ["backlog", item.get("type",""), item.get("domain","")],
                     "source": "background_researcher",
                 })
+                # Push actionable items (P3+) to evolution_queue for owner approval
+                priority = int(item.get("priority", 1))
+                if priority >= 3:
+                    itype = item.get("type", "other")
+                    # Map backlog type to evolution change_type
+                    change_type = "knowledge" if itype == "new_kb" else "backlog"
+                    effort = item.get("effort", "medium")
+                    # Auto-approve low-effort new_kb items - no owner review needed
+                    auto_apply = (itype == "new_kb" and effort == "low")
+                    sb_post_critical("evolution_queue", {
+                        "change_type": change_type,
+                        "change_summary": f"[BACKLOG P{priority}] {title}: {item.get('description','')[:200]}",
+                        "diff_content": json.dumps({
+                            "backlog_type": itype,
+                            "domain": item.get("domain", "general"),
+                            "effort": effort,
+                            "impact": item.get("impact", "medium"),
+                            "title": title,
+                        }),
+                        "pattern_key": f"backlog:{itype}:{title[:60]}",
+                        "confidence": round(0.5 + priority * 0.08, 2),
+                        "status": "applied" if auto_apply else "pending",
+                        "source": "background_researcher",
+                        "impact": item.get("domain", "general"),
+                    })
         return new_items
 
 
