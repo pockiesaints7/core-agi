@@ -382,17 +382,21 @@ def run_cold_processor():
                     batch_domain.setdefault(key, h.get("domain", "general"))
                     batch_sources.setdefault(key, set()).add(src)
 
+        # Load all pattern_frequency rows once — avoids URL-encoding bugs on long/special-char keys
+        # Fix 2026-03-12R: per-key querystring lookup with quote() produced garbage pattern_key rows
+        # (blank, single-char) when keys had spaces/special chars. Python-side match is safe.
+        all_pf = {r["pattern_key"]: r for r in sb_get(
+            "pattern_frequency", "select=id,pattern_key,frequency,auto_applied&limit=2000", svc=True
+        ) if r.get("id") != 1 and r.get("pattern_key")}
+
         for key, batch_count in batch_counts.items():
-            from urllib.parse import quote
             # Phase 3: effective source + confidence multiplier
             srcs = batch_sources.get(key, {"real"})
             eff_source = "both" if len(srcs) >= 2 else next(iter(srcs))
             src_mult = _SRC_CONF.get(eff_source, 1.0)
 
-            key_enc = quote(key, safe="")
-            existing = [e for e in sb_get("pattern_frequency",
-                        f"select=id,frequency,auto_applied&pattern_key=eq.{key_enc}&limit=1", svc=True)
-                        if e.get("id") != 1]
+            existing_rec = all_pf.get(key)
+            existing = [existing_rec] if existing_rec else []
             if existing:
                 rec      = existing[0]
                 new_freq = (rec.get("frequency") or 0) + batch_count
