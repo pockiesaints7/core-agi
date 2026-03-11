@@ -476,6 +476,84 @@ def apply_evolution(evolution_id: int):
                 "tags": ["evolution", "auto"], "source": "evolution_queue",
             })
             note = "Added to knowledge_base"
+
+        elif change_type == "new_tool":
+            # Groq generates a new Python function + registers it in TOOLS dict
+            # diff_content must contain JSON: {"fn_name": "t_...", "code": "def t_...():..."}
+            try:
+                meta = json.loads(diff_content) if diff_content else {}
+            except Exception:
+                meta = {}
+            fn_name = meta.get("fn_name", "")
+            fn_code  = meta.get("code", "")
+            if not fn_name or not fn_code:
+                # Auto-generate via Groq from change_summary
+                prompt = (f"Write a Python function for CORE AGI system named '{pattern_key or 'new_tool'}'.\n"
+                          f"Purpose: {change_summary}\n"
+                          f"Recommendation: {evo.get('recommendation','')}\n\n"
+                          f"Rules:\n"
+                          f"- Use sb_post, sb_get, sb_patch, groq_chat, gh_read, gh_write as needed\n"
+                          f"- Return dict with 'ok' key always\n"
+                          f"- Add docstring explaining purpose\n"
+                          f"- Follow CORE naming: t_<name>\n\n"
+                          f"Output ONLY the Python function, no explanation.")
+                fn_code = groq_chat(
+                    "You are CORE's code generation engine. Output only valid Python. No markdown, no preamble.",
+                    prompt, model=GROQ_MODEL, max_tokens=600
+                )
+                fn_name = ""
+                for line in fn_code.splitlines():
+                    if line.strip().startswith("def "):
+                        fn_name = line.strip().split("(")[0].replace("def ", "").strip()
+                        break
+
+            if fn_name and fn_code:
+                # Patch fn_code into core.py before TOOLS dict
+                anchor = "# ── Tool registry"
+                patch_ok = t_gh_search_replace(
+                    "core.py", anchor,
+                    f"{fn_code}\n\n\n{anchor}",
+                    f"Evolution #{evolution_id}: auto-add tool {fn_name}"
+                )
+                # Register in TOOLS dict
+                tools_patch_old = f'    "mine_kb":                {{"fn": t_mine_kb,'
+                tools_patch_new = (
+                    f'    "{fn_name}":               {{"fn": {fn_name}, "perm": "EXECUTE", "args": [],'
+                    f' "desc": "{change_summary[:80]}"}},\n'
+                    f'    "mine_kb":                {{"fn": t_mine_kb,'
+                )
+                t_gh_search_replace("core.py", tools_patch_old, tools_patch_new,
+                                    f"Evolution #{evolution_id}: register {fn_name} in TOOLS")
+                applied = patch_ok.get("ok", False)
+                note = f"New tool '{fn_name}' added to core.py and registered in TOOLS"
+                # Save to script_templates for future reuse
+                sb_post("script_templates", {
+                    "name": fn_name, "description": change_summary[:200],
+                    "trigger_pattern": evo.get("recommendation", ""),
+                    "code": fn_code, "use_count": 0,
+                    "created_at": datetime.utcnow().isoformat(),
+                })
+            else:
+                note = "new_tool evolution: could not extract function name from generated code"
+                applied = False
+
+        elif change_type == "script_template":
+            # Store reusable script template in Supabase for future sessions
+            try:
+                meta = json.loads(diff_content) if diff_content else {}
+            except Exception:
+                meta = {}
+            tpl_name = meta.get("name", pattern_key or f"template_{evolution_id}")
+            tpl_code = meta.get("code", change_summary)
+            applied = sb_post("script_templates", {
+                "name": tpl_name,
+                "description": meta.get("description", change_summary[:200]),
+                "trigger_pattern": meta.get("trigger_pattern", evo.get("recommendation", "")),
+                "code": tpl_code, "use_count": 0,
+                "created_at": datetime.utcnow().isoformat(),
+            })
+            note = f"Script template '{tpl_name}' stored in Supabase"
+
         elif change_type == "code":
             if not diff_content: return {"ok": False, "error": "code evolution requires diff_content"}
             fname = f"patches/evo_{evolution_id}_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.patch"
