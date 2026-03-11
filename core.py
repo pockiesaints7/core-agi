@@ -61,6 +61,13 @@ Fix log:Fix log:
                Runs automatically on startup if backlog_count < kb_count / 20 (underpopulated).
                Also exposed as /mine Telegram command and t_mine_kb MCP tool for manual triggering.
                Paced at 3s between batches to respect Groq free tier limits.
+  2026-03-12R: Phase 1 fix — cold processor pattern_key URL-encoding bug.
+               Root cause: per-key Supabase querystring lookup used urllib.parse.quote() on pattern strings.
+               Patterns with spaces/special chars produced URL-mangled queries -> missed lookups
+               -> sb_upsert inserted garbage rows (blank, single 'e') as new pattern_keys.
+               Fix: load all pattern_frequency rows once before loop, match Python-side by exact key.
+               Also: auto_hot_reflection now skips trivial sessions (summary<50 chars, <=2 actions)
+               with empty new_patterns[] — zero-value rows wasted cold processor cycles.
 """
 import asyncio
 import base64
