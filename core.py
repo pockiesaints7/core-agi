@@ -1053,41 +1053,28 @@ def _backlog_add(items: list) -> list:
 
 
 def _sync_backlog_status():
-    """Cross-check _backlog in-memory status against evolution_queue in Supabase.
-    Called before rendering BACKLOG.md so status is always accurate after restarts."""
+    """Sync backlog item statuses from evolution_queue into Supabase backlog table."""
     try:
         rows = sb_get("evolution_queue",
-                      "select=change_summary,status,pattern_key&change_type=eq.backlog&order=id.desc&limit=500",
+                      "select=status,pattern_key&change_type=in.(backlog,knowledge)&order=id.desc&limit=500",
                       svc=True)
-        # Build lookup: title (lowercase) -> status
-        evo_status = {}
+        synced = 0
         for row in rows:
-            # pattern_key format: "backlog:{type}:{title}"
             pk = row.get("pattern_key", "")
-            if pk.startswith("backlog:"):
-                parts = pk.split(":", 2)
-                title_key = parts[2].lower() if len(parts) == 3 else ""
-            else:
-                # fallback: extract from change_summary "[BACKLOG Px][exec] title: desc"
-                s = row.get("change_summary", "")
-                import re
-                m = re.search(r'\]\s+(.+?):', s)
-                title_key = m.group(1).lower().strip() if m else ""
-            if title_key:
-                evo_status[title_key] = row.get("status", "pending")
-        # Sync in-memory _backlog
-        with _backlog_lock:
-            for item in _backlog:
-                key = item.get("title", "").lower()
-                if key in evo_status:
-                    es = evo_status[key]
-                    if es in ("applied", "done"):
-                        item["status"] = "done"
-                    elif es == "pending_desktop":
-                        item["status"] = "in_progress"
-                    elif es in ("pending",):
-                        pass  # keep as pending
-        return len(evo_status)
+            if not pk.startswith("backlog:"): continue
+            parts = pk.split(":", 2)
+            if len(parts) != 3: continue
+            title_key = parts[2]
+            es = row.get("status", "pending")
+            new_status = (
+                "done"        if es in ("applied", "done") else
+                "in_progress" if es == "pending_desktop" else
+                None
+            )
+            if new_status:
+                sb_patch("backlog", f"title=eq.{title_key}", {"status": new_status})
+                synced += 1
+        return synced
     except Exception as e:
         print(f"[BACKLOG] status sync error: {e}")
         return 0
