@@ -1160,6 +1160,108 @@ def t_backlog_update(title: str, status: str):
         return {"ok": False, "error": f"Item not found: {title}"}
 
 
+def t_bulk_apply(executor_override: str = "claude_desktop", dry_run: bool = False):
+    """Apply all pending evolution_queue items.
+    executor_override: force all items to be handled as this executor type.
+      'claude_desktop' = Claude Desktop handles everything directly (no Groq needed)
+      'groq'           = delegate all to Groq / task_queue
+      'auto'           = use each item's original executor assignment
+    dry_run: if True, return what WOULD be applied without actually doing it.
+    """
+    try:
+        rows = sb_get("evolution_queue",
+                      "select=*&status=in.(pending,pending_desktop)&order=id.asc",
+                      svc=True)
+        if not rows:
+            return {"ok": True, "message": "No pending evolutions", "applied": [], "total": 0}
+
+        results = []
+        for evo in rows:
+            eid   = evo["id"]
+            ctype = evo.get("change_type", "knowledge")
+            summary = evo.get("change_summary", "")
+            try:
+                meta = json.loads(evo.get("diff_content") or "{}")
+            except Exception:
+                meta = {}
+
+            btype    = meta.get("backlog_type", "")
+            title    = meta.get("title", summary[:80])
+            desc     = meta.get("description", summary)
+            domain   = meta.get("domain", "general")
+            original_exec = meta.get("executor", "auto")
+
+            # Determine effective executor
+            effective = executor_override if executor_override != "auto" else original_exec
+
+            if dry_run:
+                results.append({
+                    "id": eid, "title": title, "btype": btype,
+                    "original_executor": original_exec, "would_use": effective,
+                    "action": "dry_run â€” not applied"
+                })
+                continue
+
+            # CLAUDE DESKTOP PATH â€” handle everything directly here
+            if effective == "claude_desktop" or executor_override == "claude_desktop":
+                if ctype == "knowledge" or btype == "new_kb":
+                    ok = bool(sb_post("knowledge_base", {
+                        "domain": domain, "topic": title, "content": desc,
+                        "confidence": "medium", "tags": ["bulk_apply", "claude_desktop"],
+                        "source": "bulk_apply",
+                    }))
+                    note = f"[desktop] KB entry added: {title}"
+                elif btype in ("logic_improvement", "performance", "missing_data"):
+                    ok = bool(sb_post("task_queue", {
+                        "type": "improvement",
+                        "payload": json.dumps({"title": title, "desc": desc, "domain": domain}),
+                        "status": "pending", "priority": 5, "source": "bulk_apply",
+                    }))
+                    note = f"[desktop] Queued for execution: {title}"
+                elif btype in ("new_tool", "telegram_command"):
+                    # Log to KB as pending implementation note
+                    ok = bool(sb_post("knowledge_base", {
+                        "domain": "pending_impl", "topic": f"[TODO] {title}",
+                        "content": f"Type: {btype}\n{desc}",
+                        "confidence": "low", "tags": ["todo", "new_tool", "claude_desktop"],
+                        "source": "bulk_apply",
+                    }))
+                    note = f"[desktop] Logged as TODO: {title} (needs manual impl)"
+                else:
+                    ok = bool(sb_post("knowledge_base", {
+                        "domain": domain, "topic": title, "content": desc,
+                        "confidence": "medium", "tags": ["bulk_apply"], "source": "bulk_apply",
+                    }))
+                    note = f"[desktop] KB fallback: {title}"
+
+                if ok:
+                    sb_patch("evolution_queue", f"id=eq.{eid}",
+                             {"status": "applied", "applied_at": datetime.utcnow().isoformat()})
+                    with _backlog_lock:
+                        for b in _backlog:
+                            if b.get("title","").lower() == title.lower():
+                                b["status"] = "done"
+                                break
+                results.append({"id": eid, "title": title, "ok": ok, "note": note})
+
+            else:
+                # GROQ PATH â€” delegate via apply_evolution (existing logic)
+                r = apply_evolution(eid)
+                results.append({"id": eid, "title": title, "ok": r.get("ok"), "note": r.get("note", "")})
+
+        applied = [r for r in results if r.get("ok")]
+        failed  = [r for r in results if not r.get("ok") and not r.get("action")]
+        notify(
+            f"Bulk apply done\n"
+            f"Applied: {len(applied)} | Failed: {len(failed)} | Total: {len(results)}\n"
+            f"Executor: {executor_override}"
+        )
+        return {"ok": True, "total": len(results), "applied": len(applied),
+                "failed": len(failed), "results": results}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
 # ── Tool registry ─────────────────────────────────────────────────────────────
 TOOLS = {
     "get_state":              {"fn": t_state,                  "perm": "READ",    "args": [],
@@ -1215,6 +1317,8 @@ TOOLS = {
     "get_backlog":            {"fn": t_get_backlog,            "perm": "READ",    "args": ["status", "limit", "min_priority"],
                                "desc": "Get improvement backlog. status=pending/done/dismissed. min_priority=1-5."},
     "backlog_update":         {"fn": t_backlog_update,         "perm": "WRITE",   "args": ["title", "status"],
+    "bulk_apply":             {"fn": t_bulk_apply,            "perm": "WRITE",   "args": ["executor_override", "dry_run"],
+                               "desc": "Apply ALL pending evolution_queue items at once. executor_override=claude_desktop|groq|auto. dry_run=true to preview. Use from Claude Desktop to clear backlog without Groq."},
                                "desc": "Update backlog item status: in_progress / done / dismissed."},
 }
 
