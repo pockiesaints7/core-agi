@@ -47,6 +47,12 @@ Fix log:Fix log:
                CORE now works 24/7: simulate → discover → document → notify → owner executes.
   2026-03-11O: fix — removed duplicate on_start + background_researcher block that caused
                FastAPI startup crash. Root cause: patch injected full researcher block twice.
+  2026-03-11P: fix — t_get_backlog now reads Supabase backlog table (restart-proof).
+               fix — cold_processor_loop now triggers on KB growth (COLD_KB_GROWTH_THRESHOLD=100).
+               Root cause: _backlog in-memory was wiped on restart → BACKLOG.md stayed stale
+               even though KB grew from 1k → 3k. Backlog count never updated automatically.
+               Fix: t_get_backlog queries Supabase directly. cold_processor_loop checks KB count
+               vs last-run KB count and re-triggers if delta >= 100 entries.
 """
 import asyncio
 import base64
@@ -86,6 +92,7 @@ MCP_PROTOCOL_VERSION = "2024-11-05"
 # Training config
 COLD_HOT_THRESHOLD        = 10
 COLD_TIME_THRESHOLD       = 86400
+COLD_KB_GROWTH_THRESHOLD  = 100   # re-run cold processor if KB grew by this many entries
 PATTERN_EVO_THRESHOLD     = 3
 KNOWLEDGE_AUTO_CONFIDENCE = 0.7
 
@@ -445,7 +452,6 @@ def apply_evolution(evolution_id: int):
                                f"Behavior evolution #{evolution_id}: {change_summary[:60]}")
             note = "Written to BEHAVIOR_UPDATES.md"
         elif change_type == "backlog":
-            # Execute backlog items â€” route by executor field in diff_content
             try:
                 meta = json.loads(diff_content) if diff_content else {}
             except Exception:
@@ -457,7 +463,6 @@ def apply_evolution(evolution_id: int):
             desc     = meta.get("description", change_summary)
 
             if executor == "groq" or (executor == "auto" and btype in ("new_kb", "missing_data")):
-                # GROQ PATH: CORE self-executes
                 if btype == "new_kb":
                     applied = bool(sb_post("knowledge_base", {
                         "domain": domain, "topic": title, "content": desc,
@@ -474,7 +479,6 @@ def apply_evolution(evolution_id: int):
                     note = f"[groq] Task queued: {title}"
 
             elif executor == "claude_desktop" or (executor == "auto" and btype in ("new_tool", "telegram_command")):
-                # CLAUDE DESKTOP PATH: flag for next Claude Desktop session
                 sb_patch("evolution_queue", f"id=eq.{evolution_id}", {"status": "pending_desktop"})
                 notify(
                     f"[BACKLOG] Approved - needs Claude Desktop\n"
@@ -486,7 +490,6 @@ def apply_evolution(evolution_id: int):
                 note = f"[claude_desktop] Flagged for Desktop session: {title}"
 
             else:
-                # auto + complex: Groq generates plan, queued for execution
                 plan_prompt = f"Generate a concise implementation plan for: {title}\nDescription: {desc}\nOutput as numbered steps, max 5 steps."
                 plan = groq_chat("You are CORE planning engine. Be concise.", plan_prompt,
                                  model=GROQ_FAST, max_tokens=300)
@@ -497,19 +500,15 @@ def apply_evolution(evolution_id: int):
                 }))
                 note = f"[auto] Plan generated + queued: {title}"
 
-            # Update backlog in-memory status
-            with _backlog_lock:
-                for b in _backlog:
-                    if b.get("title", "").lower() == title.lower():
-                        b["status"] = "done" if btype == "new_kb" else "in_progress"
-                        break
+            # Update backlog status in Supabase
+            sb_patch("backlog", f"title=eq.{title}",
+                     {"status": "done" if btype == "new_kb" else "in_progress"})
 
         if applied:
             sb_patch("evolution_queue", f"id=eq.{evolution_id}",
                      {"status": "applied", "applied_at": datetime.utcnow().isoformat()})
-            notify(f"? Evolution #{evolution_id} applied\nType: {change_type}\n{note}")
+            notify(f"✅ Evolution #{evolution_id} applied\nType: {change_type}\n{note}")
             check_evolution_self_sync(evo)
-            # Auto-refresh BACKLOG.md so status is immediately visible on GitHub
             try:
                 gh_write("BACKLOG.md", _backlog_to_markdown(),
                          f"chore(backlog): sync after evo #{evolution_id} applied [{change_type}]")
@@ -544,19 +543,49 @@ def reject_evolution(evolution_id: int, reason: str = ""):
 
 
 _last_cold_run: float = 0.0
+_last_cold_kb_count: int = 0  # KB count at last cold run — used for growth trigger
 
 def cold_processor_loop():
-    global _last_cold_run
+    global _last_cold_run, _last_cold_kb_count
     print("[COLD] Background loop started")
     while True:
         try:
             hots        = sb_get("hot_reflections", "select=id&processed_by_cold=eq.0&id=gt.1", svc=True)
             unprocessed = len(hots)
             time_since  = time.time() - _last_cold_run
-            if unprocessed >= COLD_HOT_THRESHOLD or (time_since >= COLD_TIME_THRESHOLD and unprocessed > 0):
-                print(f"[COLD] Triggering: unprocessed={unprocessed} time_since={int(time_since)}s")
+
+            # KB growth trigger — re-run if KB grew by COLD_KB_GROWTH_THRESHOLD since last run
+            current_kb_count = 0
+            try:
+                counts = get_system_counts()
+                current_kb_count = counts.get("knowledge_base", 0)
+            except Exception:
+                pass
+            kb_growth = current_kb_count - _last_cold_kb_count
+
+            should_run = (
+                unprocessed >= COLD_HOT_THRESHOLD or
+                (time_since >= COLD_TIME_THRESHOLD and unprocessed > 0) or
+                (kb_growth >= COLD_KB_GROWTH_THRESHOLD and _last_cold_kb_count > 0)
+            )
+
+            if should_run:
+                trigger = (
+                    f"unprocessed={unprocessed}" if unprocessed >= COLD_HOT_THRESHOLD else
+                    f"kb_growth={kb_growth} (was {_last_cold_kb_count} → now {current_kb_count})" if kb_growth >= COLD_KB_GROWTH_THRESHOLD else
+                    f"time_since={int(time_since)}s"
+                )
+                print(f"[COLD] Triggering: {trigger}")
                 run_cold_processor()
                 _last_cold_run = time.time()
+                _last_cold_kb_count = current_kb_count
+                # Also refresh BACKLOG.md whenever cold processor runs
+                try:
+                    gh_write("BACKLOG.md", _backlog_to_markdown(),
+                             f"chore(backlog): auto-refresh after cold processor ({trigger})")
+                except Exception as be:
+                    print(f"[COLD] backlog refresh error: {be}")
+
             for evo in sb_get("evolution_queue",
                                "select=id,confidence,change_type&status=eq.pending&change_type=eq.knowledge&id=gt.1",
                                svc=True):
@@ -662,12 +691,19 @@ def t_training_status():
     try:
         unprocessed = sb_get("hot_reflections", "select=id&processed_by_cold=eq.0&id=gt.1", svc=True)
         pending_evo = sb_get("evolution_queue", "select=id,change_type,change_summary,confidence&status=eq.pending&id=gt.1", svc=True)
-        with _backlog_lock:
-            backlog_pending = sum(1 for b in _backlog if b.get("status") == "pending")
+        try:
+            backlog_rows = sb_get("backlog", "select=id&status=eq.pending&limit=1", svc=True)
+            backlog_pending = int(httpx.get(
+                f"{SUPABASE_URL}/rest/v1/backlog?select=id&status=eq.pending&limit=1",
+                headers=_sbh_count_svc(), timeout=10
+            ).headers.get("content-range", "*/0").split("/")[-1])
+        except Exception:
+            backlog_pending = -1
         return {"status": f"Training pipeline ACTIVE — {get_current_step()}",
                 "unprocessed_hot": len(unprocessed), "pending_evolutions": len(pending_evo),
-                "backlog_pending_inmem": backlog_pending,
+                "backlog_pending": backlog_pending,
                 "evolutions": pending_evo[:5], "cold_threshold": COLD_HOT_THRESHOLD,
+                "kb_growth_threshold": COLD_KB_GROWTH_THRESHOLD,
                 "pattern_threshold": PATTERN_EVO_THRESHOLD, "auto_apply_conf": KNOWLEDGE_AUTO_CONFIDENCE}
     except Exception as e:
         return {"status": "error", "error": str(e)}
@@ -1010,7 +1046,6 @@ def _backlog_add(items: list) -> list:
         effort   = item.get("effort", "medium")
         domain   = item.get("domain", "general")
 
-        # Write to Supabase backlog table (source of truth)
         ok = sb_post("backlog", {
             "title":        title,
             "type":         itype,
@@ -1025,7 +1060,6 @@ def _backlog_add(items: list) -> list:
         if ok:
             new_items.append(item)
 
-        # Push P3+ to evolution_queue for owner approval
         if priority >= 3:
             executor = (
                 "claude_desktop" if itype in ("new_tool", "telegram_command") else
@@ -1159,61 +1193,36 @@ def _backlog_to_markdown() -> str:
         "performance": "Performance", "missing_data": "Missing Data", "other": "Other",
     }
     status_icon = {"done": "[x]", "in_progress": "[~]", "pending": "[ ]"}
-        for t, items in by_type.items():
-            n_t_done = sum(1 for i in items if i.get("status") == "done")
-            lines.append(f"## {type_labels.get(t, t)} ({n_t_done}/{len(items)} done)\n")
-            for item in items:
-                p      = item.get("priority", 1)
-                status = item.get("status", "pending")
-                s_icon = status_icon.get(status, "[ ]")
-                exec_  = ""
-                lines.append(f"### {s_icon} P{p}: {item.get('title','')}")
-                lines.append(f"- **Status:** {status} | **Type:** {t} | **Effort:** {item.get('effort','?')} | **Impact:** {item.get('impact','?')} | **Domain:** {item.get('domain','?')}")
-                lines.append(f"- **What:** {item.get('description','')}")
-                lines.append(f"- **Discovered:** {item.get('discovered_at','')[:16]}")
-                lines.append("")
-        lines.append("---\n_CORE runs background_researcher every 60 min._")
-        lines.append("_Use `/backlog` in Telegram or `get_backlog` MCP tool to review._")
-        return "\n".join(lines)
-
+    for t, items in by_type.items():
+        n_t_done = sum(1 for i in items if i.get("status") == "done")
+        lines.append(f"## {type_labels.get(t, t)} ({n_t_done}/{len(items)} done)\n")
+        for item in items:
+            p      = item.get("priority", 1)
+            status = item.get("status", "pending")
+            s_icon = status_icon.get(status, "[ ]")
+            lines.append(f"### {s_icon} P{p}: {item.get('title','')}")
+            lines.append(f"- **Status:** {status} | **Type:** {t} | **Effort:** {item.get('effort','?')} | **Impact:** {item.get('impact','?')} | **Domain:** {item.get('domain','?')}")
+            lines.append(f"- **What:** {item.get('description','')}")
+            lines.append(f"- **Discovered:** {item.get('discovered_at','')[:16]}")
+            lines.append("")
+    lines.append("---\n_CORE runs background_researcher every 60 min._")
+    lines.append("_Use `/backlog` in Telegram or `get_backlog` MCP tool to review._")
+    return "\n".join(lines)
 
 
 def background_researcher():
     global _last_research_run
     print("[RESEARCH] 24/7 background researcher started — interval=60min")
 
-    # Reload existing backlog from KB on startup
+    # Startup: repopulate evolution_queue from Supabase backlog (restart-proof)
     try:
-        existing = sb_get("knowledge_base",
-                          "select=topic,content&domain=eq.backlog&order=created_at.desc&limit=100",
-                          svc=True)
-        with _backlog_lock:
-            for row in existing:
-                title = row.get("topic", "").replace("[BACKLOG-", "").split("] ", 1)[-1]
-                content = row.get("content", "")
-                type_ = "other"
-                for t in ["new_tool","logic_improvement","new_kb","telegram_command","performance","missing_data"]:
-                    if t in content: type_ = t; break
-                priority = 3
-                try:
-                    p_str = row.get("topic","")
-                    if "BACKLOG-" in p_str:
-                        priority = int(p_str.split("BACKLOG-")[1].split("]")[0])
-                except: pass
-                _backlog.append({
-                    "title": title, "type": type_, "priority": priority,
-                    "description": content[:200], "domain": "loaded",
-                    "discovered_at": "previous_session", "status": "pending",
-                    "effort": "medium", "impact": "medium",
-                })
-        print(f"[RESEARCH] Loaded {len(_backlog)} existing backlog items from KB")
-        synced = _sync_backlog_status()
-        print(f"[RESEARCH] Status sync: {synced} evo entries matched")
         pushed = _repopulate_evolution_queue()
         if pushed > 0:
             notify(f"[CORE] Startup: repopulated {pushed} evolution_queue entries after restart.")
+        synced = _sync_backlog_status()
+        print(f"[RESEARCH] Startup sync: {synced} status entries matched, {pushed} evo entries repopulated")
     except Exception as e:
-        print(f"[RESEARCH] startup load error: {e}")
+        print(f"[RESEARCH] startup sync error: {e}")
 
     while True:
         try:
@@ -1229,9 +1238,16 @@ def background_researcher():
                 md = _backlog_to_markdown()
                 gh_write("BACKLOG.md", md,
                          f"chore(backlog): {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')} — {len(all_new)} new items")
-                print(f"[RESEARCH] Cycle done. New: {len(all_new)}, Total: {len(_backlog)}")
+                # Get total from Supabase for accurate count
+                try:
+                    total_count = int(httpx.get(
+                        f"{SUPABASE_URL}/rest/v1/backlog?select=id&limit=1",
+                        headers=_sbh_count_svc(), timeout=10
+                    ).headers.get("content-range", "*/0").split("/")[-1])
+                except Exception:
+                    total_count = len(all_new)
+                print(f"[RESEARCH] Cycle done. New: {len(all_new)}, Total in DB: {total_count}")
                 critical_new = [i for i in all_new if int(i.get("priority", 1)) >= 4]
-                # Count pending backlog evolutions awaiting owner approval
                 try:
                     pending_count = len(sb_get("evolution_queue",
                         "select=id&status=eq.pending&change_type=eq.backlog", svc=True))
@@ -1239,7 +1255,7 @@ def background_researcher():
                     pending_count = 0
                 if all_new or pending_count:
                     hi = "\n".join([f"[P{i['priority']}] {i['title']}" for i in critical_new[:5]])
-                    msg = f"[RESEARCH] {len(all_new)} new items | Total backlog: {len(_backlog)}"
+                    msg = f"[RESEARCH] {len(all_new)} new items | Total backlog: {total_count}"
                     if hi: msg += f"\n\nHigh priority:\n{hi}"
                     if pending_count: msg += f"\n\n{pending_count} items awaiting approval - /evolutions"
                     msg += "\n\nFull list: /backlog"
@@ -1250,37 +1266,37 @@ def background_researcher():
 
 
 def t_get_backlog(status: str = "pending", limit: int = 20, min_priority: int = 1):
-    with _backlog_lock:
-        items = [b for b in _backlog
-                 if b.get("status", "pending") == status
-                 and int(b.get("priority", 1)) >= int(min_priority)]
-        items_sorted = sorted(items, key=lambda x: -int(x.get("priority", 1)))
-        return {"ok": True, "total": len(_backlog), "filtered": len(items_sorted),
-                "items": items_sorted[:int(limit)]}
+    """Read backlog directly from Supabase — restart-proof, always accurate."""
+    try:
+        lim = int(limit) if limit else 20
+        min_p = int(min_priority) if min_priority else 1
+        qs = f"select=*&status=eq.{status}&order=priority.desc&limit={lim}"
+        if min_p > 1:
+            qs += f"&priority=gte.{min_p}"
+        items = sb_get("backlog", qs, svc=True)
+        # Get total count
+        total = int(httpx.get(
+            f"{SUPABASE_URL}/rest/v1/backlog?select=id&limit=1",
+            headers=_sbh_count_svc(), timeout=10
+        ).headers.get("content-range", "*/0").split("/")[-1])
+        return {"ok": True, "total": total, "filtered": len(items), "items": items}
+    except Exception as e:
+        return {"ok": False, "error": str(e), "items": []}
 
 
 def t_backlog_update(title: str, status: str):
-    with _backlog_lock:
-        for item in _backlog:
-            if item.get("title", "").lower() == title.lower():
-                item["status"] = status
-                sb_post("knowledge_base", {
-                    "domain": "backlog", "topic": f"[STATUS UPDATE] {title}",
-                    "content": f"Status changed to: {status}", "confidence": "high",
-                    "tags": ["backlog", "status_update"], "source": "mcp_session",
-                })
-                return {"ok": True, "title": title, "new_status": status}
-        return {"ok": False, "error": f"Item not found: {title}"}
+    """Update backlog item status in Supabase."""
+    ok = sb_patch("backlog", f"title=eq.{title}", {"status": status})
+    if ok:
+        # Also sync to evolution_queue
+        sb_patch("evolution_queue",
+                 f"pattern_key=like.backlog%3A%25{title[:40]}%25",
+                 {"status": "applied" if status == "done" else status})
+    return {"ok": ok, "title": title, "new_status": status}
 
 
 def t_bulk_apply(executor_override: str = "claude_desktop", dry_run: bool = False):
-    """Apply all pending evolution_queue items.
-    executor_override: force all items to be handled as this executor type.
-      'claude_desktop' = Claude Desktop handles everything directly (no Groq needed)
-      'groq'           = delegate all to Groq / task_queue
-      'auto'           = use each item's original executor assignment
-    dry_run: if True, return what WOULD be applied without actually doing it.
-    """
+    """Apply all pending evolution_queue items."""
     try:
         rows = sb_get("evolution_queue",
                       "select=*&status=in.(pending,pending_desktop)&order=id.asc",
@@ -1303,19 +1319,16 @@ def t_bulk_apply(executor_override: str = "claude_desktop", dry_run: bool = Fals
             desc     = meta.get("description", summary)
             domain   = meta.get("domain", "general")
             original_exec = meta.get("executor", "auto")
-
-            # Determine effective executor
             effective = executor_override if executor_override != "auto" else original_exec
 
             if dry_run:
                 results.append({
                     "id": eid, "title": title, "btype": btype,
                     "original_executor": original_exec, "would_use": effective,
-                    "action": "dry_run â€” not applied"
+                    "action": "dry_run — not applied"
                 })
                 continue
 
-            # CLAUDE DESKTOP PATH â€” handle everything directly here
             if effective == "claude_desktop" or executor_override == "claude_desktop":
                 if ctype == "knowledge" or btype == "new_kb":
                     ok = bool(sb_post("knowledge_base", {
@@ -1332,7 +1345,6 @@ def t_bulk_apply(executor_override: str = "claude_desktop", dry_run: bool = Fals
                     }))
                     note = f"[desktop] Queued for execution: {title}"
                 elif btype in ("new_tool", "telegram_command"):
-                    # Log to KB as pending implementation note
                     ok = bool(sb_post("knowledge_base", {
                         "domain": "pending_impl", "topic": f"[TODO] {title}",
                         "content": f"Type: {btype}\n{desc}",
@@ -1350,15 +1362,10 @@ def t_bulk_apply(executor_override: str = "claude_desktop", dry_run: bool = Fals
                 if ok:
                     sb_patch("evolution_queue", f"id=eq.{eid}",
                              {"status": "applied", "applied_at": datetime.utcnow().isoformat()})
-                    with _backlog_lock:
-                        for b in _backlog:
-                            if b.get("title","").lower() == title.lower():
-                                b["status"] = "done"
-                                break
+                    sb_patch("backlog", f"title=eq.{title}", {"status": "done"})
                 results.append({"id": eid, "title": title, "ok": ok, "note": note})
 
             else:
-                # GROQ PATH â€” delegate via apply_evolution (existing logic)
                 r = apply_evolution(eid)
                 results.append({"id": eid, "title": title, "ok": r.get("ok"), "note": r.get("note", "")})
 
@@ -1369,7 +1376,6 @@ def t_bulk_apply(executor_override: str = "claude_desktop", dry_run: bool = Fals
             f"Applied: {len(applied)} | Failed: {len(failed)} | Total: {len(results)}\n"
             f"Executor: {executor_override}"
         )
-        # Refresh BACKLOG.md immediately so GitHub reflects new statuses
         try:
             gh_write("BACKLOG.md", _backlog_to_markdown(),
                      f"chore(backlog): sync status after bulk_apply ({len(applied)} applied)")
@@ -1433,9 +1439,9 @@ TOOLS = {
     "search_mistakes":        {"fn": t_search_mistakes,        "perm": "READ",    "args": ["query", "domain", "limit"],
                                "desc": "Semantic mistake search. Returns what_failed + correct_approach."},
     "get_backlog":            {"fn": t_get_backlog,            "perm": "READ",    "args": ["status", "limit", "min_priority"],
-                               "desc": "Get improvement backlog. status=pending/done/dismissed. min_priority=1-5."},
+                               "desc": "Get improvement backlog from Supabase. status=pending/done/dismissed. min_priority=1-5."},
     "backlog_update":         {"fn": t_backlog_update,         "perm": "WRITE",   "args": ["title", "status"],
-                               "desc": "Update backlog item status: in_progress / done / dismissed."},
+                               "desc": "Update backlog item status in Supabase: in_progress / done / dismissed."},
     "bulk_apply":             {"fn": t_bulk_apply,             "perm": "WRITE",   "args": ["executor_override", "dry_run"],
                                "desc": "Apply ALL pending evolution_queue items at once. executor_override=claude_desktop|groq|auto. dry_run=true to preview."},
     "repopulate":             {"fn": _repopulate_evolution_queue, "perm": "WRITE", "args": [],
@@ -1501,9 +1507,16 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], all
 def root():
     counts = get_system_counts()
     step = get_current_step()
+    try:
+        backlog_count = int(httpx.get(
+            f"{SUPABASE_URL}/rest/v1/backlog?select=id&limit=1",
+            headers=_sbh_count_svc(), timeout=10
+        ).headers.get("content-range", "*/0").split("/")[-1])
+    except Exception:
+        backlog_count = -1
     return {"service": "CORE v5.2", "step": step,
             "knowledge": counts.get("knowledge_base", 0), "sessions": counts.get("sessions", 0),
-            "mistakes": counts.get("mistakes", 0), "backlog_items": len(_backlog)}
+            "mistakes": counts.get("mistakes", 0), "backlog_items": backlog_count}
 
 @app.get("/health")
 def health_ep(): return t_health()
@@ -1640,7 +1653,8 @@ def handle_msg(msg):
                f"Telegram: {h['components'].get('telegram')} | GitHub: {h['components'].get('github')}\n\n"
                f"Knowledge: {counts.get('knowledge_base',0)} | Sessions: {counts.get('sessions',0)}\n"
                f"Hot unprocessed: {ts.get('unprocessed_hot',0)} | Pending evos: {ts.get('pending_evolutions',0)}\n"
-               f"MCP tools: {len(TOOLS)} | Backlog: {len(_backlog)} items", cid)
+               f"Backlog: {ts.get('backlog_pending','?')} pending | KB growth trigger: +{COLD_KB_GROWTH_THRESHOLD}\n"
+               f"MCP tools: {len(TOOLS)}", cid)
 
     elif text == "/stats":
         s = t_stats()
@@ -1784,12 +1798,13 @@ def on_start():
     threading.Thread(target=background_researcher, daemon=True).start()
     counts = get_system_counts()
     step = get_current_step()
-    notify(f"*CORE v5.2 Online* ✅\n{step}\n"
+    notify(f"*CORE v5.3 Online* ✅\n{step}\n"
            f"Knowledge: {counts.get('knowledge_base',0)} | Sessions: {counts.get('sessions',0)}\n"
            f"MCP: {len(TOOLS)} tools\n"
            f"🔬 Background researcher: ACTIVE (60 min interval)\n"
-           f"📋 BACKLOG.md auto-updated on GitHub")
-    print(f"[CORE] v5.2 online :{PORT} — {step}")
+           f"📋 BACKLOG.md: Supabase-backed (restart-proof)\n"
+           f"📈 Cold processor: auto-triggers on KB growth (+{COLD_KB_GROWTH_THRESHOLD} entries)")
+    print(f"[CORE] v5.3 online :{PORT} — {step}")
 
 if __name__ == "__main__":
     import uvicorn
