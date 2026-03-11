@@ -992,47 +992,158 @@ _last_research_run: float = 0.0
 # NOTE: _backlog in-memory removed — all backlog state lives in Supabase `backlog` table.
 
 
-def _research_simulate_batch() -> list:
-    import random
-    domain, tasks = random.choice(_RESEARCH_DOMAINS)
-    sample = random.sample(tasks, min(3, len(tasks)))
-    routing_analyses = []
-    for task in sample:
-        sig = extract_signals(task)
-        routing_analyses.append(f"Task: '{task}' → archetype={sig['archetype']}, domain={sig['domain']}, "
-                                 f"expertise={sig['expertise']}, emotion={sig['emotion']}, stakes={sig['stakes']}")
-    kb_count = 0
-    tool_list = list(TOOLS.keys())
+def _extract_real_signal() -> bool:
+    """Track A — read real Supabase data, ask Groq to extract patterns.
+    Writes to hot_reflections tagged source=real."""
     try:
-        counts = get_system_counts()
-        kb_count = counts.get("knowledge_base", 0)
-    except: pass
+        # Load real data from Supabase
+        sessions = sb_get("sessions",
+            "select=summary,actions,interface&order=created_at.desc&limit=20", svc=True)
+        mistakes = sb_get("mistakes",
+            "select=domain,what_failed,root_cause,how_to_avoid&order=id.desc&limit=20", svc=True)
 
-    system = """You are CORE's internal research engine. Find gaps and improvement opportunities in an AGI system.
-Output MUST be a JSON array of improvement items. Each item:
-{"priority": 1-5, "type": "new_tool"|"logic_improvement"|"new_kb"|"telegram_command"|"performance"|"missing_data",
- "title": "short title (max 60 chars)", "description": "specific actionable description (max 200 chars)",
- "effort": "low"|"medium"|"high", "impact": "low"|"medium"|"high"}
-Output ONLY valid JSON array, no preamble."""
+        if not sessions and not mistakes:
+            print("[RESEARCH/REAL] No data yet — skipping")
+            return False
 
-    user = (f"Domain: {domain}\nSample tasks: {sample}\nRouting:\n" +
-            "\n".join(routing_analyses) +
-            f"\n\nCurrent tools ({len(tool_list)}): {', '.join(tool_list)}\nKB entries: {kb_count}\n"
-            f"What are 3-5 concrete improvements CORE needs?")
-    try:
-        raw = groq_chat(system, user, model=GROQ_FAST, max_tokens=600)
+        sessions_text = "\n".join([
+            f"- [{r.get('interface','?')}] {r.get('summary','')[:200]}"
+            for r in sessions
+        ]) or "No sessions yet."
+
+        mistakes_text = "\n".join([
+            f"- [{r.get('domain','?')}] FAILED: {r.get('what_failed','')[:150]} | ROOT: {r.get('root_cause','')[:100]}"
+            for r in mistakes
+        ]) or "No mistakes yet."
+
+        system = """You are CORE's pattern extraction engine. Analyze real activity logs from an AGI orchestration system.
+
+Your job: identify concrete recurring patterns, failures, and gaps from the actual data.
+Do NOT invent scenarios. Only extract what the data shows.
+
+Output MUST be a valid JSON object:
+{
+  "domain": "code|db|bot|mcp|training|kb|general",
+  "patterns": ["pattern1", "pattern2", ...],
+  "gaps": "1-2 sentences describing what's missing or unreliable",
+  "summary": "1 sentence summary of what this batch reveals"
+}
+
+patterns: list of 3-7 short strings, each a concrete repeating behavior or failure.
+Examples of good patterns: "gh_search_replace fails on special characters",
+"always verify after write", "rate limiter hit during bulk operations"
+Output ONLY valid JSON, no preamble."""
+
+        user = (f"RECENT SESSIONS ({len(sessions)}):\n{sessions_text}\n\n"
+                f"RECENT MISTAKES ({len(mistakes)}):\n{mistakes_text}\n\n"
+                f"Extract patterns from this real activity.")
+
+        raw = groq_chat(system, user, model=GROQ_MODEL, max_tokens=800)
         raw = raw.strip()
         if raw.startswith("```"): raw = raw.split("```")[1]
         if raw.startswith("json"): raw = raw[4:]
-        items = json.loads(raw.strip())
-        for item in items:
-            item["domain"] = domain
-            item["discovered_at"] = datetime.utcnow().isoformat()
-            item["status"] = "pending"
-        return items if isinstance(items, list) else []
+        result = json.loads(raw.strip())
+
+        patterns = result.get("patterns", [])
+        if not patterns:
+            print("[RESEARCH/REAL] Groq returned no patterns")
+            return False
+
+        ok = sb_post("hot_reflections", {
+            "task_summary": f"Real signal extraction — {len(sessions)} sessions, {len(mistakes)} mistakes",
+            "domain": result.get("domain", "general"),
+            "new_patterns": patterns,
+            "gaps_identified": result.get("gaps", ""),
+            "reflection_text": result.get("summary", ""),
+            "processed_by_cold": False,
+            "source": "real",
+            "quality_score": None,
+        })
+        print(f"[RESEARCH/REAL] ok={ok} patterns={len(patterns)} domain={result.get('domain')}")
+        return ok
     except Exception as e:
-        print(f"[RESEARCH] parse error: {e}")
-        return []
+        print(f"[RESEARCH/REAL] error: {e}")
+        return False
+
+
+def _run_simulation_batch() -> bool:
+    """Track B — load real CORE context, simulate 1M user population, extract patterns.
+    Writes to hot_reflections tagged source=simulation."""
+    try:
+        # Load real CORE context to ground the simulation
+        tool_list = list(TOOLS.keys())
+        mistakes = sb_get("mistakes",
+            "select=domain,what_failed&order=id.desc&limit=10", svc=True)
+        kb_sample = sb_get("knowledge_base",
+            "select=domain,topic&order=id.desc&limit=20", svc=True)
+
+        failure_modes = "\n".join([
+            f"- [{r.get('domain','?')}] {r.get('what_failed','')[:120]}"
+            for r in mistakes
+        ]) or "None recorded yet."
+
+        kb_domains = list({r.get("domain", "general") for r in kb_sample})
+        kb_topics_sample = [r.get("topic", "") for r in kb_sample[:10]]
+
+        system = """You are simulating 1,000,000 users of CORE — a personal AGI orchestration system.
+
+Your simulation must be grounded in CORE's actual architecture. Do NOT invent generic AI scenarios.
+Simulate the realistic distribution of how real users interact with THIS specific system.
+
+Usage distribution to simulate:
+- 40% routine tasks: KB queries, session logging, routing requests
+- 30% complex multi-step: write then verify then apply then check
+- 20% edge cases: rate limits, concurrent ops, ambiguous routing, missing KB entries
+- 10% failure recovery: retry logic, rollback, error handling, bad Groq output
+
+For this simulated population batch, identify:
+1. What patterns do users hit repeatedly across all usage types?
+2. What breaks or confuses them most often?
+3. What is missing from the KB that users keep needing?
+4. What tool behavior is unexpected or dangerous at scale?
+
+Output MUST be a valid JSON object:
+{
+  "domain": "code|db|bot|mcp|training|kb|general",
+  "patterns": ["pattern1", "pattern2", ...],
+  "gaps": "1-2 sentences on what this population most needs",
+  "summary": "1 sentence summary"
+}
+patterns: 4-8 short concrete strings grounded in CORE's actual tools and domains.
+Output ONLY valid JSON, no preamble."""
+
+        user = (f"CORE's MCP tools ({len(tool_list)}): {', '.join(tool_list)}\n\n"
+                f"Known failure modes from real usage:\n{failure_modes}\n\n"
+                f"KB domains active: {', '.join(kb_domains)}\n"
+                f"Sample KB topics: {', '.join(kb_topics_sample)}\n\n"
+                f"Simulate 1,000,000 users hitting this system. What patterns emerge?")
+
+        raw = groq_chat(system, user, model=GROQ_MODEL, max_tokens=900)
+        raw = raw.strip()
+        if raw.startswith("```"): raw = raw.split("```")[1]
+        if raw.startswith("json"): raw = raw[4:]
+        result = json.loads(raw.strip())
+
+        patterns = result.get("patterns", [])
+        if not patterns:
+            print("[RESEARCH/SIM] Groq returned no patterns")
+            return False
+
+        ok = sb_post("hot_reflections", {
+            "task_summary": f"Simulated 1M user population batch — grounded in real CORE context",
+            "domain": result.get("domain", "general"),
+            "new_patterns": patterns,
+            "gaps_identified": result.get("gaps", ""),
+            "reflection_text": result.get("summary", ""),
+            "processed_by_cold": False,
+            "source": "simulation",
+            "quality_score": None,
+        })
+        print(f"[RESEARCH/SIM] ok={ok} patterns={len(patterns)} domain={result.get('domain')}")
+        return ok
+    except Exception as e:
+        print(f"[RESEARCH/SIM] error: {e}")
+        return False
 
 
 def _backlog_add(items: list) -> list:
