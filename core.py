@@ -53,6 +53,14 @@ Fix log:Fix log:
                even though KB grew from 1k → 3k. Backlog count never updated automatically.
                Fix: t_get_backlog queries Supabase directly. cold_processor_loop checks KB count
                vs last-run KB count and re-triggers if delta >= 100 entries.
+  2026-03-11Q: CORE v5.4 — KB mining: one-time batch scan of all KB entries to populate backlog.
+               Root cause: 3k KB entries existed but only ~few backlog items because cold processor
+               only processes hot_reflections, not raw KB. KB was a dead warehouse.
+               Fix: run_kb_mining() reads KB in batches of 20, asks Groq to identify gaps per batch,
+               writes discovered items to backlog table via _backlog_add().
+               Runs automatically on startup if backlog_count < kb_count / 20 (underpopulated).
+               Also exposed as /mine Telegram command and t_mine_kb MCP tool for manual triggering.
+               Paced at 3s between batches to respect Groq free tier limits.
 """
 import asyncio
 import base64
@@ -95,6 +103,10 @@ COLD_TIME_THRESHOLD       = 86400
 COLD_KB_GROWTH_THRESHOLD  = 100   # re-run cold processor if KB grew by this many entries
 PATTERN_EVO_THRESHOLD     = 3
 KNOWLEDGE_AUTO_CONFIDENCE = 0.7
+
+# KB mining config — one-time batch scan to populate backlog from raw KB
+KB_MINE_BATCH_SIZE        = 20    # KB entries per Groq call
+KB_MINE_RATIO_THRESHOLD   = 20    # mine if backlog_count < kb_count / this
 
 # Self-sync config
 CORE_SELF_STALE_DAYS = 7
@@ -692,7 +704,6 @@ def t_training_status():
         unprocessed = sb_get("hot_reflections", "select=id&processed_by_cold=eq.0&id=gt.1", svc=True)
         pending_evo = sb_get("evolution_queue", "select=id,change_type,change_summary,confidence&status=eq.pending&id=gt.1", svc=True)
         try:
-            backlog_rows = sb_get("backlog", "select=id&status=eq.pending&limit=1", svc=True)
             backlog_pending = int(httpx.get(
                 f"{SUPABASE_URL}/rest/v1/backlog?select=id&status=eq.pending&limit=1",
                 headers=_sbh_count_svc(), timeout=10
@@ -704,6 +715,7 @@ def t_training_status():
                 "backlog_pending": backlog_pending,
                 "evolutions": pending_evo[:5], "cold_threshold": COLD_HOT_THRESHOLD,
                 "kb_growth_threshold": COLD_KB_GROWTH_THRESHOLD,
+                "kb_mine_ratio_threshold": KB_MINE_RATIO_THRESHOLD,
                 "pattern_threshold": PATTERN_EVO_THRESHOLD, "auto_apply_conf": KNOWLEDGE_AUTO_CONFIDENCE}
     except Exception as e:
         return {"status": "error", "error": str(e)}
@@ -978,9 +990,6 @@ _RESEARCH_DOMAINS = [
 _IMPROVEMENT_INTERVAL = 3600  # 60 min — free Groq tier safe
 _last_research_run: float = 0.0
 # NOTE: _backlog in-memory removed — all backlog state lives in Supabase `backlog` table.
-# Schema: id(int), title(text), type(text), priority(int), description(text),
-#         domain(text), effort(text), impact(text), status(text), discovered_at(timestamptz)
-# This makes backlog fully restart-proof.
 
 
 def _research_simulate_batch() -> list:
@@ -1210,6 +1219,137 @@ def _backlog_to_markdown() -> str:
     return "\n".join(lines)
 
 
+# ── KB Mining — one-time batch scan to populate backlog from raw KB ───────────
+def run_kb_mining(max_batches: int = 50, force: bool = False) -> dict:
+    """
+    Mine the entire KB in batches of KB_MINE_BATCH_SIZE entries.
+    For each batch, ask Groq to identify gaps/missing capabilities/improvements.
+    Write discovered items to backlog table via _backlog_add().
+
+    Runs automatically on startup if backlog is underpopulated relative to KB.
+    Can also be triggered manually via /mine Telegram command or t_mine_kb MCP tool.
+
+    Paced at 3s between batches to respect Groq free tier (200 calls/hour).
+    max_batches caps total Groq calls per run (default 50 = 1000 KB entries scanned).
+    """
+    try:
+        # Check if mining is needed
+        counts = get_system_counts()
+        kb_count = counts.get("knowledge_base", 0)
+        backlog_count = int(httpx.get(
+            f"{SUPABASE_URL}/rest/v1/backlog?select=id&limit=1",
+            headers=_sbh_count_svc(), timeout=10
+        ).headers.get("content-range", "*/0").split("/")[-1])
+
+        if not force and backlog_count >= kb_count / KB_MINE_RATIO_THRESHOLD:
+            msg = f"[KB MINE] Skipped — backlog ({backlog_count}) sufficient vs KB ({kb_count}). Use force=True to override."
+            print(msg)
+            return {"ok": True, "skipped": True, "reason": msg,
+                    "kb_count": kb_count, "backlog_count": backlog_count}
+
+        notify(f"⛏️ *KB Mining started*\nScanning {kb_count} KB entries in batches of {KB_MINE_BATCH_SIZE}\nMax batches: {max_batches}\nEstimated new items: {max_batches * 3}+")
+        print(f"[KB MINE] Starting. kb={kb_count} backlog={backlog_count} max_batches={max_batches}")
+
+        total_new = 0
+        offset = 0
+        batches_done = 0
+        system = """You are CORE's KB mining engine. Analyze a batch of knowledge base entries and identify:
+1. Gaps — what's missing or incomplete in this knowledge
+2. Improvements — what tools/logic CORE needs to handle these topics better
+3. Actions — specific backlog items to address the gaps
+
+Output MUST be a JSON array of 3-5 improvement items. Each item:
+{"priority": 1-5, "type": "new_tool"|"logic_improvement"|"new_kb"|"telegram_command"|"performance"|"missing_data",
+ "title": "short specific title (max 60 chars)",
+ "description": "specific actionable description (max 200 chars)",
+ "effort": "low"|"medium"|"high", "impact": "low"|"medium"|"high"}
+Output ONLY valid JSON array, no preamble, no explanation."""
+
+        while batches_done < max_batches:
+            # Read next batch from KB
+            kb_batch = sb_get("knowledge_base",
+                              f"select=domain,topic,content&order=id.asc&limit={KB_MINE_BATCH_SIZE}&offset={offset}",
+                              svc=True)
+            if not kb_batch:
+                break
+
+            # Summarize batch for Groq
+            batch_text = "\n".join([
+                f"[{r.get('domain','?')}] {r.get('topic','?')}: {str(r.get('content',''))[:150]}"
+                for r in kb_batch
+            ])
+            domains_in_batch = list({r.get("domain","general") for r in kb_batch})
+
+            user = (f"KB batch ({len(kb_batch)} entries, domains: {', '.join(domains_in_batch)}):\n\n"
+                    f"{batch_text}\n\n"
+                    f"What gaps or improvements does CORE need based on this knowledge?")
+
+            try:
+                raw = groq_chat(system, user, model=GROQ_FAST, max_tokens=600)
+                raw = raw.strip()
+                if raw.startswith("```"): raw = raw.split("```")[1]
+                if raw.startswith("json"): raw = raw[4:]
+                items = json.loads(raw.strip())
+                if isinstance(items, list):
+                    # Tag items with domain from batch
+                    for item in items:
+                        if not item.get("domain"):
+                            item["domain"] = domains_in_batch[0] if domains_in_batch else "general"
+                        item["discovered_at"] = datetime.utcnow().isoformat()
+                        item["status"] = "pending"
+                    new = _backlog_add(items)
+                    total_new += len(new)
+                    print(f"[KB MINE] Batch {batches_done+1}: offset={offset} entries={len(kb_batch)} new_items={len(new)}")
+            except Exception as e:
+                print(f"[KB MINE] Batch {batches_done+1} error: {e}")
+
+            offset += KB_MINE_BATCH_SIZE
+            batches_done += 1
+
+            # If we've scanned all KB entries, stop
+            if len(kb_batch) < KB_MINE_BATCH_SIZE:
+                break
+
+            time.sleep(3)  # pace Groq calls — 200/hr limit on free tier
+
+        # Refresh BACKLOG.md with new items
+        try:
+            gh_write("BACKLOG.md", _backlog_to_markdown(),
+                     f"chore(backlog): KB mining complete — {total_new} new items from {batches_done} batches")
+        except Exception as be:
+            print(f"[KB MINE] backlog refresh error: {be}")
+
+        final_count = int(httpx.get(
+            f"{SUPABASE_URL}/rest/v1/backlog?select=id&limit=1",
+            headers=_sbh_count_svc(), timeout=10
+        ).headers.get("content-range", "*/0").split("/")[-1])
+
+        notify(
+            f"⛏️ *KB Mining complete*\n"
+            f"Batches scanned: {batches_done} ({batches_done * KB_MINE_BATCH_SIZE} KB entries)\n"
+            f"New backlog items: {total_new}\n"
+            f"Total backlog: {final_count}\n"
+            f"BACKLOG.md updated ✅"
+        )
+        print(f"[KB MINE] Done. batches={batches_done} new_items={total_new} total_backlog={final_count}")
+        return {"ok": True, "batches_scanned": batches_done, "new_items": total_new,
+                "total_backlog": final_count, "kb_count": kb_count}
+
+    except Exception as e:
+        print(f"[KB MINE] error: {e}")
+        return {"ok": False, "error": str(e)}
+
+
+def t_mine_kb(max_batches: str = "50", force: str = "false") -> dict:
+    """MCP tool wrapper for run_kb_mining."""
+    try:
+        mb = int(max_batches) if max_batches else 50
+        f = str(force).lower() in ("true", "1", "yes")
+    except Exception:
+        mb = 50; f = False
+    return run_kb_mining(max_batches=mb, force=f)
+
+
 def background_researcher():
     global _last_research_run
     print("[RESEARCH] 24/7 background researcher started — interval=60min")
@@ -1223,6 +1363,12 @@ def background_researcher():
         print(f"[RESEARCH] Startup sync: {synced} status entries matched, {pushed} evo entries repopulated")
     except Exception as e:
         print(f"[RESEARCH] startup sync error: {e}")
+
+    # Startup: auto-mine KB if backlog is underpopulated
+    try:
+        threading.Thread(target=run_kb_mining, kwargs={"max_batches": 50, "force": False}, daemon=True).start()
+    except Exception as e:
+        print(f"[RESEARCH] startup kb mining error: {e}")
 
     while True:
         try:
@@ -1238,7 +1384,6 @@ def background_researcher():
                 md = _backlog_to_markdown()
                 gh_write("BACKLOG.md", md,
                          f"chore(backlog): {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')} — {len(all_new)} new items")
-                # Get total from Supabase for accurate count
                 try:
                     total_count = int(httpx.get(
                         f"{SUPABASE_URL}/rest/v1/backlog?select=id&limit=1",
@@ -1274,7 +1419,6 @@ def t_get_backlog(status: str = "pending", limit: int = 20, min_priority: int = 
         if min_p > 1:
             qs += f"&priority=gte.{min_p}"
         items = sb_get("backlog", qs, svc=True)
-        # Get total count
         total = int(httpx.get(
             f"{SUPABASE_URL}/rest/v1/backlog?select=id&limit=1",
             headers=_sbh_count_svc(), timeout=10
@@ -1288,7 +1432,6 @@ def t_backlog_update(title: str, status: str):
     """Update backlog item status in Supabase."""
     ok = sb_patch("backlog", f"title=eq.{title}", {"status": status})
     if ok:
-        # Also sync to evolution_queue
         sb_patch("evolution_queue",
                  f"pattern_key=like.backlog%3A%25{title[:40]}%25",
                  {"status": "applied" if status == "done" else status})
@@ -1446,6 +1589,8 @@ TOOLS = {
                                "desc": "Apply ALL pending evolution_queue items at once. executor_override=claude_desktop|groq|auto. dry_run=true to preview."},
     "repopulate":             {"fn": _repopulate_evolution_queue, "perm": "WRITE", "args": [],
                                "desc": "Re-push all P3+ backlog items to evolution_queue. Use when evolution_queue is empty after restart."},
+    "mine_kb":                {"fn": t_mine_kb,                "perm": "WRITE",   "args": ["max_batches", "force"],
+                               "desc": "Mine KB entries in batches to generate backlog items. max_batches=50 default. force=true to skip ratio check."},
 }
 
 # ── MCP JSON-RPC ──────────────────────────────────────────────────────────────
@@ -1464,7 +1609,7 @@ def handle_jsonrpc(body: dict, session_id: str = "") -> dict:
     if method == "initialize":
         return ok({"protocolVersion": MCP_PROTOCOL_VERSION,
                    "capabilities": {"tools": {"listChanged": False}},
-                   "serverInfo": {"name": "CORE v5.2", "version": "5.2"}})
+                   "serverInfo": {"name": "CORE v5.4", "version": "5.4"}})
     elif method == "notifications/initialized": return None
     elif method == "ping": return ok({})
     elif method == "tools/list":
@@ -1500,7 +1645,7 @@ class PatchRequest(BaseModel):
     message: str
     repo: Optional[str] = ""
 
-app = FastAPI(title="CORE v5.2", version="5.2")
+app = FastAPI(title="CORE v5.4", version="5.4")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 @app.get("/")
@@ -1514,7 +1659,7 @@ def root():
         ).headers.get("content-range", "*/0").split("/")[-1])
     except Exception:
         backlog_count = -1
-    return {"service": "CORE v5.2", "step": step,
+    return {"service": "CORE v5.4", "step": step,
             "knowledge": counts.get("knowledge_base", 0), "sessions": counts.get("sessions", 0),
             "mistakes": counts.get("mistakes", 0), "backlog_items": backlog_count}
 
@@ -1592,7 +1737,7 @@ async def mcp_startup(body: Handshake, req: Request):
     notify(f"🔌 MCP Session\nClient: {body.client_id}\nToken: {tok[:8]}...")
     return {"session_token": tok, "expires_hours": SESSION_TTL_H,
             "state": t_state(), "health": t_health(), "constitution": t_constitution(),
-            "tools": list(TOOLS.keys()), "note": f"CORE v5.2 ready. {step}"}
+            "tools": list(TOOLS.keys()), "note": f"CORE v5.4 ready. {step}"}
 
 @app.post("/mcp/auth")
 async def mcp_auth(body: Handshake, req: Request):
@@ -1632,7 +1777,7 @@ def handle_msg(msg):
     if text == "/start":
         counts = get_system_counts()
         step = get_current_step()
-        notify(f"*CORE v5.2*\n{step}\n"
+        notify(f"*CORE v5.4*\n{step}\n"
                f"Knowledge: {counts.get('knowledge_base',0)} | Sessions: {counts.get('sessions',0)}\n\n"
                f"*Commands:*\n"
                f"/status — health + training\n"
@@ -1640,6 +1785,7 @@ def handle_msg(msg):
                f"/route <task> — routing analysis\n"
                f"/stats — analytics\n"
                f"/backlog [min_priority] — improvement backlog\n"
+               f"/mine — scan KB for backlog items\n"
                f"/mistakes [domain] — recent mistakes\n"
                f"/tasks — task queue\n"
                f"/evolutions — pending evolutions\n"
@@ -1691,6 +1837,12 @@ def handle_msg(msg):
                    f"Stakes: {sig['stakes']} | Complexity: {result['routing']['complexity']}/12", cid)
         else:
             notify(f"Route error: {result.get('error')}", cid)
+
+    elif text.startswith("/mine"):
+        parts = text.split(None, 1)
+        force = len(parts) > 1 and parts[1].strip().lower() == "force"
+        notify(f"⛏️ KB mining started{'(forced)' if force else ''}... will notify when done.", cid)
+        threading.Thread(target=run_kb_mining, kwargs={"max_batches": 50, "force": force}, daemon=True).start()
 
     elif text.startswith("/backlog"):
         parts = text.split(None, 1)
@@ -1765,7 +1917,7 @@ def handle_msg(msg):
             notify(f"✅ Queued: `{text[:80]}`" if ok else "❌ Failed to queue task.", cid)
 
 def queue_poller():
-    print("[QUEUE] Started — v5.2 live execution mode")
+    print("[QUEUE] Started — v5.4 live execution mode")
     while True:
         try:
             tasks = sb_get("task_queue", "status=eq.pending&order=priority.asc&limit=1")
@@ -1798,13 +1950,14 @@ def on_start():
     threading.Thread(target=background_researcher, daemon=True).start()
     counts = get_system_counts()
     step = get_current_step()
-    notify(f"*CORE v5.3 Online* ✅\n{step}\n"
+    notify(f"*CORE v5.4 Online* ✅\n{step}\n"
            f"Knowledge: {counts.get('knowledge_base',0)} | Sessions: {counts.get('sessions',0)}\n"
            f"MCP: {len(TOOLS)} tools\n"
            f"🔬 Background researcher: ACTIVE (60 min interval)\n"
+           f"⛏️ KB mining: auto-triggers on startup if backlog underpopulated\n"
            f"📋 BACKLOG.md: Supabase-backed (restart-proof)\n"
            f"📈 Cold processor: auto-triggers on KB growth (+{COLD_KB_GROWTH_THRESHOLD} entries)")
-    print(f"[CORE] v5.3 online :{PORT} — {step}")
+    print(f"[CORE] v5.4 online :{PORT} — {step}")
 
 if __name__ == "__main__":
     import uvicorn
