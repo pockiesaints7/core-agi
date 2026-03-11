@@ -1085,9 +1085,19 @@ def background_researcher():
                          f"chore(backlog): {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')} — {len(all_new)} new items")
                 print(f"[RESEARCH] Cycle done. New: {len(all_new)}, Total: {len(_backlog)}")
                 critical_new = [i for i in all_new if int(i.get("priority", 1)) >= 4]
-                if critical_new:
-                    lines = "\n".join([f"🔴 P{i['priority']}: {i['title']}" for i in critical_new[:5]])
-                    notify(f"🔬 *CORE Research Update*\n{len(all_new)} new improvements found\n\n*High priority:*\n{lines}\n\nFull list: /backlog")
+                # Count pending backlog evolutions awaiting owner approval
+                try:
+                    pending_count = len(sb_get("evolution_queue",
+                        "select=id&status=eq.pending&change_type=eq.backlog", svc=True))
+                except Exception:
+                    pending_count = 0
+                if all_new or pending_count:
+                    hi = "\n".join([f"[P{i['priority']}] {i['title']}" for i in critical_new[:5]])
+                    msg = f"[RESEARCH] {len(all_new)} new items | Total backlog: {len(_backlog)}"
+                    if hi: msg += f"\n\nHigh priority:\n{hi}"
+                    if pending_count: msg += f"\n\n{pending_count} items awaiting approval - /evolutions"
+                    msg += "\n\nFull list: /backlog"
+                    notify(msg)
         except Exception as e:
             print(f"[RESEARCH] loop error: {e}")
         time.sleep(300)  # check every 5 min, runs every 60 min
