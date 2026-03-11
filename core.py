@@ -751,6 +751,150 @@ def t_list_evolutions(status="pending"):
                   svc=True)
     return {"evolutions": rows, "count": len(rows)}
 
+
+def t_check_evolutions(limit: int = 20) -> dict:
+    """
+    Groq-powered evolution brief. Reads pending evolutions + recent mistakes + top patterns
+    from Supabase, then asks Groq to generate a structured actionable prompt for Claude to
+    execute — including ready-to-use code, tool calls, and priority order.
+    This is the core of CORE's self-improvement loop becoming faster over time.
+    """
+    try:
+        # --- Pull all context from Supabase ---
+        evolutions = sb_get("evolution_queue",
+            f"select=id,change_type,change_summary,confidence,source,recommendation,pattern_key,created_at"
+            f"&status=eq.pending&id=gt.1&order=confidence.desc&limit={limit}",
+            svc=True)
+
+        mistakes = sb_get("mistakes",
+            "select=domain,context,what_failed,correct_approach,root_cause,how_to_avoid,severity"
+            "&order=id.desc&limit=10",
+            svc=True)
+
+        patterns = sb_get("pattern_frequency",
+            "select=pattern_key,frequency,domain,description&order=frequency.desc&limit=10",
+            svc=True)
+
+        templates = sb_get("script_templates",
+            "select=name,description,trigger_pattern&order=use_count.desc&limit=5",
+            svc=True) if True else []
+
+        tool_names = list(TOOLS.keys())
+
+        # --- Format context for Groq ---
+        evo_text = "\n".join([
+            f"[#{e['id']} | {e['change_type']} | conf={e.get('confidence','?')} | src={e.get('source','?')}]\n"
+            f"  Summary: {e.get('change_summary','')[:120]}\n"
+            f"  Recommendation: {e.get('recommendation','') or 'none'}"
+            for e in evolutions
+        ]) or "No pending evolutions."
+
+        mistake_text = "\n".join([
+            f"[{m.get('domain','?')} | sev={m.get('severity','?')}] FAILED: {m.get('what_failed','')[:100]}\n"
+            f"  ROOT: {m.get('root_cause','')[:80]} | FIX: {m.get('correct_approach','')[:100]}\n"
+            f"  AVOID: {m.get('how_to_avoid','')[:80]}"
+            for m in mistakes
+        ]) or "No mistakes recorded."
+
+        pattern_text = "\n".join([
+            f"  [{p.get('domain','?')}] {p.get('pattern_key','')[:80]} (seen {p.get('frequency',0)}x)"
+            for p in patterns
+        ]) or "No patterns yet."
+
+        template_text = "\n".join([
+            f"  TEMPLATE: {t.get('name','')} — {t.get('description','')[:80]}"
+            for t in templates
+        ]) or "  No templates yet."
+
+        system = """You are CORE's evolution engine. Your job is to generate a precise, actionable brief
+for Claude (the AI agent running CORE) to act on RIGHT NOW in this session.
+
+You have access to: pending evolutions, recent mistakes, recurring patterns, and available MCP tools.
+
+Your output must be a JSON object with this exact structure:
+{
+  "session_title": "short title for this evolution session",
+  "priority_actions": [
+    {
+      "rank": 1,
+      "action_type": "code_patch | new_tool | new_template | kb_entry | reject",
+      "title": "short title",
+      "why": "1 sentence — why this matters for CORE's efficiency",
+      "evolution_ids": [list of evolution IDs this addresses],
+      "ready_to_execute": true/false,
+      "instruction": "exact instruction for Claude — what to do, what tool to call, what code to write",
+      "code_snippet": "if action_type=code_patch or new_tool: include the exact Python function or patch here, else null"
+    }
+  ],
+  "new_tools_proposed": [
+    {
+      "name": "t_tool_name",
+      "purpose": "what problem it solves",
+      "trigger": "what mistake/pattern caused this",
+      "code": "def t_tool_name(...):\\n    ..."
+    }
+  ],
+  "templates_proposed": [
+    {
+      "name": "template_name",
+      "description": "what it does",
+      "trigger_pattern": "when to use it",
+      "code": "template code"
+    }
+  ],
+  "reject_ids": [list of evolution IDs to reject as low value],
+  "summary": "2-3 sentence summary of what this session should accomplish"
+}
+
+Rules:
+- Rank actions by impact on CORE's speed and reliability, not by confidence score
+- For repeated mistakes (same root cause seen 2+ times): ALWAYS propose a new_tool to prevent recurrence
+- new_tool code must be valid Python, follow CORE's style (use sb_post, sb_get, gh_search_replace etc)
+- code_patch instructions must reference gh_search_replace with exact old_str/new_str
+- reject evolutions that are vague, duplicate, or low-signal
+- Output ONLY valid JSON, no preamble"""
+
+        user = (
+            f"CORE MCP tools available: {', '.join(tool_names)}\n\n"
+            f"PENDING EVOLUTIONS ({len(evolutions)}):\n{evo_text}\n\n"
+            f"RECENT MISTAKES ({len(mistakes)}):\n{mistake_text}\n\n"
+            f"TOP PATTERNS:\n{pattern_text}\n\n"
+            f"EXISTING TEMPLATES:\n{template_text}\n\n"
+            f"Generate the evolution brief for this session."
+        )
+
+        raw = groq_chat(system, user, model=GROQ_MODEL, max_tokens=2000)
+        raw = raw.strip()
+        if raw.startswith("```"): raw = "\n".join(raw.split("\n")[1:])
+        if raw.endswith("```"): raw = "\n".join(raw.split("\n")[:-1])
+        brief = json.loads(raw.strip())
+
+        # Save proposed templates to script_templates table
+        for tpl in brief.get("templates_proposed", []):
+            try:
+                sb_post("script_templates", {
+                    "name": tpl.get("name", ""),
+                    "description": tpl.get("description", ""),
+                    "trigger_pattern": tpl.get("trigger_pattern", ""),
+                    "code": tpl.get("code", ""),
+                    "use_count": 0,
+                    "created_at": datetime.utcnow().isoformat(),
+                })
+            except Exception: pass
+
+        return {
+            "ok": True,
+            "brief": brief,
+            "evolution_count": len(evolutions),
+            "mistake_count": len(mistakes),
+            "pattern_count": len(patterns),
+        }
+
+    except json.JSONDecodeError as e:
+        return {"ok": False, "error": f"Groq returned invalid JSON: {e}", "raw": raw[:500]}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
 def t_approve_evolution(evolution_id):
     try: eid = int(evolution_id)
     except: return {"ok": False, "error": "evolution_id must be a number"}
