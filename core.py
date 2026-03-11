@@ -1049,6 +1049,10 @@ TOOLS = {
                                "desc": "Analytics: domain distribution, top patterns, mistake frequency, avg quality score."},
     "search_mistakes":        {"fn": t_search_mistakes,        "perm": "READ",    "args": ["query", "domain", "limit"],
                                "desc": "Semantic mistake search. Returns what_failed + correct_approach. Better than get_mistakes for specific lookups."},
+    "get_backlog":            {"fn": t_get_backlog,            "perm": "READ",    "args": ["status", "limit", "min_priority"],
+                               "desc": "Get improvement backlog discovered by background_researcher. status=pending/done/dismissed. min_priority=1-5."},
+    "backlog_update":         {"fn": t_backlog_update,         "perm": "WRITE",   "args": ["title", "status"],
+                               "desc": "Update backlog item status: in_progress / done / dismissed. title must match exactly."},
 }
 
 # ── MCP JSON-RPC ────────────────────────────────────────────────────────────────
