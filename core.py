@@ -1310,7 +1310,6 @@ def t_bulk_apply(executor_override: str = "claude_desktop", dry_run: bool = Fals
         applied = [r for r in results if r.get("ok")]
         failed  = [r for r in results if not r.get("ok") and not r.get("action")]
         notify(
-        notify(
             f"Bulk apply done\n"
             f"Applied: {len(applied)} | Failed: {len(failed)} | Total: {len(results)}\n"
             f"Executor: {executor_override}"
@@ -1321,7 +1320,7 @@ def t_bulk_apply(executor_override: str = "claude_desktop", dry_run: bool = Fals
                      f"chore(backlog): sync status after bulk_apply ({len(applied)} applied)")
         except Exception as _be:
             print(f"[BACKLOG] bulk refresh error: {_be}")
-                "failed": len(failed), "results": results}
+        return {"ok": True, "applied": len(applied), "failed": len(failed), "results": results}
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
