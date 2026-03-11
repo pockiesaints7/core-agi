@@ -1438,9 +1438,11 @@ TOOLS = {
     "get_backlog":            {"fn": t_get_backlog,            "perm": "READ",    "args": ["status", "limit", "min_priority"],
                                "desc": "Get improvement backlog. status=pending/done/dismissed. min_priority=1-5."},
     "backlog_update":         {"fn": t_backlog_update,         "perm": "WRITE",   "args": ["title", "status"],
-    "bulk_apply":             {"fn": t_bulk_apply,            "perm": "WRITE",   "args": ["executor_override", "dry_run"],
-                               "desc": "Apply ALL pending evolution_queue items at once. executor_override=claude_desktop|groq|auto. dry_run=true to preview. Use from Claude Desktop to clear backlog without Groq."},
                                "desc": "Update backlog item status: in_progress / done / dismissed."},
+    "bulk_apply":             {"fn": t_bulk_apply,             "perm": "WRITE",   "args": ["executor_override", "dry_run"],
+                               "desc": "Apply ALL pending evolution_queue items at once. executor_override=claude_desktop|groq|auto. dry_run=true to preview."},
+    "repopulate":             {"fn": _repopulate_evolution_queue, "perm": "WRITE", "args": [],
+                               "desc": "Re-push all P3+ backlog items to evolution_queue. Use when evolution_queue is empty after restart."},
 }
 
 # ── MCP JSON-RPC ──────────────────────────────────────────────────────────────
