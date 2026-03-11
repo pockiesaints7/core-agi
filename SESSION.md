@@ -36,7 +36,7 @@ hot_reflections, cold_reflections, evolution_queue, pattern_frequency
 ## System State (as of 2026-03-11 session)
 - Railway: live @ https://core-agi-production.up.railway.app
 - core.py: commit 19b0d0f (restored + self_sync_check added)
-- last_good_commit: 19b0d0f ← UPDATE THIS after every successful deploy
+- last_good_commit: 09b370a  (fix: import import os SyntaxError line 55)
 - knowledge_base: ~360+ entries
 - CORE_SELF.md: LIVE — single source of truth for CORE's self-knowledge
 - operating_context.json: v2.0 — full schema all 9 active tables + architecture
@@ -44,7 +44,9 @@ hot_reflections, cold_reflections, evolution_queue, pattern_frequency
 - resource_ceilings.json: v2 — includes _env_vars_declared + _ai_models + _last_verified
 
 ## Incident Log
-- 2026-03-11 INCIDENT: write_file tool wiped core.py (929→26 lines). Railway down ~5min.
+- 2026-03-11 INCIDENT(2): Wrong env detection — used claude.ai PowerShell workarounds on Claude Desktop. Mistake id=178 logged. Fix: updated env detection SOP in CORE_v5_plan.md.
+  - 2026-03-11 INCIDENT(3): import import os SyntaxError line 55 — duplicate keyword from bad patch. Fixed commit 09b370a.
+  - 2026-03-11 INCIDENT: write_file tool wiped core.py (929→26 lines). Railway down ~5min.
   Root cause: write_file = full overwrite, used for partial docstring edit.
   Recovery: github:get_file_contents from commit cc87e5c → restore via github:create_or_update_file.
   Fixes applied: self_sync_check() added, write_file desc updated in TOOLS registry.
