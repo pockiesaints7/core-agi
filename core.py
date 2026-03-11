@@ -1,14 +1,16 @@
-"""CORE v5.0 — Step 3 | Training Pipeline Active
+"""CORE v5.0 — Recursive Self-Improvement Architecture
 Owner: REINVAGNAR
-Step 0: MCP fully working, Telegram queues tasks.
-Step 1: Claude Desktop live connection.
-Step 2: Training pipeline designed (TRAINING_DESIGN.md).
-Step 3: Training pipeline implemented.
-Fix (2026-03-11e): t_state() fetches operating_context.json + SESSION.md from GitHub.
-Fix (2026-03-11f): cold_processor uses Counter for batch freq counting.
-Fix (2026-03-11g): cold_reflections insert uses sb_post_critical (bypasses rate limiter).
-  Root cause: sb_post() silently returns False when L.sbw() is exhausted. cold_reflections
-  is a critical summary write (1x per batch run) so it must bypass the in-memory counter.
+Step status is dynamic — always read from SESSION.md on GitHub.
+Do NOT hardcode step numbers anywhere in this file.
+
+Fix log:
+  2026-03-11e: t_state() fetches operating_context.json + SESSION.md from GitHub.
+  2026-03-11f: cold_processor uses Counter for batch freq counting.
+  2026-03-11g: cold_reflections insert uses sb_post_critical (bypasses rate limiter).
+  2026-03-11h: All hardcoded step labels removed. Step derived dynamically from SESSION.md.
+               Root cause: step labels in root(), startup(), on_start(), Telegram /start
+               were hardcoded to 'Step 3' even after system advanced to Step 5.
+               Fix: get_current_step() helper reads SESSION.md live on every call.
 """
 import asyncio
 import base64
@@ -168,6 +170,32 @@ def gh_write(path, content, msg, repo=None):
     if sha: p["sha"] = sha
     return httpx.put(f"https://api.github.com/repos/{repo}/contents/{path}", headers=h, json=p, timeout=20).is_success
 
+# ── Dynamic step label — NEVER hardcode step numbers ─────────────────────────
+_step_cache: dict = {"label": "unknown", "ts": 0.0}
+_STEP_CACHE_TTL = 300  # seconds — refresh every 5 min
+
+def get_current_step() -> str:
+    """
+    Read current step label dynamically from SESSION.md on GitHub.
+    Cached for 5 minutes to avoid hammering GitHub on every request.
+    NEVER hardcode a step label anywhere in this file — always call this function.
+    """
+    global _step_cache
+    if time.time() - _step_cache["ts"] < _STEP_CACHE_TTL:
+        return _step_cache["label"]
+    try:
+        md = gh_read("SESSION.md")
+        # Extract line like: ## Current Step: Step 5 (Deploy & Monitor)
+        for line in md.splitlines():
+            if line.startswith("## Current Step:"):
+                label = line.replace("## Current Step:", "").strip()
+                _step_cache = {"label": label, "ts": time.time()}
+                return label
+    except Exception as e:
+        print(f"[STEP] Failed to read SESSION.md: {e}")
+    # Fallback: don't guess, return generic label
+    return _step_cache.get("label") or "unknown — check SESSION.md"
+
 # ── Supabase helpers ──────────────────────────────────────────────────────────
 def get_latest_session():
     d = sb_get("sessions", "select=summary,actions,created_at&order=created_at.desc&limit=1")
@@ -318,7 +346,7 @@ def run_cold_processor():
             sb_patch("hot_reflections", f"id=eq.{h['id']}", {"processed_by_cold": True})
 
         if evolutions_queued > 0:
-            notify(f"✨ Cold processor: {evolutions_queued} evolution(s) queued from {len(hots)} sessions.\nUse /evolutions to review.")
+            notify(f"\u2728 Cold processor: {evolutions_queued} evolution(s) queued from {len(hots)} sessions.\nUse /evolutions to review.")
 
         print(f"[COLD] Done: processed={len(hots)} patterns={len(batch_counts)} evolutions={evolutions_queued}")
         return {"ok": True, "processed": len(hots), "patterns_found": len(batch_counts), "evolutions_queued": evolutions_queued}
@@ -366,10 +394,10 @@ def apply_evolution(evolution_id: int):
         if applied:
             sb_patch("evolution_queue", f"id=eq.{evolution_id}",
                      {"status": "applied", "applied_at": datetime.utcnow().isoformat()})
-            notify(f"✅ Evolution #{evolution_id} applied\nType: {change_type}\n{note}")
+            notify(f"\u2705 Evolution #{evolution_id} applied\nType: {change_type}\n{note}")
             print(f"[EVO] Applied #{evolution_id} ({change_type})")
         else:
-            notify(f"❌ Evolution #{evolution_id} apply failed\nType: {change_type}")
+            notify(f"\u274c Evolution #{evolution_id} apply failed\nType: {change_type}")
         return {"ok": applied, "evolution_id": evolution_id, "change_type": change_type, "note": note}
     except Exception as e:
         print(f"[EVO] error: {e}")
@@ -391,7 +419,7 @@ def reject_evolution(evolution_id: int, reason: str = ""):
             "how_to_avoid": "Raise confidence threshold or improve pattern quality",
             "severity": "low", "tags": ["evolution", "rejected"],
         })
-        notify(f"❌ Evolution #{evolution_id} rejected.\nReason: {reason or 'No reason given'}")
+        notify(f"\u274c Evolution #{evolution_id} rejected.\nReason: {reason or 'No reason given'}")
         return {"ok": True, "evolution_id": evolution_id}
     except Exception as e:
         return {"ok": False, "error": str(e)}
@@ -519,7 +547,7 @@ def t_training_status():
     try:
         unprocessed = sb_get("hot_reflections", "select=id&processed_by_cold=eq.false&id=gt.1", svc=True)
         pending_evo = sb_get("evolution_queue", "select=id,change_type,change_summary,confidence&status=eq.pending&id=gt.1", svc=True)
-        return {"status": "Step 3 — training pipeline ACTIVE",
+        return {"status": f"Training pipeline ACTIVE — {get_current_step()}",
                 "unprocessed_hot": len(unprocessed), "pending_evolutions": len(pending_evo),
                 "evolutions": pending_evo[:5], "cold_threshold": COLD_HOT_THRESHOLD,
                 "pattern_threshold": PATTERN_EVO_THRESHOLD, "auto_apply_conf": KNOWLEDGE_AUTO_CONFIDENCE}
@@ -628,10 +656,10 @@ TOOLS = {
                                "desc": "Approve and apply a pending evolution by ID"},
     "reject_evolution":       {"fn": t_reject_evolution,       "perm": "WRITE",   "args": ["evolution_id", "reason"],
                                "desc": "Reject a pending evolution by ID. reason=optional"},
-    "gh_search_replace":        {"fn": t_gh_search_replace, "perm": "EXECUTE", "args": ["path", "old_str", "new_str", "message", "repo"],
-                                 "desc": "Surgical find-and-replace in a GitHub file. Fails safely if old_str not found or ambiguous."},
-    "gh_read_lines":            {"fn": t_gh_read_lines,    "perm": "READ",    "args": ["path", "start_line", "end_line", "repo"],
-                                 "desc": "Read specific line range from GitHub file with line numbers. Use before gh_search_replace."},
+    "gh_search_replace":      {"fn": t_gh_search_replace,      "perm": "EXECUTE", "args": ["path", "old_str", "new_str", "message", "repo"],
+                               "desc": "Surgical find-and-replace in a GitHub file. Fails safely if old_str not found or ambiguous."},
+    "gh_read_lines":          {"fn": t_gh_read_lines,          "perm": "READ",    "args": ["path", "start_line", "end_line", "repo"],
+                               "desc": "Read specific line range from GitHub file with line numbers. Use before gh_search_replace."},
     "write_file":             {"fn": t_write_file,             "perm": "EXECUTE", "args": ["path", "content", "message", "repo"],
                                "desc": "Write file to GitHub repo. repo defaults to pockiesaints7/core-agi"},
 }
@@ -686,7 +714,8 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], all
 @app.get("/")
 def root():
     counts = get_system_counts()
-    return {"service": "CORE v5.0", "step": "3 — Training Pipeline Active",
+    step = get_current_step()  # dynamic — never hardcode
+    return {"service": "CORE v5.0", "step": step,
             "knowledge": counts.get("knowledge_base", 0), "sessions": counts.get("sessions", 0),
             "mistakes": counts.get("mistakes", 0),
             "hot_unprocessed": counts.get("hot_reflections", 0),
@@ -752,10 +781,11 @@ async def mcp_messages(req: Request):
 async def mcp_startup(body: Handshake, req: Request):
     if body.secret != MCP_SECRET: raise HTTPException(401, "Invalid secret")
     tok = mcp_new(req.client.host)
+    step = get_current_step()  # dynamic — never hardcode
     notify(f"\U0001f50c MCP Session\nClient: {body.client_id}\nToken: {tok[:8]}...")
     return {"session_token": tok, "expires_hours": SESSION_TTL_H,
             "state": t_state(), "health": t_health(), "constitution": t_constitution(),
-            "tools": list(TOOLS.keys()), "note": "CORE Step 3 ready. Training pipeline active."}
+            "tools": list(TOOLS.keys()), "note": f"CORE v5.0 ready. {step}"}
 
 @app.post("/mcp/auth")
 async def mcp_auth(body: Handshake, req: Request):
@@ -794,11 +824,13 @@ def handle_msg(msg):
 
     if text == "/start":
         counts = get_system_counts()
-        notify(f"*CORE v5.0 — Step 3*\nKnowledge: {counts.get('knowledge_base',0)}\n"
+        step = get_current_step()  # dynamic — never hardcode
+        notify(f"*CORE v5.0*\n{step}\nKnowledge: {counts.get('knowledge_base',0)}\n"
                f"Sessions: {counts.get('sessions',0)}\n\nCommands: /status /tasks /ask /evolutions\n/approve <id> /reject <id>", cid)
     elif text == "/status":
         h = t_health(); counts = get_system_counts(); ts = t_training_status()
-        notify(f"*Status*\nSupabase: {h['components'].get('supabase')}\nGroq: {h['components'].get('groq')}\n"
+        step = get_current_step()  # dynamic — never hardcode
+        notify(f"*Status — {step}*\nSupabase: {h['components'].get('supabase')}\nGroq: {h['components'].get('groq')}\n"
                f"Telegram: {h['components'].get('telegram')}\nGitHub: {h['components'].get('github')}\n\n"
                f"Knowledge: {counts.get('knowledge_base',0)}\nSessions: {counts.get('sessions',0)}\n"
                f"Hot unprocessed: {ts.get('unprocessed_hot',0)}\nPending evolutions: {ts.get('pending_evolutions',0)}", cid)
@@ -854,10 +886,11 @@ def on_start():
     threading.Thread(target=queue_poller, daemon=True).start()
     threading.Thread(target=cold_processor_loop, daemon=True).start()
     counts = get_system_counts()
-    notify(f"*CORE v5.0 Online — Step 3*\nKnowledge: {counts.get('knowledge_base',0)}\n"
-           f"Sessions: {counts.get('sessions',0)}\nMCP: 17 tools active\n"
+    step = get_current_step()  # dynamic — never hardcode
+    notify(f"*CORE v5.0 Online*\n{step}\nKnowledge: {counts.get('knowledge_base',0)}\n"
+           f"Sessions: {counts.get('sessions',0)}\nMCP: {len(TOOLS)} tools active\n"
            f"Training: ✅ ACTIVE — hot/cold/evolution pipeline running")
-    print(f"[CORE] v5.0 Step 3 online :{PORT} — training pipeline active")
+    print(f"[CORE] v5.0 online :{PORT} — {step}")
 
 if __name__ == "__main__":
     import uvicorn
