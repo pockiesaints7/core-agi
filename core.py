@@ -660,6 +660,8 @@ def t_training_status():
     try:
         unprocessed = sb_get("hot_reflections", "select=id&processed_by_cold=eq.0&id=gt.1", svc=True)
         pending_evo = sb_get("evolution_queue", "select=id,change_type,change_summary,confidence&status=eq.pending&id=gt.1", svc=True)
+        with _backlog_lock:
+            backlog_pending = sum(1 for b in _backlog if b.get("status") == "pending")
         return {"status": f"Training pipeline ACTIVE — {get_current_step()}",
                 "unprocessed_hot": len(unprocessed), "pending_evolutions": len(pending_evo),
                 "evolutions": pending_evo[:5], "cold_threshold": COLD_HOT_THRESHOLD,
