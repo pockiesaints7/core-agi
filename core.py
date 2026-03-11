@@ -1039,6 +1039,16 @@ TOOLS = {
                                "desc": "Read specific line range from GitHub file with line numbers. Use before gh_search_replace."},
     "write_file":             {"fn": t_write_file,             "perm": "EXECUTE", "args": ["path", "content", "message", "repo"],
                                "desc": "Write file to GitHub repo. FULL OVERWRITE — use for new files only. For edits use gh_search_replace."},
+    "route":                  {"fn": t_route,                  "perm": "EXECUTE", "args": ["task", "execute"],
+                               "desc": "Route a task through CORE Routing Engine v2.0. execute=true to run via Groq. Returns signals+archetype+response."},
+    "ask":                    {"fn": t_ask,                    "perm": "READ",    "args": ["question", "domain"],
+                               "desc": "Ask CORE anything. Pulls KB context + Groq generates answer. Main AGI query interface."},
+    "reflect":                {"fn": t_reflect,                "perm": "WRITE",   "args": ["task_summary", "domain", "patterns", "quality", "notes"],
+                               "desc": "Log a hot reflection in one call. Use at end of significant sessions."},
+    "stats":                  {"fn": t_stats,                  "perm": "READ",    "args": [],
+                               "desc": "Analytics: domain distribution, top patterns, mistake frequency, avg quality score."},
+    "search_mistakes":        {"fn": t_search_mistakes,        "perm": "READ",    "args": ["query", "domain", "limit"],
+                               "desc": "Semantic mistake search. Returns what_failed + correct_approach. Better than get_mistakes for specific lookups."},
 }
 
 # ── MCP JSON-RPC ────────────────────────────────────────────────────────────────
