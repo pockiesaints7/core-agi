@@ -1035,39 +1035,91 @@ def _backlog_add(items: list) -> list:
         return new_items
 
 
+def _sync_backlog_status():
+    """Cross-check _backlog in-memory status against evolution_queue in Supabase.
+    Called before rendering BACKLOG.md so status is always accurate after restarts."""
+    try:
+        rows = sb_get("evolution_queue",
+                      "select=change_summary,status,pattern_key&change_type=eq.backlog&order=id.desc&limit=500",
+                      svc=True)
+        # Build lookup: title (lowercase) -> status
+        evo_status = {}
+        for row in rows:
+            # pattern_key format: "backlog:{type}:{title}"
+            pk = row.get("pattern_key", "")
+            if pk.startswith("backlog:"):
+                parts = pk.split(":", 2)
+                title_key = parts[2].lower() if len(parts) == 3 else ""
+            else:
+                # fallback: extract from change_summary "[BACKLOG Px][exec] title: desc"
+                s = row.get("change_summary", "")
+                import re
+                m = re.search(r'\]\s+(.+?):', s)
+                title_key = m.group(1).lower().strip() if m else ""
+            if title_key:
+                evo_status[title_key] = row.get("status", "pending")
+        # Sync in-memory _backlog
+        with _backlog_lock:
+            for item in _backlog:
+                key = item.get("title", "").lower()
+                if key in evo_status:
+                    es = evo_status[key]
+                    if es in ("applied", "done"):
+                        item["status"] = "done"
+                    elif es == "pending_desktop":
+                        item["status"] = "in_progress"
+                    elif es in ("pending",):
+                        pass  # keep as pending
+        return len(evo_status)
+    except Exception as e:
+        print(f"[BACKLOG] status sync error: {e}")
+        return 0
+
+
 def _backlog_to_markdown() -> str:
+    # Sync status from Supabase before rendering so BACKLOG.md always reflects reality
+    _sync_backlog_status()
     with _backlog_lock:
         if not _backlog:
             return "# CORE Improvement Backlog\n\n_No items yet._\n"
-        sorted_b = sorted(_backlog, key=lambda x: -int(x.get("priority", 1)))
+        sorted_b = sorted(_backlog, key=lambda x: (-int(x.get("priority", 1)),
+                                                    x.get("status","pending") != "done"))
+        total     = len(sorted_b)
+        n_done    = sum(1 for b in sorted_b if b.get("status") == "done")
+        n_prog    = sum(1 for b in sorted_b if b.get("status") == "in_progress")
+        n_pending = total - n_done - n_prog
         lines = [
             "# CORE Improvement Backlog",
             f"\n_Auto-generated. Last updated: {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}_",
-            f"_Total: {len(sorted_b)} | Pending: {sum(1 for b in sorted_b if b.get('status')=='pending')}_\n",
+            f"_Total: {total} | Pending: {n_pending} | In Progress: {n_prog} | Done: {n_done}_\n",
             "---\n",
         ]
         by_type: dict = {}
         for item in sorted_b:
             by_type.setdefault(item.get("type", "other"), []).append(item)
         type_labels = {
-            "new_tool": "🔧 New Tools", "logic_improvement": "🧠 Logic Improvements",
-            "new_kb": "📚 Knowledge Gaps", "telegram_command": "📱 Telegram Commands",
-            "performance": "⚡ Performance", "missing_data": "🗄️ Missing Data", "other": "📌 Other",
+            "new_tool": "New Tools", "logic_improvement": "Logic Improvements",
+            "new_kb": "Knowledge Gaps", "telegram_command": "Telegram Commands",
+            "performance": "Performance", "missing_data": "Missing Data", "other": "Other",
         }
+        status_icon = {"done": "[x]", "in_progress": "[~]", "pending": "[ ]"}
         for t, items in by_type.items():
-            lines.append(f"## {type_labels.get(t, t)}\n")
+            n_t_done = sum(1 for i in items if i.get("status") == "done")
+            lines.append(f"## {type_labels.get(t, t)} ({n_t_done}/{len(items)} done)\n")
             for item in items:
-                p = item.get("priority", 1)
-                star = "🔴" if p >= 4 else ("🟡" if p == 3 else "🟢")
-                s_icon = "✅" if item.get("status") == "done" else ("🚧" if item.get("status") == "in_progress" else "⬜")
-                lines.append(f"### {s_icon} {star} P{p}: {item.get('title','')}")
-                lines.append(f"- **Type:** {t} | **Effort:** {item.get('effort','?')} | **Impact:** {item.get('impact','?')} | **Domain:** {item.get('domain','?')}")
+                p      = item.get("priority", 1)
+                status = item.get("status", "pending")
+                s_icon = status_icon.get(status, "[ ]")
+                exec_  = ""
+                lines.append(f"### {s_icon} P{p}: {item.get('title','')}")
+                lines.append(f"- **Status:** {status} | **Type:** {t} | **Effort:** {item.get('effort','?')} | **Impact:** {item.get('impact','?')} | **Domain:** {item.get('domain','?')}")
                 lines.append(f"- **What:** {item.get('description','')}")
                 lines.append(f"- **Discovered:** {item.get('discovered_at','')[:16]}")
                 lines.append("")
         lines.append("---\n_CORE runs background_researcher every 60 min._")
         lines.append("_Use `/backlog` in Telegram or `get_backlog` MCP tool to review._")
         return "\n".join(lines)
+
 
 
 def background_researcher():
