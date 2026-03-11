@@ -45,12 +45,14 @@ Fix log:
                Telegram new: /backlog [min_priority] — see what CORE discovered while you were away.
                TOOLS: 25 → 27 tools.
                CORE now works 24/7: simulate → discover → document → notify → owner executes.
+  2026-03-11O: fix — removed duplicate on_start + background_researcher block that caused
+               FastAPI startup crash. Root cause: patch injected full researcher block twice.
 """
 import asyncio
 import base64
 import hashlib
 import json
-import os
+import import os
 import threading
 import time
 import uuid
@@ -88,7 +90,7 @@ PATTERN_EVO_THRESHOLD     = 3
 KNOWLEDGE_AUTO_CONFIDENCE = 0.7
 
 # Self-sync config
-CORE_SELF_STALE_DAYS = 7   # warn if CORE_SELF.md not updated in 7 days while sessions active
+CORE_SELF_STALE_DAYS = 7
 
 # ── Rate limiter ──────────────────────────────────────────────────────────────
 class RateLimiter:
@@ -136,7 +138,6 @@ def sb_get(t, qs="", svc=False):
     return r.json()
 
 def sb_post(t, d):
-    """Rate-limited insert. Returns False silently if rate limit hit."""
     if not L.sbw(): return False
     r = httpx.post(f"{SUPABASE_URL}/rest/v1/{t}", headers=_sbh(True), json=d, timeout=15)
     if not r.is_success:
@@ -144,8 +145,6 @@ def sb_post(t, d):
     return r.is_success
 
 def sb_post_critical(t, d):
-    """Critical insert: bypasses rate limiter. Use only for low-freq summary writes
-    (e.g. cold_reflections, evolution_queue) where silent skip is unacceptable."""
     r = httpx.post(f"{SUPABASE_URL}/rest/v1/{t}", headers=_sbh(True), json=d, timeout=15)
     if not r.is_success:
         print(f"[SB CRITICAL] {t} failed: {r.status_code} {r.text[:200]}")
@@ -207,16 +206,11 @@ def gh_write(path, content, msg, repo=None):
     if sha: p["sha"] = sha
     return httpx.put(f"https://api.github.com/repos/{repo}/contents/{path}", headers=h, json=p, timeout=20).is_success
 
-# ── Dynamic step label — NEVER hardcode step numbers ─────────────────────────
+# ── Dynamic step label ────────────────────────────────────────────────────────
 _step_cache: dict = {"label": "unknown", "ts": 0.0}
-_STEP_CACHE_TTL = 300  # seconds — refresh every 5 min
+_STEP_CACHE_TTL = 300
 
 def get_current_step() -> str:
-    """
-    Read current step label dynamically from SESSION.md on GitHub.
-    Cached for 5 minutes to avoid hammering GitHub on every request.
-    NEVER hardcode a step label anywhere in this file — always call this function.
-    """
     global _step_cache
     if time.time() - _step_cache["ts"] < _STEP_CACHE_TTL:
         return _step_cache["label"]
@@ -248,13 +242,8 @@ def get_system_counts():
             counts[t] = -1
     return counts
 
-# ── Self-sync check — V1/V2/V6 fix ───────────────────────────────────────────
+# ── Self-sync check ───────────────────────────────────────────────────────────
 def self_sync_check():
-    """
-    Fix 2026-03-11L: Detect stale CORE_SELF.md and warn owner via Telegram.
-    Runs on startup and after every apply_evolution().
-    Prevents CORE from drifting from self-knowledge over time.
-    """
     try:
         core_self = gh_read("CORE_SELF.md")
         last_updated = None
@@ -266,54 +255,40 @@ def self_sync_check():
                 except:
                     pass
                 break
-
         if not last_updated:
-            notify("⚠️ *CORE Self-Sync Warning*\nCORE_SELF.md has no `Last updated:` date. Please verify it's current.")
+            notify("⚠️ *CORE Self-Sync Warning*\nCORE_SELF.md has no `Last updated:` date.")
             return {"ok": False, "reason": "no_date"}
-
         days_stale = (datetime.utcnow() - last_updated).days
         if days_stale > CORE_SELF_STALE_DAYS:
-            # Check if there's been active sessions since last update
-            recent = sb_get("sessions", f"select=id&order=created_at.desc&limit=1", svc=True)
+            recent = sb_get("sessions", "select=id&order=created_at.desc&limit=1", svc=True)
             if recent:
                 notify(
                     f"⚠️ *CORE Self-Sync Warning*\n"
                     f"CORE_SELF.md last updated *{days_stale} days ago*.\n"
                     f"Active sessions detected since then.\n"
-                    f"Please review and update CORE_SELF.md if architecture has changed.\n"
+                    f"Please review and update CORE_SELF.md.\n"
                     f"→ github.com/pockiesaints7/core-agi/blob/main/CORE_SELF.md"
                 )
                 print(f"[SELF_SYNC] WARNING: CORE_SELF.md is {days_stale} days stale")
                 return {"ok": False, "days_stale": days_stale, "warned": True}
-
         print(f"[SELF_SYNC] OK — CORE_SELF.md updated {days_stale}d ago")
         return {"ok": True, "days_stale": days_stale}
-
     except Exception as e:
         print(f"[SELF_SYNC] error: {e}")
         return {"ok": False, "error": str(e)}
 
 
 def check_evolution_self_sync(evo: dict):
-    """
-    Fix 2026-03-11L: For structural evolutions, remind owner to update CORE_SELF.md.
-    Called inside apply_evolution() for schema/tool/architecture/file change types.
-    """
     structural_types = {"schema", "tool", "architecture", "file", "behavior"}
     change_type = evo.get("change_type", "")
     diff_content = evo.get("diff_content", "") or ""
-
     if change_type in structural_types and "core_self_updated" not in diff_content.lower():
         notify(
             f"📋 *CORE Self-Sync Reminder*\n"
             f"Evolution #{evo.get('id')} applied (type: `{change_type}`).\n"
-            f"This is a structural change — please update *CORE_SELF.md*:\n"
-            f"• Schema section if tables changed\n"
-            f"• MCP Tools section if tools changed\n"
-            f"• Architecture section if infra changed\n"
+            f"Please update *CORE_SELF.md* if structure changed.\n"
             f"→ github.com/pockiesaints7/core-agi/blob/main/CORE_SELF.md"
         )
-        print(f"[SELF_SYNC] Structural evolution #{evo.get('id')} — owner reminded to update CORE_SELF.md")
 
 # ── MCP session management ────────────────────────────────────────────────────
 _sessions: dict = {}
@@ -333,17 +308,15 @@ def mcp_ok(tok: str) -> bool:
     _sessions[tok]["calls"] += 1
     return True
 
-# ── Training pipeline ────────────────────────────────────────────────────────────
-
+# ── Training pipeline ─────────────────────────────────────────────────────────
 def auto_hot_reflection(session_data: dict):
-    """Auto-generate a hot_reflection from a sessions row. Lightweight, no LLM."""
     try:
         summary   = session_data.get("summary", "")
         actions   = session_data.get("actions", []) or []
         interface = session_data.get("interface", "unknown")
         total     = max(len(actions), 1)
-        verify_rate   = round(sum(1 for a in actions if any(k in str(a).lower() for k in ["verify","readback","confirm"])) / total, 2)
-        mistake_rate  = round(sum(1 for a in actions if any(k in str(a).lower() for k in ["mistake","error","fix","wrong"])) / total, 2)
+        verify_rate  = round(sum(1 for a in actions if any(k in str(a).lower() for k in ["verify","readback","confirm"])) / total, 2)
+        mistake_rate = round(sum(1 for a in actions if any(k in str(a).lower() for k in ["mistake","error","fix","wrong"])) / total, 2)
         domain = "general"
         for kw, d in [("supabase","db"),("github","code"),("telegram","bot"),("mcp","mcp"),("training","training"),("knowledge","kb")]:
             if kw in summary.lower(): domain = d; break
@@ -353,7 +326,7 @@ def auto_hot_reflection(session_data: dict):
             "new_patterns": [], "new_mistakes": [],
             "quality_score": None, "gaps_identified": None,
             "reflection_text": f"Auto-generated from {interface} session. Actions: {total}.",
-            "processed_by_cold": False,  # JSON body bool is fine — only querystring filter needs int
+            "processed_by_cold": False,
         })
         print(f"[HOT] ok={ok} domain={domain}")
         return ok
@@ -363,11 +336,7 @@ def auto_hot_reflection(session_data: dict):
 
 
 def run_cold_processor():
-    """Batch: distill patterns, upsert pattern_frequency, queue evolutions, write summary.
-    Fix (2026-03-11i): processed_by_cold filter uses eq.0/eq.1 (integer) not eq.false/eq.true.
-    """
     try:
-        # Fix 2026-03-11i: use eq.0 not eq.false — PostgREST rejects boolean in querystring
         hots = sb_get("hot_reflections",
                       "select=id,domain,new_patterns,new_mistakes,quality_score&processed_by_cold=eq.0&id=gt.1&order=created_at.asc",
                       svc=True)
@@ -377,7 +346,6 @@ def run_cold_processor():
 
         period_start      = datetime.utcnow().isoformat()
         evolutions_queued = 0
-
         batch_counts: Counter = Counter()
         batch_domain: dict    = {}
         for h in hots:
@@ -391,13 +359,11 @@ def run_cold_processor():
             existing = [e for e in sb_get("pattern_frequency",
                         f"select=id,frequency,auto_applied&pattern_key=eq.{key}&limit=1", svc=True)
                         if e.get("id") != 1]
-
             if existing:
                 rec      = existing[0]
                 new_freq = (rec.get("frequency") or 0) + batch_count
                 sb_patch("pattern_frequency", f"id=eq.{rec['id']}",
                          {"frequency": new_freq, "last_seen": datetime.utcnow().isoformat()})
-                print(f"[COLD] pattern '{key[:50]}' updated freq={new_freq}")
                 if new_freq >= PATTERN_EVO_THRESHOLD and not rec.get("auto_applied"):
                     if sb_post_critical("evolution_queue", {
                         "status": "pending", "change_type": "knowledge",
@@ -408,7 +374,6 @@ def run_cold_processor():
                     }):
                         evolutions_queued += 1
                         sb_patch("pattern_frequency", f"id=eq.{rec['id']}", {"auto_applied": True})
-                        print(f"[COLD] evolution queued for '{key[:50]}'")
             else:
                 new_freq = batch_count
                 sb_upsert("pattern_frequency", {
@@ -417,46 +382,34 @@ def run_cold_processor():
                     "first_seen": datetime.utcnow().isoformat(),
                     "last_seen": datetime.utcnow().isoformat(), "auto_applied": False,
                 }, "pattern_key")
-                print(f"[COLD] new pattern '{key[:50]}' freq={new_freq}")
                 if new_freq >= PATTERN_EVO_THRESHOLD:
                     if sb_post_critical("evolution_queue", {
                         "status": "pending", "change_type": "knowledge",
-                        "change_summary": f"New pattern '{key}' seen {new_freq}x in first batch — promote to knowledge base",
+                        "change_summary": f"New pattern '{key}' seen {new_freq}x — promote to knowledge base",
                         "pattern_key": key, "frequency": new_freq,
                         "confidence": min(0.5 + new_freq * 0.1, 0.95),
                         "impact": "low", "reversible": True, "owner_notified": False,
                     }):
                         evolutions_queued += 1
-                        print(f"[COLD] evolution queued for new pattern '{key[:50]}'")
 
-        period_end = datetime.utcnow().isoformat()
-        cold_ok = sb_post_critical("cold_reflections", {
-            "period_start":      period_start,
-            "period_end":        period_end,
-            "hot_count":         len(hots),
-            "patterns_found":    len(batch_counts),
-            "evolutions_queued": evolutions_queued,
-            "auto_applied":      0,
-            "summary_text":      f"Processed {len(hots)} hots. {len(batch_counts)} unique patterns. {evolutions_queued} evolutions queued.",
+        sb_post_critical("cold_reflections", {
+            "period_start": period_start, "period_end": datetime.utcnow().isoformat(),
+            "hot_count": len(hots), "patterns_found": len(batch_counts),
+            "evolutions_queued": evolutions_queued, "auto_applied": 0,
+            "summary_text": f"Processed {len(hots)} hots. {len(batch_counts)} unique patterns. {evolutions_queued} evolutions queued.",
         })
-        print(f"[COLD] cold_reflections insert ok={cold_ok}")
-
         for h in hots:
             sb_patch("hot_reflections", f"id=eq.{h['id']}", {"processed_by_cold": True})
-
         if evolutions_queued > 0:
-            notify(f"\u2728 Cold processor: {evolutions_queued} evolution(s) queued from {len(hots)} sessions.\nUse /evolutions to review.")
-
+            notify(f"✨ Cold processor: {evolutions_queued} evolution(s) queued from {len(hots)} sessions.\nUse /evolutions to review.")
         print(f"[COLD] Done: processed={len(hots)} patterns={len(batch_counts)} evolutions={evolutions_queued}")
         return {"ok": True, "processed": len(hots), "patterns_found": len(batch_counts), "evolutions_queued": evolutions_queued}
-
     except Exception as e:
         print(f"[COLD] error: {e}")
         return {"ok": False, "error": str(e)}
 
 
 def apply_evolution(evolution_id: int):
-    """Apply an approved evolution (knowledge/code/behavior)."""
     try:
         rows = sb_get("evolution_queue",
                       f"select=*&id=eq.{evolution_id}&status=eq.pending&limit=1", svc=True)
@@ -483,22 +436,20 @@ def apply_evolution(evolution_id: int):
             if not diff_content: return {"ok": False, "error": "code evolution requires diff_content"}
             fname = f"patches/evo_{evolution_id}_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.patch"
             applied = gh_write(fname, diff_content, f"Evolution #{evolution_id}: {change_summary[:60]}")
-            note = f"Patch written to {fname} — review and merge manually"
+            note = f"Patch written to {fname}"
         elif change_type == "behavior":
             if not diff_content: return {"ok": False, "error": "behavior evolution requires diff_content"}
             applied = gh_write("BEHAVIOR_UPDATES.md", diff_content,
                                f"Behavior evolution #{evolution_id}: {change_summary[:60]}")
-            note = "Written to BEHAVIOR_UPDATES.md — review and merge into operating_context.json manually"
+            note = "Written to BEHAVIOR_UPDATES.md"
 
         if applied:
             sb_patch("evolution_queue", f"id=eq.{evolution_id}",
                      {"status": "applied", "applied_at": datetime.utcnow().isoformat()})
-            notify(f"\u2705 Evolution #{evolution_id} applied\nType: {change_type}\n{note}")
-            print(f"[EVO] Applied #{evolution_id} ({change_type})")
-            # Fix 2026-03-11L: remind owner to update CORE_SELF.md for structural evolutions
+            notify(f"✅ Evolution #{evolution_id} applied\nType: {change_type}\n{note}")
             check_evolution_self_sync(evo)
         else:
-            notify(f"\u274c Evolution #{evolution_id} apply failed\nType: {change_type}")
+            notify(f"❌ Evolution #{evolution_id} apply failed\nType: {change_type}")
         return {"ok": applied, "evolution_id": evolution_id, "change_type": change_type, "note": note}
     except Exception as e:
         print(f"[EVO] error: {e}")
@@ -506,7 +457,6 @@ def apply_evolution(evolution_id: int):
 
 
 def reject_evolution(evolution_id: int, reason: str = ""):
-    """Reject a pending evolution and log as mistake."""
     try:
         rows = sb_get("evolution_queue",
                       f"select=*&id=eq.{evolution_id}&status=eq.pending&limit=1", svc=True)
@@ -520,7 +470,7 @@ def reject_evolution(evolution_id: int, reason: str = ""):
             "how_to_avoid": "Raise confidence threshold or improve pattern quality",
             "severity": "low", "tags": ["evolution", "rejected"],
         })
-        notify(f"\u274c Evolution #{evolution_id} rejected.\nReason: {reason or 'No reason given'}")
+        notify(f"❌ Evolution #{evolution_id} rejected.\nReason: {reason or 'No reason given'}")
         return {"ok": True, "evolution_id": evolution_id}
     except Exception as e:
         return {"ok": False, "error": str(e)}
@@ -529,12 +479,10 @@ def reject_evolution(evolution_id: int, reason: str = ""):
 _last_cold_run: float = 0.0
 
 def cold_processor_loop():
-    """Background thread: trigger cold processor every 10 unprocessed hots OR 24h."""
     global _last_cold_run
     print("[COLD] Background loop started")
     while True:
         try:
-            # Fix 2026-03-11i: use eq.0 not eq.false in querystring
             hots        = sb_get("hot_reflections", "select=id&processed_by_cold=eq.0&id=gt.1", svc=True)
             unprocessed = len(hots)
             time_since  = time.time() - _last_cold_run
@@ -547,7 +495,6 @@ def cold_processor_loop():
                                svc=True):
                 conf = float(evo.get("confidence") or 0)
                 if conf >= KNOWLEDGE_AUTO_CONFIDENCE:
-                    print(f"[EVO] Auto-applying #{evo['id']} confidence={conf}")
                     apply_evolution(evo["id"])
         except Exception as e:
             print(f"[COLD] loop error: {e}")
@@ -629,8 +576,8 @@ def t_write_file(path, content, message, repo=""):
     return {"ok": ok, "path": path}
 
 def t_notify(message, level="info"):
-    icons = {"info": "\u2139\ufe0f", "warn": "\u26a0\ufe0f", "alert": "\U0001f6a8", "ok": "\u2705"}
-    return {"ok": notify(f"{icons.get(level, '\u00bb')} CORE\n{message}")}
+    icons = {"info": "ℹ️", "warn": "⚠️", "alert": "🚨", "ok": "✅"}
+    return {"ok": notify(f"{icons.get(level, '»')} CORE\n{message}")}
 
 def t_sb_query(table, filters="", limit=20):
     try: lim = int(limit) if limit else 20
@@ -646,7 +593,6 @@ def t_sb_insert(table, data):
 
 def t_training_status():
     try:
-        # Fix 2026-03-11i: use eq.0 not eq.false
         unprocessed = sb_get("hot_reflections", "select=id&processed_by_cold=eq.0&id=gt.1", svc=True)
         pending_evo = sb_get("evolution_queue", "select=id,change_type,change_summary,confidence&status=eq.pending&id=gt.1", svc=True)
         return {"status": f"Training pipeline ACTIVE — {get_current_step()}",
@@ -675,10 +621,6 @@ def t_reject_evolution(evolution_id, reason=""):
     return reject_evolution(eid, reason)
 
 def t_gh_search_replace(path, old_str, new_str, message, repo=""):
-    """
-    Surgical find-and-replace in a GitHub file.
-    Returns ok=False if old_str not found or ambiguous. Never corrupts file.
-    """
     try:
         repo = repo or GITHUB_REPO
         r = httpx.get(f"https://api.github.com/repos/{repo}/contents/{path}",
@@ -697,17 +639,12 @@ def t_gh_search_replace(path, old_str, new_str, message, repo=""):
         pr = httpx.put(f"https://api.github.com/repos/{repo}/contents/{path}",
                        headers=_ghh(), json={"message": message, "content": encoded, "sha": sha}, timeout=20)
         ok = pr.is_success
-        print(f"[GH] search_replace {'ok' if ok else 'fail'}: {path}")
         return {"ok": ok, "path": path, "replaced": old_str[:80]}
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
 
 def t_gh_read_lines(path, start_line=1, end_line=50, repo=""):
-    """
-    Read specific line range from a GitHub file with line numbers.
-    Use before gh_search_replace to find exact strings to patch.
-    """
     try:
         file_content = gh_read(path, repo or GITHUB_REPO)
         lines = file_content.splitlines()
@@ -722,9 +659,8 @@ def t_gh_read_lines(path, start_line=1, end_line=50, repo=""):
         return {"ok": False, "error": str(ex), "path": path}
 
 
-# ── Groq LLM call ────────────────────────────────────────────────────────────
+# ── Groq LLM call ─────────────────────────────────────────────────────────────
 def groq_chat(system: str, user: str, model: str = None, max_tokens: int = 1024) -> str:
-    """Single Groq chat completion. Returns text or raises."""
     m = model or GROQ_MODEL
     r = httpx.post(
         "https://api.groq.com/openai/v1/chat/completions",
@@ -738,16 +674,9 @@ def groq_chat(system: str, user: str, model: str = None, max_tokens: int = 1024)
     return r.json()["choices"][0]["message"]["content"].strip()
 
 
-# ── Signal extraction (v2.0 routing pre-layer) ────────────────────────────────
+# ── Signal extraction (routing pre-layer) ─────────────────────────────────────
 def extract_signals(task: str) -> dict:
-    """
-    Extract 5 routing signals from raw task text.
-    S1=intent, S2=domain, S3=expertise(1-5), S4=emotion, S5=scope/stakes
-    Fast path: keyword-based, no LLM needed.
-    """
     t = task.lower()
-
-    # S1: Intent verb
     intent = "generate"
     for kw, v in [("fix","fix"),("debug","fix"),("error","fix"),("broken","fix"),
                   ("explain","explain"),("what is","explain"),("how does","explain"),("teach","explain"),
@@ -759,7 +688,6 @@ def extract_signals(task: str) -> dict:
                   ("plan","orchestrate"),("steps to","orchestrate"),("how to","orchestrate")]:
         if kw in t: intent = v; break
 
-    # S2: Domain fingerprint
     domain = "general"
     for kw, d in [("def ","code"),("function","code"),("import ","code"),("class ","code"),("sql","code"),
                   ("contract","legal"),("liability","legal"),("clause","legal"),("lawsuit","legal"),
@@ -770,58 +698,37 @@ def extract_signals(task: str) -> dict:
                   ("content","creative"),("story","creative"),("blog","creative"),("design","creative")]:
         if kw in t: domain = d; break
 
-    # S3: Expertise (1=beginner, 5=expert)
     expertise = 3
-    beginner_markers = ["what is", "how do i", "i don't know", "explain", "simple", "basic", "beginner", "noob", "untuk pemula", "apa itu", "gimana caranya"]
-    expert_markers   = ["implement", "optimize", "architecture", "idiomatic", "edge case", "tradeoff", "latency", "throughput", "refactor", "scalab"]
+    beginner_markers = ["what is","how do i","i don't know","explain","simple","basic","beginner","noob","untuk pemula","apa itu","gimana caranya"]
+    expert_markers   = ["implement","optimize","architecture","idiomatic","edge case","tradeoff","latency","throughput","refactor","scalab"]
     if any(m in t for m in beginner_markers): expertise = 2
     if any(m in t for m in expert_markers):   expertise = 4
-    # Very short terse query = probably expert
     if len(task.split()) <= 5 and "?" not in task: expertise = max(expertise, 4)
 
-    # S4: Emotional signal
     emotion = "neutral"
     if any(m in t for m in ["asap","urgent","deadline","help!","tolong","buru","cepat"]): emotion = "urgent"
     elif any(m in t for m in ["still","again","doesn't work","still not","masih ga","kenapa ga"]): emotion = "frustrated"
     elif any(m in t for m in ["worried","scared","overwhelmed","anxious","takut","bingung banget","ga tau harus"]): emotion = "vulnerable"
     elif any(m in t for m in ["lol","btw","just wondering","haha","wkwk","iseng","santai"]): emotion = "casual"
 
-    # S5: Stakes/scope
     stakes = "medium"
     if any(m in t for m in ["quick","short","brief","simple","just","cepet","singkat"]): stakes = "low"
     if any(m in t for m in ["production","deploy","contract","legal","medical","critical","penting banget","serius"]): stakes = "high"
     if any(m in t for m in ["life","death","emergency","darurat","nyawa","hukum","lawsuit"]): stakes = "critical"
 
-    # Archetype mapping
     archetype_map = {
         "lookup": "A1", "explain": "A4", "generate": "A3", "fix": "A4",
         "analyze": "A4", "validate": "A8", "build": "A5", "decide": "A6",
         "orchestrate": "A7", "support": "A9",
     }
-
-    return {
-        "intent": intent,
-        "domain": domain,
-        "expertise": expertise,
-        "emotion": emotion,
-        "stakes": stakes,
-        "archetype": archetype_map.get(intent, "A3"),
-    }
+    return {"intent": intent, "domain": domain, "expertise": expertise,
+            "emotion": emotion, "stakes": stakes, "archetype": archetype_map.get(intent, "A3")}
 
 
 def t_route(task: str, execute: bool = False):
-    """
-    Route a task through CORE Routing Engine v2.0.
-    Extracts signals → determines archetype → builds system prompt → optionally executes via Groq.
-    execute=True: actually runs the task and returns response.
-    execute=False: returns routing analysis only (for inspection).
-    """
     if not task: return {"ok": False, "error": "task required"}
-
     sig = extract_signals(task)
-
-    # Complexity score
-    complexity = 3  # base
+    complexity = 3
     if sig["expertise"] <= 2:  complexity += 1
     if sig["emotion"] in ("urgent", "frustrated"): complexity += 1
     if sig["stakes"] == "critical": complexity += 2
@@ -830,7 +737,6 @@ def t_route(task: str, execute: bool = False):
     if sig["stakes"] == "low": complexity -= 1
     complexity = max(1, min(12, complexity))
 
-    # Build system prompt calibrated to signals
     tone_map = {
         "urgent":     "Be concise and direct. Lead with the answer immediately.",
         "frustrated": "Acknowledge the difficulty briefly, then provide the fix directly.",
@@ -853,72 +759,37 @@ def t_route(task: str, execute: bool = False):
         f"You are CORE, a personal AGI. "
         f"{tone_map.get(sig['emotion'], tone_map['neutral'])} "
         f"{expertise_map.get(sig['expertise'], expertise_map[3])} "
-        f"Domain context: {sig['domain']}. "
-        f"Stakes level: {sig['stakes']}. "
-        f"{disclaimer} "
+        f"Domain context: {sig['domain']}. Stakes level: {sig['stakes']}. {disclaimer} "
         "Be genuinely helpful. If you see a gap the user didn't ask about but should know, mention it briefly."
     )
-
-    routing_info = {
-        "signals": sig,
-        "complexity": complexity,
-        "system_prompt_preview": system_prompt[:120] + "...",
-        "archetype": sig["archetype"],
-    }
+    routing_info = {"signals": sig, "complexity": complexity,
+                    "system_prompt_preview": system_prompt[:120] + "...", "archetype": sig["archetype"]}
 
     if not execute:
         return {"ok": True, "routing": routing_info}
 
-    # Execute via Groq
     try:
         model = GROQ_FAST if complexity <= 4 else GROQ_MODEL
         response = groq_chat(system_prompt, task, model=model)
-        # Log to task_queue as completed
-        sb_post("task_queue", {
-            "task": task[:300], "status": "completed", "priority": 5,
-            "error": None,
-            "chat_id": "",
-        })
+        sb_post("task_queue", {"task": task[:300], "status": "completed", "priority": 5, "error": None, "chat_id": ""})
         return {"ok": True, "routing": routing_info, "response": response, "model_used": model}
     except Exception as e:
         return {"ok": False, "routing": routing_info, "error": str(e)}
 
 
 def t_ask(question: str, domain: str = ""):
-    """
-    Ask CORE anything. Pulls relevant KB context + Groq generates answer.
-    This is the main AGI query interface — smarter than raw search_kb.
-    """
     if not question: return {"ok": False, "error": "question required"}
-
-    # Pull KB context
     kb_results = t_search_kb(question, domain=domain, limit=5)
-    kb_context = ""
-    if kb_results:
-        kb_context = "\n\n".join([
-            f"[KB: {r.get('topic','')}]\n{str(r.get('content',''))[:300]}"
-            for r in kb_results
-        ])
-
-    # Pull recent mistakes for the domain
+    kb_context = "\n\n".join([f"[KB: {r.get('topic','')}]\n{str(r.get('content',''))[:300]}" for r in kb_results]) if kb_results else ""
     mistakes = t_get_mistakes(domain=domain or "general", limit=3)
-    mistake_context = ""
-    if mistakes:
-        mistake_context = "\n".join([
-            f"- Avoid: {m.get('what_failed','')} → {m.get('correct_approach','')[:100]}"
-            for m in mistakes
-        ])
-
-    system = (
-        "You are CORE, a personal AGI assistant with accumulated knowledge from many sessions. "
-        "Answer using the knowledge base context provided. Be specific and actionable. "
-        "If KB context is insufficient, say so and answer from general knowledge."
-    )
+    mistake_context = "\n".join([f"- Avoid: {m.get('what_failed','')} → {m.get('correct_approach','')[:100]}" for m in mistakes]) if mistakes else ""
+    system = ("You are CORE, a personal AGI assistant with accumulated knowledge from many sessions. "
+              "Answer using the knowledge base context provided. Be specific and actionable. "
+              "If KB context is insufficient, say so and answer from general knowledge.")
     user = f"Question: {question}\n\n"
     if kb_context: user += f"Relevant knowledge:\n{kb_context}\n\n"
     if mistake_context: user += f"Known pitfalls to avoid:\n{mistake_context}\n\n"
     user += "Answer:"
-
     try:
         answer = groq_chat(system, user, model=GROQ_FAST, max_tokens=512)
         return {"ok": True, "answer": answer, "kb_hits": len(kb_results), "question": question}
@@ -928,19 +799,11 @@ def t_ask(question: str, domain: str = ""):
 
 def t_reflect(task_summary: str, domain: str = "general", patterns: list = None,
               quality: float = None, notes: str = ""):
-    """
-    Single-call hot reflection logger. Replaces manual sb_insert to hot_reflections.
-    Use at end of any significant session or task.
-    """
     ok = sb_post("hot_reflections", {
-        "task_summary": task_summary[:300],
-        "domain": domain,
-        "verify_rate": 0.0,
-        "mistake_consult_rate": 0.0,
-        "new_patterns": patterns or [],
-        "new_mistakes": [],
-        "quality_score": quality,
-        "gaps_identified": None,
+        "task_summary": task_summary[:300], "domain": domain,
+        "verify_rate": 0.0, "mistake_consult_rate": 0.0,
+        "new_patterns": patterns or [], "new_mistakes": [],
+        "quality_score": quality, "gaps_identified": None,
         "reflection_text": notes or f"Logged via t_reflect. Domain: {domain}.",
         "processed_by_cold": False,
     })
@@ -948,30 +811,15 @@ def t_reflect(task_summary: str, domain: str = "general", patterns: list = None,
 
 
 def t_stats():
-    """
-    Analytics dashboard: domain breakdown, top patterns, routing distribution, mistake frequency.
-    Derived from hot_reflections + pattern_frequency + mistakes tables.
-    """
     try:
-        # Domain breakdown from hot_reflections
         hots = sb_get("hot_reflections", "select=domain,quality_score&limit=200", svc=True)
         domain_counts: Counter = Counter(h.get("domain","general") for h in hots)
-
-        # Top patterns
-        patterns = sb_get("pattern_frequency",
-                          "select=pattern_key,frequency,domain&order=frequency.desc&limit=10", svc=True)
-
-        # Mistake frequency by domain
+        patterns = sb_get("pattern_frequency", "select=pattern_key,frequency,domain&order=frequency.desc&limit=10", svc=True)
         mistakes = sb_get("mistakes", "select=domain&limit=200", svc=True)
         mistake_counts: Counter = Counter(m.get("domain","general") for m in mistakes)
-
-        # Avg quality score
         scores = [h["quality_score"] for h in hots if h.get("quality_score") is not None]
         avg_quality = round(sum(scores) / len(scores), 2) if scores else None
-
-        # Counts
         counts = get_system_counts()
-
         return {
             "ok": True,
             "total_sessions": counts.get("sessions", 0),
@@ -981,19 +829,13 @@ def t_stats():
             "avg_quality_score": avg_quality,
             "domain_distribution": dict(domain_counts.most_common(8)),
             "mistake_distribution": dict(mistake_counts.most_common(6)),
-            "top_patterns": [{"pattern": p.get("pattern_key","")[:80],
-                              "freq": p.get("frequency",0),
-                              "domain": p.get("domain","")} for p in patterns],
+            "top_patterns": [{"pattern": p.get("pattern_key","")[:80], "freq": p.get("frequency",0), "domain": p.get("domain","")} for p in patterns],
         }
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
 
 def t_search_mistakes(query: str = "", domain: str = "", limit: int = 10):
-    """
-    Semantic mistake search. Returns what failed + correct approach.
-    Better than get_mistakes for specific lookups.
-    """
     try:
         lim = int(limit) if limit else 10
         qs = f"select=domain,context,what_failed,correct_approach,root_cause,severity&order=created_at.desc&limit={lim}"
@@ -1005,6 +847,214 @@ def t_search_mistakes(query: str = "", domain: str = "", limit: int = 10):
         return {"ok": True, "count": len(results), "mistakes": results}
     except Exception as e:
         return {"ok": False, "error": str(e)}
+
+
+# ── Background Researcher — 24/7, runs every 60 min ──────────────────────────
+_RESEARCH_DOMAINS = [
+    ("code",     ["debug this python function", "optimize SQL query", "refactor async code",
+                  "explain this error", "design REST API", "review this architecture"]),
+    ("business", ["improve cash flow", "write investor pitch", "reduce churn",
+                  "hire first employee", "expand to new market", "price my product"]),
+    ("legal",    ["draft NDA", "understand terms of service", "employment contract review",
+                  "IP protection for startup", "GDPR compliance checklist"]),
+    ("creative", ["write product description", "social media strategy", "brand voice guide",
+                  "content calendar", "email newsletter"]),
+    ("academic", ["summarize research paper", "explain statistical method",
+                  "literature review outline", "thesis argument structure"]),
+    ("medical",  ["explain diagnosis", "medication interaction check", "symptom checker",
+                  "treatment options", "second opinion research"]),
+    ("finance",  ["build financial model", "tax optimization", "runway calculation",
+                  "fundraising strategy", "unit economics"]),
+    ("data",     ["clean messy dataset", "visualize trends", "build dashboard",
+                  "anomaly detection", "A/B test analysis"]),
+]
+
+_IMPROVEMENT_INTERVAL = 3600  # 60 min — free Groq tier safe
+_last_research_run: float = 0.0
+_backlog_lock = threading.Lock()
+_backlog: list = []
+
+
+def _research_simulate_batch() -> list:
+    import random
+    domain, tasks = random.choice(_RESEARCH_DOMAINS)
+    sample = random.sample(tasks, min(3, len(tasks)))
+    routing_analyses = []
+    for task in sample:
+        sig = extract_signals(task)
+        routing_analyses.append(f"Task: '{task}' → archetype={sig['archetype']}, domain={sig['domain']}, "
+                                 f"expertise={sig['expertise']}, emotion={sig['emotion']}, stakes={sig['stakes']}")
+    kb_count = 0
+    tool_list = list(TOOLS.keys())
+    try:
+        counts = get_system_counts()
+        kb_count = counts.get("knowledge_base", 0)
+    except: pass
+
+    system = """You are CORE's internal research engine. Find gaps and improvement opportunities in an AGI system.
+Output MUST be a JSON array of improvement items. Each item:
+{"priority": 1-5, "type": "new_tool"|"logic_improvement"|"new_kb"|"telegram_command"|"performance"|"missing_data",
+ "title": "short title (max 60 chars)", "description": "specific actionable description (max 200 chars)",
+ "effort": "low"|"medium"|"high", "impact": "low"|"medium"|"high"}
+Output ONLY valid JSON array, no preamble."""
+
+    user = (f"Domain: {domain}\nSample tasks: {sample}\nRouting:\n" +
+            "\n".join(routing_analyses) +
+            f"\n\nCurrent tools ({len(tool_list)}): {', '.join(tool_list)}\nKB entries: {kb_count}\n"
+            f"What are 3-5 concrete improvements CORE needs?")
+    try:
+        raw = groq_chat(system, user, model=GROQ_FAST, max_tokens=600)
+        raw = raw.strip()
+        if raw.startswith("```"): raw = raw.split("```")[1]
+        if raw.startswith("json"): raw = raw[4:]
+        items = json.loads(raw.strip())
+        for item in items:
+            item["domain"] = domain
+            item["discovered_at"] = datetime.utcnow().isoformat()
+            item["status"] = "pending"
+        return items if isinstance(items, list) else []
+    except Exception as e:
+        print(f"[RESEARCH] parse error: {e}")
+        return []
+
+
+def _backlog_add(items: list) -> list:
+    global _backlog
+    with _backlog_lock:
+        existing_titles = {b["title"].lower() for b in _backlog}
+        new_items = []
+        for item in items:
+            title = item.get("title", "").strip()
+            if title and title.lower() not in existing_titles:
+                existing_titles.add(title.lower())
+                _backlog.append(item)
+                new_items.append(item)
+                sb_post("knowledge_base", {
+                    "domain": "backlog",
+                    "topic": f"[BACKLOG-{item.get('priority','?')}] {title}",
+                    "content": (f"type={item.get('type')} effort={item.get('effort')} "
+                                f"impact={item.get('impact')} domain={item.get('domain')}\n"
+                                f"{item.get('description','')}"),
+                    "confidence": "medium",
+                    "tags": ["backlog", item.get("type",""), item.get("domain","")],
+                    "source": "background_researcher",
+                })
+        return new_items
+
+
+def _backlog_to_markdown() -> str:
+    with _backlog_lock:
+        if not _backlog:
+            return "# CORE Improvement Backlog\n\n_No items yet._\n"
+        sorted_b = sorted(_backlog, key=lambda x: -int(x.get("priority", 1)))
+        lines = [
+            "# CORE Improvement Backlog",
+            f"\n_Auto-generated. Last updated: {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}_",
+            f"_Total: {len(sorted_b)} | Pending: {sum(1 for b in sorted_b if b.get('status')=='pending')}_\n",
+            "---\n",
+        ]
+        by_type: dict = {}
+        for item in sorted_b:
+            by_type.setdefault(item.get("type", "other"), []).append(item)
+        type_labels = {
+            "new_tool": "🔧 New Tools", "logic_improvement": "🧠 Logic Improvements",
+            "new_kb": "📚 Knowledge Gaps", "telegram_command": "📱 Telegram Commands",
+            "performance": "⚡ Performance", "missing_data": "🗄️ Missing Data", "other": "📌 Other",
+        }
+        for t, items in by_type.items():
+            lines.append(f"## {type_labels.get(t, t)}\n")
+            for item in items:
+                p = item.get("priority", 1)
+                star = "🔴" if p >= 4 else ("🟡" if p == 3 else "🟢")
+                s_icon = "✅" if item.get("status") == "done" else ("🚧" if item.get("status") == "in_progress" else "⬜")
+                lines.append(f"### {s_icon} {star} P{p}: {item.get('title','')}")
+                lines.append(f"- **Type:** {t} | **Effort:** {item.get('effort','?')} | **Impact:** {item.get('impact','?')} | **Domain:** {item.get('domain','?')}")
+                lines.append(f"- **What:** {item.get('description','')}")
+                lines.append(f"- **Discovered:** {item.get('discovered_at','')[:16]}")
+                lines.append("")
+        lines.append("---\n_CORE runs background_researcher every 60 min._")
+        lines.append("_Use `/backlog` in Telegram or `get_backlog` MCP tool to review._")
+        return "\n".join(lines)
+
+
+def background_researcher():
+    global _last_research_run
+    print("[RESEARCH] 24/7 background researcher started — interval=60min")
+
+    # Reload existing backlog from KB on startup
+    try:
+        existing = sb_get("knowledge_base",
+                          "select=topic,content&domain=eq.backlog&order=created_at.desc&limit=100",
+                          svc=True)
+        with _backlog_lock:
+            for row in existing:
+                title = row.get("topic", "").replace("[BACKLOG-", "").split("] ", 1)[-1]
+                content = row.get("content", "")
+                type_ = "other"
+                for t in ["new_tool","logic_improvement","new_kb","telegram_command","performance","missing_data"]:
+                    if t in content: type_ = t; break
+                priority = 3
+                try:
+                    p_str = row.get("topic","")
+                    if "BACKLOG-" in p_str:
+                        priority = int(p_str.split("BACKLOG-")[1].split("]")[0])
+                except: pass
+                _backlog.append({
+                    "title": title, "type": type_, "priority": priority,
+                    "description": content[:200], "domain": "loaded",
+                    "discovered_at": "previous_session", "status": "pending",
+                    "effort": "medium", "impact": "medium",
+                })
+        print(f"[RESEARCH] Loaded {len(_backlog)} existing backlog items from KB")
+    except Exception as e:
+        print(f"[RESEARCH] startup load error: {e}")
+
+    while True:
+        try:
+            if time.time() - _last_research_run >= _IMPROVEMENT_INTERVAL:
+                print("[RESEARCH] Running simulation batch...")
+                _last_research_run = time.time()
+                all_new = []
+                for _ in range(3):
+                    items = _research_simulate_batch()
+                    new = _backlog_add(items)
+                    all_new.extend(new)
+                    time.sleep(2)  # pace Groq calls
+                md = _backlog_to_markdown()
+                gh_write("BACKLOG.md", md,
+                         f"chore(backlog): {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')} — {len(all_new)} new items")
+                print(f"[RESEARCH] Cycle done. New: {len(all_new)}, Total: {len(_backlog)}")
+                critical_new = [i for i in all_new if int(i.get("priority", 1)) >= 4]
+                if critical_new:
+                    lines = "\n".join([f"🔴 P{i['priority']}: {i['title']}" for i in critical_new[:5]])
+                    notify(f"🔬 *CORE Research Update*\n{len(all_new)} new improvements found\n\n*High priority:*\n{lines}\n\nFull list: /backlog")
+        except Exception as e:
+            print(f"[RESEARCH] loop error: {e}")
+        time.sleep(300)  # check every 5 min, runs every 60 min
+
+
+def t_get_backlog(status: str = "pending", limit: int = 20, min_priority: int = 1):
+    with _backlog_lock:
+        items = [b for b in _backlog
+                 if b.get("status", "pending") == status
+                 and int(b.get("priority", 1)) >= int(min_priority)]
+        items_sorted = sorted(items, key=lambda x: -int(x.get("priority", 1)))
+        return {"ok": True, "total": len(_backlog), "filtered": len(items_sorted),
+                "items": items_sorted[:int(limit)]}
+
+
+def t_backlog_update(title: str, status: str):
+    with _backlog_lock:
+        for item in _backlog:
+            if item.get("title", "").lower() == title.lower():
+                item["status"] = status
+                sb_post("knowledge_base", {
+                    "domain": "backlog", "topic": f"[STATUS UPDATE] {title}",
+                    "content": f"Status changed to: {status}", "confidence": "high",
+                    "tags": ["backlog", "status_update"], "source": "mcp_session",
+                })
+                return {"ok": True, "title": title, "new_status": status}
+        return {"ok": False, "error": f"Item not found: {title}"}
 
 
 # ── Tool registry ─────────────────────────────────────────────────────────────
@@ -1050,22 +1100,22 @@ TOOLS = {
     "write_file":             {"fn": t_write_file,             "perm": "EXECUTE", "args": ["path", "content", "message", "repo"],
                                "desc": "Write file to GitHub repo. FULL OVERWRITE — use for new files only. For edits use gh_search_replace."},
     "route":                  {"fn": t_route,                  "perm": "EXECUTE", "args": ["task", "execute"],
-                               "desc": "Route a task through CORE Routing Engine v2.0. execute=true to run via Groq. Returns signals+archetype+response."},
+                               "desc": "Route a task through CORE Routing Engine v2.0. execute=true to run via Groq."},
     "ask":                    {"fn": t_ask,                    "perm": "READ",    "args": ["question", "domain"],
-                               "desc": "Ask CORE anything. Pulls KB context + Groq generates answer. Main AGI query interface."},
+                               "desc": "Ask CORE anything. Pulls KB context + Groq generates answer."},
     "reflect":                {"fn": t_reflect,                "perm": "WRITE",   "args": ["task_summary", "domain", "patterns", "quality", "notes"],
                                "desc": "Log a hot reflection in one call. Use at end of significant sessions."},
     "stats":                  {"fn": t_stats,                  "perm": "READ",    "args": [],
                                "desc": "Analytics: domain distribution, top patterns, mistake frequency, avg quality score."},
     "search_mistakes":        {"fn": t_search_mistakes,        "perm": "READ",    "args": ["query", "domain", "limit"],
-                               "desc": "Semantic mistake search. Returns what_failed + correct_approach. Better than get_mistakes for specific lookups."},
+                               "desc": "Semantic mistake search. Returns what_failed + correct_approach."},
     "get_backlog":            {"fn": t_get_backlog,            "perm": "READ",    "args": ["status", "limit", "min_priority"],
-                               "desc": "Get improvement backlog discovered by background_researcher. status=pending/done/dismissed. min_priority=1-5."},
+                               "desc": "Get improvement backlog. status=pending/done/dismissed. min_priority=1-5."},
     "backlog_update":         {"fn": t_backlog_update,         "perm": "WRITE",   "args": ["title", "status"],
-                               "desc": "Update backlog item status: in_progress / done / dismissed. title must match exactly."},
+                               "desc": "Update backlog item status: in_progress / done / dismissed."},
 }
 
-# ── MCP JSON-RPC ────────────────────────────────────────────────────────────────
+# ── MCP JSON-RPC ──────────────────────────────────────────────────────────────
 def _mcp_tool_schema(name, tool):
     props = {a: {"type": "string", "description": a} for a in tool["args"]}
     return {"name": name, "description": tool.get("desc", name),
@@ -1081,7 +1131,7 @@ def handle_jsonrpc(body: dict, session_id: str = "") -> dict:
     if method == "initialize":
         return ok({"protocolVersion": MCP_PROTOCOL_VERSION,
                    "capabilities": {"tools": {"listChanged": False}},
-                   "serverInfo": {"name": "CORE v5.0", "version": "5.0"}})
+                   "serverInfo": {"name": "CORE v5.2", "version": "5.2"}})
     elif method == "notifications/initialized": return None
     elif method == "ping": return ok({})
     elif method == "tools/list":
@@ -1099,7 +1149,7 @@ def handle_jsonrpc(body: dict, session_id: str = "") -> dict:
     elif method == "prompts/list":   return ok({"prompts": []})
     else: return err(-32601, f"Method not found: {method}")
 
-# ── FastAPI ────────────────────────────────────────────────────────────────────
+# ── FastAPI ───────────────────────────────────────────────────────────────────
 class Handshake(BaseModel):
     secret: str
     client_id: Optional[str] = "claude_desktop"
@@ -1110,7 +1160,6 @@ class ToolCall(BaseModel):
     args: dict = {}
 
 class PatchRequest(BaseModel):
-    """Surgical patch request — used by claude.ai to avoid full-file rewrites."""
     secret: str
     path: str
     old_str: str
@@ -1118,41 +1167,28 @@ class PatchRequest(BaseModel):
     message: str
     repo: Optional[str] = ""
 
-app = FastAPI(title="CORE v5.0", version="5.0")
+app = FastAPI(title="CORE v5.2", version="5.2")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 @app.get("/")
 def root():
     counts = get_system_counts()
-    step = get_current_step()  # dynamic — never hardcode
-    return {"service": "CORE v5.0", "step": step,
+    step = get_current_step()
+    return {"service": "CORE v5.2", "step": step,
             "knowledge": counts.get("knowledge_base", 0), "sessions": counts.get("sessions", 0),
-            "mistakes": counts.get("mistakes", 0),
-            "hot_unprocessed": counts.get("hot_reflections", 0),
-            "evolutions_pending": counts.get("evolution_queue", 0)}
+            "mistakes": counts.get("mistakes", 0), "backlog_items": len(_backlog)}
 
 @app.get("/health")
 def health_ep(): return t_health()
 
 @app.post("/patch")
 async def patch_file(body: PatchRequest):
-    """
-    Surgical find-and-replace endpoint for claude.ai.
-    Avoids full-file rewrites — send only the diff strings.
-    Auth: body.secret must match MCP_SECRET.
-    Fix 2026-03-11j: added this endpoint.
-    """
     if body.secret != MCP_SECRET:
         raise HTTPException(401, "Invalid secret")
-    result = t_gh_search_replace(
-        path=body.path,
-        old_str=body.old_str,
-        new_str=body.new_str,
-        message=body.message,
-        repo=body.repo or GITHUB_REPO,
-    )
+    result = t_gh_search_replace(path=body.path, old_str=body.old_str, new_str=body.new_str,
+                                  message=body.message, repo=body.repo or GITHUB_REPO)
     if result.get("ok"):
-        notify(f"\u2702\ufe0f Patch applied: `{body.path}`\n{body.message[:100]}")
+        notify(f"✂️ Patch applied: `{body.path}`\n{body.message[:100]}")
     return result
 
 @app.post("/mcp/sse")
@@ -1212,16 +1248,16 @@ async def mcp_messages(req: Request):
 async def mcp_startup(body: Handshake, req: Request):
     if body.secret != MCP_SECRET: raise HTTPException(401, "Invalid secret")
     tok = mcp_new(req.client.host)
-    step = get_current_step()  # dynamic — never hardcode
-    notify(f"\U0001f50c MCP Session\nClient: {body.client_id}\nToken: {tok[:8]}...")
+    step = get_current_step()
+    notify(f"🔌 MCP Session\nClient: {body.client_id}\nToken: {tok[:8]}...")
     return {"session_token": tok, "expires_hours": SESSION_TTL_H,
             "state": t_state(), "health": t_health(), "constitution": t_constitution(),
-            "tools": list(TOOLS.keys()), "note": f"CORE v5.0 ready. {step}"}
+            "tools": list(TOOLS.keys()), "note": f"CORE v5.2 ready. {step}"}
 
 @app.post("/mcp/auth")
 async def mcp_auth(body: Handshake, req: Request):
     if body.secret != MCP_SECRET:
-        notify(f"\u26a0\ufe0f Invalid MCP auth from {req.client.host}")
+        notify(f"⚠️ Invalid MCP auth from {req.client.host}")
         raise HTTPException(401, "Invalid secret")
     return {"session_token": mcp_new(req.client.host), "expires_hours": SESSION_TTL_H}
 
@@ -1256,15 +1292,16 @@ def handle_msg(msg):
     if text == "/start":
         counts = get_system_counts()
         step = get_current_step()
-        notify(f"*CORE v5.1*\n{step}\n"
+        notify(f"*CORE v5.2*\n{step}\n"
                f"Knowledge: {counts.get('knowledge_base',0)} | Sessions: {counts.get('sessions',0)}\n\n"
                f"*Commands:*\n"
                f"/status — health + training\n"
-               f"/ask <question> — ask CORE anything (Groq)\n"
-               f"/route <task> — see how CORE would route this\n"
-               f"/stats — analytics dashboard\n"
+               f"/ask <question> — ask CORE (Groq)\n"
+               f"/route <task> — routing analysis\n"
+               f"/stats — analytics\n"
+               f"/backlog [min_priority] — improvement backlog\n"
                f"/mistakes [domain] — recent mistakes\n"
-               f"/tasks — recent task queue\n"
+               f"/tasks — task queue\n"
                f"/evolutions — pending evolutions\n"
                f"/approve <id> /reject <id>", cid)
 
@@ -1276,7 +1313,7 @@ def handle_msg(msg):
                f"Telegram: {h['components'].get('telegram')} | GitHub: {h['components'].get('github')}\n\n"
                f"Knowledge: {counts.get('knowledge_base',0)} | Sessions: {counts.get('sessions',0)}\n"
                f"Hot unprocessed: {ts.get('unprocessed_hot',0)} | Pending evos: {ts.get('pending_evolutions',0)}\n"
-               f"MCP tools: {len(TOOLS)}", cid)
+               f"MCP tools: {len(TOOLS)} | Backlog: {len(_backlog)} items", cid)
 
     elif text == "/stats":
         s = t_stats()
@@ -1314,19 +1351,6 @@ def handle_msg(msg):
         else:
             notify(f"Route error: {result.get('error')}", cid)
 
-    elif text.startswith("/mistakes"):
-        parts = text.split(None, 1)
-        domain = parts[1].strip() if len(parts) > 1 else ""
-        result = t_search_mistakes(domain=domain, limit=5)
-        if result.get("ok") and result["mistakes"]:
-            lines = "\n\n".join([
-                f"[{m.get('domain','')}] *{m.get('what_failed','')[:60]}*\n→ {m.get('correct_approach','')[:100]}"
-                for m in result["mistakes"]
-            ])
-            notify(f"*Recent Mistakes*{' ('+domain+')' if domain else ''}\n\n{lines}", cid)
-        else:
-            notify("No mistakes found" + (f" for domain: {domain}" if domain else ""), cid)
-
     elif text.startswith("/backlog"):
         parts = text.split(None, 1)
         min_p = 1
@@ -1345,7 +1369,20 @@ def handle_msg(msg):
             notify(f"📋 *Backlog* ({result['filtered']} pending / {total} total)\n\n" +
                    "\n".join(lines) + "\n\n_Full list: BACKLOG.md on GitHub_", cid)
         else:
-            notify(f"📋 Backlog empty (total: {total}). Researcher runs every hour.", cid)
+            notify(f"📋 Backlog empty (total: {total}). Researcher runs every 60 min.", cid)
+
+    elif text.startswith("/mistakes"):
+        parts = text.split(None, 1)
+        domain = parts[1].strip() if len(parts) > 1 else ""
+        result = t_search_mistakes(domain=domain, limit=5)
+        if result.get("ok") and result["mistakes"]:
+            lines = "\n\n".join([
+                f"[{m.get('domain','')}] *{m.get('what_failed','')[:60]}*\n→ {m.get('correct_approach','')[:100]}"
+                for m in result["mistakes"]
+            ])
+            notify(f"*Recent Mistakes*{' ('+domain+')' if domain else ''}\n\n{lines}", cid)
+        else:
+            notify("No mistakes found" + (f" for domain: {domain}" if domain else ""), cid)
 
     elif text == "/tasks":
         tasks = sb_get("task_queue", "select=task,status&order=created_at.desc&limit=5")
@@ -1377,20 +1414,17 @@ def handle_msg(msg):
         except (ValueError, IndexError): notify("Usage: /reject <id> [reason]", cid)
 
     else:
-        # Non-command message → route + execute via Groq
         sig = extract_signals(text)
         notify(f"⚙️ Routing [{sig['archetype']}] {sig['domain']}...", cid)
         result = t_route(text, execute=True)
         if result.get("ok") and result.get("response"):
             notify(result["response"][:1500], cid)
         else:
-            # Fallback: queue it
             ok = sb_post("task_queue", {"task": text, "chat_id": cid, "status": "pending", "priority": 5})
             notify(f"✅ Queued: `{text[:80]}`" if ok else "❌ Failed to queue task.", cid)
 
 def queue_poller():
-    """Poll task_queue and EXECUTE pending tasks via routing engine v2.0."""
-    print("[QUEUE] Started — v5.1 live execution mode")
+    print("[QUEUE] Started — v5.2 live execution mode")
     while True:
         try:
             tasks = sb_get("task_queue", "status=eq.pending&order=priority.asc&limit=1")
@@ -1399,317 +1433,20 @@ def queue_poller():
                 tid = t["id"]
                 task_text = t.get("task", "")
                 chat_id = t.get("chat_id", "")
-
-                # Mark as processing
                 sb_patch("task_queue", f"id=eq.{tid}", {"status": "processing"})
-                print(f"[QUEUE] Executing task {tid}: {task_text[:60]}")
-
-                # Route + execute
                 result = t_route(task_text, execute=True)
-
                 if result.get("ok") and result.get("response"):
                     sb_patch("task_queue", f"id=eq.{tid}", {"status": "completed", "error": None})
-                    # Notify via Telegram if task came from Telegram
                     if chat_id:
                         notify(f"✅ *Task completed*\n{result['response'][:800]}", chat_id)
-                    print(f"[QUEUE] Task {tid} completed")
                 else:
                     err = result.get("error", "unknown error")
                     sb_patch("task_queue", f"id=eq.{tid}", {"status": "failed", "error": err[:200]})
                     if chat_id:
                         notify(f"❌ Task failed: {err[:200]}", chat_id)
-                    print(f"[QUEUE] Task {tid} failed: {err}")
-
         except Exception as e:
             print(f"[QUEUE] {e}")
         time.sleep(10)
-
-# ── Background Researcher — runs 24/7 without owner ──────────────────────────
-# Simulation domains and task archetypes for autonomous discovery
-_RESEARCH_DOMAINS = [
-    ("code",     ["debug this python function", "optimize SQL query", "refactor async code",
-                  "explain this error", "design REST API", "review this architecture"]),
-    ("business", ["improve cash flow", "write investor pitch", "reduce churn", 
-                  "hire first employee", "expand to new market", "price my product"]),
-    ("legal",    ["draft NDA", "understand terms of service", "employment contract review",
-                  "IP protection for startup", "GDPR compliance checklist"]),
-    ("creative", ["write product description", "social media strategy", "brand voice guide",
-                  "content calendar", "email newsletter"]),
-    ("academic", ["summarize research paper", "explain statistical method",
-                  "literature review outline", "thesis argument structure"]),
-    ("medical",  ["explain diagnosis", "medication interaction check", "symptom checker",
-                  "treatment options", "second opinion research"]),
-    ("finance",  ["build financial model", "tax optimization", "runway calculation",
-                  "fundraising strategy", "unit economics"]),
-    ("data",     ["clean messy dataset", "visualize trends", "build dashboard",
-                  "anomaly detection", "A/B test analysis"]),
-]
-
-_IMPROVEMENT_INTERVAL = 3600   # run researcher every 60 min
-_last_research_run: float = 0.0
-_backlog_lock = threading.Lock()
-
-# In-memory backlog (persisted to KB + BACKLOG.md)
-_backlog: list = []   # [{id, priority, type, title, description, discovered_at}]
-
-
-def _research_simulate_batch() -> list[dict]:
-    """
-    Run one simulation batch: pick random domain/tasks, route them,
-    ask Groq to identify gaps, missing tools, or logic improvements.
-    Returns list of improvement candidates.
-    """
-    import random
-    domain, tasks = random.choice(_RESEARCH_DOMAINS)
-    sample = random.sample(tasks, min(3, len(tasks)))
-
-    # Build routing analysis for the sample
-    routing_analyses = []
-    for task in sample:
-        sig = extract_signals(task)
-        routing_analyses.append(f"Task: '{task}' → archetype={sig['archetype']}, "
-                                 f"domain={sig['domain']}, expertise={sig['expertise']}, "
-                                 f"emotion={sig['emotion']}, stakes={sig['stakes']}")
-
-    # Pull current KB state for context
-    kb_count = 0
-    tool_list = list(TOOLS.keys())
-    try:
-        counts = get_system_counts()
-        kb_count = counts.get("knowledge_base", 0)
-    except: pass
-
-    # Ask Groq to think like an AGI researcher
-    system = """You are CORE's internal research engine. Your job is to find gaps, missing capabilities,
-and improvement opportunities in an AGI system by simulating real user tasks.
-
-You will be given:
-- A domain and sample tasks
-- Current routing analysis for those tasks
-- Current system capabilities
-
-Your output MUST be a JSON array of improvement items. Each item:
-{
-  "priority": 1-5 (5=critical, 1=nice-to-have),
-  "type": "new_tool" | "logic_improvement" | "new_kb" | "telegram_command" | "performance" | "missing_data",
-  "title": "short title (max 60 chars)",
-  "description": "specific, actionable description of what to build/change/add (max 200 chars)",
-  "effort": "low" | "medium" | "high",
-  "impact": "low" | "medium" | "high"
-}
-
-Be specific. Don't suggest vague things like "improve performance". 
-Suggest concrete things like "add t_summarize() tool that condenses long KB entries to 2 sentences".
-Output ONLY valid JSON array, no preamble."""
-
-    user = (f"Domain: {domain}\n"
-            f"Sample tasks: {sample}\n"
-            f"Routing analyses:\n" + "\n".join(routing_analyses) + "\n\n"
-            f"Current tools ({len(tool_list)}): {', '.join(tool_list)}\n"
-            f"KB entries: {kb_count}\n\n"
-            f"What are 3-5 concrete improvements CORE needs to handle this domain better?")
-
-    try:
-        raw = groq_chat(system, user, model=GROQ_FAST, max_tokens=600)
-        # Strip possible markdown fences
-        raw = raw.strip()
-        if raw.startswith("```"): raw = raw.split("```")[1]
-        if raw.startswith("json"): raw = raw[4:]
-        items = json.loads(raw.strip())
-        # Stamp each item
-        for item in items:
-            item["domain"] = domain
-            item["discovered_at"] = datetime.utcnow().isoformat()
-            item["status"] = "pending"   # pending | in_progress | done | dismissed
-        return items if isinstance(items, list) else []
-    except Exception as e:
-        print(f"[RESEARCH] parse error: {e} | raw: {str(raw)[:100]}")
-        return []
-
-
-def _backlog_add(items: list[dict]):
-    """Deduplicate by title and add to in-memory backlog + KB."""
-    global _backlog
-    with _backlog_lock:
-        existing_titles = {b["title"].lower() for b in _backlog}
-        new_items = []
-        for item in items:
-            title = item.get("title", "").strip()
-            if title and title.lower() not in existing_titles:
-                existing_titles.add(title.lower())
-                _backlog.append(item)
-                new_items.append(item)
-                # Persist to KB so it survives Railway restarts
-                sb_post("knowledge_base", {
-                    "domain": "backlog",
-                    "topic": f"[BACKLOG-{item.get('priority','?')}] {title}",
-                    "content": (f"type={item.get('type')} effort={item.get('effort')} "
-                                f"impact={item.get('impact')} domain={item.get('domain')}\n"
-                                f"{item.get('description','')}"),
-                    "confidence": "medium",
-                    "tags": ["backlog", item.get("type",""), item.get("domain","")],
-                    "source": "background_researcher",
-                })
-        return new_items
-
-
-def _backlog_to_markdown() -> str:
-    """Render current backlog as markdown for BACKLOG.md."""
-    with _backlog_lock:
-        if not _backlog:
-            return "# CORE Improvement Backlog\n\n_No items yet. Background researcher hasn't run._\n"
-
-        # Sort by priority desc
-        sorted_b = sorted(_backlog, key=lambda x: -int(x.get("priority", 1)))
-
-        lines = [
-            "# CORE Improvement Backlog",
-            f"\n_Auto-generated by background_researcher. Last updated: {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}_",
-            f"_Total items: {len(sorted_b)} | Pending: {sum(1 for b in sorted_b if b.get('status')=='pending')}_\n",
-            "---\n",
-        ]
-
-        # Group by type
-        by_type: dict = {}
-        for item in sorted_b:
-            t = item.get("type", "other")
-            by_type.setdefault(t, []).append(item)
-
-        type_labels = {
-            "new_tool": "🔧 New Tools",
-            "logic_improvement": "🧠 Logic Improvements",
-            "new_kb": "📚 Knowledge Gaps",
-            "telegram_command": "📱 Telegram Commands",
-            "performance": "⚡ Performance",
-            "missing_data": "🗄️ Missing Data",
-            "other": "📌 Other",
-        }
-
-        for t, items in by_type.items():
-            lines.append(f"## {type_labels.get(t, t)}\n")
-            for item in items:
-                p = item.get("priority", 1)
-                stars = "🔴" if p >= 4 else ("🟡" if p == 3 else "🟢")
-                status = item.get("status", "pending")
-                status_icon = "✅" if status == "done" else ("🚧" if status == "in_progress" else "⬜")
-                lines.append(f"### {status_icon} {stars} P{p}: {item.get('title','')}")
-                lines.append(f"- **Type:** {t} | **Effort:** {item.get('effort','?')} | **Impact:** {item.get('impact','?')} | **Domain:** {item.get('domain','?')}")
-                lines.append(f"- **What:** {item.get('description','')}")
-                lines.append(f"- **Discovered:** {item.get('discovered_at','')[:16]}")
-                lines.append("")
-
-        lines.append("---")
-        lines.append(f"\n_CORE runs background_researcher every hour. Items auto-added when new gaps discovered._")
-        lines.append("_To act on an item: use `/backlog` in Telegram or `read_file(BACKLOG.md)` in MCP._")
-        return "\n".join(lines)
-
-
-def background_researcher():
-    """
-    24/7 autonomous loop. Runs on Railway without owner.
-    Every hour: simulate tasks, discover gaps, update BACKLOG.md, log to KB.
-    Sends Telegram digest to owner when high-priority items found.
-    """
-    global _last_research_run
-    print("[RESEARCH] Background researcher started — autonomous 24/7 mode")
-
-    # On startup: reload existing backlog from KB
-    try:
-        existing = sb_get("knowledge_base",
-                          "select=topic,content&domain=eq.backlog&order=created_at.desc&limit=100",
-                          svc=True)
-        with _backlog_lock:
-            for row in existing:
-                title = row.get("topic", "").replace("[BACKLOG-", "").split("] ", 1)[-1]
-                content = row.get("content", "")
-                # Parse type from content
-                type_ = "other"
-                for t in ["new_tool","logic_improvement","new_kb","telegram_command","performance","missing_data"]:
-                    if t in content: type_ = t; break
-                priority = 3
-                try:
-                    p_str = row.get("topic","")
-                    if "P" in p_str:
-                        priority = int(p_str.split("-")[1].split("]")[0])
-                except: pass
-                _backlog.append({
-                    "title": title, "type": type_, "priority": priority,
-                    "description": content[:200], "domain": "loaded",
-                    "discovered_at": "previous_session", "status": "pending",
-                    "effort": "medium", "impact": "medium",
-                })
-        print(f"[RESEARCH] Loaded {len(_backlog)} existing backlog items from KB")
-    except Exception as e:
-        print(f"[RESEARCH] startup load error: {e}")
-
-    while True:
-        try:
-            time_since = time.time() - _last_research_run
-            if time_since >= _IMPROVEMENT_INTERVAL:
-                print("[RESEARCH] Running simulation batch...")
-                _last_research_run = time.time()
-
-                # Run multiple domain simulations
-                all_new = []
-                for _ in range(3):   # 3 domains per cycle
-                    items = _research_simulate_batch()
-                    new = _backlog_add(items)
-                    all_new.extend(new)
-                    time.sleep(2)  # avoid Groq rate limit
-
-                # Write BACKLOG.md to GitHub
-                md = _backlog_to_markdown()
-                gh_write("BACKLOG.md", md,
-                         f"chore(backlog): auto-update {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')} — {len(all_new)} new items")
-                print(f"[RESEARCH] Cycle done. New: {len(all_new)}, Total: {len(_backlog)}")
-
-                # Notify owner if high-priority items found
-                critical_new = [i for i in all_new if int(i.get("priority", 1)) >= 4]
-                if critical_new:
-                    lines = "\n".join([f"🔴 P{i['priority']}: {i['title']}" for i in critical_new[:5]])
-                    notify(f"🔬 *CORE Research Update*\n{len(all_new)} new improvements discovered\n\n"
-                           f"*High priority:*\n{lines}\n\n"
-                           f"Full list: /backlog or BACKLOG.md on GitHub")
-
-        except Exception as e:
-            print(f"[RESEARCH] loop error: {e}")
-
-        time.sleep(300)  # check every 5 min, runs sim every 60 min
-
-
-def t_get_backlog(status: str = "pending", limit: int = 20, min_priority: int = 1):
-    """Return current improvement backlog, filtered and sorted."""
-    with _backlog_lock:
-        items = [b for b in _backlog
-                 if b.get("status", "pending") == status
-                 and int(b.get("priority", 1)) >= int(min_priority)]
-        items_sorted = sorted(items, key=lambda x: -int(x.get("priority", 1)))
-        return {
-            "ok": True,
-            "total": len(_backlog),
-            "filtered": len(items_sorted),
-            "items": items_sorted[:int(limit)],
-        }
-
-
-def t_backlog_update(title: str, status: str):
-    """Mark a backlog item as in_progress / done / dismissed."""
-    with _backlog_lock:
-        for item in _backlog:
-            if item.get("title", "").lower() == title.lower():
-                item["status"] = status
-                # Update in KB too
-                sb_post("knowledge_base", {
-                    "domain": "backlog",
-                    "topic": f"[STATUS UPDATE] {title}",
-                    "content": f"Status changed to: {status}",
-                    "confidence": "high",
-                    "tags": ["backlog", "status_update"],
-                    "source": "mcp_session",
-                })
-                return {"ok": True, "title": title, "new_status": status}
-        return {"ok": False, "error": f"Item not found: {title}"}
-
 
 @app.on_event("startup")
 def on_start():
@@ -1720,11 +1457,11 @@ def on_start():
     threading.Thread(target=background_researcher, daemon=True).start()
     counts = get_system_counts()
     step = get_current_step()
-    notify(f"*CORE v5.2 Online*\n{step}\n"
+    notify(f"*CORE v5.2 Online* ✅\n{step}\n"
            f"Knowledge: {counts.get('knowledge_base',0)} | Sessions: {counts.get('sessions',0)}\n"
-           f"MCP: {len(TOOLS)+2} tools active\n"
-           f"🔬 Background researcher: ACTIVE (hourly simulation)\n"
-           f"📋 Backlog auto-updates to BACKLOG.md on GitHub")
+           f"MCP: {len(TOOLS)} tools\n"
+           f"🔬 Background researcher: ACTIVE (60 min interval)\n"
+           f"📋 BACKLOG.md auto-updated on GitHub")
     print(f"[CORE] v5.2 online :{PORT} — {step}")
 
 if __name__ == "__main__":
