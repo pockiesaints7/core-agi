@@ -99,11 +99,15 @@ Use Desktop Commander PowerShell:
 - NEVER pass `repo` arg ke read_file atau write_file
 - NEVER gunakan `query_string` untuk sb_query - gunakan `filters`
 - NEVER hardcode step numbers di core.py
+- NEVER use write_file to edit existing files — it FULLY OVERWRITES (proven: wiped core.py)
 - ALWAYS read-back setelah setiap write
 - ALWAYS call get_mistakes(domain=X) sebelum remote write
 - ALWAYS update SESSION.md di akhir session kalau ada yang berubah
 - ALWAYS update CORE_SELF.md FIRST kalau ada structural change
-- Edit GitHub file: gh_search_replace (Claude Desktop) atau /patch (claude.ai)
+- ALWAYS update last_good_commit di SESSION.md setelah successful Railway deploy
+- Edit GitHub file dari claude.ai: POST /patch endpoint ONLY
+- Edit GitHub file dari Claude Desktop: gh_search_replace tool
+- If Railway down: pivot ke github: tools langsung, jangan pakai core-agi: tools
 
 ---
 
