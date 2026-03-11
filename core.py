@@ -11,6 +11,12 @@ Fix log:
                Root cause: step labels in root(), startup(), on_start(), Telegram /start
                were hardcoded to 'Step 3' even after system advanced to Step 5.
                Fix: get_current_step() helper reads SESSION.md live on every call.
+  2026-03-11i: processed_by_cold filter changed from eq.false/True to eq.0/1 (integer).
+               Root cause: Supabase PostgREST rejects Python bool in querystring filter.
+               Fix: use 0/1 in all querystring filters; keep Python bool in JSON body (ok there).
+  2026-03-11j: Added POST /patch endpoint — surgical find-and-replace from claude.ai.
+               Accepts {path, old_str, new_str, message, secret}. Reuses gh_search_replace.
+               Purpose: avoid full-file rewrites from claude.ai which waste GitHub rate limit.
 """
 import asyncio
 import base64
@@ -185,7 +191,6 @@ def get_current_step() -> str:
         return _step_cache["label"]
     try:
         md = gh_read("SESSION.md")
-        # Extract line like: ## Current Step: Step 5 (Deploy & Monitor)
         for line in md.splitlines():
             if line.startswith("## Current Step:"):
                 label = line.replace("## Current Step:", "").strip()
@@ -193,7 +198,6 @@ def get_current_step() -> str:
                 return label
     except Exception as e:
         print(f"[STEP] Failed to read SESSION.md: {e}")
-    # Fallback: don't guess, return generic label
     return _step_cache.get("label") or "unknown — check SESSION.md"
 
 # ── Supabase helpers ──────────────────────────────────────────────────────────
@@ -251,7 +255,7 @@ def auto_hot_reflection(session_data: dict):
             "new_patterns": [], "new_mistakes": [],
             "quality_score": None, "gaps_identified": None,
             "reflection_text": f"Auto-generated from {interface} session. Actions: {total}.",
-            "processed_by_cold": False,
+            "processed_by_cold": False,  # JSON body bool is fine — only querystring filter needs int
         })
         print(f"[HOT] ok={ok} domain={domain}")
         return ok
@@ -262,11 +266,12 @@ def auto_hot_reflection(session_data: dict):
 
 def run_cold_processor():
     """Batch: distill patterns, upsert pattern_frequency, queue evolutions, write summary.
-    Fix (2026-03-11g): cold_reflections uses sb_post_critical (bypasses rate limiter).
+    Fix (2026-03-11i): processed_by_cold filter uses eq.0/eq.1 (integer) not eq.false/eq.true.
     """
     try:
+        # Fix 2026-03-11i: use eq.0 not eq.false — PostgREST rejects boolean in querystring
         hots = sb_get("hot_reflections",
-                      "select=id,domain,new_patterns,new_mistakes,quality_score&processed_by_cold=eq.false&id=gt.1&order=created_at.asc",
+                      "select=id,domain,new_patterns,new_mistakes,quality_score&processed_by_cold=eq.0&id=gt.1&order=created_at.asc",
                       svc=True)
         if not hots:
             print("[COLD] No unprocessed hot reflections.")
@@ -275,7 +280,6 @@ def run_cold_processor():
         period_start      = datetime.utcnow().isoformat()
         evolutions_queued = 0
 
-        # Aggregate pattern counts across batch
         batch_counts: Counter = Counter()
         batch_domain: dict    = {}
         for h in hots:
@@ -285,7 +289,6 @@ def run_cold_processor():
                     batch_counts[key] += 1
                     batch_domain.setdefault(key, h.get("domain", "general"))
 
-        # Upsert pattern_frequency
         for key, batch_count in batch_counts.items():
             existing = [e for e in sb_get("pattern_frequency",
                         f"select=id,frequency,auto_applied&pattern_key=eq.{key}&limit=1", svc=True)
@@ -328,7 +331,6 @@ def run_cold_processor():
                         evolutions_queued += 1
                         print(f"[COLD] evolution queued for new pattern '{key[:50]}'")
 
-        # Write cold_reflections summary — CRITICAL: use sb_post_critical, not sb_post
         period_end = datetime.utcnow().isoformat()
         cold_ok = sb_post_critical("cold_reflections", {
             "period_start":      period_start,
@@ -341,7 +343,6 @@ def run_cold_processor():
         })
         print(f"[COLD] cold_reflections insert ok={cold_ok}")
 
-        # Mark all hots as processed
         for h in hots:
             sb_patch("hot_reflections", f"id=eq.{h['id']}", {"processed_by_cold": True})
 
@@ -433,14 +434,14 @@ def cold_processor_loop():
     print("[COLD] Background loop started")
     while True:
         try:
-            hots        = sb_get("hot_reflections", "select=id&processed_by_cold=eq.false&id=gt.1", svc=True)
+            # Fix 2026-03-11i: use eq.0 not eq.false in querystring
+            hots        = sb_get("hot_reflections", "select=id&processed_by_cold=eq.0&id=gt.1", svc=True)
             unprocessed = len(hots)
             time_since  = time.time() - _last_cold_run
             if unprocessed >= COLD_HOT_THRESHOLD or (time_since >= COLD_TIME_THRESHOLD and unprocessed > 0):
                 print(f"[COLD] Triggering: unprocessed={unprocessed} time_since={int(time_since)}s")
                 run_cold_processor()
                 _last_cold_run = time.time()
-            # Auto-apply high-confidence knowledge evolutions
             for evo in sb_get("evolution_queue",
                                "select=id,confidence,change_type&status=eq.pending&change_type=eq.knowledge&id=gt.1",
                                svc=True):
@@ -545,7 +546,8 @@ def t_sb_insert(table, data):
 
 def t_training_status():
     try:
-        unprocessed = sb_get("hot_reflections", "select=id&processed_by_cold=eq.false&id=gt.1", svc=True)
+        # Fix 2026-03-11i: use eq.0 not eq.false
+        unprocessed = sb_get("hot_reflections", "select=id&processed_by_cold=eq.0&id=gt.1", svc=True)
         pending_evo = sb_get("evolution_queue", "select=id,change_type,change_summary,confidence&status=eq.pending&id=gt.1", svc=True)
         return {"status": f"Training pipeline ACTIVE — {get_current_step()}",
                 "unprocessed_hot": len(unprocessed), "pending_evolutions": len(pending_evo),
@@ -708,6 +710,15 @@ class ToolCall(BaseModel):
     tool: str
     args: dict = {}
 
+class PatchRequest(BaseModel):
+    """Surgical patch request — used by claude.ai to avoid full-file rewrites."""
+    secret: str
+    path: str
+    old_str: str
+    new_str: str
+    message: str
+    repo: Optional[str] = ""
+
 app = FastAPI(title="CORE v5.0", version="5.0")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
@@ -723,6 +734,27 @@ def root():
 
 @app.get("/health")
 def health_ep(): return t_health()
+
+@app.post("/patch")
+async def patch_file(body: PatchRequest):
+    """
+    Surgical find-and-replace endpoint for claude.ai.
+    Avoids full-file rewrites — send only the diff strings.
+    Auth: body.secret must match MCP_SECRET.
+    Fix 2026-03-11j: added this endpoint.
+    """
+    if body.secret != MCP_SECRET:
+        raise HTTPException(401, "Invalid secret")
+    result = t_gh_search_replace(
+        path=body.path,
+        old_str=body.old_str,
+        new_str=body.new_str,
+        message=body.message,
+        repo=body.repo or GITHUB_REPO,
+    )
+    if result.get("ok"):
+        notify(f"\u2702\ufe0f Patch applied: `{body.path}`\n{body.message[:100]}")
+    return result
 
 @app.post("/mcp/sse")
 async def mcp_post(req: Request):
