@@ -442,6 +442,41 @@ def apply_evolution(evolution_id: int):
             applied = gh_write("BEHAVIOR_UPDATES.md", diff_content,
                                f"Behavior evolution #{evolution_id}: {change_summary[:60]}")
             note = "Written to BEHAVIOR_UPDATES.md"
+        elif change_type == "backlog":
+            # Execute backlog items - route by backlog_type
+            try:
+                meta = json.loads(diff_content) if diff_content else {}
+            except Exception:
+                meta = {}
+            btype  = meta.get("backlog_type", "other")
+            domain = meta.get("domain", "general")
+            title  = meta.get("title", change_summary[:80])
+            if btype == "new_kb":
+                applied = bool(sb_post("knowledge_base", {
+                    "domain": domain, "topic": title,
+                    "content": change_summary.replace(f"[BACKLOG P{evo.get('confidence',0)}] {title}: ", ""),
+                    "confidence": "medium", "tags": ["backlog", "auto_applied"],
+                    "source": "evolution_queue",
+                }))
+                note = f"KB entry added: {title}"
+            elif btype in ("logic_improvement", "performance", "missing_data"):
+                applied = bool(sb_post("task_queue", {
+                    "type": "improvement", "payload": json.dumps(meta),
+                    "status": "pending", "priority": int(evo.get("confidence", 0.5) * 10),
+                    "source": "backlog_evolution",
+                }))
+                note = f"Task queued for execution: {title}"
+            else:
+                # new_tool / telegram_command - needs manual dev, just notify
+                notify(f"?? *Backlog item approved (manual dev needed)*\nP{int(meta.get('effort','medium')=='low')+3}: {title}\nType: {btype} | Effort: {meta.get('effort')}")
+                applied = True
+                note = f"Owner notified - manual implementation needed: {btype}"
+            # Update backlog in-memory status
+            with _backlog_lock:
+                for b in _backlog:
+                    if b.get("title", "").lower() == title.lower():
+                        b["status"] = "done" if btype == "new_kb" else "in_progress"
+                        break
 
         if applied:
             sb_patch("evolution_queue", f"id=eq.{evolution_id}",
