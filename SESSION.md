@@ -11,6 +11,7 @@
 CORE v5.0 fully live. Training loop confirmed working.
 Cold processor ran autonomously: processed 4 hot_reflections, found 15 patterns.
 Next: use CORE for real tasks via Claude Desktop. Feed hot_reflections naturally per session.
+Interface self-ID rules now in plan + KB — CORE will never misidentify itself again.
 
 ---
 
