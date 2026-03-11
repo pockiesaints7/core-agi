@@ -1691,6 +1691,53 @@ Output ONLY valid JSON array, no preamble, no explanation."""
         return {"ok": False, "error": str(e)}
 
 
+def t_list_templates(limit: int = 20) -> dict:
+    """List all reusable script templates stored in Supabase."""
+    try:
+        rows = sb_get("script_templates",
+                      f"select=name,description,trigger_pattern,use_count,created_at"
+                      f"&order=use_count.desc&limit={limit}",
+                      svc=True)
+        return {"ok": True, "templates": rows, "count": len(rows)}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def t_run_template(name: str, params: str = "") -> dict:
+    """
+    Retrieve a stored script template by name and return it ready to execute.
+    Increments use_count so most-used templates surface first.
+    params: optional JSON string of substitution vars for the template.
+    """
+    try:
+        rows = sb_get("script_templates",
+                      f"select=*&name=eq.{name}&limit=1", svc=True)
+        if not rows:
+            return {"ok": False, "error": f"Template '{name}' not found"}
+        tpl = rows[0]
+        code = tpl.get("code", "")
+        # Apply param substitutions if provided
+        if params:
+            try:
+                p = json.loads(params)
+                for k, v in p.items():
+                    code = code.replace(f"{{{k}}}", str(v))
+            except Exception:
+                pass
+        sb_patch("script_templates", f"name=eq.{name}",
+                 {"use_count": (tpl.get("use_count") or 0) + 1})
+        return {
+            "ok": True,
+            "name": name,
+            "description": tpl.get("description", ""),
+            "trigger_pattern": tpl.get("trigger_pattern", ""),
+            "code": code,
+            "instruction": f"Execute this code via gh_search_replace or direct MCP tool calls as appropriate.",
+        }
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
 def t_mine_kb(max_batches: str = "50", force: str = "false") -> dict:
     """MCP tool wrapper for run_kb_mining."""
     try:
