@@ -1,164 +1,274 @@
-# CORE v5.0 — Training Pipeline Design
-**Status:** FINAL — Step 2 output
-**Designed:** 2026-03-11
+# CORE v5.0 — Training Pipeline Design (Redesigned)
+**Status:** ACTIVE — persistent task until fully implemented
+**Redesigned:** 2026-03-12
 **Owner:** REINVAGNAR
 
 ---
 
 ## Philosophy
 
-Sistem belajar dari dirinya sendiri melalui loop:
-```
-Session selesai → hot_reflections → cold processor → pattern_frequency → evolution_queue → apply → loop
-```
-Schema tidak perlu diubah — sudah matang dan siap diimplementasikan.
+CORE learns from two signal sources:
+1. **Real activity** — what actually happened in sessions, what failed, what was asked
+2. **Simulated population** — Groq simulates 1,000,000 users to accelerate pattern discovery
+
+Both feed the same pipeline. Railway is stateless compute — it thinks and writes to Supabase, nothing more.
+All state lives in Supabase. Railway can restart 100x and nothing is lost.
+**Nothing auto-applies. Ever. Owner + Claude Desktop are always the hands.**
 
 ---
 
-## Pipeline Full
+## Architecture Principle
 
-### Stage 1 — HOT REFLECTION (per session)
-
-**Trigger:** Session selesai
-
-**Dua cara tulis ke `hot_reflections`:**
-
-1. **Claude manual (via MCP `sb_insert`)** — di akhir setiap Claude Desktop session
-   - Cocok untuk refleksi yang butuh reasoning: gaps, patterns, kualitas
-   - Fields yang diisi Claude: `task_summary`, `domain`, `quality_score`, `new_patterns[]`, `new_mistakes[]`, `gaps_identified`, `reflection_text`
-
-2. **core.py otomatis** — triggered saat row baru masuk ke tabel `sessions`
-   - Auto-generate dari data yang sudah ada: `summary` → `task_summary`, parse `actions[]` untuk hitung `verify_rate` & `mistake_consult_rate`
-   - Lightweight, tidak butuh reasoning
-   - Fields yang diisi: `task_summary`, `domain`, `verify_rate`, `mistake_consult_rate`
-
-**Default:** `processed_by_cold = false`
-
----
-
-### Stage 2 — COLD PROCESSOR (batch)
-
-**Trigger (mana yang duluan):**
-- 10 hot_reflections belum diproses (`processed_by_cold=false`), ATAU
-- 24 jam sejak cold processor terakhir jalan
-
-**Dijalankan oleh dua cara:**
-
-1. **core.py background thread** — check setiap 30 menit, auto-trigger kalau kondisi terpenuhi
-2. **Claude manual via MCP** — Claude bisa trigger kapan saja via tool call ke endpoint khusus
-
-**Proses:**
 ```
-1. Baca semua hot_reflections WHERE processed_by_cold=false
-2. Untuk setiap pattern di new_patterns[]:
-   - Kalau pattern_key sudah ada di pattern_frequency → increment frequency, update last_seen
-   - Kalau baru → insert baru (frequency=1, confidence=0.5)
-3. Kalau frequency >= 3 → push ke evolution_queue
-4. Tulis 1 baris cold_reflections:
-   - period_start/end, hot_count, patterns_found, evolutions_queued, summary_text
-5. Update semua hot yang diproses: processed_by_cold=true
+Railway  = stateless cron. Runs Groq calls. Writes to Supabase. Owns nothing.
+Supabase = all memory, all state, single source of truth.
+Claude Desktop = the hands. Only thing that applies evolutions.
+Groq     = the thinker. Extracts patterns, simulates users. No tools, no apply.
 ```
 
 ---
 
-### Stage 3 — EVOLUTION QUEUE (apply perubahan)
+## Full Pipeline
 
-**Tiga tipe perubahan, tiga level keamanan:**
+```
+SIGNAL SOURCES (every 60 min, Railway runs this autonomously)
+│
+├── TRACK A: Real data
+│   Read from Supabase:
+│   - sessions (last 20): summary + actions[]
+│   - mistakes (last 20): what_failed + root_cause + domain
+│   - hot_reflections (recent manual): patterns + gaps + quality_score
+│
+│   Ask Groq:
+│   "Here is CORE's recent real activity. Identify:
+│    1. Recurring patterns (things done repeatedly)
+│    2. Recurring failures (same mistake multiple times)
+│    3. Knowledge gaps (things attempted but knowledge was missing)
+│    4. Missing behaviors (things that should happen but don't)
+│    For each: give pattern_key, domain, severity, recommendation."
+│
+│   Output → insert rows to hot_reflections
+│   Tagged: source=real
+│
+├── TRACK B: Simulated population
+│   Load CORE context from Supabase:
+│   - knowledge_base (sample): what CORE knows
+│   - mistakes (all domains): known failure modes
+│   - sessions (domain distribution): what types of tasks exist
+│
+│   Ask Groq:
+│   "You are simulating 1,000,000 users of CORE — a personal AGI
+│    orchestration system with these tools: [MCP tool list].
+│    These domains: code, db, bot, mcp, training, kb, general.
+│    These known failure modes: [from mistakes table].
+│
+│    Simulate realistic usage distribution:
+│    - 40% routine tasks (KB queries, session logging, routing)
+│    - 30% complex multi-step (write → verify → apply → check)
+│    - 20% edge cases (rate limits, conflicts, ambiguous routing)
+│    - 10% failure recovery (retry, rollback, error handling)
+│
+│    For this simulated batch of 1,000,000 users:
+│    1. What patterns did they hit repeatedly?
+│    2. What broke or confused them?
+│    3. What was missing from the KB?
+│    4. What tool behavior was unexpected or dangerous?
+│
+│    Return JSON array:
+│    [{pattern_key, domain, frequency, severity, recommendation}]"
+│
+│   Output → insert rows to hot_reflections
+│   Tagged: source=simulation
+│
+└── TRACK A + B both write to hot_reflections (Supabase)
+    Railway forgets everything after writing. Zero in-memory state.
 
-| change_type | Auto-apply? | Kondisi | Target |
+         │
+         ▼ (trigger: 10 unprocessed hot_reflections OR 24h passed)
+
+COLD PROCESSOR (background thread, pure Python/SQL, no Groq, no LLM)
+│
+│  Read all hot_reflections WHERE processed_by_cold=false
+│  Count pattern_key frequency across all rows
+│
+│  Confidence weighting:
+│  - source=real only      → confidence = base
+│  - source=simulation only → confidence = base × 0.7 (lower trust)
+│  - source=both (overlap) → confidence = base × 1.3 (highest signal)
+│
+│  frequency >= 3 → push to evolution_queue (status=pending)
+│  Write 1 cold_reflection summary row
+│  Mark all processed hot_reflections: processed_by_cold=true
+│
+│  ALL writes go to Supabase. Railway owns nothing after this runs.
+│
+└── evolution_queue filled. Pipeline stops here autonomously.
+
+         │
+         ▼ (waits — no auto-apply, ever)
+
+EVOLUTION QUEUE (Supabase, status=pending)
+│
+│  Each row contains:
+│  - pattern_key         → what the pattern is
+│  - change_type         → knowledge | code | behavior
+│  - change_summary      → what was observed
+│  - recommendation      → what Groq suggests doing about it
+│  - confidence          → 0.0–1.0 (weighted by source)
+│  - source              → real | simulation | both
+│  - frequency           → how many times pattern was seen
+│  - status              → pending (all start here)
+│
+└── Waits for owner + Claude Desktop to review and apply
+
+         │
+         ▼ (you come online)
+
+OWNER + CLAUDE DESKTOP (the only hands)
+│
+├── "check pending evolutions"
+│    Claude reads evolution_queue, lists each item with
+│    change_type, confidence, source, recommendation
+│
+├── "apply best ones"
+│    Claude filters by confidence desc + source=both first
+│    Applies top picks:
+│    knowledge → sb_insert to knowledge_base
+│    code      → gh_search_replace on core.py
+│    behavior  → edit operating_context.json or SESSION.md
+│
+└── "apply all"
+     Claude bulk applies everything pending
+     Logs each result
+     Marks applied rows: status=applied, applied_at=now
+```
+
+---
+
+## Signal Input: How Sessions Feed the Pipeline
+
+Groq cannot read raw conversations. It reads structured Supabase data written by Claude.
+
+**What Claude writes at session end (mandatory):**
+
+```
+sessions table:
+  summary   → what we did this session (2-3 sentences)
+  actions[] → step by step list of actions taken
+  interface → claude_desktop | claude_web
+
+hot_reflections table (via t_reflect()):
+  task_summary → same as session summary
+  domain       → code | db | bot | mcp | training | kb | general
+  patterns     → ["pattern 1", "pattern 2"] ← KEY FIELD
+  notes        → gaps identified, what was hard, what's missing
+  quality      → 1-10 score
+  source       → real (always, when written by Claude)
+```
+
+**Rule: t_reflect() is mandatory at end of every Claude Desktop session.**
+- If Claude forgets → owner says "log a reflection" → Claude calls t_reflect() with key points
+- Both paths write to same hot_reflections table
+- Pipeline works either way
+
+---
+
+## Supabase Tables Used
+
+| Table | Written by | Read by | Purpose |
 |---|---|---|---|
-| `knowledge` | ✅ Ya | confidence > 0.7 | knowledge_base via add_knowledge |
-| `code` | ❌ Tidak | SELALU butuh owner approval | core.py via GitHub push |
-| `behavior` | ❌ Tidak | SELALU butuh owner approval | operating_context.json atau SESSION.md |
+| sessions | Claude Desktop | Groq (Track A) | Real activity log |
+| mistakes | Claude Desktop | Groq (Track A) | Real failure log |
+| hot_reflections | Groq (both tracks) + Claude | Cold processor | Pattern buffer |
+| pattern_frequency | Cold processor | Cold processor | Pattern counting |
+| cold_reflections | Cold processor | Owner/Claude | Audit log of cold runs |
+| evolution_queue | Cold processor | Owner/Claude | Pending improvements |
+| knowledge_base | Claude Desktop (apply) | Groq (context) | Applied knowledge |
 
-**Flow:**
-```
-evolution_queue (status=pending)
-  → notify_owner via Telegram (owner_notified=true)
-  
-  IF change_type=knowledge AND confidence > 0.7:
-    → auto-apply: add_knowledge MCP call
-    → status=applied, applied_at=now
-  
-  IF change_type=code OR behavior:
-    → tunggu owner approval via Telegram
-    → owner approve → apply diff_content
-    → status=applied, applied_at=now
-  
-  IF owner reject:
-    → status=rejected
-    → log ke mistakes (domain=evolution)
-```
-
-**Rollback:** `reversible=true` default — owner bisa revert via Telegram command kapan saja.
+**No GitHub writes from autonomous loop. Lesson learned 2026-03-12.**
 
 ---
 
-## Decisions Made
+## Evolution Apply Rules
 
-| Decision | Nilai | Alasan |
+| change_type | Who applies | How |
 |---|---|---|
-| Cold processor trigger | 10 hot ATAU 24 jam | Responsif tapi tidak wasteful |
-| Pattern threshold | frequency >= 3 | Satu atau dua kali bisa noise, tiga kali = signal |
-| Knowledge auto-apply | confidence > 0.7 | Risiko rendah, tidak perlu selalu gangguin owner |
-| Code/behavior | Selalu manual | Risiko tinggi, butuh human judgment |
-| Rollback default | reversible=true | Sesuai constitution: always recoverable |
+| knowledge | Claude Desktop | sb_insert to knowledge_base |
+| code | Claude Desktop | gh_search_replace on core.py |
+| behavior | Claude Desktop | edit operating_context.json |
+
+**No auto-apply. All types wait for owner review.**
 
 ---
 
-## Schema Migration
+## Telegram Notifications (from Railway)
 
-**Tidak ada perubahan schema yang diperlukan.** Semua field yang dibutuhkan pipeline sudah ada.
+| Event | Notify? | Message |
+|---|---|---|
+| Cold processor ran | Yes if evolutions > 0 | "N evolutions queued — /evolutions to review" |
+| Cold processor ran, 0 evolutions | No | Silent |
+| Signal extraction complete | No | Silent (too noisy) |
+| Railway error / crash | Yes | Error details |
 
-Satu hal yang perlu ditambahkan saat implementasi: **index** di:
-- `hot_reflections.processed_by_cold` — untuk query WHERE processed_by_cold=false yang efisien
-- `pattern_frequency.pattern_key` — untuk upsert yang cepat
-- `evolution_queue.status` — untuk filter pending
-
----
-
-## Implementation Notes untuk Step 3
-
-### Fungsi baru yang perlu dibuat di core.py:
-
-```python
-# 1. Auto-write hot reflection saat session di-insert
-def auto_hot_reflection(session_data): ...
-
-# 2. Cold processor — bisa dipanggil oleh thread ATAU MCP tool
-def run_cold_processor(): ...
-
-# 3. Evolution applier — dipanggil setelah owner approve
-def apply_evolution(evolution_id): ...
-
-# 4. Telegram command handler baru
-# /approve <id> — approve evolution
-# /reject <id>  — reject evolution
-# /evolutions   — list pending evolutions
-```
-
-### MCP tool baru yang perlu diekspos:
-```
-trigger_cold_processor  — Claude bisa trigger manual
-list_evolutions         — lihat pending evolutions
-approve_evolution       — approve dari Claude Desktop
-```
-
-### Background thread baru di core.py:
-```python
-def cold_processor_loop():
-    # Check setiap 30 menit
-    # Trigger kalau hot_count >= 10 ATAU 24 jam berlalu
-    while True:
-        run_cold_processor()
-        time.sleep(1800)  # 30 menit
-```
+**No notification spam. Only notify when owner action is needed.**
 
 ---
 
-## Free Tier Considerations
+## Implementation Checklist (next sessions)
 
-- Cold processor jalan **maksimal 2x per hari** (24 jam trigger) → ~60 Supabase reads/writes per hari, aman
-- Evolution knowledge auto-apply → 1 Supabase write per evolution, aman
-- Groq **tidak dipakai** di training pipeline ini — cold processor logic murni Python/SQL
-- Railway background thread ringan — tidak ada LLM call, hanya DB queries
+### Phase 1 — Fix signal extraction (Track A)
+- [ ] Rewrite `background_researcher()` signal extraction prompt
+      → reads real sessions + mistakes from Supabase
+      → asks Groq to extract patterns (not simulate tasks)
+      → writes to hot_reflections with new_patterns[] populated
+      → tagged source=real
+
+### Phase 2 — Add simulation track (Track B)
+- [ ] Add `run_simulation_batch()` function
+      → loads CORE context (tools, domains, failure modes) from Supabase
+      → sends population simulation prompt to Groq
+      → writes to hot_reflections tagged source=simulation
+      → runs alongside Track A every 60min
+
+### Phase 3 — Fix cold processor confidence weighting
+- [ ] Add source field to hot_reflections (real | simulation | both)
+- [ ] Cold processor reads source field
+- [ ] Confidence adjusted by source (real=base, sim=×0.7, both=×1.3)
+
+### Phase 4 — Fix evolution_queue output quality
+- [ ] Each evolution row must include recommendation field
+- [ ] Remove backlog change_type from evolution flow entirely
+      → backlog stays in backlog table, never auto-promoted
+- [ ] Add source field to evolution_queue rows
+
+### Phase 5 — Claude Desktop apply workflow
+- [ ] t_check_evolutions() → list pending with summary
+- [ ] t_apply_evolution(id) → apply single by ID
+- [ ] t_bulk_apply() → apply all pending (already exists, verify works)
+- [ ] All apply actions write to knowledge_base / core.py / operating_context
+
+---
+
+## What "Done" Looks Like
+
+1. Railway runs every 60min with zero GitHub commits
+2. hot_reflections table grows autonomously with real patterns[]
+3. Cold processor runs and produces meaningful evolution_queue rows
+4. You come online, ask "check pending evolutions", get actionable list
+5. You say "apply best ones", Claude applies them with clear before/after
+6. Repeat loop — CORE actually improves over time from real + simulated signal
+
+---
+
+## Decisions Log
+
+| Decision | Value | Reason |
+|---|---|---|
+| Nothing auto-applies | Always owner | Groq has no tools. Dangerous otherwise. |
+| All state in Supabase | 100% | Railway is stateless, can restart anytime |
+| No GitHub writes from autonomous loop | Enforced | Causes Railway redeploy on every commit |
+| Simulation grounded in real CORE context | Required | Generic simulation = noise, not signal |
+| Real signal weighted higher than simulation | Confidence ×0.7 for sim | 1 real user > 1M fake users |
+| Real + sim overlap = highest confidence | Confidence ×1.3 | Two independent sources agreeing = strong signal |
+| t_reflect() mandatory per session | Rule | Pipeline quality depends on rich hot_reflections input |
+| backlog removed from evolution flow | Removed | Was producing 115 hollow pending items, not real improvements |
