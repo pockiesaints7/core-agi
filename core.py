@@ -1458,10 +1458,7 @@ def t_mine_kb(max_batches: str = "50", force: str = "false") -> dict:
 
 def background_researcher():
     global _last_research_run
-    print("[RESEARCH] 24/7 background researcher started — interval=60min")
-
-    global _last_research_run
-    print("[RESEARCH] background researcher started — real signal + simulation mode")
+    print("[RESEARCH] background researcher started - real signal + simulation mode")
 
     while True:
         try:
@@ -1469,42 +1466,15 @@ def background_researcher():
                 print("[RESEARCH] Running signal extraction cycle...")
                 _last_research_run = time.time()
 
-                # Track A — extract patterns from real sessions + mistakes
+                # Track A - extract patterns from real sessions + mistakes
                 real_ok = _extract_real_signal()
                 time.sleep(3)  # pace Groq calls
 
-                # Track B — grounded simulation of 1M user population
+                # Track B - grounded simulation of 1M user population
                 sim_ok = _run_simulation_batch()
 
                 print(f"[RESEARCH] Cycle done. real={real_ok} sim={sim_ok}")
-                # No Telegram notify — cold processor notifies when evolutions are queued
-        except Exception as e:
-            print(f"[RESEARCH] loop error: {e}")
-        time.sleep(300)  # check every 5 min, runs every 60 min
-                md = _backlog_to_markdown()
-                gh_write("BACKLOG.md", md,
-                         f"chore(backlog): {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')} — {len(all_new)} new items")
-                try:
-                    total_count = int(httpx.get(
-                        f"{SUPABASE_URL}/rest/v1/backlog?select=id&limit=1",
-                        headers=_sbh_count_svc(), timeout=10
-                    ).headers.get("content-range", "*/0").split("/")[-1])
-                except Exception:
-                    total_count = len(all_new)
-                print(f"[RESEARCH] Cycle done. New: {len(all_new)}, Total in DB: {total_count}")
-                critical_new = [i for i in all_new if int(i.get("priority", 1)) >= 4]
-                try:
-                    pending_count = len(sb_get("evolution_queue",
-                        "select=id&status=eq.pending&change_type=eq.backlog", svc=True))
-                except Exception:
-                    pending_count = 0
-                if all_new or pending_count:
-                    hi = "\n".join([f"[P{i['priority']}] {i['title']}" for i in critical_new[:5]])
-                    msg = f"[RESEARCH] {len(all_new)} new items | Total backlog: {total_count}"
-                    if hi: msg += f"\n\nHigh priority:\n{hi}"
-                    if pending_count: msg += f"\n\n{pending_count} items awaiting approval - /evolutions"
-                    msg += "\n\nFull list: /backlog"
-                    notify(msg)
+                # No Telegram notify - cold processor notifies when evolutions are queued
         except Exception as e:
             print(f"[RESEARCH] loop error: {e}")
         time.sleep(300)  # check every 5 min, runs every 60 min
