@@ -40,9 +40,13 @@ hot_reflections, cold_reflections, evolution_queue, pattern_frequency
 - ✅ Write efficiency rules documented in CORE_v5_plan.md
 
 ## Remaining Step 5 Tasks
-- ? Clean up sim test rows from hot_reflections (id 2-10) - DONE 2026-03-11 (9 rows deleted)
-- Monitor cold processor via Telegram /status
-- Verify knowledge base grows organically from real sessions
+- ? Clean up sim test rows - DONE 2026-03-11 (all null/sim garbage deleted)
+  - hot_reflections: deleted id 1-10 (10 rows). Remaining: id 11-13 (legit, processed)
+  - cold_reflections: deleted id 1-2 (null + sim test). Now empty, ready for real data
+  - pattern_frequency: deleted null id=1, merged duplicate id=3+4 ? id=4 (freq=3). 2 clean patterns remain
+- ? Railway health: ALL OK (supabase, groq, telegram, github)
+- Monitor cold processor - will activate when real hot_reflections accumulate
+- Verify knowledge base grows organically from real sessions (kb has 332 entries, no new since deploy)
 
 ---
 
