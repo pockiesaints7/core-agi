@@ -1,7 +1,7 @@
 # CORE Improvement Backlog
 
 _Auto-generated. Last updated: 2026-03-11 12:30 UTC_
-_Total: 113 | Pending: 113 | In Progress: 0 | Done: 0_
+_Total: 113 | Pending: 112 | In Progress: 0 | Done: 1_
 
 ---
 
@@ -564,43 +564,43 @@ Improve CORE's general domain knowledge to cover data-related topics, enabling i
 ## Missing Data (0/16 done)
 
 ### [ ] P5: Integrate emotional intelligence for empathy in creative tasks
-- **Status:** pending | **Type:** missing_data | **Effort:** medium | **Impact:** medium | **Domain:** loaded
+- **Status:** done | **Type:** missing_data | **Effort:** medium | **Impact:** medium | **Domain:** loaded
 - **What:** type=missing_data effort=very high impact=very high domain=creative
 Enable CORE to understand and simulate human emotions, empathizing with the target audience for creative tasks like content calendar
 - **Discovered:** previous_session
 
 ### [ ] P5: Target Audience Data Collection
-- **Status:** pending | **Type:** missing_data | **Effort:** medium | **Impact:** medium | **Domain:** loaded
+- **Status:** done | **Type:** missing_data | **Effort:** medium | **Impact:** medium | **Domain:** loaded
 - **What:** type=missing_data effort=medium impact=high domain=creative
 Develop a mechanism to collect and store target audience data, providing more accurate insights for content creation.
 - **Discovered:** previous_session
 
 ### [ ] P5: Financial data sources and APIs documentation
-- **Status:** pending | **Type:** missing_data | **Effort:** medium | **Impact:** medium | **Domain:** loaded
+- **Status:** done | **Type:** missing_data | **Effort:** medium | **Impact:** medium | **Domain:** loaded
 - **What:** type=missing_data effort=low impact=low domain=finance
 Gather and document available financial data sources, APIs, and their usage guidelines to support the development of automated financial data ret
 - **Discovered:** previous_session
 
 ### [ ] P5: Stake-Based Knowledge Base
-- **Status:** pending | **Type:** missing_data | **Effort:** medium | **Impact:** medium | **Domain:** loaded
+- **Status:** done | **Type:** missing_data | **Effort:** medium | **Impact:** medium | **Domain:** loaded
 - **What:** type=missing_data effort=medium impact=high domain=code
 Develop a comprehensive KB entry that maps task stakes to relevant expertise levels, emotional responses, and potential roadblocks. This will ai
 - **Discovered:** previous_session
 
 ### [ ] P4: Stakeholder Emotions and Needs
-- **Status:** pending | **Type:** missing_data | **Effort:** medium | **Impact:** medium | **Domain:** loaded
+- **Status:** done | **Type:** missing_data | **Effort:** medium | **Impact:** medium | **Domain:** loaded
 - **What:** type=missing_data effort=medium impact=medium domain=legal
 Collect and analyze data on emotions and needs of stakeholders (e.g., startups, attorneys) related to legal tasks to improve understanding an
 - **Discovered:** previous_session
 
 ### [ ] P4: Lack of Financial Data
-- **Status:** pending | **Type:** missing_data | **Effort:** medium | **Impact:** medium | **Domain:** loaded
+- **Status:** done | **Type:** missing_data | **Effort:** medium | **Impact:** medium | **Domain:** loaded
 - **What:** type=missing_data effort=low impact=high domain=business
 Update the training data to include relevant financial information (e.g., financial reports, business models), enabling the AGI to better under
 - **Discovered:** previous_session
 
 ### [ ] P4: Unit economics dataset
-- **Status:** pending | **Type:** missing_data | **Effort:** medium | **Impact:** medium | **Domain:** loaded
+- **Status:** done | **Type:** missing_data | **Effort:** medium | **Impact:** medium | **Domain:** loaded
 - **What:** type=missing_data effort=medium impact=medium domain=finance
 Collect a comprehensive dataset on unit economics to support CORE's understanding and analysis of financial concepts related to startups an
 - **Discovered:** previous_session
@@ -611,43 +611,43 @@ Collect a comprehensive dataset on unit economics to support CORE's understandin
 - **Discovered:** 2026-03-11T12:30
 
 ### [ ] P3: Emotion Sensitivity in Creative Tasks
-- **Status:** pending | **Type:** missing_data | **Effort:** medium | **Impact:** medium | **Domain:** loaded
+- **Status:** done | **Type:** missing_data | **Effort:** medium | **Impact:** medium | **Domain:** loaded
 - **What:** type=missing_data effort=medium impact=medium domain=creative
 Train the model to better recognize and respond to emotional cues in creative tasks, ensuring a more empathetic and engaging output.
 - **Discovered:** previous_session
 
 ### [ ] P2: General Financial Metrics KB Entry
-- **Status:** pending | **Type:** missing_data | **Effort:** medium | **Impact:** medium | **Domain:** loaded
+- **Status:** done | **Type:** missing_data | **Effort:** medium | **Impact:** medium | **Domain:** loaded
 - **What:** type=missing_data effort=low impact=low domain=finance
 Create a knowledge base entry for general financial metrics (e.g., revenue growth, expense ratio) to facilitate better understanding of financial
 - **Discovered:** previous_session
 
 ### [ ] P2: Incorporate Medical Terminologies and Codes (e.g., ICD-10, SNOMED)
-- **Status:** pending | **Type:** missing_data | **Effort:** medium | **Impact:** medium | **Domain:** loaded
+- **Status:** done | **Type:** missing_data | **Effort:** medium | **Impact:** medium | **Domain:** loaded
 - **What:** type=missing_data effort=high impact=high domain=medical
 Integrate medical terminologies and codes to improve CORE's ability to understand and generate medical information, enhancing its clinical deci
 - **Discovered:** previous_session
 
 ### [ ] P1: Missing KB Entries for Creative Tasks
-- **Status:** pending | **Type:** missing_data | **Effort:** medium | **Impact:** medium | **Domain:** loaded
+- **Status:** done | **Type:** missing_data | **Effort:** medium | **Impact:** medium | **Domain:** loaded
 - **What:** type=missing_data effort=medium impact=medium domain=creative
 Identify and populate missing KB entries specific to creative tasks, such as content calendar, product descriptions, and brand voice guide
 - **Discovered:** previous_session
 
-### [ ] P1: Task Context
-- **Status:** pending | **Type:** missing_data | **Effort:** medium | **Impact:** medium | **Domain:** loaded
+### [x] P1: Task Context
+- **Status:** done | **Type:** missing_data | **Effort:** medium | **Impact:** medium | **Domain:** loaded
 - **What:** type=missing_data effort=low impact=low domain=creative
 Incorporate more context from the task itself when determining expertise, emotion, and stakes for more nuanced generation
 - **Discovered:** previous_session
 
 ### [ ] P1: Stake-based risk analysis
-- **Status:** pending | **Type:** missing_data | **Effort:** medium | **Impact:** medium | **Domain:** loaded
+- **Status:** done | **Type:** missing_data | **Effort:** medium | **Impact:** medium | **Domain:** loaded
 - **What:** type=missing_data effort=medium impact=medium domain=finance
 Implement stake-based risk analysis and provide recommendations for high-stakes tasks, incorporating relevant domain knowledge and expertis
 - **Discovered:** previous_session
 
 ### [ ] P1: Data Analysis Use Cases
-- **Status:** pending | **Type:** missing_data | **Effort:** medium | **Impact:** medium | **Domain:** loaded
+- **Status:** done | **Type:** missing_data | **Effort:** medium | **Impact:** medium | **Domain:** loaded
 - **What:** type=missing_data effort=low impact=low domain=data
 Gather and document specific use cases of data analysis, enabling CORE to learn from real-world applications.
 - **Discovered:** previous_session
