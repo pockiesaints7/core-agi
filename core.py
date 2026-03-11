@@ -422,11 +422,16 @@ def run_cold_processor():
                     "last_seen": datetime.utcnow().isoformat(), "auto_applied": False,
                 }, "pattern_key")
                 if new_freq >= PATTERN_EVO_THRESHOLD:
+                    confidence = round(min((0.5 + new_freq * 0.1) * src_mult, 0.99), 3)
+                    rec_text = (f"Add '{key}' to knowledge_base "
+                                f"(domain={batch_domain.get(key, 'general')}, "
+                                f"seen {new_freq}x, source={eff_source})")
                     if sb_post_critical("evolution_queue", {
                         "status": "pending", "change_type": "knowledge",
                         "change_summary": f"New pattern '{key}' seen {new_freq}x — promote to knowledge base",
+                        "recommendation": rec_text,
                         "pattern_key": key, "frequency": new_freq,
-                        "confidence": min(0.5 + new_freq * 0.1, 0.95),
+                        "confidence": confidence, "source": eff_source,
                         "impact": "low", "reversible": True, "owner_notified": False,
                     }):
                         evolutions_queued += 1
