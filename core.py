@@ -1241,25 +1241,83 @@ def handle_msg(msg):
 
     if text == "/start":
         counts = get_system_counts()
-        step = get_current_step()  # dynamic — never hardcode
-        notify(f"*CORE v5.0*\n{step}\nKnowledge: {counts.get('knowledge_base',0)}\n"
-               f"Sessions: {counts.get('sessions',0)}\n\nCommands: /status /tasks /ask /evolutions\n/approve <id> /reject <id>", cid)
+        step = get_current_step()
+        notify(f"*CORE v5.1*\n{step}\n"
+               f"Knowledge: {counts.get('knowledge_base',0)} | Sessions: {counts.get('sessions',0)}\n\n"
+               f"*Commands:*\n"
+               f"/status — health + training\n"
+               f"/ask <question> — ask CORE anything (Groq)\n"
+               f"/route <task> — see how CORE would route this\n"
+               f"/stats — analytics dashboard\n"
+               f"/mistakes [domain] — recent mistakes\n"
+               f"/tasks — recent task queue\n"
+               f"/evolutions — pending evolutions\n"
+               f"/approve <id> /reject <id>", cid)
+
     elif text == "/status":
         h = t_health(); counts = get_system_counts(); ts = t_training_status()
-        step = get_current_step()  # dynamic — never hardcode
-        notify(f"*Status — {step}*\nSupabase: {h['components'].get('supabase')}\nGroq: {h['components'].get('groq')}\n"
-               f"Telegram: {h['components'].get('telegram')}\nGitHub: {h['components'].get('github')}\n\n"
-               f"Knowledge: {counts.get('knowledge_base',0)}\nSessions: {counts.get('sessions',0)}\n"
-               f"Hot unprocessed: {ts.get('unprocessed_hot',0)}\nPending evolutions: {ts.get('pending_evolutions',0)}", cid)
+        step = get_current_step()
+        notify(f"*Status — {step}*\n"
+               f"Supabase: {h['components'].get('supabase')} | Groq: {h['components'].get('groq')}\n"
+               f"Telegram: {h['components'].get('telegram')} | GitHub: {h['components'].get('github')}\n\n"
+               f"Knowledge: {counts.get('knowledge_base',0)} | Sessions: {counts.get('sessions',0)}\n"
+               f"Hot unprocessed: {ts.get('unprocessed_hot',0)} | Pending evos: {ts.get('pending_evolutions',0)}\n"
+               f"MCP tools: {len(TOOLS)}", cid)
+
+    elif text == "/stats":
+        s = t_stats()
+        if s.get("ok"):
+            top_p = "\n".join([f"  {p['freq']}x {p['pattern'][:50]}" for p in s.get("top_patterns",[])[:5]])
+            domains = " | ".join([f"{k}:{v}" for k,v in list(s.get("domain_distribution",{}).items())[:5]])
+            notify(f"*CORE Analytics*\n"
+                   f"Sessions: {s['total_sessions']} | KB: {s['knowledge_entries']}\n"
+                   f"Mistakes: {s['total_mistakes']} | Reflections: {s['hot_reflections']}\n"
+                   f"Avg quality: {s.get('avg_quality_score','—')}\n\n"
+                   f"*Domains:* {domains}\n\n"
+                   f"*Top patterns:*\n{top_p or 'none yet'}", cid)
+        else:
+            notify(f"Stats error: {s.get('error')}", cid)
+
+    elif text.startswith("/ask "):
+        q = text[5:].strip()
+        notify("🧠 Thinking...", cid)
+        result = t_ask(q)
+        if result.get("ok"):
+            notify(f"*Q:* {q[:80]}\n\n{result['answer'][:800]}\n\n_(KB hits: {result['kb_hits']})_", cid)
+        else:
+            notify(f"Error: {result.get('error')}", cid)
+
+    elif text.startswith("/route "):
+        task = text[7:].strip()
+        result = t_route(task, execute=False)
+        if result.get("ok"):
+            sig = result["routing"]["signals"]
+            notify(f"*Routing: {task[:60]}*\n\n"
+                   f"Archetype: {sig['archetype']}\n"
+                   f"Intent: {sig['intent']} | Domain: {sig['domain']}\n"
+                   f"Expertise: {sig['expertise']}/5 | Emotion: {sig['emotion']}\n"
+                   f"Stakes: {sig['stakes']} | Complexity: {result['routing']['complexity']}/12", cid)
+        else:
+            notify(f"Route error: {result.get('error')}", cid)
+
+    elif text.startswith("/mistakes"):
+        parts = text.split(None, 1)
+        domain = parts[1].strip() if len(parts) > 1 else ""
+        result = t_search_mistakes(domain=domain, limit=5)
+        if result.get("ok") and result["mistakes"]:
+            lines = "\n\n".join([
+                f"[{m.get('domain','')}] *{m.get('what_failed','')[:60]}*\n→ {m.get('correct_approach','')[:100]}"
+                for m in result["mistakes"]
+            ])
+            notify(f"*Recent Mistakes*{' ('+domain+')' if domain else ''}\n\n{lines}", cid)
+        else:
+            notify("No mistakes found" + (f" for domain: {domain}" if domain else ""), cid)
+
     elif text == "/tasks":
         tasks = sb_get("task_queue", "select=task,status&order=created_at.desc&limit=5")
         lines = "\n".join([f"- [{t.get('status')}] {t.get('task','')[:60]}" for t in tasks])
         notify(f"*Recent Tasks*\n\n{lines}" if tasks else "No tasks yet.", cid)
-    elif text.startswith("/ask "):
-        q = text[5:].strip()
-        res = t_search_kb(q, limit=5)
-        lines = "\n\n".join([f"*{x.get('topic','')}*\n{str(x.get('content',''))[:200]}" for x in res]) if res else "Nothing found."
-        notify(lines, cid)
+
     elif text == "/evolutions":
         rows = sb_get("evolution_queue",
                       "select=id,change_type,change_summary,confidence&status=eq.pending&id=gt.1&order=created_at.desc&limit=10",
@@ -1268,12 +1326,14 @@ def handle_msg(msg):
             lines = "\n".join([f"#{r['id']} [{r.get('change_type','?')}] conf={r.get('confidence','?')}\n  {str(r.get('change_summary',''))[:80]}" for r in rows])
             notify(f"*Pending Evolutions*\n\n{lines}\n\nUse /approve <id> or /reject <id>", cid)
         else: notify("No pending evolutions.", cid)
+
     elif text.startswith("/approve "):
         try:
             eid = int(text.split()[1])
             result = apply_evolution(eid)
             notify(f"Evolution #{eid}: {'applied ✅' if result.get('ok') else 'failed ❌'}\n{result.get('note', result.get('error', ''))}", cid)
         except (ValueError, IndexError): notify("Usage: /approve <id>", cid)
+
     elif text.startswith("/reject "):
         parts = text.split(None, 2)
         try:
@@ -1281,9 +1341,18 @@ def handle_msg(msg):
             result = reject_evolution(eid, reason)
             notify(f"Evolution #{eid}: {'rejected ❌' if result.get('ok') else 'failed'}\n{reason}", cid)
         except (ValueError, IndexError): notify("Usage: /reject <id> [reason]", cid)
+
     else:
-        ok = sb_post("task_queue", {"task": text, "chat_id": cid, "status": "pending", "priority": 5})
-        notify(f"\u2705 Queued: `{text[:80]}`" if ok else "\u274c Failed to queue task.", cid)
+        # Non-command message → route + execute via Groq
+        sig = extract_signals(text)
+        notify(f"⚙️ Routing [{sig['archetype']}] {sig['domain']}...", cid)
+        result = t_route(text, execute=True)
+        if result.get("ok") and result.get("response"):
+            notify(result["response"][:1500], cid)
+        else:
+            # Fallback: queue it
+            ok = sb_post("task_queue", {"task": text, "chat_id": cid, "status": "pending", "priority": 5})
+            notify(f"✅ Queued: `{text[:80]}`" if ok else "❌ Failed to queue task.", cid)
 
 def queue_poller():
     print("[QUEUE] Started")
