@@ -7,5 +7,27 @@
   "mcp_tool_calls_per_minute": 30,
   "max_file_size_kb": 500,
   "max_new_tools_per_day": 3,
-  "_note": "These ceilings are immutable by CORE. Only REINVAGNAR may modify."
+  "_note": "These ceilings are immutable by CORE. Only REINVAGNAR may modify. Update _last_verified whenever you change any value or Railway env var.",
+  "_last_verified": "2026-03-11",
+  "_ai_models": {
+    "primary": "llama-3.3-70b-versatile",
+    "fast": "llama-3.1-8b-instant",
+    "provider": "Groq",
+    "_note": "Update this when GROQ_MODEL env var changes on Railway"
+  },
+  "_env_vars_declared": {
+    "GROQ_API_KEY": "Groq API key",
+    "GROQ_MODEL": "Primary model name (default: llama-3.3-70b-versatile)",
+    "GROQ_MODEL_FAST": "Fast model name (default: llama-3.1-8b-instant)",
+    "SUPABASE_URL": "Supabase project URL",
+    "SUPABASE_SERVICE_KEY": "Supabase service role key",
+    "SUPABASE_ANON_KEY": "Supabase anon key",
+    "TELEGRAM_BOT_TOKEN": "Telegram bot token",
+    "TELEGRAM_CHAT_ID": "Owner Telegram chat ID",
+    "GITHUB_PAT": "GitHub personal access token",
+    "GITHUB_USERNAME": "GitHub username (default: pockiesaints7)",
+    "MCP_SECRET": "MCP authentication secret",
+    "PORT": "Server port (default: 8080)",
+    "_last_verified": "2026-03-11"
+  }
 }
