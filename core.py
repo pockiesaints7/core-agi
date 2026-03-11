@@ -339,6 +339,11 @@ def auto_hot_reflection(session_data: dict):
         domain = "general"
         for kw, d in [("supabase","db"),("github","code"),("telegram","bot"),("mcp","mcp"),("training","training"),("knowledge","kb")]:
             if kw in summary.lower(): domain = d; break
+        # Skip if no meaningful patterns — empty rows waste cold processor cycles
+        # Only write if summary is substantive (>50 chars) or has meaningful action count
+        if len(summary.strip()) < 50 and total <= 2:
+            print(f"[HOT] Skipped trivial session: summary_len={len(summary)} actions={total}")
+            return False
         ok = sb_post("hot_reflections", {
             "task_summary": summary[:300], "domain": domain,
             "verify_rate": verify_rate, "mistake_consult_rate": mistake_rate,
