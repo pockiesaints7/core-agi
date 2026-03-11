@@ -1460,33 +1460,27 @@ def background_researcher():
     global _last_research_run
     print("[RESEARCH] 24/7 background researcher started — interval=60min")
 
-    # Startup: repopulate evolution_queue from Supabase backlog (restart-proof)
-    try:
-        pushed = _repopulate_evolution_queue()
-        if pushed > 0:
-            notify(f"[CORE] Startup: repopulated {pushed} evolution_queue entries after restart.")
-        synced = _sync_backlog_status()
-        print(f"[RESEARCH] Startup sync: {synced} status entries matched, {pushed} evo entries repopulated")
-    except Exception as e:
-        print(f"[RESEARCH] startup sync error: {e}")
-
-    # Startup: auto-mine KB if backlog is underpopulated
-    try:
-        threading.Thread(target=run_kb_mining, kwargs={"max_batches": 50, "force": False}, daemon=True).start()
-    except Exception as e:
-        print(f"[RESEARCH] startup kb mining error: {e}")
+    global _last_research_run
+    print("[RESEARCH] background researcher started — real signal + simulation mode")
 
     while True:
         try:
             if time.time() - _last_research_run >= _IMPROVEMENT_INTERVAL:
-                print("[RESEARCH] Running simulation batch...")
+                print("[RESEARCH] Running signal extraction cycle...")
                 _last_research_run = time.time()
-                all_new = []
-                for _ in range(3):
-                    items = _research_simulate_batch()
-                    new = _backlog_add(items)
-                    all_new.extend(new)
-                    time.sleep(2)  # pace Groq calls
+
+                # Track A — extract patterns from real sessions + mistakes
+                real_ok = _extract_real_signal()
+                time.sleep(3)  # pace Groq calls
+
+                # Track B — grounded simulation of 1M user population
+                sim_ok = _run_simulation_batch()
+
+                print(f"[RESEARCH] Cycle done. real={real_ok} sim={sim_ok}")
+                # No Telegram notify — cold processor notifies when evolutions are queued
+        except Exception as e:
+            print(f"[RESEARCH] loop error: {e}")
+        time.sleep(300)  # check every 5 min, runs every 60 min
                 md = _backlog_to_markdown()
                 gh_write("BACKLOG.md", md,
                          f"chore(backlog): {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')} — {len(all_new)} new items")
