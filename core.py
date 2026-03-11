@@ -1,4 +1,9 @@
-Fix log:
+"""CORE v5.0 - Recursive Self-Improvement Architecture
+Owner: REINVAGNAR
+Step status is dynamic - always read from SESSION.md on GitHub.
+Do NOT hardcode step numbers anywhere in this file.
+
+Fix log:Fix log:
   2026-03-11e: t_state() fetches operating_context.json + SESSION.md from GitHub.
   2026-03-11f: cold_processor uses Counter for batch freq counting.
   2026-03-11g: cold_reflections insert uses sb_post_critical (bypasses rate limiter).
