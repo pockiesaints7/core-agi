@@ -1748,6 +1748,55 @@ def t_mine_kb(max_batches: str = "50", force: str = "false") -> dict:
     return run_kb_mining(max_batches=mb, force=f)
 
 
+def t_redeploy(reason: str = "") -> dict:
+    """Trigger Railway redeploy of CORE from latest GitHub commit.
+    CORE manages its own deployment — no external Railway MCP needed."""
+    try:
+        token = os.environ.get("RAILWAY_TOKEN", "")
+        service_id = os.environ.get("RAILWAY_SERVICE_ID", "48ad55bd-6be2-4d8a-83df-34fc05facaa2")
+        if not token:
+            return {"ok": False, "error": "RAILWAY_TOKEN env var not set"}
+        query = "mutation($id:String!){serviceInstanceRedeploy(serviceId:$id)}"
+        r = httpx.post(
+            "https://backboard.railway.app/graphql/v2",
+            headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+            json={"query": query, "variables": {"id": service_id}},
+            timeout=15,
+        )
+        data = r.json()
+        if "errors" in data:
+            return {"ok": False, "error": data["errors"][0]["message"]}
+        notify(f"🚀 CORE redeploying\nReason: {reason or 'manual trigger'}")
+        return {"ok": True, "reason": reason}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def t_logs(limit: str = "50") -> dict:
+    """Fetch recent Railway deployment logs for CORE."""
+    try:
+        token = os.environ.get("RAILWAY_TOKEN", "")
+        service_id = os.environ.get("RAILWAY_SERVICE_ID", "48ad55bd-6be2-4d8a-83df-34fc05facaa2")
+        env_id = os.environ.get("RAILWAY_ENV_ID", "ff3f2a4c-4085-445e-88ff-a423862d00e8")
+        if not token:
+            return {"ok": False, "error": "RAILWAY_TOKEN env var not set"}
+        lim = int(limit) if limit else 50
+        query = """query($sid:String!,$eid:String!,$n:Int){serviceInstanceLogs(serviceId:$sid,environmentId:$eid,limit:$n){timestamp message severity}}"""
+        r = httpx.post(
+            "https://backboard.railway.app/graphql/v2",
+            headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+            json={"query": query, "variables": {"sid": service_id, "eid": env_id, "n": lim}},
+            timeout=15,
+        )
+        data = r.json()
+        if "errors" in data:
+            return {"ok": False, "error": data["errors"][0]["message"]}
+        logs = data.get("data", {}).get("serviceInstanceLogs", [])
+        return {"ok": True, "count": len(logs), "logs": logs}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
 def background_researcher():
     global _last_research_run
     print("[RESEARCH] background researcher started - real signal + simulation mode")
