@@ -1082,6 +1082,56 @@ def _sync_backlog_status():
         return 0
 
 
+def _repopulate_evolution_queue():
+    """Re-push P3+ backlog items missing from evolution_queue.
+    Called on startup after reload so data loss from restarts is auto-healed."""
+    try:
+        existing = sb_get("evolution_queue",
+                          "select=pattern_key&change_type=in.(backlog,knowledge)&limit=500",
+                          svc=True)
+        existing_keys = {r.get("pattern_key","") for r in existing}
+        pushed = 0
+        with _backlog_lock:
+            for item in _backlog:
+                if item.get("status") in ("done", "dismissed"): continue
+                priority = int(item.get("priority", 1))
+                if priority < 3: continue
+                title  = item.get("title","")
+                itype  = item.get("type","other")
+                effort = item.get("effort","medium")
+                executor = (
+                    "claude_desktop" if itype in ("new_tool","telegram_command") else
+                    "groq"           if itype in ("new_kb","missing_data") else
+                    "auto"
+                )
+                pkey = f"backlog:{itype}:{title[:60]}"
+                if pkey in existing_keys: continue
+                change_type = "knowledge" if itype == "new_kb" else "backlog"
+                auto_apply  = (itype == "new_kb" and effort == "low" and executor == "groq")
+                sb_post_critical("evolution_queue", {
+                    "change_type": change_type,
+                    "change_summary": f"[BACKLOG P{priority}][{executor}] {title}: {item.get('description','')[:180]}",
+                    "diff_content": json.dumps({
+                        "backlog_type": itype, "executor": executor,
+                        "domain": item.get("domain","general"), "effort": effort,
+                        "impact": item.get("impact","medium"), "title": title,
+                        "description": item.get("description",""),
+                    }),
+                    "pattern_key": pkey,
+                    "confidence": round(0.5 + priority * 0.08, 2),
+                    "status": "applied" if auto_apply else "pending",
+                    "source": "startup_repopulate",
+                    "impact": item.get("domain","general"),
+                })
+                existing_keys.add(pkey)
+                pushed += 1
+        print(f"[RESEARCH] Repopulated {pushed} missing evolution_queue entries")
+        return pushed
+    except Exception as e:
+        print(f"[RESEARCH] repopulate error: {e}")
+        return 0
+
+
 def _backlog_to_markdown() -> str:
     # Sync status from Supabase before rendering so BACKLOG.md always reflects reality
     _sync_backlog_status()
