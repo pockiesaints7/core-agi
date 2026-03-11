@@ -1,11 +1,108 @@
 # CORE Improvement Backlog
 
-_Auto-generated. Last updated: 2026-03-11 13:50 UTC_
-_Total: 114 | Pending: 114 | In Progress: 0 | Done: 0_
+_Auto-generated. Last updated: 2026-03-11 13:51 UTC_
+_Total: 113 | Pending: 113 | In Progress: 0 | Done: 0_
 
 ---
 
-## New Tools (0/29 done)
+## Performance (0/14 done)
+
+### [ ] P5: Optimize Search Performance
+- **Status:** pending | **Type:** performance | **Effort:** medium | **Impact:** medium | **Domain:** loaded
+- **What:** type=performance effort=high impact=high domain=data
+Enhance search performance for large KB entries (1752) to reduce processing time and improve task efficiency.
+- **Discovered:** previous_session
+
+### [ ] P5: Optimize routing for finance tasks
+- **Status:** pending | **Type:** performance | **Effort:** medium | **Impact:** medium | **Domain:** loaded
+- **What:** type=performance effort=high impact=high domain=finance
+Implement task-specific routing for finance tasks, such as 'runway calculation' and 'fundraising strategy', to improve accuracy and relevance of
+- **Discovered:** previous_session
+
+### [ ] P5: Knowledge base optimizations
+- **Status:** pending | **Type:** performance | **Effort:** medium | **Impact:** medium | **Domain:** loaded
+- **What:** type=performance effort=medium impact=low domain=legal
+Regularly refactor and optimize the knowledge base to improve query performance, reduce latency, and ensure data consistency.
+- **Discovered:** previous_session
+
+### [ ] P4: KB Query Optimization
+- **Status:** pending | **Type:** performance | **Effort:** medium | **Impact:** medium | **Domain:** loaded
+- **What:** type=performance effort=medium impact=high domain=academic
+Optimize existing KB search queries for faster results and improved response times, particularly for literature review and statistical method
+- **Discovered:** previous_session
+
+### [ ] P4: Optimize knowledge retrieval
+- **Status:** pending | **Type:** performance | **Effort:** medium | **Impact:** medium | **Domain:** loaded
+- **What:** type=performance effort=medium impact=medium domain=finance
+Optimize the knowledge retrieval mechanisms in CORE's finance domain to reduce query latency and improve the speed of retrieving relevant kn
+- **Discovered:** previous_session
+
+### [ ] P4: KB Search Optimization
+- **Status:** pending | **Type:** performance | **Effort:** medium | **Impact:** medium | **Domain:** business
+- **What:** Improve search efficiency in knowledge base to reduce search time and increase accuracy
+- **Discovered:** 2026-03-11T13:50
+
+### [ ] P3: Optimize Knowledge Base search
+- **Status:** pending | **Type:** performance | **Effort:** medium | **Impact:** medium | **Domain:** loaded
+- **What:** type=performance effort=high impact=medium domain=data
+Rebuild search_kb function to utilize efficient indexing and data structures for KB entries
+- **Discovered:** previous_session
+
+### [ ] P2: KB Query Optimizations
+- **Status:** pending | **Type:** performance | **Effort:** medium | **Impact:** medium | **Domain:** loaded
+- **What:** type=performance effort=low impact=medium domain=finance
+Optimize knowledge base queries for faster results and reduce latency when searching for relevant information
+- **Discovered:** previous_session
+
+### [ ] P2: Optimize SB Query Functionality
+- **Status:** pending | **Type:** performance | **Effort:** medium | **Impact:** medium | **Domain:** loaded
+- **What:** type=performance effort=medium impact=high domain=creative
+Improve the performance of the sb_query tool by implementing caching or other optimization techniques to reduce processing time.
+- **Discovered:** previous_session
+
+### [ ] P2: Database Query Optimizer
+- **Status:** pending | **Type:** performance | **Effort:** medium | **Impact:** medium | **Domain:** loaded
+- **What:** type=performance effort=low impact=low domain=code
+Develop an SQL query optimizer to improve performance and reduce computational overhead for database queries.
+- **Discovered:** previous_session
+
+### [ ] P2: Optimize Route Resolution
+- **Status:** pending | **Type:** performance | **Effort:** medium | **Impact:** medium | **Domain:** loaded
+- **What:** type=performance effort=high impact=medium domain=medical
+Optimize the route resolution process to improve efficiency and scalability for complex task flows.
+- **Discovered:** previous_session
+
+### [ ] P2: Optimization of routing and task allocation
+- **Status:** pending | **Type:** performance | **Effort:** medium | **Impact:** medium | **Domain:** loaded
+- **What:** type=performance effort=low impact=low domain=medical
+Improving CORE's routing and task allocation efficiency by implementing advanced algorithms or machine learning models to reduce processing time a
+- **Discovered:** previous_session
+
+### [ ] P1: Optimize knowledge retrieval for creative tasks
+- **Status:** pending | **Type:** performance | **Effort:** medium | **Impact:** medium | **Domain:** loaded
+- **What:** type=performance effort=low impact=low domain=creative
+Tune the knowledge retrieval mechanism to reduce latency and improve performance when searching for relevant knowledge in creative tasks.
+- **Discovered:** previous_session
+
+### [ ] P1: Task Routing Optimization
+- **Status:** pending | **Type:** performance | **Effort:** medium | **Impact:** medium | **Domain:** loaded
+- **What:** type=performance effort=low impact=low domain=creative
+Optimize task routing to prioritize expertise and emotion in creative tasks, reducing mistakes and improving overall performance.
+- **Discovered:** previous_session
+
+## New Tools (0/30 done)
+
+### [ ] P5: Knowledge Graph Visualization
+- **Status:** pending | **Type:** new_tool | **Effort:** medium | **Impact:** medium | **Domain:** loaded
+- **What:** type=new_tool effort=high impact=high domain=finance
+Develop a visualization tool to help users navigate and understand complex relationships between financial concepts and tax laws
+- **Discovered:** previous_session
+
+### [ ] P5: Stakeholder Communication Tool
+- **Status:** pending | **Type:** new_tool | **Effort:** medium | **Impact:** medium | **Domain:** loaded
+- **What:** type=new_tool effort=high impact=high domain=business
+Create a tool for seamless communication between stakeholders and the AGI, ensuring clarity and context is maintained.
+- **Discovered:** previous_session
 
 ### [ ] P5: Trend Visualization Tool
 - **Status:** pending | **Type:** new_tool | **Effort:** medium | **Impact:** medium | **Domain:** loaded
@@ -24,16 +121,6 @@ Create a tool that can extract key financial entities (e.g., companies, assets, 
 - **What:** type=new_tool effort=high impact=high domain=medical
 Developing a tool that can analyze medical images (e.g., X-rays, MRIs) to aid in diagnosis and enhance CORE's domain expertise in radiology.
 - **Discovered:** previous_session
-
-### [ ] P5: Stakeholder Communication Tool
-- **Status:** pending | **Type:** new_tool | **Effort:** high | **Impact:** high | **Domain:** business
-- **What:** Create a tool for seamless communication between stakeholders and the AGI, ensuring clarity and context is maintained.
-- **Discovered:** 2026-03-11T13:49
-
-### [ ] P5: Knowledge Graph Visualization
-- **Status:** pending | **Type:** new_tool | **Effort:** high | **Impact:** high | **Domain:** finance
-- **What:** Develop a visualization tool to help users navigate and understand complex relationships between financial concepts and tax laws
-- **Discovered:** 2026-03-11T13:49
 
 ### [ ] P4: Brand Voice Assistant
 - **Status:** pending | **Type:** new_tool | **Effort:** medium | **Impact:** medium | **Domain:** loaded
@@ -65,16 +152,26 @@ Integrate a data visualization tool to help AGI create plots and dashboards, mak
 Integrate social media specific knowledge into the KB or utilize an external API to enhance creative domain tasks
 - **Discovered:** previous_session
 
-### [ ] P4: SQL Optimizer
+### [ ] P4: Template Generator
+- **Status:** pending | **Type:** new_tool | **Effort:** high | **Impact:** high | **Domain:** creative
+- **What:** Create a tool that can generate templates for email newsletters, product descriptions, and brand voice guides based on given context and task requirements
+- **Discovered:** 2026-03-11T13:50
+
+### [ ] P4: Content Evaluation
+- **Status:** pending | **Type:** new_tool | **Effort:** high | **Impact:** high | **Domain:** creative
+- **What:** Develop a tool that can evaluate the quality and relevance of generated content against given standards and stakeholder preferences
+- **Discovered:** 2026-03-11T13:50
+
+### [ ] P3: Data Retrieval Tool
 - **Status:** pending | **Type:** new_tool | **Effort:** medium | **Impact:** medium | **Domain:** loaded
-- **What:** type=new_tool effort=high impact=high domain=code
-Develop a tool to analyze SQL queries and provide optimizations based on query plan analysis and index suggestions.
+- **What:** type=new_tool effort=medium impact=medium domain=data
+Implement a data retrieval tool to simplify data fetching and processing tasks.
 - **Discovered:** previous_session
 
-### [ ] P4: Financial Calculations
+### [ ] P3: Task Archetype Classifier
 - **Status:** pending | **Type:** new_tool | **Effort:** medium | **Impact:** medium | **Domain:** loaded
-- **What:** type=new_tool effort=medium impact=medium-high domain=finance
-Develop a tool that can perform financial calculations (e.g., DCF analysis, IRR calculation) to support tasks like runway calculation
+- **What:** type=new_tool effort=medium impact=medium domain=business
+Develop a tool that can accurately classify tasks into different archetypes, improving routing and expertise assignment.
 - **Discovered:** previous_session
 
 ### [ ] P3: Generate product description
@@ -101,15 +198,16 @@ Develop a tool for generating sample code snippets based on provided parameters 
 Develop a style transfer tool to automatically generate content in different styles based on brand preferences.
 - **Discovered:** previous_session
 
-### [ ] P3: Task Archetype Classifier
-- **Status:** pending | **Type:** new_tool | **Effort:** medium | **Impact:** medium | **Domain:** business
-- **What:** Develop a tool that can accurately classify tasks into different archetypes, improving routing and expertise assignment.
-- **Discovered:** 2026-03-11T13:49
-
-### [ ] P3: Data Retrieval Tool
-- **Status:** pending | **Type:** new_tool | **Effort:** medium | **Impact:** medium | **Domain:** data
-- **What:** Implement a data retrieval tool to simplify data fetching and processing tasks.
+### [ ] P3: Medication Interactions Checker
+- **Status:** pending | **Type:** new_tool | **Effort:** medium | **Impact:** medium | **Domain:** medical
+- **What:** Develop a tool that can check for potential medication interactions and provide recommendations to avoid adverse reactions.
 - **Discovered:** 2026-03-11T13:50
+
+### [ ] P2: Task Prioritizer
+- **Status:** pending | **Type:** new_tool | **Effort:** medium | **Impact:** medium | **Domain:** loaded
+- **What:** type=new_tool effort=low impact=medium domain=business
+Develop a tool that can prioritize tasks based on stakeholder input, expertise availability, and task complexity.
+- **Discovered:** previous_session
 
 ### [ ] P2: Financial model generator
 - **Status:** pending | **Type:** new_tool | **Effort:** medium | **Impact:** medium | **Domain:** loaded
@@ -153,22 +251,10 @@ Create a new tool that allows CORE to simulate medication interactions and predi
 Develop a tool to analyze and summarize terms of service documents, extracting key clauses, warranties, and disclaimers.
 - **Discovered:** previous_session
 
-### [ ] P2: Tax Optimization Tool
-- **Status:** pending | **Type:** new_tool | **Effort:** medium | **Impact:** medium | **Domain:** loaded
-- **What:** type=new_tool effort=medium impact=medium domain=finance
-Develop a tool that can optimize tax strategies for individuals and businesses to support the 'tax optimization' task
-- **Discovered:** previous_session
-
-### [ ] P2: Stake-Based Task Evaluation
-- **Status:** pending | **Type:** new_tool | **Effort:** medium | **Impact:** medium | **Domain:** loaded
-- **What:** type=new_tool effort=medium impact=medium domain=finance
-Develop a tool that evaluates tasks based on their stakes, allowing CORE to weigh risks and rewards in decisions like unit economics and tax op
-- **Discovered:** previous_session
-
-### [ ] P2: Task Prioritizer
-- **Status:** pending | **Type:** new_tool | **Effort:** low | **Impact:** medium | **Domain:** business
-- **What:** Develop a tool that can prioritize tasks based on stakeholder input, expertise availability, and task complexity.
-- **Discovered:** 2026-03-11T13:49
+### [ ] P2: Product and Market Analysis
+- **Status:** pending | **Type:** new_tool | **Effort:** high | **Impact:** high | **Domain:** business
+- **What:** Develop a tool to analyze market data, customer behavior, and product performance to inform decision-making
+- **Discovered:** 2026-03-11T13:50
 
 ### [ ] P1: Data Visualization
 - **Status:** pending | **Type:** new_tool | **Effort:** medium | **Impact:** medium | **Domain:** loaded
@@ -176,7 +262,138 @@ Develop a tool that evaluates tasks based on their stakes, allowing CORE to weig
 Develop tool to create interactive visualizations of data trends, enabling better insights and decision-making
 - **Discovered:** previous_session
 
-## Logic Improvements (0/23 done)
+### [ ] P1: Task Prioritization
+- **Status:** pending | **Type:** new_tool | **Effort:** medium | **Impact:** medium | **Domain:** business
+- **What:** Develop a tool to prioritize tasks based on business goals, resource allocation, and risk assessment
+- **Discovered:** 2026-03-11T13:50
+
+## Knowledge Gaps (0/21 done)
+
+### [ ] P5: Business Domain Knowledge
+- **Status:** pending | **Type:** new_kb | **Effort:** medium | **Impact:** medium | **Domain:** loaded
+- **What:** type=new_kb effort=high impact=high domain=business
+Add a comprehensive knowledge base on business strategies, trends, and best practices to support general and finance domain tasks.
+- **Discovered:** previous_session
+
+### [ ] P5: Code Architecture Examples
+- **Status:** pending | **Type:** new_kb | **Effort:** medium | **Impact:** medium | **Domain:** loaded
+- **What:** type=new_kb effort=high impact=high domain=code
+Include KB entries with diverse code architecture examples for CORE to draw upon during design tasks.
+- **Discovered:** previous_session
+
+### [ ] P5: Code Snippet Database
+- **Status:** pending | **Type:** new_kb | **Effort:** medium | **Impact:** medium | **Domain:** loaded
+- **What:** type=new_kb effort=high impact=high domain=code
+Collect and organize common Python and other programming language snippets to improve code completion and troubleshooting.
+- **Discovered:** previous_session
+
+### [ ] P5: Disease Knowledge Base
+- **Status:** pending | **Type:** new_kb | **Effort:** high | **Impact:** high | **Domain:** medical
+- **What:** Develop a knowledge base of common diseases, symptoms, treatments, and medications to enhance symptom checking and treatment option recommendations.
+- **Discovered:** 2026-03-11T13:50
+
+### [ ] P4: Expert Insights Knowledge Base
+- **Status:** pending | **Type:** new_kb | **Effort:** medium | **Impact:** medium | **Domain:** loaded
+- **What:** type=new_kb effort=medium impact=high domain=finance
+Integrate expertise-specific knowledge and insights from A3 archetypes to provide more nuanced and informed answers to financial-related questions
+- **Discovered:** previous_session
+
+### [ ] P4: Taxonomy of Finance Concepts
+- **Status:** pending | **Type:** new_kb | **Effort:** medium | **Impact:** medium | **Domain:** loaded
+- **What:** type=new_kb effort=medium impact=high domain=finance
+Develop a KB entry that links general terms to finance-specific concepts and definitions.
+- **Discovered:** previous_session
+
+### [ ] P4: Code-specific Knowledge Base
+- **Status:** pending | **Type:** new_kb | **Effort:** medium | **Impact:** medium | **Domain:** loaded
+- **What:** type=new_kb effort=medium impact=medium domain=code
+Develop a specialized Knowledge Base for coding-related concepts, syntax, and best practices across various programming languages.
+- **Discovered:** previous_session
+
+### [ ] P4: Creative Domain Knowledge Base
+- **Status:** pending | **Type:** new_kb | **Effort:** medium | **Impact:** medium | **Domain:** loaded
+- **What:** type=new_kb effort=high impact=high domain=creative
+Enrich the knowledge base with creative domain-specific knowledge, including writing styles, industry trends, and best practices.
+- **Discovered:** previous_session
+
+### [ ] P4: Add finance domain knowledge
+- **Status:** pending | **Type:** new_kb | **Effort:** medium | **Impact:** medium | **Domain:** loaded
+- **What:** type=new_kb effort=medium impact=medium domain=finance
+Develop a finance-specific knowledge base with relevant concepts, models, and formulas to improve CORE's understanding and generation of finance-
+- **Discovered:** previous_session
+
+### [ ] P3: Financial Domain Knowledge Graph
+- **Status:** pending | **Type:** new_kb | **Effort:** medium | **Impact:** medium | **Domain:** loaded
+- **What:** type=new_kb effort=high impact=high domain=finance
+Create a dedicated knowledge graph for financial concepts, regulations, and tax laws to support tasks like 'tax optimization' with more accurate info
+- **Discovered:** previous_session
+
+### [ ] P3: Content Calendar Templates
+- **Status:** pending | **Type:** new_kb | **Effort:** medium | **Impact:** medium | **Domain:** loaded
+- **What:** type=new_kb effort=medium impact=medium domain=creative
+Add templates for different types of content calendars to CORE's knowledge base to enable more effective content planning.
+- **Discovered:** previous_session
+
+### [ ] P3: Domain Knowledge Expansion
+- **Status:** pending | **Type:** new_kb | **Effort:** medium | **Impact:** medium | **Domain:** loaded
+- **What:** type=new_kb effort=medium impact=medium domain=data
+Introduce domain-specific knowledge in data analysis to improve CORE's performance and accuracy
+- **Discovered:** previous_session
+
+### [ ] P3: Add General Symptom Data
+- **Status:** pending | **Type:** new_kb | **Effort:** medium | **Impact:** medium | **Domain:** loaded
+- **What:** type=new_kb effort=medium impact=medium domain=medical
+Create a new knowledge base for general symptoms to improve symptom checker accuracy.
+- **Discovered:** previous_session
+
+### [ ] P3: Data Analysis Domain Knowledge
+- **Status:** pending | **Type:** new_kb | **Effort:** medium | **Impact:** medium | **Domain:** loaded
+- **What:** type=new_kb effort=medium impact=high domain=data
+Incorporate fundamental concepts of A/B testing, data visualization, and data cleaning into the knowledge base. Enable CORE to better understand task 
+- **Discovered:** previous_session
+
+### [ ] P3: Financial Model Knowledge Base
+- **Status:** pending | **Type:** new_kb | **Effort:** medium | **Impact:** medium | **Domain:** loaded
+- **What:** type=new_kb effort=medium impact=medium domain=finance
+Create a specialized knowledge base for financial modeling containing relevant formulas, theories, and examples
+- **Discovered:** previous_session
+
+### [ ] P3: Integration with credible medical sources
+- **Status:** pending | **Type:** new_kb | **Effort:** medium | **Impact:** medium | **Domain:** loaded
+- **What:** type=new_kb effort=medium impact=medium domain=medical
+Incorporating relevant and up-to-date information from credible medical sources (e.g., PubMed, Mayo Clinic) into CORE's knowledge base to enhance
+- **Discovered:** previous_session
+
+### [ ] P3: GDPR-specific knowledge base
+- **Status:** pending | **Type:** new_kb | **Effort:** medium | **Impact:** medium | **Domain:** loaded
+- **What:** type=new_kb effort=high impact=medium domain=legal
+Implement a custom knowledge base for GDPR-related information, including data protection regulations, compliance strategies, and best practices.
+- **Discovered:** previous_session
+
+### [ ] P3: Industry-Specific Business Knowledge
+- **Status:** pending | **Type:** new_kb | **Effort:** high | **Impact:** high | **Domain:** business
+- **What:** Introduce specific knowledge in business domain, such as industry trends, competitive analysis, and market research
+- **Discovered:** 2026-03-11T13:50
+
+### [ ] P2: Domain Knowledge
+- **Status:** pending | **Type:** new_kb | **Effort:** medium | **Impact:** medium | **Domain:** loaded
+- **What:** type=new_kb effort=high impact=high domain=data
+Incorporate domain-specific knowledge (data analysis) into the KB to enhance task understanding and execution.
+- **Discovered:** previous_session
+
+### [ ] P2: Literature Review Framework KB
+- **Status:** pending | **Type:** new_kb | **Effort:** medium | **Impact:** medium | **Domain:** loaded
+- **What:** type=new_kb effort=high impact=high domain=academic
+Integrate a KB of literature review frameworks and methodologies to improve outline generation and research paper analysis.
+- **Discovered:** previous_session
+
+### [ ] P2: General Domain Knowledge Updates
+- **Status:** pending | **Type:** new_kb | **Effort:** medium | **Impact:** medium | **Domain:** loaded
+- **What:** type=new_kb effort=medium impact=medium domain=creative
+Expand general domain knowledge to cover topics related to creativity and content management, allowing for more comprehensive task handling
+- **Discovered:** previous_session
+
+## Logic Improvements (0/24 done)
 
 ### [ ] P5: Contextual Task Routing
 - **Status:** pending | **Type:** logic_improvement | **Effort:** medium | **Impact:** medium | **Domain:** loaded
@@ -196,10 +413,16 @@ Implement emotion-driven adaptation in creative tasks to enhance product descrip
 Implement algorithms for handling missing values, data normalization, and data transformation. Leverage existing tools like get_state and upd
 - **Discovered:** previous_session
 
-### [ ] P5: Integrate Financial Domain Knowledge
+### [ ] P4: Task Routing based on Context
 - **Status:** pending | **Type:** logic_improvement | **Effort:** medium | **Impact:** medium | **Domain:** loaded
-- **What:** type=logic_improvement effort=high impact=high domain=finance
-Incorporate domain-specific knowledge and concepts from finance (e.g., tax laws, financial statements) to improve performance on finance t
+- **What:** type=logic_improvement effort=medium impact=high domain=finance
+Improve task routing to consider context such as previous conversations, external data, and user preferences
+- **Discovered:** previous_session
+
+### [ ] P4: Improve Expertise Assessment
+- **Status:** pending | **Type:** logic_improvement | **Effort:** medium | **Impact:** medium | **Domain:** loaded
+- **What:** type=logic_improvement effort=high impact=high domain=business
+Enhance the algorithm to assess expertise more accurately, taking into account the specific skills required for each task.
 - **Discovered:** previous_session
 
 ### [ ] P4: Unified Route Processing
@@ -250,21 +473,15 @@ CORE's symptom checker could be improved by using a more sophisticated logic mod
 Train and fine-tune decision trees to improve CORE's ability to navigate complex legal domains, such as identifying relevant precedents and 
 - **Discovered:** previous_session
 
-### [ ] P4: Economics Task Prioritization
-- **Status:** pending | **Type:** logic_improvement | **Effort:** medium | **Impact:** medium | **Domain:** loaded
-- **What:** type=logic_improvement effort=high impact=medium domain=finance
-Implement a task prioritization system that can handle economic tasks (e.g., unit economics) with varying stakes in multiple domains, al
-- **Discovered:** previous_session
+### [ ] P4: Symptom Checking Algorithm
+- **Status:** pending | **Type:** logic_improvement | **Effort:** medium | **Impact:** high | **Domain:** medical
+- **What:** Improve the symptom checking algorithm to consider multiple symptoms, potential diseases, and their likelihood to increase accuracy and confidence.
+- **Discovered:** 2026-03-11T13:50
 
-### [ ] P4: Improve Expertise Assessment
-- **Status:** pending | **Type:** logic_improvement | **Effort:** high | **Impact:** high | **Domain:** business
-- **What:** Enhance the algorithm to assess expertise more accurately, taking into account the specific skills required for each task.
-- **Discovered:** 2026-03-11T13:49
-
-### [ ] P4: Task Routing based on Context
-- **Status:** pending | **Type:** logic_improvement | **Effort:** medium | **Impact:** high | **Domain:** finance
-- **What:** Improve task routing to consider context such as previous conversations, external data, and user preferences
-- **Discovered:** 2026-03-11T13:49
+### [ ] P4: Task Archetype Inference
+- **Status:** pending | **Type:** logic_improvement | **Effort:** medium | **Impact:** high | **Domain:** business
+- **What:** Improve inference of task archetype (e.g. A3) to reduce misrouting and improve task handling
+- **Discovered:** 2026-03-11T13:50
 
 ### [ ] P3: Finance Domain Reasoning
 - **Status:** pending | **Type:** logic_improvement | **Effort:** medium | **Impact:** medium | **Domain:** loaded
@@ -296,17 +513,21 @@ Develop a logic system to automatically assign creative tasks to their correspon
 Improve the expertise in refactoring async code by integrating knowledge from popular async libraries and frameworks.
 - **Discovered:** previous_session
 
-### [ ] P3: Improved Code Suggestion System
-- **Status:** pending | **Type:** logic_improvement | **Effort:** medium | **Impact:** medium | **Domain:** loaded
-- **What:** type=logic_improvement effort=medium impact=high domain=code
-Implement a more sophisticated code suggestion algorithm to reduce false positives and improve relevancy.
-- **Discovered:** previous_session
-
 ### [ ] P2: Improve Medical Domain Knowledge Integration
 - **Status:** pending | **Type:** logic_improvement | **Effort:** medium | **Impact:** medium | **Domain:** loaded
 - **What:** type=logic_improvement effort=high impact=high domain=medical
 Integrate medical knowledge into a separate ontology to improve reasoning and inference in medical tasks.
 - **Discovered:** previous_session
+
+### [ ] P2: Expertise Weighting
+- **Status:** pending | **Type:** logic_improvement | **Effort:** high | **Impact:** high | **Domain:** medical
+- **What:** Implement expertise weighting to consider the knowledge and experience of medical professionals in the medical domain, adjusting the output accordingly.
+- **Discovered:** 2026-03-11T13:50
+
+### [ ] P2: Emotion-Driven Task Routing
+- **Status:** pending | **Type:** logic_improvement | **Effort:** high | **Impact:** high | **Domain:** creative
+- **What:** Implement logic to route tasks based on emotion and archetype to improve creative output and relevance of generated content
+- **Discovered:** 2026-03-11T13:50
 
 ### [ ] P1: Financial model refinement
 - **Status:** pending | **Type:** logic_improvement | **Effort:** medium | **Impact:** medium | **Domain:** loaded
@@ -314,131 +535,7 @@ Integrate medical knowledge into a separate ontology to improve reasoning and in
 Improve the logic and algorithms used in CORE's financial model generator to produce more accurate, realistic, and adaptable models that
 - **Discovered:** previous_session
 
-## Knowledge Gaps (0/21 done)
-
-### [ ] P5: Code Architecture Examples
-- **Status:** pending | **Type:** new_kb | **Effort:** medium | **Impact:** medium | **Domain:** loaded
-- **What:** type=new_kb effort=high impact=high domain=code
-Include KB entries with diverse code architecture examples for CORE to draw upon during design tasks.
-- **Discovered:** previous_session
-
-### [ ] P5: Code Snippet Database
-- **Status:** pending | **Type:** new_kb | **Effort:** medium | **Impact:** medium | **Domain:** loaded
-- **What:** type=new_kb effort=high impact=high domain=code
-Collect and organize common Python and other programming language snippets to improve code completion and troubleshooting.
-- **Discovered:** previous_session
-
-### [ ] P5: Business Domain Knowledge
-- **Status:** pending | **Type:** new_kb | **Effort:** high | **Impact:** high | **Domain:** business
-- **What:** Add a comprehensive knowledge base on business strategies, trends, and best practices to support general and finance domain tasks.
-- **Discovered:** 2026-03-11T13:49
-
-### [ ] P4: Taxonomy of Finance Concepts
-- **Status:** pending | **Type:** new_kb | **Effort:** medium | **Impact:** medium | **Domain:** loaded
-- **What:** type=new_kb effort=medium impact=high domain=finance
-Develop a KB entry that links general terms to finance-specific concepts and definitions.
-- **Discovered:** previous_session
-
-### [ ] P4: Code-specific Knowledge Base
-- **Status:** pending | **Type:** new_kb | **Effort:** medium | **Impact:** medium | **Domain:** loaded
-- **What:** type=new_kb effort=medium impact=medium domain=code
-Develop a specialized Knowledge Base for coding-related concepts, syntax, and best practices across various programming languages.
-- **Discovered:** previous_session
-
-### [ ] P4: Creative Domain Knowledge Base
-- **Status:** pending | **Type:** new_kb | **Effort:** medium | **Impact:** medium | **Domain:** loaded
-- **What:** type=new_kb effort=high impact=high domain=creative
-Enrich the knowledge base with creative domain-specific knowledge, including writing styles, industry trends, and best practices.
-- **Discovered:** previous_session
-
-### [ ] P4: Add finance domain knowledge
-- **Status:** pending | **Type:** new_kb | **Effort:** medium | **Impact:** medium | **Domain:** loaded
-- **What:** type=new_kb effort=medium impact=medium domain=finance
-Develop a finance-specific knowledge base with relevant concepts, models, and formulas to improve CORE's understanding and generation of finance-
-- **Discovered:** previous_session
-
-### [ ] P4: Expert Insights Knowledge Base
-- **Status:** pending | **Type:** new_kb | **Effort:** medium | **Impact:** high | **Domain:** finance
-- **What:** Integrate expertise-specific knowledge and insights from A3 archetypes to provide more nuanced and informed answers to financial-related questions
-- **Discovered:** 2026-03-11T13:49
-
-### [ ] P3: Content Calendar Templates
-- **Status:** pending | **Type:** new_kb | **Effort:** medium | **Impact:** medium | **Domain:** loaded
-- **What:** type=new_kb effort=medium impact=medium domain=creative
-Add templates for different types of content calendars to CORE's knowledge base to enable more effective content planning.
-- **Discovered:** previous_session
-
-### [ ] P3: Domain Knowledge Expansion
-- **Status:** pending | **Type:** new_kb | **Effort:** medium | **Impact:** medium | **Domain:** loaded
-- **What:** type=new_kb effort=medium impact=medium domain=data
-Introduce domain-specific knowledge in data analysis to improve CORE's performance and accuracy
-- **Discovered:** previous_session
-
-### [ ] P3: Add General Symptom Data
-- **Status:** pending | **Type:** new_kb | **Effort:** medium | **Impact:** medium | **Domain:** loaded
-- **What:** type=new_kb effort=medium impact=medium domain=medical
-Create a new knowledge base for general symptoms to improve symptom checker accuracy.
-- **Discovered:** previous_session
-
-### [ ] P3: Data Analysis Domain Knowledge
-- **Status:** pending | **Type:** new_kb | **Effort:** medium | **Impact:** medium | **Domain:** loaded
-- **What:** type=new_kb effort=medium impact=high domain=data
-Incorporate fundamental concepts of A/B testing, data visualization, and data cleaning into the knowledge base. Enable CORE to better understand task 
-- **Discovered:** previous_session
-
-### [ ] P3: Financial Model Knowledge Base
-- **Status:** pending | **Type:** new_kb | **Effort:** medium | **Impact:** medium | **Domain:** loaded
-- **What:** type=new_kb effort=medium impact=medium domain=finance
-Create a specialized knowledge base for financial modeling containing relevant formulas, theories, and examples
-- **Discovered:** previous_session
-
-### [ ] P3: Integration with credible medical sources
-- **Status:** pending | **Type:** new_kb | **Effort:** medium | **Impact:** medium | **Domain:** loaded
-- **What:** type=new_kb effort=medium impact=medium domain=medical
-Incorporating relevant and up-to-date information from credible medical sources (e.g., PubMed, Mayo Clinic) into CORE's knowledge base to enhance
-- **Discovered:** previous_session
-
-### [ ] P3: GDPR-specific knowledge base
-- **Status:** pending | **Type:** new_kb | **Effort:** medium | **Impact:** medium | **Domain:** loaded
-- **What:** type=new_kb effort=high impact=medium domain=legal
-Implement a custom knowledge base for GDPR-related information, including data protection regulations, compliance strategies, and best practices.
-- **Discovered:** previous_session
-
-### [ ] P3: Finance-Related Knowledge Base
-- **Status:** pending | **Type:** new_kb | **Effort:** medium | **Impact:** medium | **Domain:** loaded
-- **What:** type=new_kb effort=high impact=medium domain=finance
-Create a dedicated knowledge base for finance-related concepts, laws, and best practices to improve performance on finance tasks
-- **Discovered:** previous_session
-
-### [ ] P3: Financial Domain Knowledge Graph
-- **Status:** pending | **Type:** new_kb | **Effort:** high | **Impact:** high | **Domain:** finance
-- **What:** Create a dedicated knowledge graph for financial concepts, regulations, and tax laws to support tasks like 'tax optimization' with more accurate information
-- **Discovered:** 2026-03-11T13:49
-
-### [ ] P2: Literature Review Framework KB
-- **Status:** pending | **Type:** new_kb | **Effort:** medium | **Impact:** medium | **Domain:** loaded
-- **What:** type=new_kb effort=high impact=high domain=academic
-Integrate a KB of literature review frameworks and methodologies to improve outline generation and research paper analysis.
-- **Discovered:** previous_session
-
-### [ ] P2: General Domain Knowledge Updates
-- **Status:** pending | **Type:** new_kb | **Effort:** medium | **Impact:** medium | **Domain:** loaded
-- **What:** type=new_kb effort=medium impact=medium domain=creative
-Expand general domain knowledge to cover topics related to creativity and content management, allowing for more comprehensive task handling
-- **Discovered:** previous_session
-
-### [ ] P2: Domain-Specific KB for Code
-- **Status:** pending | **Type:** new_kb | **Effort:** medium | **Impact:** medium | **Domain:** loaded
-- **What:** type=new_kb effort=high impact=high domain=code
-Create a specialized KB for code-related topics, including best practices, design patterns, and coding standards.
-- **Discovered:** previous_session
-
-### [ ] P2: Domain Knowledge
-- **Status:** pending | **Type:** new_kb | **Effort:** high | **Impact:** high | **Domain:** data
-- **What:** Incorporate domain-specific knowledge (data analysis) into the KB to enhance task understanding and execution.
-- **Discovered:** 2026-03-11T13:50
-
-## Missing Data (0/21 done)
+## Missing Data (0/20 done)
 
 ### [ ] P5: Statistical Method Data in KB
 - **Status:** pending | **Type:** missing_data | **Effort:** medium | **Impact:** medium | **Domain:** loaded
@@ -476,10 +573,10 @@ Develop an ontology or taxonomy for the finance domain to better organize and ut
 Enrich the system's understanding of emotion by incorporating a more detailed emotion model, enabling better emotional state assessment, and m
 - **Discovered:** previous_session
 
-### [ ] P5: Financial Modeling Data Collection
+### [ ] P4: Task Domain Mapping
 - **Status:** pending | **Type:** missing_data | **Effort:** medium | **Impact:** medium | **Domain:** loaded
-- **What:** type=missing_data effort=low impact=high domain=finance
-Gather and integrate financial data from various sources (e.g., public datasets) to support CORE's decision-making in tasks like unit economics 
+- **What:** type=missing_data effort=low impact=medium domain=data
+Store domain mapping for tasks to improve routing and knowledge retrieval.
 - **Discovered:** previous_session
 
 ### [ ] P4: Lack of specific medication database
@@ -487,11 +584,6 @@ Gather and integrate financial data from various sources (e.g., public datasets)
 - **What:** type=missing_data effort=high impact=high domain=medical
 CORE requires an updated and specific database of medications to perform reliable medication interaction checks.
 - **Discovered:** previous_session
-
-### [ ] P4: Task Domain Mapping
-- **Status:** pending | **Type:** missing_data | **Effort:** low | **Impact:** medium | **Domain:** data
-- **What:** Store domain mapping for tasks to improve routing and knowledge retrieval.
-- **Discovered:** 2026-03-11T13:50
 
 ### [ ] P3: Code Error Classification
 - **Status:** pending | **Type:** missing_data | **Effort:** medium | **Impact:** medium | **Domain:** loaded
@@ -559,107 +651,10 @@ Monitor and update CORE's knowledge base with recent developments in intellectua
 Integrate a tool or knowledge base to analyze and interpret error messages from various programming languages.
 - **Discovered:** previous_session
 
-### [ ] P1: Task Archetype Data Collection
-- **Status:** pending | **Type:** missing_data | **Effort:** medium | **Impact:** medium | **Domain:** loaded
-- **What:** type=missing_data effort=low impact=low domain=code
-Gather and organize task archetype data to improve routing and decision-making capabilities.
-- **Discovered:** previous_session
-
-## Performance (0/16 done)
-
-### [ ] P5: Optimize routing for finance tasks
-- **Status:** pending | **Type:** performance | **Effort:** medium | **Impact:** medium | **Domain:** loaded
-- **What:** type=performance effort=high impact=high domain=finance
-Implement task-specific routing for finance tasks, such as 'runway calculation' and 'fundraising strategy', to improve accuracy and relevance of
-- **Discovered:** previous_session
-
-### [ ] P5: Knowledge base optimizations
-- **Status:** pending | **Type:** performance | **Effort:** medium | **Impact:** medium | **Domain:** loaded
-- **What:** type=performance effort=medium impact=low domain=legal
-Regularly refactor and optimize the knowledge base to improve query performance, reduce latency, and ensure data consistency.
-- **Discovered:** previous_session
-
-### [ ] P5: Performance Optimizations
-- **Status:** pending | **Type:** performance | **Effort:** medium | **Impact:** medium | **Domain:** loaded
-- **What:** type=performance effort=high impact=high domain=finance
-Identify and optimize performance-critical components of the system to handle finance-related tasks more efficiently
-- **Discovered:** previous_session
-
-### [ ] P5: Optimize KB Search
-- **Status:** pending | **Type:** performance | **Effort:** medium | **Impact:** medium | **Domain:** loaded
-- **What:** type=performance effort=low impact=medium domain=code
-Improve the efficiency of KB search queries to reduce response times and enhance overall performance.
-- **Discovered:** previous_session
-
-### [ ] P5: Optimize Search Performance
-- **Status:** pending | **Type:** performance | **Effort:** high | **Impact:** high | **Domain:** data
-- **What:** Enhance search performance for large KB entries (1752) to reduce processing time and improve task efficiency.
+### [ ] P1: Medical Imaging Support
+- **Status:** pending | **Type:** missing_data | **Effort:** high | **Impact:** high | **Domain:** medical
+- **What:** Integrate support for medical imaging analysis, such as X-rays, CT scans, and MRIs, to provide more comprehensive diagnostic capabilities.
 - **Discovered:** 2026-03-11T13:50
-
-### [ ] P4: KB Query Optimization
-- **Status:** pending | **Type:** performance | **Effort:** medium | **Impact:** medium | **Domain:** loaded
-- **What:** type=performance effort=medium impact=high domain=academic
-Optimize existing KB search queries for faster results and improved response times, particularly for literature review and statistical method
-- **Discovered:** previous_session
-
-### [ ] P4: Optimize knowledge retrieval
-- **Status:** pending | **Type:** performance | **Effort:** medium | **Impact:** medium | **Domain:** loaded
-- **What:** type=performance effort=medium impact=medium domain=finance
-Optimize the knowledge retrieval mechanisms in CORE's finance domain to reduce query latency and improve the speed of retrieving relevant kn
-- **Discovered:** previous_session
-
-### [ ] P4: Improved Knowledge Retrieval for Complex Tasks
-- **Status:** pending | **Type:** performance | **Effort:** medium | **Impact:** medium | **Domain:** loaded
-- **What:** type=performance effort=high impact=high domain=finance
-Optimize CORE's knowledge retrieval system to efficiently handle complex tasks like 'fundraising strategy' that require information from multipl
-- **Discovered:** previous_session
-
-### [ ] P3: Optimize Knowledge Base search
-- **Status:** pending | **Type:** performance | **Effort:** medium | **Impact:** medium | **Domain:** loaded
-- **What:** type=performance effort=high impact=medium domain=data
-Rebuild search_kb function to utilize efficient indexing and data structures for KB entries
-- **Discovered:** previous_session
-
-### [ ] P2: Optimize SB Query Functionality
-- **Status:** pending | **Type:** performance | **Effort:** medium | **Impact:** medium | **Domain:** loaded
-- **What:** type=performance effort=medium impact=high domain=creative
-Improve the performance of the sb_query tool by implementing caching or other optimization techniques to reduce processing time.
-- **Discovered:** previous_session
-
-### [ ] P2: Database Query Optimizer
-- **Status:** pending | **Type:** performance | **Effort:** medium | **Impact:** medium | **Domain:** loaded
-- **What:** type=performance effort=low impact=low domain=code
-Develop an SQL query optimizer to improve performance and reduce computational overhead for database queries.
-- **Discovered:** previous_session
-
-### [ ] P2: Optimize Route Resolution
-- **Status:** pending | **Type:** performance | **Effort:** medium | **Impact:** medium | **Domain:** loaded
-- **What:** type=performance effort=high impact=medium domain=medical
-Optimize the route resolution process to improve efficiency and scalability for complex task flows.
-- **Discovered:** previous_session
-
-### [ ] P2: Optimization of routing and task allocation
-- **Status:** pending | **Type:** performance | **Effort:** medium | **Impact:** medium | **Domain:** loaded
-- **What:** type=performance effort=low impact=low domain=medical
-Improving CORE's routing and task allocation efficiency by implementing advanced algorithms or machine learning models to reduce processing time a
-- **Discovered:** previous_session
-
-### [ ] P2: KB Query Optimizations
-- **Status:** pending | **Type:** performance | **Effort:** low | **Impact:** medium | **Domain:** finance
-- **What:** Optimize knowledge base queries for faster results and reduce latency when searching for relevant information
-- **Discovered:** 2026-03-11T13:49
-
-### [ ] P1: Optimize knowledge retrieval for creative tasks
-- **Status:** pending | **Type:** performance | **Effort:** medium | **Impact:** medium | **Domain:** loaded
-- **What:** type=performance effort=low impact=low domain=creative
-Tune the knowledge retrieval mechanism to reduce latency and improve performance when searching for relevant knowledge in creative tasks.
-- **Discovered:** previous_session
-
-### [ ] P1: Task Routing Optimization
-- **Status:** pending | **Type:** performance | **Effort:** medium | **Impact:** medium | **Domain:** loaded
-- **What:** type=performance effort=low impact=low domain=creative
-Optimize task routing to prioritize expertise and emotion in creative tasks, reducing mistakes and improving overall performance.
-- **Discovered:** previous_session
 
 ## Other (0/1 done)
 
