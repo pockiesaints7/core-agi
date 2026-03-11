@@ -1,7 +1,17 @@
 """CORE v5.0 — Recursive Self-Improvement Architecture
-Owner: REINVAGNAR
-Step status is dynamic — always read from SESSION.md on GitHub.
-Do NOT hardcode step numbers anywhere in this file.
+
+    uvicorn.run("core:app", host="0.0.0.0", port=PORT, reload=False)
+        if applied:
+            sb_patch("evolution_queue", f"id=eq.{evolution_id}",
+                     {"status": "applied", "applied_at": datetime.utcnow().isoformat()})
+            notify(f"? Evolution #{evolution_id} applied\nType: {change_type}\n{note}")
+            check_evolution_self_sync(evo)
+            # Auto-refresh BACKLOG.md so status is immediately visible on GitHub
+            try:
+                gh_write("BACKLOG.md", _backlog_to_markdown(),
+                         f"chore(backlog): sync status after evolution #{evolution_id} applied")
+            except Exception as _be:
+                print(f"[BACKLOG] refresh error: {_be}")
 
 Fix log:
   2026-03-11e: t_state() fetches operating_context.json + SESSION.md from GitHub.
@@ -1304,11 +1314,17 @@ def t_bulk_apply(executor_override: str = "claude_desktop", dry_run: bool = Fals
         applied = [r for r in results if r.get("ok")]
         failed  = [r for r in results if not r.get("ok") and not r.get("action")]
         notify(
+        notify(
             f"Bulk apply done\n"
             f"Applied: {len(applied)} | Failed: {len(failed)} | Total: {len(results)}\n"
             f"Executor: {executor_override}"
         )
-        return {"ok": True, "total": len(results), "applied": len(applied),
+        # Refresh BACKLOG.md immediately so GitHub reflects new statuses
+        try:
+            gh_write("BACKLOG.md", _backlog_to_markdown(),
+                     f"chore(backlog): sync status after bulk_apply ({len(applied)} applied)")
+        except Exception as _be:
+            print(f"[BACKLOG] bulk refresh error: {_be}")
                 "failed": len(failed), "results": results}
     except Exception as e:
         return {"ok": False, "error": str(e)}
