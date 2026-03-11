@@ -740,3 +740,114 @@ More importantly: The Soul accumulates quality data every call, building toward 
 | `t_soul_score` runs on every call | Always | Can't improve what you don't measure |
 | `t_soul_graduation` threshold = 10,000 pairs | Practical | Minimum viable dataset for meaningful fine-tuning |
 | Memory injection order: KB → mistakes → patterns → history | Priority | Most concrete knowledge first, broadest context last |
+
+---
+
+## Phase 11: Claude Desktop AGI — From Assistant to Autonomous Agent
+**Designed:** 2026-03-12
+**Status:** PHASE 12 BOOTSTRAP BUILT — `core_agent.py` exists at `C:\Users\rnvgg\.claude-skills\core_agent.py`
+**Vision:** Claude Desktop stops being a chat app you open. It becomes a persistent background agent. As long as your PC is on, CORE is working — executing tasks, improving itself, syncing with Railway, briefing you each morning. You go from driver to supervisor.
+
+### What core_agent.py Is
+`core_agent.py` is the bridge between your PC and CORE on Railway.
+It runs as a Windows scheduled task every 5 minutes while your PC is on.
+It is the reason CORE has hands on your local machine without you being present.
+Every Claude Desktop session understands: if `core_agent.py` is running, CORE is autonomous.
+Without it: CORE is reactive (you trigger it).
+With it: CORE is proactive (it triggers itself).
+
+### Architecture
+```
+PC ON
+  └── Windows Task Scheduler (every 5 min)
+        └── core_agent.py
+              ├── polls CORE Railway: what tasks are pending for Desktop?
+              ├── executes locally: filesystem, PowerShell, scripts
+              ├── reports results back to Railway via Supabase
+              ├── logs everything to local SQLite event bus
+              └── sends Telegram if owner attention needed
+```
+
+### Tool Tiers
+
+#### Tier 1: Persistent Presence
+| Tool | Purpose |
+|---|---|
+| `t_cd_heartbeat` | Pings CORE every 60s while PC is on. CORE knows if Desktop agent is alive or dead. |
+| `t_cd_session_open` | Fires on Claude Desktop launch — loads state, health, context automatically. |
+| `t_cd_session_close` | Fires on Claude Desktop close — calls `t_reflect()` automatically. Learning never lost. |
+| `t_cd_pc_on_detect` | CORE detects PC wake from sleep via heartbeat resuming. Triggers morning brief. |
+| `t_cd_idle_detect` | Owner hasn't typed in 30+ min → switch to autonomous background mode. |
+
+#### Tier 2: Proactive Communication
+| Tool | Purpose |
+|---|---|
+| `t_cd_push_notification` | Windows toast notification from Railway via Telegram webhook → Desktop MCP. |
+| `t_cd_status_bar` | Writes CORE status to local file → system tray reads it. Glanceable health always. |
+| `t_cd_interrupt` | Critical only — CORE opens Claude Desktop and messages you. Like a tap on the shoulder. |
+| `t_cd_daily_brief_render` | On PC wake, auto-populate chat with last night's summary. Wake up to a briefing. |
+| `t_cd_soul_conversation` | Desktop polls Railway `/soul/think` periodically: "What should I work on now?" Executes answer. |
+
+#### Tier 3: PC as Execution Environment
+| Tool | Purpose |
+|---|---|
+| `t_cd_run_script` | Soul generates PowerShell/Python, Desktop executes locally, result sent to Railway. |
+| `t_cd_file_watch` | Watch folder for new files — CORE processes automatically. Drop PDF → CORE summarizes to KB. |
+| `t_cd_clipboard_agent` | Monitor clipboard for patterns (URLs, errors, code) — CORE auto-routes to right tool. |
+| `t_cd_screen_context` | Screenshot → describe active window → preload relevant KB context before being asked. |
+| `t_cd_local_kb_cache` | Cache KB entries in local SQLite. Near-instant reads, zero network latency. |
+
+#### Tier 4: Machine-to-Machine Protocol
+| Tool | Purpose |
+|---|---|
+| `t_cd_soul_sync` | Bidirectional: Desktop pushes local context to Railway, Railway pushes tasks to Desktop. Continuous, not request-response. |
+| `t_cd_task_receive` | Railway queues Desktop-only tasks (needs local tools). Desktop polls, picks up, executes, returns result. |
+| `t_cd_task_complete` | After executing Railway-dispatched task, Desktop reports result back. Closes the loop. |
+| `t_cd_event_bus` | Local SQLite event table. Railway writes event, Desktop reads and reacts in <5 seconds. |
+| `t_cd_capability_announce` | On startup, Desktop tells Railway: filesystem, PowerShell, screen, RAM, OS. Railway routes accordingly. |
+
+#### Tier 5: Autonomous Agent Loop
+| Tool | Purpose |
+|---|---|
+| `t_cd_autonomous_loop` | While PC on + owner idle: CORE runs its own backlog. Owner returns to find work done. |
+| `t_cd_decision_gate` | Before any autonomous action — classify risk: read-only (auto), reversible (execute+notify), irreversible (ask first). |
+| `t_cd_work_log` | Every autonomous action logged to SQLite + Supabase. Full transparency on what CORE did. |
+| `t_cd_goal_pursue` | CORE reads goals from `operating_context.json`, breaks into tasks, executes over multiple sessions. Long-horizon agency. |
+| `t_cd_self_improve_loop` | While idle: CORE reviews mistakes → generates fix → patches core.py → waits for deploy → verifies. Improves itself without being asked. |
+
+### Your Role Shift
+```
+TODAY:     You → [type] → Claude Desktop → responds → done
+PHASE 11:  Railway (Soul thinks 24/7)
+               ↕ machine-to-machine sync
+           Claude Desktop (hands + eyes, PC-native)
+               ↕ event bus <5 second latency
+           Your PC (filesystem, PowerShell, screen)
+               ↕ toast notifications
+           You (glance, approve, redirect)
+```
+You go from DRIVER to SUPERVISOR. CORE drives. You steer when needed.
+
+### What Makes It Safe
+`t_cd_decision_gate` classifies every autonomous action:
+- Read-only → auto-execute, no notification
+- Reversible → execute + notify owner
+- Irreversible → wait for owner approval before proceeding
+CORE never does anything destructive without asking.
+
+### Implementation Order
+1. `core_agent.py` scheduled task bootstrap — the loop that makes everything else possible ✅ BUILT
+2. `t_cd_heartbeat` + `t_cd_task_receive` + `t_cd_task_complete` — basic M2M task loop
+3. `t_cd_event_bus` via local SQLite — instant local state
+4. `t_cd_decision_gate` — safety classifier before any autonomous action
+5. `t_cd_daily_brief_render` — morning briefing on PC wake
+6. `t_cd_autonomous_loop` + `t_cd_self_improve_loop` — full autonomous agent
+
+### Design Decisions
+| Decision | Value | Reason |
+|---|---|---|
+| Windows Task Scheduler every 5 min | Bootstrap | No persistent process needed to start — simplest reliable loop |
+| Local SQLite as event bus | Speed | Sub-second local reads vs 5min polling for time-sensitive events |
+| `t_cd_decision_gate` on every autonomous action | Safety | CORE has full PC access — classification prevents accidents |
+| Railway is source of truth, Desktop is executor | Architecture | Railway thinks, Desktop acts — clear separation of concerns |
+| `core_agent.py` is self-contained | Portability | Single file, no dependencies beyond Python stdlib + httpx |
