@@ -1355,16 +1355,40 @@ def handle_msg(msg):
             notify(f"✅ Queued: `{text[:80]}`" if ok else "❌ Failed to queue task.", cid)
 
 def queue_poller():
-    print("[QUEUE] Started")
+    """Poll task_queue and EXECUTE pending tasks via routing engine v2.0."""
+    print("[QUEUE] Started — v5.1 live execution mode")
     while True:
         try:
             tasks = sb_get("task_queue", "status=eq.pending&order=priority.asc&limit=1")
             if tasks:
                 t = tasks[0]
-                sb_patch("task_queue", f"id=eq.{t['id']}", {"status": "waiting", "error": "Execution engine not yet active (Step 5)"})
-                print(f"[QUEUE] Task {t['id']} acknowledged")
-        except Exception as e: print(f"[QUEUE] {e}")
-        time.sleep(30)
+                tid = t["id"]
+                task_text = t.get("task", "")
+                chat_id = t.get("chat_id", "")
+
+                # Mark as processing
+                sb_patch("task_queue", f"id=eq.{tid}", {"status": "processing"})
+                print(f"[QUEUE] Executing task {tid}: {task_text[:60]}")
+
+                # Route + execute
+                result = t_route(task_text, execute=True)
+
+                if result.get("ok") and result.get("response"):
+                    sb_patch("task_queue", f"id=eq.{tid}", {"status": "completed", "error": None})
+                    # Notify via Telegram if task came from Telegram
+                    if chat_id:
+                        notify(f"✅ *Task completed*\n{result['response'][:800]}", chat_id)
+                    print(f"[QUEUE] Task {tid} completed")
+                else:
+                    err = result.get("error", "unknown error")
+                    sb_patch("task_queue", f"id=eq.{tid}", {"status": "failed", "error": err[:200]})
+                    if chat_id:
+                        notify(f"❌ Task failed: {err[:200]}", chat_id)
+                    print(f"[QUEUE] Task {tid} failed: {err}")
+
+        except Exception as e:
+            print(f"[QUEUE] {e}")
+        time.sleep(10)
 
 @app.on_event("startup")
 def on_start():
