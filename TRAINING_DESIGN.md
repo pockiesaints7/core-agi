@@ -351,3 +351,100 @@ No human needed for infrastructure ops. Owner only reviews outcomes.
 | t_incident_detect runs every 5min not 60min | Fast response | Infrastructure incidents need immediate response |
 | All Railway tools return structured dict with ok key | Consistency | Same pattern as all other CORE tools |
 | t_deploy_gate blocks all redeploys | Safety | Never redeploy during active session or mid-write |
+
+---
+
+## Phase 7: Supabase AGI Tools — CORE Self-Manages Its Own Database
+**Designed:** 2026-03-12
+**Status:** PENDING IMPLEMENTATION
+**Vision:** CORE owns its entire data layer. No manual Supabase dashboard ops. CORE creates tables, runs migrations, monitors storage, detects anomalies, compacts old data, and backs itself up — autonomously.
+
+### Why This Matters
+Every time a new column was needed (source, recommendation), it required manual SQL via management API from Claude Desktop.
+Every schema change is a friction point that breaks autonomous evolution.
+When CORE manages Supabase natively, schema evolves alongside code — zero manual intervention.
+
+### Tool Tiers
+
+#### Tier 1: Schema Self-Awareness
+| Tool | Purpose |
+|---|---|
+| `t_schema_get` | Read full schema of any table: columns, types, constraints, indexes. CORE knows its own DB structure without hardcoding it. |
+| `t_schema_diff` | Compare current live schema against expected schema in `operating_context.json`. Alert if column missing or type wrong. |
+| `t_table_list` | List all tables with row counts and sizes. CORE knows what exists. |
+| `t_column_exists` | Check if a column exists before writing — prevents silent PostgREST rejections. |
+| `t_index_list` | List all indexes. CORE detects missing indexes on hot query paths. |
+
+#### Tier 2: Schema Self-Healing
+| Tool | Purpose |
+|---|---|
+| `t_migrate` | Run arbitrary SQL via Supabase management API. CORE adds columns, creates tables, modifies constraints autonomously. |
+| `t_add_column` | Add a single column with type + default. Idempotent (IF NOT EXISTS). Used by evolution pipeline when new fields are needed. |
+| `t_create_table` | Create a new table from a schema definition dict. CORE provisions its own tables when a new capability requires storage. |
+| `t_add_index` | Add index on a column. Auto-triggered when CORE detects a slow query pattern. |
+| `t_migration_log` | Write every schema change to a `migrations` table with timestamp + SQL + triggered_by. Full audit trail. |
+
+#### Tier 3: Data Quality & Monitoring
+| Tool | Purpose |
+|---|---|
+| `t_row_count` | Count rows in any table with optional filter. CORE tracks growth rate over time. |
+| `t_storage_usage` | Total DB size + table-level sizes. Alert if approaching 500MB free tier limit. |
+| `t_null_audit` | Count NULLs in critical columns. Detects data quality issues before they break pipeline. |
+| `t_duplicate_detect` | Find duplicate pattern_keys, duplicate KB topics. Surfaces data rot early. |
+| `t_stale_detect` | Find rows older than N days with processed_by_cold=0. Detects pipeline stalls. |
+| `t_anomaly_scan` | Full health scan: null rates, duplicates, stale rows, storage — runs on startup and after bulk ops. |
+
+#### Tier 4: Data Lifecycle Management
+| Tool | Purpose |
+|---|---|
+| `t_compact_kb` | Deduplicate knowledge_base entries with same topic+domain, merge content, keep highest confidence. Monthly. |
+| `t_archive_old` | Move hot_reflections older than 90 days (processed=1) to cold_archive table. Keeps hot table fast. |
+| `t_purge_applied` | Delete evolution_queue rows status=applied older than 30 days. Keeps queue clean. |
+| `t_snapshot` | Dump critical tables to JSON committed to GitHub. Full backup before major evolutions. |
+| `t_restore_snapshot` | Restore a table from a GitHub snapshot file. Recovery path after bad evolution or data corruption. |
+
+#### Tier 5: Autonomous Database Evolution
+| Tool | Purpose |
+|---|---|
+| `t_query_plan` | Run EXPLAIN ANALYZE on any query. CORE detects slow queries and auto-queues index evolution. |
+| `t_schema_evolution` | When cold processor discovers a new field is needed, auto-queue a `schema` evolution with ALTER TABLE SQL ready. |
+| `t_rls_check` | Verify Row Level Security policies. Alert if a table is unprotected. |
+| `t_capacity_forecast` | Project when DB hits 400MB (80% of 500MB free tier). Queue upgrade backlog item with lead time. |
+| `t_self_heal_pipeline` | Full autonomous check: schema_diff → add missing columns → null_audit → stale_detect → anomaly_scan → notify owner. Runs on startup. |
+
+### Key Pain Points From CORE History This Solves
+| Pain Point | Tool That Fixes It |
+|---|---|
+| `source` column missing → silent write failures | `t_column_exists` + `t_schema_diff` on startup |
+| Manual ALTER TABLE via curl every time | `t_add_column` called from evolution pipeline |
+| No idea how much storage is left | `t_storage_usage` + `t_capacity_forecast` |
+| hot_reflections growing unbounded | `t_archive_old` runs monthly |
+| Duplicate KB entries accumulating | `t_compact_kb` runs monthly |
+| Schema changes not tracked anywhere | `t_migration_log` writes every change |
+| PostgREST silently rejects unknown columns | `t_column_exists` check before every write |
+
+### Implementation Order
+1. `t_schema_diff` + `t_column_exists` — run on every startup, prevent silent failures
+2. `t_migrate` + `t_add_column` — replace all manual curl SQL calls
+3. `t_storage_usage` + `t_row_count` — add to `t_state()` output
+4. `t_anomaly_scan` — add to `on_start()` startup sequence
+5. `t_compact_kb` + `t_archive_old` + `t_purge_applied` — monthly cron in cold_processor_loop
+6. `t_snapshot` — run before every bulk evolution apply
+7. `t_self_heal_pipeline` — full autonomous DB health on every startup
+
+### Compounding Effect
+- Month 1: CORE detects missing columns before they cause silent failures
+- Month 3: CORE runs its own migrations when evolution needs new schema
+- Month 6: CORE compacts and archives its own data, stays fast forever
+- Year 1: CORE forecasts its own storage capacity and plans upgrades
+- Year 5: CORE designs its own schema extensions for new capabilities
+- Year 10: CORE's database is a living organism — grows, compacts, heals with zero human intervention
+
+### Design Decisions
+| Decision | Value | Reason |
+|---|---|---|
+| All migrations via Supabase management API SQL endpoint | Single path | Consistent, auditable, no psycopg2 dependency |
+| `t_column_exists` checked before every evolution write | Required | PostgREST silently rejects unknown columns — root cause of Phase 1/2 failure |
+| `t_snapshot` before bulk apply | Safety | Always have rollback point before mass data changes |
+| `t_self_heal_pipeline` on every startup | Proactive | Catch schema drift before it causes runtime failures |
+| `migrations` table tracks all schema changes | Audit | Know exactly when every column was added and why |
