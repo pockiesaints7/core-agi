@@ -3,12 +3,13 @@
 **Last updated:** 2026-03-11
 **Owner:** REINVAGNAR
 
-## Current Step: Step 4 ✅ DONE → Next: Step 5 (Deploy & Monitor)
+## Current Step: Step 5 (Deploy & Monitor) — ACTIVE ⏳
 
 ---
 
 ## Next Action
-Step 5: Deploy & Monitor — pastikan Railway stable, monitor cold processor via Telegram /status, verify knowledge base grows organically dari real sessions, clean up sim test rows dari hot_reflections (id 2-10).
+Step 5 ongoing — Railway stable, training pipeline active. Next: clean up sim test rows
+from hot_reflections (id 2-10), monitor cold processor via Telegram /status, verify KB grows.
 
 ---
 
@@ -25,42 +26,57 @@ hot_reflections, cold_reflections, evolution_queue, pattern_frequency
 - ✅ Step 2: Audit Training Logic — DONE 2026-03-11
 - ✅ Step 3: Training Pipeline Implemented — DONE 2026-03-11 (commit fda0388)
 - ✅ Step 4: Simulation — DONE 2026-03-11 (commit 66fa36b)
-- ⏳ Step 5: Deploy & Monitor — NEXT
+- ⏳ Step 5: Deploy & Monitor — ACTIVE
 
-## Step 4 — Simulation Results
-- 9 hot_reflections inserted (sim test, id 2-10)
-- Background thread auto-triggered cold processor saat count=10 ✔
-- pattern_frequency upserted: freq=5, auto_applied=true ✔
-- evolution_queue: id=2, status=applied, confidence=0.95 ✔
-- knowledge_base auto-apply: id=750, source=evolution_queue, confidence=high ✔
-- cold_reflections summary: tidak ter-insert (minor bug ditemukan)
+## Step 5 — Progress Log
+- ✅ 2026-03-11i: processed_by_cold fix — eq.false→eq.0, eq.true→eq.1 in querystring (commit cc87e5c)
+- ✅ 2026-03-11j: POST /patch endpoint added — surgical edits from claude.ai (commit cc87e5c)
+- ✅ 2026-03-11k: Railway MCP server built & registered in claude_desktop_config.json
+    7 tools: railway_status, railway_services, railway_env_get, railway_env_set,
+             railway_logs, railway_restart, railway_deploy_status
+    Location: C:\Users\rnvgg\.claude-skills\mcp-servers\railway-mcp\index.js
+    NOTE: Requires Claude Desktop restart to activate
+- ✅ MCP_SECRET added to CREDENTIALS.md (core_mcp_secret_2026_REINVAGNAR)
+- ✅ Write efficiency rules documented in CORE_v5_plan.md
 
-## Step 4 — Bug Found & Fixed
-- cold_reflections insert: debug logging ditambahkan
-- pattern frequency counting: sekarang pakai Counter (batch aggregation)
-- evolution probe row (id=1): semua query sudah exclude dengan id=gt.1
-- Fix di commit ini (66fa36b) sudah include semua perbaikan
+## Remaining Step 5 Tasks
+- Clean up sim test rows from hot_reflections (id 2-10)
+- Monitor cold processor via Telegram /status
+- Verify knowledge base grows organically from real sessions
 
 ---
 
 ## System State
-- Railway: Step 3 live + Step 4 fix applied
-- MCP: 17 tools active
-- Knowledge base: 333 (330 + 3 sim) | Sessions: 182+ | Mistakes: 81+
-- hot_reflections: 10 total (1 probe + 9 sim), semua processed
-- pattern_frequency: 1 pattern (sim test)
-- evolution_queue: 1 applied (sim test)
+- Railway: live @ https://core-agi-production.up.railway.app
+- core.py: commit cc87e5c (processed_by_cold fix + /patch endpoint)
+- MCP on CORE: 20 tools active
+- Claude Desktop MCP servers: core-agi, railway, github, postgres, filesystem,
+  memory, fetch, sqlite, windows-mcp, cloudflare-workers, cloudflare-builds,
+  sequential-thinking, puppeteer, everything, zapier, git, time
+
+---
+
+## Surgical Edit Workflow (claude.ai)
+claude.ai cannot reach Railway directly (egress blocked).
+Use Desktop Commander PowerShell:
+  $body = @{secret="core_mcp_secret_2026_REINVAGNAR"; path="core.py";
+            old_str="..."; new_str="..."; message="fix: ..."} | ConvertTo-Json
+  Invoke-RestMethod -Uri "https://core-agi-production.up.railway.app/patch" -Method POST
+    -ContentType "application/json" -Body $body
 
 ---
 
 ## Rules for Claude Desktop Sessions
 - NEVER pass `repo` arg ke read_file atau write_file
 - NEVER gunakan `query_string` untuk sb_query — gunakan `filters`
+- NEVER hardcode step numbers di core.py — pakai get_current_step()
 - ALWAYS read-back setelah setiap write sebelum report success
 - ALWAYS call get_mistakes(domain=X) sebelum remote write
 - ALWAYS update SESSION.md di akhir session kalau ada yang berubah
-- Kalau drop tabel baru: append ke `tombstone_tables` di operating_context.json
-- Kalau tambah tabel baru: tambah ke Active Tables di file ini
+- Edit file lokal: Desktop Commander:edit_block (surgical, bukan full rewrite)
+- Edit GitHub file: gh_search_replace (Claude Desktop) atau /patch (claude.ai)
+- File baru panjang: chunk 25-30 baris, jangan satu blob
+- Kalau drop tabel baru: append ke tombstone_tables di operating_context.json
 
 ---
 
