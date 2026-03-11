@@ -2006,6 +2006,10 @@ TOOLS = {
                                "desc": "List reusable script templates generated from evolved patterns. Templates are auto-created when mistakes repeat 3x."},
     "run_template":           {"fn": t_run_template,           "perm": "EXECUTE", "args": ["name", "params"],
                                "desc": "Retrieve a stored script template by name. Increments use_count. params=optional JSON substitution vars."},
+    "redeploy":               {"fn": t_redeploy,               "perm": "EXECUTE", "args": ["reason"],
+                               "desc": "Trigger Railway redeploy of CORE from latest GitHub commit. CORE manages its own deployment."},
+    "logs":                   {"fn": t_logs,                   "perm": "READ",    "args": ["limit"],
+                               "desc": "Fetch recent Railway deployment logs. limit=number of lines (default 50)."},
 }
 
 # ── MCP JSON-RPC ──────────────────────────────────────────────────────────────
