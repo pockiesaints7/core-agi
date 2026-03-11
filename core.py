@@ -384,6 +384,11 @@ def run_cold_processor():
 
         for key, batch_count in batch_counts.items():
             from urllib.parse import quote
+            # Phase 3: effective source + confidence multiplier
+            srcs = batch_sources.get(key, {"real"})
+            eff_source = "both" if len(srcs) >= 2 else next(iter(srcs))
+            src_mult = _SRC_CONF.get(eff_source, 1.0)
+
             key_enc = quote(key, safe="")
             existing = [e for e in sb_get("pattern_frequency",
                         f"select=id,frequency,auto_applied&pattern_key=eq.{key_enc}&limit=1", svc=True)
