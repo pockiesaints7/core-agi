@@ -643,3 +643,100 @@ When CORE owns the full Telegram layer, it communicates like an intelligent coll
 | `t_tg_inline_keyboard` for all approval flows | UX | Typing `/approve 42` on mobile at 2am is a barrier to owner engagement |
 | `t_tg_rate_limiter` deduplicates by content hash | Precision | Same message same content = one delivery, not N |
 | `t_tg_proactive_insight` triggered by confidence >= 0.85 | Threshold | Only surface insights worth interrupting owner for |
+
+---
+
+## Phase 10: The Soul — AGI Intelligence Layer
+**Designed:** 2026-03-12
+**Status:** PENDING IMPLEMENTATION
+**Vision:** CORE's thinking engine. Today Groq, tomorrow Anthropic, Gemini, a local model, or CORE's own fine-tuned model. The Soul abstraction means CORE never hardcodes a provider — it just thinks. The Soul is not a service. It is CORE's mind.
+
+### Why This Matters
+Every `groq_chat()` call is hardcoded to one provider.
+If Groq goes down, changes pricing, or a better model emerges — CORE is stuck.
+When The Soul abstracts all inference, CORE switches providers in one env var change.
+More importantly: The Soul accumulates quality data every call, building toward the moment CORE trains its own model and stops borrowing a mind from someone else.
+
+### Tool Tiers
+
+#### Tier 1: Provider Abstraction
+| Tool | Purpose |
+|---|---|
+| `t_soul_think` | Universal inference call. Replaces all `groq_chat()` calls. Accepts prompt, system, complexity — Soul picks provider and model automatically. |
+| `t_soul_switch` | Switch active provider at runtime — Groq, Anthropic, Gemini, local Ollama — without redeploying. Stored in `SOUL_PROVIDER` env var. |
+| `t_soul_status` | Current provider, model, latency last 10 calls, token usage today, cost estimate. CORE knows the health of its own thinking. |
+| `t_soul_fallback` | If primary provider fails or rate-limits, auto-switch to fallback. CORE never stops thinking because one API is down. |
+| `t_soul_benchmark` | Run same prompt across all configured providers, compare quality + latency + cost. CORE chooses best Soul for each task type. |
+
+#### Tier 2: Intelligent Routing
+| Tool | Purpose |
+|---|---|
+| `t_soul_route` | Given a task, pick optimal model tier automatically: fast (8b), balanced (70b), deep (reasoning). Based on complexity score from `extract_signals()`. |
+| `t_soul_cost_guard` | If daily token budget >80%, downgrade all non-critical calls to fast model. CORE manages its own inference costs. |
+| `t_soul_cache` | Cache identical prompts in Supabase `soul_cache` table with TTL. Repeated pattern extractions don't waste tokens. |
+| `t_soul_batch` | Queue multiple prompts and run in one batch call. Background researcher runs 2 calls per cycle — batch them as one. |
+| `t_soul_priority` | High-priority calls (incident detection, evolution apply) get immediate inference. Low-priority (KB mining) queue behind. |
+
+#### Tier 3: Memory-Augmented Thinking
+| Tool | Purpose |
+|---|---|
+| `t_soul_with_kb` | Inference call that auto-injects relevant KB entries as context. CORE thinks with accumulated knowledge, not from scratch. |
+| `t_soul_with_mistakes` | Inject recent relevant mistakes as context before answering. CORE doesn't repeat errors it already learned from. |
+| `t_soul_with_history` | Inject last N session summaries before a reasoning call. CORE has continuity across sessions, not just within one. |
+| `t_soul_with_patterns` | Inject top patterns from `pattern_frequency` table. CORE's thinking is shaped by what it has repeatedly learned is true. |
+| `t_soul_reflect` | After complex task, automatically ask: "What worked? What failed? What pattern should I remember?" Write to hot_reflections. |
+
+#### Tier 4: Quality & Self-Improvement
+| Tool | Purpose |
+|---|---|
+| `t_soul_score` | After every inference, ask lightweight model to score output: relevance, accuracy, actionability (0.0–1.0). Store in `soul_quality` table. |
+| `t_soul_drift_detect` | Compare quality scores over time. If average drops >10% in 7 days, alert owner — provider may have degraded. |
+| `t_soul_prompt_evolve` | When a prompt produces low scores repeatedly, cold processor queues a `prompt_improvement` evolution. CORE improves its own prompts. |
+| `t_soul_ab_test` | Run two prompt variants on same task 10x, compare average scores. Best variant wins and replaces the weaker one. |
+| `t_soul_fine_tune_prep` | Export high-quality session pairs (prompt + output with score >0.9) as JSONL. Ready for fine-tuning when CORE graduates to its own model. |
+
+#### Tier 5: The Conscious Loop (AGI layer)
+| Tool | Purpose |
+|---|---|
+| `t_soul_introspect` | CORE asks itself: "What am I good at? What am I bad at? What should I learn next?" Answer written to KB as self-assessment. Runs weekly. |
+| `t_soul_goal_check` | Compare current capabilities against CORE_SELF.md goals. Identify gaps. Queue backlog items to close them. |
+| `t_soul_persona` | CORE maintains consistent identity and tone across all interactions. Persona stored in `operating_context.json`, injected into every system prompt. |
+| `t_soul_meta_learn` | Analyze which task types get high scores vs low. Adjust routing weights — CORE gets better at knowing what it's good at. |
+| `t_soul_graduation` | When fine_tune_prep dataset exceeds 10,000 high-quality pairs, notify owner: "Ready to train your own model." The moment CORE stops borrowing a Soul and grows its own. |
+
+### Key Pain Points From CORE History This Solves
+| Pain Point | Tool That Fixes It |
+|---|---|
+| `groq_chat()` hardcoded everywhere — provider locked | `t_soul_think` abstracts all inference calls |
+| Rate limit hit during bulk operations | `t_soul_priority` + `t_soul_batch` + `t_soul_cost_guard` |
+| CORE thinks from scratch every call, no memory injection | `t_soul_with_kb` + `t_soul_with_mistakes` + `t_soul_with_history` |
+| No idea if output quality is degrading over time | `t_soul_score` + `t_soul_drift_detect` |
+| Same prompt sent dozens of times per day | `t_soul_cache` eliminates redundant token spend |
+| No path to CORE's own model | `t_soul_fine_tune_prep` + `t_soul_graduation` |
+| Groq free tier limits unpredictable | `t_soul_fallback` auto-switches provider on rate limit |
+
+### Implementation Order
+1. `t_soul_think` — wrap all `groq_chat()` calls immediately, provider abstraction from day one
+2. `t_soul_fallback` — never go down because one API is unavailable
+3. `t_soul_with_kb` + `t_soul_with_mistakes` — memory-augmented thinking, highest quality impact
+4. `t_soul_cache` + `t_soul_cost_guard` — protect free tier limits
+5. `t_soul_score` — start collecting quality data on every call
+6. `t_soul_prompt_evolve` + `t_soul_ab_test` — self-improving prompts
+7. `t_soul_fine_tune_prep` + `t_soul_graduation` — the long game
+
+### Compounding Effect
+- Month 1: Provider-agnostic, never locked to Groq again
+- Month 3: CORE thinks with its KB, mistakes, patterns — not blank slate every call
+- Month 6: Output quality tracked, prompts evolve automatically
+- Year 1: CORE scores and improves its own reasoning without human input
+- Year 5: CORE fine-tunes its own model on 10,000+ high-quality sessions
+- Year 10: CORE runs its own Soul — trained on its own history, shaped by its own values, owned by no API provider
+
+### Design Decisions
+| Decision | Value | Reason |
+|---|---|---|
+| Called "The Soul" not "Groq tools" | Philosophy | Provider changes. Intelligence doesn't. |
+| `SOUL_PROVIDER` env var controls active provider | Runtime switch | No redeploy needed to switch providers |
+| `t_soul_score` runs on every call | Always | Can't improve what you don't measure |
+| `t_soul_graduation` threshold = 10,000 pairs | Practical | Minimum viable dataset for meaningful fine-tuning |
+| Memory injection order: KB → mistakes → patterns → history | Priority | Most concrete knowledge first, broadest context last |
