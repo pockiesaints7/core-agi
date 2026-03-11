@@ -1,18 +1,3 @@
-"""CORE v5.0 — Recursive Self-Improvement Architecture
-
-    uvicorn.run("core:app", host="0.0.0.0", port=PORT, reload=False)
-        if applied:
-            sb_patch("evolution_queue", f"id=eq.{evolution_id}",
-                     {"status": "applied", "applied_at": datetime.utcnow().isoformat()})
-            notify(f"? Evolution #{evolution_id} applied\nType: {change_type}\n{note}")
-            check_evolution_self_sync(evo)
-            # Auto-refresh BACKLOG.md so status is immediately visible on GitHub
-            try:
-                gh_write("BACKLOG.md", _backlog_to_markdown(),
-                         f"chore(backlog): sync status after evolution #{evolution_id} applied")
-            except Exception as _be:
-                print(f"[BACKLOG] refresh error: {_be}")
-
 Fix log:
   2026-03-11e: t_state() fetches operating_context.json + SESSION.md from GitHub.
   2026-03-11f: cold_processor uses Counter for batch freq counting.
@@ -515,8 +500,14 @@ def apply_evolution(evolution_id: int):
         if applied:
             sb_patch("evolution_queue", f"id=eq.{evolution_id}",
                      {"status": "applied", "applied_at": datetime.utcnow().isoformat()})
-            notify(f"✅ Evolution #{evolution_id} applied\nType: {change_type}\n{note}")
+            notify(f"? Evolution #{evolution_id} applied\nType: {change_type}\n{note}")
             check_evolution_self_sync(evo)
+            # Auto-refresh BACKLOG.md so status is immediately visible on GitHub
+            try:
+                gh_write("BACKLOG.md", _backlog_to_markdown(),
+                         f"chore(backlog): sync after evo #{evolution_id} applied [{change_type}]")
+            except Exception as _be:
+                print(f"[BACKLOG] refresh error: {_be}")
         else:
             notify(f"❌ Evolution #{evolution_id} apply failed\nType: {change_type}")
         return {"ok": applied, "evolution_id": evolution_id, "change_type": change_type, "note": note}
