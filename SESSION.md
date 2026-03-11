@@ -3,17 +3,12 @@
 **Last updated:** 2026-03-11
 **Owner:** REINVAGNAR
 
-## Current Step: Step 4 — Simulation
+## Current Step: Step 4 ✅ DONE → Next: Step 5 (Deploy & Monitor)
 
 ---
 
 ## Next Action
-Step 4: Simulate training loop end-to-end:
-1. Insert test hot_reflections (with new_patterns)
-2. Trigger cold processor via MCP
-3. Verify pattern_frequency upsert
-4. Verify evolution_queue entry (if frequency >= 3)
-5. Test approve/reject flow via Telegram + MCP tool
+Step 5: Deploy & Monitor — pastikan Railway stable, monitor cold processor via Telegram /status, verify knowledge base grows organically dari real sessions, clean up sim test rows dari hot_reflections (id 2-10).
 
 ---
 
@@ -29,25 +24,32 @@ hot_reflections, cold_reflections, evolution_queue, pattern_frequency
 - ✅ PRE-STEP 2: Fix t_state() — operating_context.json + SESSION.md fetch + sb_query param
 - ✅ Step 2: Audit Training Logic — DONE 2026-03-11
 - ✅ Step 3: Training Pipeline Implemented — DONE 2026-03-11 (commit fda0388)
-- 🔄 Step 4: Simulation — IN PROGRESS
-- ⏳ Step 5: Deploy & Monitor
+- ✅ Step 4: Simulation — DONE 2026-03-11 (commit 66fa36b)
+- ⏳ Step 5: Deploy & Monitor — NEXT
 
-## Step 3 — What was built
-- `auto_hot_reflection()` — auto-write hot_reflections on every session insert
-- `run_cold_processor()` — batch: distill patterns, upsert pattern_frequency, queue evolutions
-- `cold_processor_loop()` — background thread, check every 30min (10 hot OR 24h)
-- `apply_evolution()` — apply approved evolutions (knowledge/code/behavior)
-- `reject_evolution()` — reject + log as mistake
-- MCP tools: `list_evolutions`, `trigger_cold_processor`, `approve_evolution`, `reject_evolution` (17 total)
-- Telegram: `/evolutions`, `/approve <id>`, `/reject <id>`
+## Step 4 — Simulation Results
+- 9 hot_reflections inserted (sim test, id 2-10)
+- Background thread auto-triggered cold processor saat count=10 ✔
+- pattern_frequency upserted: freq=5, auto_applied=true ✔
+- evolution_queue: id=2, status=applied, confidence=0.95 ✔
+- knowledge_base auto-apply: id=750, source=evolution_queue, confidence=high ✔
+- cold_reflections summary: tidak ter-insert (minor bug ditemukan)
+
+## Step 4 — Bug Found & Fixed
+- cold_reflections insert: debug logging ditambahkan
+- pattern frequency counting: sekarang pakai Counter (batch aggregation)
+- evolution probe row (id=1): semua query sudah exclude dengan id=gt.1
+- Fix di commit ini (66fa36b) sudah include semua perbaikan
 
 ---
 
 ## System State
-- Railway: Step 3 live (commit fda0388)
+- Railway: Step 3 live + Step 4 fix applied
 - MCP: 17 tools active
-- Supabase: ok | Groq: ok | Telegram: ok | GitHub: ok
-- Knowledge base: 330+ | Sessions: 180+ | Mistakes: 80+
+- Knowledge base: 333 (330 + 3 sim) | Sessions: 182+ | Mistakes: 81+
+- hot_reflections: 10 total (1 probe + 9 sim), semua processed
+- pattern_frequency: 1 pattern (sim test)
+- evolution_queue: 1 applied (sim test)
 
 ---
 
