@@ -272,3 +272,82 @@ hot_reflections table (via t_reflect()):
 | Real + sim overlap = highest confidence | Confidence ×1.3 | Two independent sources agreeing = strong signal |
 | t_reflect() mandatory per session | Rule | Pipeline quality depends on rich hot_reflections input |
 | backlog removed from evolution flow | Removed | Was producing 115 hollow pending items, not real improvements |
+
+---
+
+## Phase 6: Railway AGI Tools — CORE Self-Manages Infrastructure
+**Designed:** 2026-03-12
+**Status:** PENDING IMPLEMENTATION
+**Vision:** CORE is the only MCP needed. No external Railway wrapper. CORE calls Railway's GraphQL API directly, manages its own deployment, detects its own crashes, optimizes its own resources.
+
+### Why This Matters
+Every external MCP wrapper is a dependency CORE can't control or improve.
+When CORE manages Railway natively, the loop becomes fully autonomous:
+mistake → pattern → new tool → patch → redeploy → verify → done.
+No human needed for infrastructure ops. Owner only reviews outcomes.
+
+### Tool Tiers
+
+#### Tier 1: Self-Awareness
+| Tool | Purpose |
+|---|---|
+| `t_deploy_status` | Active build ID, commit SHA deployed, deploy time, crash count since last deploy |
+| `t_logs` | Last N lines of runtime logs with severity filter — CORE reads its own stdout ✅ BUILT |
+| `t_build_status` | Is current GitHub push building/failed/succeeded — CORE waits for own redeploy |
+| `t_crash_report` | Detect restart loops: >2 restarts/hr → pull traceback → auto-write to mistakes table |
+
+#### Tier 2: Self-Healing
+| Tool | Purpose |
+|---|---|
+| `t_redeploy` | Trigger redeploy + wait for build + health check + Telegram before/after ✅ BUILT |
+| `t_rollback` | Redeploy from specific commit SHA — auto-triggered on crash after patch |
+| `t_env_get` | Read all Railway env vars — verify own config on startup |
+| `t_env_set` | Update env var + trigger redeploy — CORE rotates own secrets |
+| `t_env_diff` | Compare Railway env vars vs expected in operating_context.json — alert on mismatch |
+
+#### Tier 3: Self-Optimization
+| Tool | Purpose |
+|---|---|
+| `t_resource_usage` | CPU %, memory MB, network I/O — track in Supabase, detect leaks |
+| `t_usage_trend` | 7-day metrics — if memory grows 10%/day queue evolution: "investigate leak" |
+| `t_scale_check` | Current plan vs projected load based on KB growth rate — queue upgrade if needed |
+| `t_deploy_history` | Last 20 deploys with status+commit+duration — correlate slow starts to code changes |
+
+#### Tier 4: Multi-Service Orchestration
+| Tool | Purpose |
+|---|---|
+| `t_service_list` | All services in Railway project — CORE sees its own fleet |
+| `t_service_create` | Provision new Railway service from GitHub repo — CORE spins up dedicated workers |
+| `t_service_pause` | Pause non-critical services off-hours to save credits |
+| `t_volume_snapshot` | Snapshot before major evolution — rollback point for architectural rewrites |
+
+#### Tier 5: Autonomous Decision Loop (AGI layer)
+| Tool | Purpose |
+|---|---|
+| `t_deploy_gate` | Pre-deploy checklist: health ok, no pending migrations, no active session, KB not mid-write |
+| `t_incident_detect` | Every 5min: if crashed/sleeping → auto-diagnose → fix → redeploy → full incident report to Telegram |
+| `t_cost_monitor` | Credits consumed vs budget — if >80% used, reduce _IMPROVEMENT_INTERVAL from 60→180min |
+| `t_self_upgrade_pipeline` | Full autonomous loop: patch → wait for build → health check → smoke test → mark evolution verified |
+
+### Implementation Order
+1. Fix `RAILWAY_TOKEN` env var on Railway service (needed by t_redeploy + t_logs)
+2. Build Tier 1 tools — self-awareness first
+3. Build Tier 2 tools — self-healing
+4. `t_incident_detect` runs in background_researcher loop alongside existing researcher
+5. Tier 3-5 built incrementally as CORE matures
+
+### Compounding Effect
+- Year 1: CORE redeploys itself when code is pushed
+- Year 2: CORE detects own crashes and rolls back
+- Year 3: CORE optimizes resource usage autonomously
+- Year 5: CORE provisions new services when it outgrows one
+- Year 10: CORE decides own infrastructure architecture, owner reviews Telegram summary each morning
+
+### Design Decisions
+| Decision | Value | Reason |
+|---|---|---|
+| Railway MCP removed from claude_desktop_config.json | 2026-03-12 | CORE manages own deployment — no external wrapper needed |
+| t_redeploy uses RAILWAY_TOKEN from Railway env var | Required | Token stored in service, not in Claude config |
+| t_incident_detect runs every 5min not 60min | Fast response | Infrastructure incidents need immediate response |
+| All Railway tools return structured dict with ok key | Consistency | Same pattern as all other CORE tools |
+| t_deploy_gate blocks all redeploys | Safety | Never redeploy during active session or mid-write |
