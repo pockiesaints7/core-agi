@@ -1,15 +1,17 @@
-# CORE v5.0 — Session State
+# CORE v5.0 - Session State
 
 **Last updated:** 2026-03-11
 **Owner:** REINVAGNAR
 
-## Current Step: Step 5 (Deploy & Monitor) — ACTIVE ⏳
+## Current Step: ✅ ALL STEPS COMPLETE — CORE v5.0 LIVE
 
 ---
 
 ## Next Action
-Step 5 ongoing — Railway stable, training pipeline active. Next: clean up sim test rows
-from hot_reflections (id 2-10), monitor cold processor via Telegram /status, verify KB grows.
+CORE v5.0 fully live. Steps 0-5 complete 2026-03-11. Training pipeline active.
+Retroactive learnings injected: 8 KB entries, 6 mistakes, 4 hot_reflections (Steps 0-5).
+Next: use CORE for real tasks via Claude Desktop. hot_reflections accumulate organically,
+cold_processor runs on schedule, evolution_queue surfaces improvements for owner approval.
 
 ---
 
@@ -20,17 +22,17 @@ hot_reflections, cold_reflections, evolution_queue, pattern_frequency
 ---
 
 ## Step Status
-- ✅ Step 0: Railway MCP Server + Telegram Bot
-- ✅ Step 1: Claude Desktop Live Connection
-- ✅ PRE-STEP 2: Fix t_state() — operating_context.json + SESSION.md fetch + sb_query param
-- ✅ Step 2: Audit Training Logic — DONE 2026-03-11
-- ✅ Step 3: Training Pipeline Implemented — DONE 2026-03-11 (commit fda0388)
-- ✅ Step 4: Simulation — DONE 2026-03-11 (commit 66fa36b)
-- ⏳ Step 5: Deploy & Monitor — ACTIVE
+- ✅ Step 0: Railway MCP Server + Telegram Bot - COMPLETE 2026-03-11
+- ✅ Step 1: Claude Desktop Live Connection - COMPLETE 2026-03-11
+- ✅ PRE-STEP 2: Fix t_state() - operating_context.json + SESSION.md fetch + sb_query param - DONE
+- ✅ Step 2: Audit Training Logic - DONE 2026-03-11
+- ✅ Step 3: Training Pipeline Implemented - DONE 2026-03-11 (commit fda0388)
+- ✅ Step 4: Simulation - DONE 2026-03-11 (commit 66fa36b)
+- ✅ Step 5: Deploy & Monitor - COMPLETE 2026-03-11
 
-## Step 5 — Progress Log
-- ✅ 2026-03-11i: processed_by_cold fix — eq.false→eq.0, eq.true→eq.1 in querystring (commit cc87e5c)
-- ✅ 2026-03-11j: POST /patch endpoint added — surgical edits from claude.ai (commit cc87e5c)
+## Step 5 - Progress Log
+- ✅ 2026-03-11i: processed_by_cold fix - eq.false→eq.0, eq.true→eq.1 in querystring (commit cc87e5c)
+- ✅ 2026-03-11j: POST /patch endpoint added - surgical edits from claude.ai (commit cc87e5c)
 - ✅ 2026-03-11k: Railway MCP server built & registered in claude_desktop_config.json
     7 tools: railway_status, railway_services, railway_env_get, railway_env_set,
              railway_logs, railway_restart, railway_deploy_status
@@ -38,15 +40,13 @@ hot_reflections, cold_reflections, evolution_queue, pattern_frequency
     NOTE: Requires Claude Desktop restart to activate
 - ✅ MCP_SECRET added to CREDENTIALS.md (core_mcp_secret_2026_REINVAGNAR)
 - ✅ Write efficiency rules documented in CORE_v5_plan.md
-
-## Remaining Step 5 Tasks
-- ? Clean up sim test rows - DONE 2026-03-11 (all null/sim garbage deleted)
-  - hot_reflections: deleted id 1-10 (10 rows). Remaining: id 11-13 (legit, processed)
-  - cold_reflections: deleted id 1-2 (null + sim test). Now empty, ready for real data
-  - pattern_frequency: deleted null id=1, merged duplicate id=3+4 ? id=4 (freq=3). 2 clean patterns remain
-- ? Railway health: ALL OK (supabase, groq, telegram, github)
-- Monitor cold processor - will activate when real hot_reflections accumulate
-- Verify knowledge base grows organically from real sessions (kb has 332 entries, no new since deploy)
+- ✅ DB cleanup: hot_reflections/cold_reflections/pattern_frequency sim+null rows deleted
+- ✅ Railway health verified: all components OK (supabase, groq, telegram, github)
+- ✅ Retroactive learnings injected from Steps 0-5:
+    - 8 knowledge_base entries (architecture, training, bugs, workflow)
+    - 6 mistakes (postgrest bool, sb_query param, rate limiter, egress, repo arg, t_state)
+    - 4 hot_reflections (Step 0-1, PRE2+2, 3-4, 5) ready for cold_processor
+    - 1 session log
 
 ---
 
@@ -54,6 +54,8 @@ hot_reflections, cold_reflections, evolution_queue, pattern_frequency
 - Railway: live @ https://core-agi-production.up.railway.app
 - core.py: commit cc87e5c (processed_by_cold fix + /patch endpoint)
 - MCP on CORE: 20 tools active
+- knowledge_base: 340 entries (332 existing + 8 injected)
+- hot_reflections: 7 rows (id 11-17), all unprocessed by cold → ready for next cold run
 - Claude Desktop MCP servers: core-agi, railway, github, postgres, filesystem,
   memory, fetch, sqlite, windows-mcp, cloudflare-workers, cloudflare-builds,
   sequential-thinking, puppeteer, everything, zapier, git, time
@@ -72,8 +74,8 @@ Use Desktop Commander PowerShell:
 
 ## Rules for Claude Desktop Sessions
 - NEVER pass `repo` arg ke read_file atau write_file
-- NEVER gunakan `query_string` untuk sb_query — gunakan `filters`
-- NEVER hardcode step numbers di core.py — pakai get_current_step()
+- NEVER gunakan `query_string` untuk sb_query - gunakan `filters`
+- NEVER hardcode step numbers di core.py - pakai get_current_step()
 - ALWAYS read-back setelah setiap write sebelum report success
 - ALWAYS call get_mistakes(domain=X) sebelum remote write
 - ALWAYS update SESSION.md di akhir session kalau ada yang berubah
@@ -85,6 +87,6 @@ Use Desktop Commander PowerShell:
 ---
 
 ## Context Files
-- `operating_context.json` — static: tool rules, schema, tombstone tables
-- `SESSION.md` (file ini) — dynamic: active tables, step status, next action
-- `TRAINING_DESIGN.md` — pipeline design lengkap (output Step 2)
+- `operating_context.json` - static: tool rules, schema, tombstone tables
+- `SESSION.md` (file ini) - dynamic: active tables, step status, next action
+- `TRAINING_DESIGN.md` - pipeline design lengkap (output Step 2)
