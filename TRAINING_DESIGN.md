@@ -448,3 +448,99 @@ When CORE manages Supabase natively, schema evolves alongside code — zero manu
 | `t_snapshot` before bulk apply | Safety | Always have rollback point before mass data changes |
 | `t_self_heal_pipeline` on every startup | Proactive | Catch schema drift before it causes runtime failures |
 | `migrations` table tracks all schema changes | Audit | Know exactly when every column was added and why |
+
+---
+
+## Phase 8: GitHub AGI Tools — CORE Self-Manages Its Own Codebase
+**Designed:** 2026-03-12
+**Status:** PENDING IMPLEMENTATION
+**Vision:** CORE owns its entire codebase. No manual commits, no full-file overwrites, no rate limit fumbling. CORE reads, patches, reviews, and evolves its own code autonomously.
+
+### Why This Matters
+Every bad patch in CORE history came from missing context — patching blind, wrong anchors, ambiguous old_str.
+Every wasted session came from not knowing the codebase structure before editing.
+When CORE has full GitHub awareness, patches are validated before apply, rolled back on failure, and versioned automatically.
+
+### Tool Tiers
+
+#### Tier 1: Codebase Self-Awareness
+| Tool | Purpose |
+|---|---|
+| `t_file_exists` | Check if a file exists before reading or patching. Prevents blind writes. |
+| `t_repo_tree` | Full file tree of the repo. CORE knows what files exist without hardcoding paths. |
+| `t_file_hash` | SHA of any file. CORE detects if a file changed since last session — catches external edits or failed patches. |
+| `t_search_code` | Search across all files for a string or pattern. CORE finds where a function is called before refactoring it. |
+| `t_commit_history` | Last N commits with message + SHA + changed files. CORE knows what changed and when. |
+
+#### Tier 2: Safe Code Patching
+| Tool | Purpose |
+|---|---|
+| `t_gh_search_replace` | Surgical find-replace. Already built ✅. The canonical tool for all core.py edits. |
+| `t_gh_read_lines` | Read specific line range with line numbers. Already built ✅. Always run before patching. |
+| `t_patch_validate` | Before applying: verify old_str exists exactly once, no ambiguity, no whitespace drift. Dry-run mode. |
+| `t_multi_patch` | Apply a list of patches in sequence as a single atomic commit. For evolutions touching multiple locations. |
+| `t_patch_rollback` | Revert a specific commit by SHA. CORE undoes a bad patch without manual git intervention. |
+
+#### Tier 3: Code Quality & Safety
+| Tool | Purpose |
+|---|---|
+| `t_syntax_check` | Run python AST parse on core.py. Catch syntax errors before deploy. |
+| `t_function_list` | Extract all `def` function names and line numbers from core.py. CORE knows its own surface area. |
+| `t_tools_audit` | Verify every function in TOOLS dict actually exists as a `def` in core.py. Catches broken registrations. |
+| `t_anchor_check` | Verify critical anchor strings still exist before patching near them. |
+| `t_diff_preview` | Show unified diff of what a proposed patch would change without applying it. Owner reviews before approve. |
+
+#### Tier 4: Release & Version Management
+| Tool | Purpose |
+|---|---|
+| `t_tag_release` | Create a GitHub release tag after a successful evolution batch. CORE versions itself. |
+| `t_changelog_append` | Append an entry to CHANGELOG.md after every applied evolution. Permanent record of what changed and why. |
+| `t_branch_create` | Create a feature branch before risky changes. CORE isolates experimental evolutions from main. |
+| `t_pr_create` | Open a pull request for high-risk evolutions. Owner reviews diff, merges when ready. |
+| `t_pr_merge` | Merge an approved PR after owner confirms. Closes the safe evolution loop. |
+
+#### Tier 5: Autonomous Code Evolution
+| Tool | Purpose |
+|---|---|
+| `t_evolution_patch` | Full pipeline: validate → apply → syntax check → commit → redeploy → verify health → mark evolution applied. Zero manual steps. |
+| `t_dead_code_scan` | Find functions defined but not in TOOLS and not called anywhere. CORE cleans its own dead weight. |
+| `t_complexity_scan` | Detect functions over 80 lines. CORE queues a refactor evolution when a function grows too large. |
+| `t_dependency_audit` | Check all imports against what's installed on Railway. Alert if a new import would break the build. |
+| `t_self_rewrite` | For major upgrades: CORE proposes full rewrite of a module, writes to branch, owner reviews diff, merges when satisfied. |
+
+### Key Pain Points From CORE History This Solves
+| Pain Point | Tool That Fixes It |
+|---|---|
+| `write_file` overwrote all of core.py (2026-03-11k) | `t_patch_validate` blocks ambiguous patches before apply |
+| Patches applied to wrong location due to stale line numbers | `t_anchor_check` verifies anchors exist before patching near them |
+| No idea if a function was accidentally removed | `t_tools_audit` verifies TOOLS dict integrity on every startup |
+| Multiple patches needed separate commits | `t_multi_patch` batches them atomically |
+| No version history of CORE's evolution | `t_tag_release` + `t_changelog_append` after every batch |
+| High-risk evolutions go straight to main | `t_branch_create` + `t_pr_create` for risky changes |
+| PowerShell timeout on network calls | `t_gh_search_replace` is always the canonical path — no PS needed |
+
+### Implementation Order
+1. `t_patch_validate` + `t_anchor_check` — safety gates, add to every patch flow immediately
+2. `t_function_list` + `t_tools_audit` — run on every startup, catch broken TOOLS registrations
+3. `t_changelog_append` — run after every applied evolution, permanent record
+4. `t_multi_patch` — batch evolution patches into single atomic commits
+5. `t_syntax_check` — block deploys on syntax errors before they hit Railway
+6. `t_tag_release` + `t_branch_create` + `t_pr_create` — version management and safe evolution flow
+7. `t_evolution_patch` — final boss: full autonomous patch-to-deploy pipeline
+
+### Compounding Effect
+- Month 1: CORE validates patches before applying — zero accidental overwrites
+- Month 3: CORE versions itself, full changelog of every evolution
+- Month 6: CORE opens PRs for risky changes, owner just reviews the diff
+- Year 1: CORE refactors its own growing functions autonomously
+- Year 5: CORE proposes and implements major architectural rewrites via branches
+- Year 10: CORE's entire codebase is self-maintaining — owner reads the changelog each morning
+
+### Design Decisions
+| Decision | Value | Reason |
+|---|---|---|
+| `t_gh_search_replace` remains canonical edit tool | Enforced | Proven reliable, server-side, no PS timeout |
+| `t_patch_validate` runs before every `t_gh_search_replace` | Required | old_str ambiguity is root cause of every bad patch in CORE history |
+| `t_tools_audit` runs on startup | Proactive | Catch broken TOOLS registrations before they cause 404 on tool call |
+| `t_changelog_append` after every evolution | Always | Permanent institutional memory of every code change |
+| High-risk evolutions use branch + PR | Safety | Never push architectural changes directly to main |
