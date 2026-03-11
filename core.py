@@ -1207,6 +1207,11 @@ def background_researcher():
                     "effort": "medium", "impact": "medium",
                 })
         print(f"[RESEARCH] Loaded {len(_backlog)} existing backlog items from KB")
+        synced = _sync_backlog_status()
+        print(f"[RESEARCH] Status sync: {synced} evo entries matched")
+        pushed = _repopulate_evolution_queue()
+        if pushed > 0:
+            notify(f"[CORE] Startup: repopulated {pushed} evolution_queue entries after restart.")
     except Exception as e:
         print(f"[RESEARCH] startup load error: {e}")
 
