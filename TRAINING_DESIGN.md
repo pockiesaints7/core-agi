@@ -1,6 +1,7 @@
 # CORE v5.0 — Training Pipeline Design (Redesigned)
-**Status:** ACTIVE — persistent task until fully implemented
+**Status:** ✅ COMPLETE — Phases 1–5 verified in live code 2026-03-12
 **Redesigned:** 2026-03-12
+**Verified:** 2026-03-12 (Claude Desktop session — code read line-by-line from core.py)
 **Owner:** REINVAGNAR
 
 ---
