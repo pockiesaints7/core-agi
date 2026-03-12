@@ -53,6 +53,13 @@ Fix log:Fix log:
                even though KB grew from 1k → 3k. Backlog count never updated automatically.
                Fix: t_get_backlog queries Supabase directly. cold_processor_loop checks KB count
                vs last-run KB count and re-triggers if delta >= 100 entries.
+  2026-03-12S: cold_processor new_patterns normalization fix.
+               ROOT CAUSE: Groq sometimes returns new_patterns as a JSON string "[...]" or plain
+               comma/newline-separated string instead of a list. Iterating a string yields single
+               characters → garbage single-char pattern_keys (space, 'e', 's', 'a' etc.) in
+               evolution_queue (ids 146-172+). Fix: normalize raw_patterns before iteration —
+               try json.loads(), fall back to comma/newline split. Also added len(p)>3 guard
+               to skip any remaining single-char noise.
   2026-03-11Q: CORE v5.4 — KB mining: one-time batch scan of all KB entries to populate backlog.
                Root cause: 3k KB entries existed but only ~few backlog items because cold processor
                only processes hot_reflections, not raw KB. KB was a dead warehouse.
