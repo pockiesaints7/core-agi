@@ -1821,18 +1821,38 @@ def t_logs(limit: str = "50") -> dict:
         if not token:
             return {"ok": False, "error": "RAILWAY_TOKEN env var not set"}
         lim = int(limit) if limit else 50
-        query = """query($sid:String!,$eid:String!,$n:Int){serviceInstanceLogs(serviceId:$sid,environmentId:$eid,limit:$n){timestamp message severity}}"""
+        # Step 1: get latest deployment ID
+        dep_query = """query($sid:String!,$eid:String!){deployments(serviceId:$sid,environmentId:$eid,first:1){edges{node{id status}}}}"""
         r = httpx.post(
             "https://backboard.railway.app/graphql/v2",
             headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
-            json={"query": query, "variables": {"sid": service_id, "eid": env_id, "n": lim}},
+            json={"query": dep_query, "variables": {"sid": service_id, "eid": env_id}},
             timeout=15,
         )
-        data = r.json()
+        dep_data = r.json()
+        if "errors" in dep_data:
+            return {"ok": False, "error": f"dep query: {dep_data['errors'][0]['message']}"}
+        edges = dep_data.get("data", {}).get("deployments", {}).get("edges", [])
+        if not edges:
+            return {"ok": False, "error": "No deployments found"}
+        deploy_id = edges[0]["node"]["id"]
+        deploy_status = edges[0]["node"].get("status", "unknown")
+        # Step 2: fetch logs for that deployment
+        log_query = """query($did:String!){deploymentLogs(deploymentId:$did){timestamp message}}"""
+        r2 = httpx.post(
+            "https://backboard.railway.app/graphql/v2",
+            headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+            json={"query": log_query, "variables": {"did": deploy_id}},
+            timeout=20,
+        )
+        data = r2.json()
         if "errors" in data:
-            return {"ok": False, "error": data["errors"][0]["message"]}
-        logs = data.get("data", {}).get("serviceInstanceLogs", [])
-        return {"ok": True, "count": len(logs), "logs": logs}
+            return {"ok": False, "error": f"log query: {data['errors'][0]['message']}"}
+        logs = data.get("data", {}).get("deploymentLogs", [])
+        # Trim to limit, newest first
+        logs = logs[-lim:] if len(logs) > lim else logs
+        return {"ok": True, "deploy_id": deploy_id[:12], "deploy_status": deploy_status,
+                "count": len(logs), "logs": logs}
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
