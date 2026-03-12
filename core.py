@@ -2527,30 +2527,6 @@ def handle_msg(msg):
         lines = "\n".join([f"- [{t.get('status')}] {t.get('task','')[:60]}" for t in tasks])
         notify(f"*Recent Tasks*\n\n{lines}" if tasks else "No tasks yet.", cid)
 
-    elif text == "/evolutions":
-        rows = sb_get("evolution_queue",
-                      "select=id,change_type,change_summary,confidence&status=eq.pending&id=gt.1&order=created_at.desc&limit=10",
-                      svc=True)
-        if rows:
-            lines = "\n".join([f"#{r['id']} [{r.get('change_type','?')}] conf={r.get('confidence','?')}\n  {str(r.get('change_summary',''))[:80]}" for r in rows])
-            notify(f"*Pending Evolutions*\n\n{lines}\n\nUse /approve <id> or /reject <id>", cid)
-        else: notify("No pending evolutions.", cid)
-
-    elif text.startswith("/approve "):
-        try:
-            eid = int(text.split()[1])
-            result = apply_evolution(eid)
-            notify(f"Evolution #{eid}: {'applied ✅' if result.get('ok') else 'failed ❌'}\n{result.get('note', result.get('error', ''))}", cid)
-        except (ValueError, IndexError): notify("Usage: /approve <id>", cid)
-
-    elif text.startswith("/reject "):
-        parts = text.split(None, 2)
-        try:
-            eid = int(parts[1]); reason = parts[2] if len(parts) > 2 else ""
-            result = reject_evolution(eid, reason)
-            notify(f"Evolution #{eid}: {'rejected ❌' if result.get('ok') else 'failed'}\n{reason}", cid)
-        except (ValueError, IndexError): notify("Usage: /reject <id> [reason]", cid)
-
     else:
         sig = extract_signals(text)
         notify(f"⚙️ Routing [{sig['archetype']}] {sig['domain']}...", cid)
