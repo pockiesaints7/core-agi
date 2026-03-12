@@ -2326,6 +2326,120 @@ def root():
 @app.get("/health")
 def health_ep(): return t_health()
 
+@app.get("/review")
+async def review_widget():
+    """Interactive evolution review widget — served as HTML page."""
+    from fastapi.responses import HTMLResponse
+    html = """<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>CORE — Evolution Review</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#0a0a0a;color:#e5e5e5;min-height:100vh;padding:2rem}
+h1{font-size:1.4rem;font-weight:500;margin-bottom:.4rem;color:#fff}
+.sub{font-size:.8rem;color:#666;margin-bottom:2rem}
+.list{display:flex;flex-direction:column;gap:8px;margin-bottom:1.5rem}
+.card{background:#141414;border:1px solid #222;border-radius:10px;padding:14px 16px;cursor:pointer;transition:border-color .15s}
+.card:hover{border-color:#444}.card.sel{border-color:#4f6ef7}
+.meta{display:flex;gap:6px;align-items:center;margin-bottom:6px;flex-wrap:wrap}
+.badge{font-size:11px;font-weight:500;padding:2px 8px;border-radius:6px}
+.p1{background:#3d1515;color:#f87171}.p2{background:#3d2b10;color:#fb923c}
+.p3{background:#1a2d4a;color:#60a5fa}.p4,.p5{background:#1f1f1f;color:#888}
+.btype{background:#1a1a1a;color:#666}.conf{font-size:11px;color:#555}
+.etitle{font-size:13px;font-weight:500;color:#ccc}
+.btn{display:inline-flex;align-items:center;gap:6px;padding:9px 20px;font-size:13px;font-weight:500;border:1px solid #333;border-radius:8px;background:transparent;color:#e5e5e5;cursor:pointer}
+.btn:hover{background:#1a1a1a}.btn:disabled{opacity:.4;cursor:not-allowed}
+.result{margin-top:1.5rem}
+.pb{background:#111;border-left:3px solid #4f6ef7;border-radius:0 8px 8px 0;padding:14px 16px;margin-bottom:10px}
+.pk{font-size:10px;font-weight:600;color:#4f6ef7;letter-spacing:.1em;text-transform:uppercase;margin-bottom:5px}
+.pv{font-size:13px;color:#ccc;line-height:1.7}
+.spin{display:inline-block;width:13px;height:13px;border:2px solid #333;border-top-color:#4f6ef7;border-radius:50%;animation:s .7s linear infinite}
+@keyframes s{to{transform:rotate(360deg)}}
+.copy{font-size:11px;color:#4f6ef7;background:none;border:none;cursor:pointer;margin-top:8px}
+.lbl{font-size:10px;font-weight:600;color:#555;letter-spacing:.08em;text-transform:uppercase;margin-bottom:10px}
+</style>
+</head>
+<body>
+<h1>CORE &mdash; Evolution Review</h1>
+<p class="sub">Translate pending evolution entries into structured WHAT / WHY / WHERE / HOW prompts via Claude</p>
+<p class="lbl">Pending evolutions</p>
+<div class="list" id="list"><p style="color:#555;font-size:13px">Loading...</p></div>
+<div id="ta" style="display:none">
+  <button class="btn" id="btn" onclick="go()">Translate to structured prompt &#x2197;</button>
+</div>
+<div class="result" id="res" style="display:none"></div>
+<script>
+let evos=[],sel=null;
+async function load(){
+  try{
+    const r=await fetch('/api/evolutions');
+    const d=await r.json();
+    evos=d.evolutions||[];
+    render();
+  }catch(e){
+    document.getElementById('list').innerHTML='<p style="color:#f87171;font-size:13px">Error: '+e.message+'</p>';
+  }
+}
+function render(){
+  const el=document.getElementById('list');
+  if(!evos.length){el.innerHTML='<p style="color:#555;font-size:13px">No pending evolutions.</p>';return;}
+  el.innerHTML=evos.map(e=>{
+    const p=(e.change_summary||'').match(/P(\\d)/)?.[1]||'3';
+    const t=(e.change_summary||'').replace(/\\[.*?\\]/g,'').replace(/^\\s*:\\s*/,'').trim().slice(0,80);
+    return '<div class="card" id="c'+e.id+'" onclick="pick('+e.id+')"><div class="meta"><span class="badge p'+p+'">P'+p+'</span><span class="badge btype">'+e.change_type+'</span><span class="conf">conf: '+(e.confidence||0).toFixed(2)+'</span></div><div class="etitle">#'+e.id+' &mdash; '+(t||e.change_summary?.slice(0,80)||'unnamed')+'</div></div>';
+  }).join('');
+}
+function pick(id){
+  document.querySelectorAll('.card').forEach(c=>c.classList.remove('sel'));
+  const c=document.getElementById('c'+id);if(c)c.classList.add('sel');
+  sel=id;
+  document.getElementById('ta').style.display='block';
+  document.getElementById('res').style.display='none';
+}
+async function go(){
+  const evo=evos.find(e=>e.id===sel);if(!evo)return;
+  const btn=document.getElementById('btn');
+  btn.disabled=true;btn.innerHTML='<span class="spin"></span> Translating via Claude...';
+  const res=document.getElementById('res');res.style.display='none';
+  const sys=`You are CORE's evolution analyst. Translate a raw evolution entry into a structured actionable prompt.
+Output MUST be valid JSON with exactly these keys:
+{"what":"1-2 sentences: what problem/pattern was detected","why":"1-2 sentences: why this matters and what data triggered it","where":"which component: core.py / KB / routing logic / system prompt / backlog processor","how":"2-4 concrete steps to implement this change","expected_outcome":"1 sentence: what improves if executed"}
+CORE context: core.py=FastAPI on Railway, KB=knowledge_base in Supabase, evolution_queue=proposed changes, Groq=AI execution, Claude=review layer only.
+Output ONLY valid JSON, no preamble.`;
+  const usr="Evolution ID: "+evo.id+"\\nType: "+evo.change_type+"\\nSummary: "+evo.change_summary+"\\nConfidence: "+evo.confidence+"\\nPattern key: "+(evo.pattern_key||'none')+"\\nTranslate this evolution.";
+  try{
+    const r=await fetch('https://api.anthropic.com/v1/messages',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model:'claude-sonnet-4-20250514',max_tokens:1000,system:sys,messages:[{role:'user',content:usr}]})});
+    const d=await r.json();
+    const raw=d.content?.find(b=>b.type==='text')?.text||'{}';
+    const p=JSON.parse(raw.replace(/```json|```/g,'').trim());
+    const fields=[{k:'WHAT',v:p.what},{k:'WHY',v:p.why},{k:'WHERE',v:p.where},{k:'HOW',v:p.how},{k:'EXPECTED OUTCOME',v:p.expected_outcome}];
+    const full=fields.map(f=>f.k+':\\n'+f.v).join('\\n\\n');
+    res.innerHTML='<p class="lbl" style="margin-bottom:12px">Structured prompt &mdash; Evolution #'+evo.id+'</p>'+fields.map(f=>'<div class="pb"><div class="pk">'+f.k+'</div><div class="pv">'+(f.v||'&mdash;')+'</div></div>').join('')+'<button class="copy" onclick="cp(this,`'+full.replace(/`/g,'\\u0060')+'`)">Copy as text</button>';
+    res.style.display='block';
+  }catch(e){
+    res.innerHTML='<p style="color:#f87171;font-size:13px;margin-top:1rem">Error: '+e.message+'</p>';
+    res.style.display='block';
+  }
+  btn.disabled=false;btn.innerHTML='Translate to structured prompt &#x2197;';
+}
+function cp(btn,t){navigator.clipboard.writeText(t).then(()=>{btn.textContent='Copied!';setTimeout(()=>btn.textContent='Copy as text',1500);})}
+load();
+</script>
+</body>
+</html>"""
+    return HTMLResponse(content=html, status_code=200)
+
+@app.get("/api/evolutions")
+def api_evolutions():
+    """Data endpoint for the /review widget — returns pending evolutions as JSON."""
+    rows = sb_get("evolution_queue",
+                  "select=id,status,change_type,change_summary,confidence,pattern_key,diff_content,created_at"
+                  "&status=eq.pending&id=gt.1&order=created_at.desc&limit=50",
+                  svc=True)
+    return {"evolutions": rows, "count": len(rows)}
+
 @app.post("/patch")
 async def patch_file(body: PatchRequest):
     if body.secret != MCP_SECRET:
