@@ -2172,6 +2172,13 @@ def t_crash_report() -> dict:
         return {"ok": False, "error": str(e)}
 
 
+def t_review_evolutions() -> dict:
+    """Return URL to the interactive evolution review widget."""
+    railway_url = os.environ.get("RAILWAY_PUBLIC_DOMAIN", "core-agi-production.up.railway.app")
+    url = f"https://{railway_url}/review"
+    return {"ok": True, "url": url, "note": "Open URL in browser — interactive widget to translate and review pending evolutions."}
+
+
 # ── Tool registry ─────────────────────────────────────────────────────────────
 TOOLS = {
     "get_state":              {"fn": t_state,                  "perm": "READ",    "args": [],
