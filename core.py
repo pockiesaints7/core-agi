@@ -1887,6 +1887,33 @@ def background_researcher():
                 # Track B - grounded simulation of 1M user population
                 sim_ok = _run_simulation_batch()
 
+                # Track C — auto-apply groq-executable pending evolutions (new_kb + missing_data)
+                # These don't need owner approval — Groq just writes KB entries / queues tasks.
+                # Cap at 20 per cycle to respect rate limits.
+                try:
+                    groq_pending = sb_get(
+                        "evolution_queue",
+                        "select=id,change_type,change_summary,diff_content,confidence,pattern_key&status=eq.pending&order=id.asc&limit=20",
+                        svc=True
+                    )
+                    auto_applied = 0
+                    for evo in groq_pending:
+                        try:
+                            meta = json.loads(evo.get("diff_content") or "{}")
+                        except Exception:
+                            meta = {}
+                        executor = meta.get("executor", "auto")
+                        btype    = meta.get("backlog_type", "")
+                        if executor == "groq" or (executor == "auto" and btype in ("new_kb", "missing_data")):
+                            r = apply_evolution(evo["id"])
+                            if r.get("ok"):
+                                auto_applied += 1
+                            time.sleep(1)  # pace Supabase writes
+                    if auto_applied:
+                        print(f"[RESEARCH] Auto-applied {auto_applied} groq evolutions")
+                except Exception as _ae:
+                    print(f"[RESEARCH] auto-apply error: {_ae}")
+
                 print(f"[RESEARCH] Cycle done. real={real_ok} sim={sim_ok}")
                 # No Telegram notify - cold processor notifies when evolutions are queued
         except Exception as e:
