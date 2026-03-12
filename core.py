@@ -1956,6 +1956,198 @@ def t_bulk_apply(executor_override: str = "claude_desktop", dry_run: bool = Fals
         return {"ok": False, "error": str(e)}
 
 
+# ── Phase 6: Railway AGI Tools — Tier 1: Self-Awareness ──────────────────────
+
+def t_deploy_status() -> dict:
+    """Return active deploy info: build ID, commit SHA, deploy time, restart count.
+    Uses Railway GraphQL API. RAILWAY_TOKEN must be set in Railway env vars."""
+    try:
+        token      = os.environ.get("RAILWAY_TOKEN", "")
+        service_id = os.environ.get("RAILWAY_SERVICE_ID", "48ad55bd-6be2-4d8a-83df-34fc05facaa2")
+        env_id     = os.environ.get("RAILWAY_ENV_ID",     "ff3f2a4c-4085-445e-88ff-a423862d00e8")
+        if not token:
+            return {"ok": False, "error": "RAILWAY_TOKEN not set"}
+        query = """query($sid:String!,$eid:String!){
+          serviceInstance(serviceId:$sid,environmentId:$eid){
+            latestDeployment{
+              id status createdAt meta
+            }
+          }
+        }"""
+        r = httpx.post(
+            "https://backboard.railway.app/graphql/v2",
+            headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+            json={"query": query, "variables": {"sid": service_id, "eid": env_id}},
+            timeout=15,
+        )
+        data = r.json()
+        if "errors" in data:
+            return {"ok": False, "error": data["errors"][0]["message"]}
+        deploy = (data.get("data", {})
+                      .get("serviceInstance", {})
+                      .get("latestDeployment") or {})
+        meta = deploy.get("meta") or {}
+        return {
+            "ok": True,
+            "deploy_id":    deploy.get("id", "unknown"),
+            "status":       deploy.get("status", "unknown"),
+            "created_at":   deploy.get("createdAt", "unknown"),
+            "commit_sha":   meta.get("commitHash", "unknown")[:12] if isinstance(meta, dict) else "unknown",
+            "commit_msg":   meta.get("commitMessage", "unknown")[:80] if isinstance(meta, dict) else "unknown",
+        }
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def t_build_status() -> dict:
+    """Check if the latest GitHub push is building, succeeded, or failed on Railway.
+    Returns build status + any failure reason so CORE knows if a code patch landed."""
+    try:
+        token      = os.environ.get("RAILWAY_TOKEN", "")
+        service_id = os.environ.get("RAILWAY_SERVICE_ID", "48ad55bd-6be2-4d8a-83df-34fc05facaa2")
+        env_id     = os.environ.get("RAILWAY_ENV_ID",     "ff3f2a4c-4085-445e-88ff-a423862d00e8")
+        if not token:
+            return {"ok": False, "error": "RAILWAY_TOKEN not set"}
+        query = """query($sid:String!,$eid:String!){
+          deployments(serviceId:$sid,environmentId:$eid,first:3){
+            edges{ node{ id status createdAt meta } }
+          }
+        }"""
+        r = httpx.post(
+            "https://backboard.railway.app/graphql/v2",
+            headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+            json={"query": query, "variables": {"sid": service_id, "eid": env_id}},
+            timeout=15,
+        )
+        data = r.json()
+        if "errors" in data:
+            return {"ok": False, "error": data["errors"][0]["message"]}
+        edges = (data.get("data", {})
+                     .get("deployments", {})
+                     .get("edges", []))
+        deploys = []
+        for e in edges:
+            node = e.get("node", {})
+            meta = node.get("meta") or {}
+            deploys.append({
+                "id":         node.get("id", "")[:12],
+                "status":     node.get("status", "unknown"),
+                "created_at": node.get("createdAt", ""),
+                "commit_sha": meta.get("commitHash", "")[:12] if isinstance(meta, dict) else "",
+                "commit_msg": meta.get("commitMessage", "")[:60] if isinstance(meta, dict) else "",
+            })
+        latest = deploys[0] if deploys else {}
+        return {
+            "ok": True,
+            "latest": latest,
+            "recent": deploys,
+            "summary": f"Latest deploy: {latest.get('status','?')} — {latest.get('commit_msg','?')}",
+        }
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+# Crash tracking state — persists in-process, resets on restart (by design)
+_crash_window_secs = 3600   # 1 hour window
+_crash_threshold   = 2      # >2 restarts/hr = restart loop
+_startup_times: list = []   # timestamps of process starts this run
+
+
+def t_crash_report() -> dict:
+    """Detect Railway restart loops: >2 restarts/hour = loop detected.
+    Pulls last N deploy statuses, counts FAILED/CRASHED in last hour.
+    If loop detected: auto-writes to mistakes table + notifies Telegram.
+    Safe to call from background_researcher every cycle."""
+    try:
+        token      = os.environ.get("RAILWAY_TOKEN", "")
+        service_id = os.environ.get("RAILWAY_SERVICE_ID", "48ad55bd-6be2-4d8a-83df-34fc05facaa2")
+        env_id     = os.environ.get("RAILWAY_ENV_ID",     "ff3f2a4c-4085-445e-88ff-a423862d00e8")
+        if not token:
+            return {"ok": False, "error": "RAILWAY_TOKEN not set — crash detection requires RAILWAY_TOKEN"}
+
+        # Pull last 10 deploys
+        query = """query($sid:String!,$eid:String!){
+          deployments(serviceId:$sid,environmentId:$eid,first:10){
+            edges{ node{ id status createdAt meta } }
+          }
+        }"""
+        r = httpx.post(
+            "https://backboard.railway.app/graphql/v2",
+            headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+            json={"query": query, "variables": {"sid": service_id, "eid": env_id}},
+            timeout=15,
+        )
+        data = r.json()
+        if "errors" in data:
+            return {"ok": False, "error": data["errors"][0]["message"]}
+
+        edges = (data.get("data", {})
+                     .get("deployments", {})
+                     .get("edges", []))
+
+        now = datetime.utcnow()
+        cutoff = now - timedelta(seconds=_crash_window_secs)
+        failed_recent = []
+        for e in edges:
+            node   = e.get("node", {})
+            status = node.get("status", "")
+            ts_str = node.get("createdAt", "")
+            if status in ("FAILED", "CRASHED", "ERROR"):
+                try:
+                    ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00")).replace(tzinfo=None)
+                    if ts >= cutoff:
+                        meta = node.get("meta") or {}
+                        failed_recent.append({
+                            "id":     node.get("id", "")[:12],
+                            "status": status,
+                            "ts":     ts_str[:19],
+                            "commit": meta.get("commitHash", "")[:10] if isinstance(meta, dict) else "",
+                        })
+                except Exception:
+                    pass
+
+        crash_count = len(failed_recent)
+        loop_detected = crash_count > _crash_threshold
+
+        if loop_detected:
+            summary = (f"Restart loop: {crash_count} failures in last hour. "
+                       f"Commits: {', '.join(d['commit'] for d in failed_recent)}")
+            # Log to mistakes table — permanent signal for cold processor
+            sb_post("mistakes", {
+                "domain":           "infrastructure",
+                "context":          f"Railway restart loop detected — {crash_count} failures in 1hr",
+                "what_failed":      f"Service crashed {crash_count}x in 1 hour",
+                "correct_approach": "Check recent commits for syntax errors. Use t_build_status to identify failing commit. Rollback via t_redeploy if needed.",
+                "root_cause":       "Likely bad code patch deployed — Railway keeps restarting failed service",
+                "how_to_avoid":     "Run t_build_status after every patch. Add t_syntax_check (Phase 8) before deploy.",
+                "severity":         "critical",
+                "tags":             ["crash", "restart_loop", "railway", "infrastructure"],
+            })
+            notify(
+                f"🚨 *CORE Restart Loop Detected*\n"
+                f"Failures in last hour: {crash_count}\n"
+                f"Threshold: {_crash_threshold}\n"
+                f"Recent failed commits: {', '.join(d['commit'] for d in failed_recent[:3])}\n\n"
+                f"Action: Review last patch. Use /redeploy to retry or rollback."
+            )
+            print(f"[CRASH] Restart loop: {crash_count} failures in 1hr — mistake logged + Telegram notified")
+        else:
+            summary = f"No restart loop. {crash_count} failure(s) in last hour (threshold={_crash_threshold})."
+            print(f"[CRASH] OK — {crash_count} failures in last hour")
+
+        return {
+            "ok":            True,
+            "crash_count":   crash_count,
+            "loop_detected": loop_detected,
+            "threshold":     _crash_threshold,
+            "window_hours":  1,
+            "failed_recent": failed_recent,
+            "summary":       summary,
+        }
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
 # ── Tool registry ─────────────────────────────────────────────────────────────
 TOOLS = {
     "get_state":              {"fn": t_state,                  "perm": "READ",    "args": [],
