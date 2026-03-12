@@ -1220,7 +1220,7 @@ def t_stats():
         patterns = sb_get("pattern_frequency", "select=pattern_key,frequency,domain&order=frequency.desc&limit=10", svc=True)
         mistakes = sb_get("mistakes", "select=domain&limit=200", svc=True)
         mistake_counts: Counter = Counter(m.get("domain","general") for m in mistakes)
-        scores = [h["quality_score"] for h in hots if h.get("quality_score") is not None]
+        scores = [min(1.0, max(0.0, float(h["quality_score"]))) for h in hots if h.get("quality_score") is not None]
         avg_quality = round(sum(scores) / len(scores), 2) if scores else None
         counts = get_system_counts()
         return {
