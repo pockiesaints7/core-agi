@@ -1796,11 +1796,11 @@ def t_redeploy(reason: str = "") -> dict:
         service_id = os.environ.get("RAILWAY_SERVICE_ID", "48ad55bd-6be2-4d8a-83df-34fc05facaa2")
         if not token:
             return {"ok": False, "error": "RAILWAY_TOKEN env var not set"}
-        query = "mutation($id:String!){serviceInstanceRedeploy(serviceId:$id)}"
+        query = "mutation($id:String!,$eid:String!){serviceInstanceRedeploy(serviceId:$id,environmentId:$eid)}"
         r = httpx.post(
             "https://backboard.railway.app/graphql/v2",
             headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
-            json={"query": query, "variables": {"id": service_id}},
+            json={"query": query, "variables": {"id": service_id, "eid": os.environ.get("RAILWAY_ENV_ID", "ff3f2a4c-4085-445e-88ff-a423862d00e8")}},
             timeout=15,
         )
         data = r.json()
