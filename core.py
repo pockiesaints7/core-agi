@@ -479,7 +479,7 @@ def run_cold_processor():
         for h in hots:
             sb_patch("hot_reflections", f"id=eq.{h['id']}", {"processed_by_cold": 1})
         if evolutions_queued > 0:
-            notify(f"✨ Cold processor: {evolutions_queued} evolution(s) queued from {len(hots)} sessions.\nUse /evolutions to review.")
+            notify(f"✨ Cold processor: {evolutions_queued} evolution(s) queued from {len(hots)} sessions.\nReview via Claude Desktop.")
         print(f"[COLD] Done: processed={len(hots)} patterns={len(batch_counts)} evolutions={evolutions_queued}")
         return {"ok": True, "processed": len(hots), "patterns_found": len(batch_counts), "evolutions_queued": evolutions_queued}
     except Exception as e:
@@ -2432,9 +2432,7 @@ def handle_msg(msg):
                f"/backlog [min_priority] — improvement backlog\n"
                f"/mine — scan KB for backlog items\n"
                f"/mistakes [domain] — recent mistakes\n"
-               f"/tasks — task queue\n"
-               f"/evolutions — pending evolutions\n"
-               f"/approve <id> /reject <id>", cid)
+               f"/tasks — task queue"
 
     elif text == "/status":
         h = t_health(); counts = get_system_counts(); ts = t_training_status()
