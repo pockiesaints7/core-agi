@@ -53,6 +53,12 @@ Fix log:Fix log:
                even though KB grew from 1k → 3k. Backlog count never updated automatically.
                Fix: t_get_backlog queries Supabase directly. cold_processor_loop checks KB count
                vs last-run KB count and re-triggers if delta >= 100 entries.
+  2026-03-12T: Removed /evolutions, /approve, /reject Telegram commands.
+               REASON: Per TRAINING_DESIGN.md — "Nothing auto-applies. Ever. Owner + Claude Desktop
+               are always the hands." Telegram apply_evolution() violates stateless Railway principle.
+               Evolution review + apply is Claude Desktop's job only.
+               Also removed "Use /evolutions to review" from cold processor Telegram notify.
+               Cold processor now says "Review via Claude Desktop."
   2026-03-12S: cold_processor new_patterns normalization fix.
                ROOT CAUSE: Groq sometimes returns new_patterns as a JSON string "[...]" or plain
                comma/newline-separated string instead of a list. Iterating a string yields single
