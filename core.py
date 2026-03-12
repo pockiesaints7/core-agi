@@ -1951,6 +1951,9 @@ def t_backlog_update(title: str, status: str):
 
 def t_bulk_apply(executor_override: str = "claude_desktop", dry_run: bool = False):
     """Apply all pending evolution_queue items."""
+    # MCP passes booleans as strings — normalize
+    if isinstance(dry_run, str):
+        dry_run = dry_run.strip().lower() not in ("false", "0", "no", "")
     try:
         rows = sb_get("evolution_queue",
                       "select=*&status=in.(pending,pending_desktop)&order=id.asc",
