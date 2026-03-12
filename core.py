@@ -387,8 +387,19 @@ def run_cold_processor():
 
         for h in hots:
             src = h.get("source") or "real"
-            for p in (h.get("new_patterns") or []):
-                if p:
+            raw_patterns = h.get("new_patterns") or []
+            # Normalize: Groq sometimes returns a JSON string or plain comma-string instead of list.
+            # Iterating a string gives single chars — root cause of garbage single-char pattern_keys.
+            if isinstance(raw_patterns, str):
+                raw_patterns = raw_patterns.strip()
+                try:
+                    parsed = json.loads(raw_patterns)
+                    raw_patterns = parsed if isinstance(parsed, list) else [raw_patterns]
+                except (json.JSONDecodeError, ValueError):
+                    # Plain string — split on newline or comma, strip whitespace
+                    raw_patterns = [x.strip() for x in raw_patterns.replace("\n", ",").split(",") if x.strip()]
+            for p in raw_patterns:
+                if p and isinstance(p, str) and len(p) > 3:  # skip single chars / noise
                     key = str(p)[:200]
                     batch_counts[key] += 1
                     batch_domain.setdefault(key, h.get("domain", "general"))
