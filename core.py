@@ -2326,6 +2326,11 @@ def root():
 @app.get("/health")
 def health_ep(): return t_health()
 
+@app.get("/state")
+def state_ep():
+    """Full system state — same data as t_state() MCP tool."""
+    return t_state()
+
 @app.get("/review")
 async def review_widget():
     """Interactive evolution review widget — served as HTML page."""
