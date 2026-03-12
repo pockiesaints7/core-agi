@@ -2438,7 +2438,7 @@ def handle_msg(msg):
                f"/backlog [min_priority] — improvement backlog\n"
                f"/mine — scan KB for backlog items\n"
                f"/mistakes [domain] — recent mistakes\n"
-               f"/tasks — task queue"
+                f"/tasks - task queue", cid)
 
     elif text == "/status":
         h = t_health(); counts = get_system_counts(); ts = t_training_status()
