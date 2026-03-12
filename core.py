@@ -2582,7 +2582,6 @@ def on_start():
            f"MCP: {len(TOOLS)} tools\n"
            f"🔬 Background researcher: ACTIVE (60 min interval)\n"
            f"⛏️ KB mining: auto-triggers on startup if backlog underpopulated\n"
-           f"📋 BACKLOG.md: Supabase-backed (restart-proof)\n"
            f"📈 Cold processor: auto-triggers on KB growth (+{COLD_KB_GROWTH_THRESHOLD} entries)")
     print(f"[CORE] v5.4 online :{PORT} — {step}")
 
