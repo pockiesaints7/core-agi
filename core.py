@@ -1523,13 +1523,26 @@ def _repopulate_evolution_queue():
     """Re-push P3+ backlog items missing from evolution_queue.
     Reads directly from Supabase backlog table — restart-proof."""
     try:
-        existing = sb_get("evolution_queue",
-                          "select=pattern_key&change_type=in.(backlog,knowledge)&limit=500",
+        existing_rows = sb_get("evolution_queue",
+                          "select=pattern_key,status&change_type=in.(backlog,knowledge)&limit=500",
                           svc=True)
-        existing_keys = {r.get("pattern_key","") for r in existing}
+        # Keys already in queue at any status — skip re-inserting
+        existing_keys = {r.get("pattern_key","") for r in existing_rows}
+        # Keys already applied/rejected — also update backlog status so they stop re-triggering
+        resolved_keys = {r.get("pattern_key","") for r in existing_rows
+                         if r.get("status") in ("applied", "rejected")}
+        # Only pull backlog items that are still genuinely pending
         backlog_items = sb_get("backlog",
                                "select=*&status=eq.pending&order=priority.desc&limit=500",
                                svc=True)
+        # Sync resolved evolution items back to backlog so they don't keep appearing
+        for r in existing_rows:
+            if r.get("status") == "applied":
+                pkey = r.get("pattern_key", "")
+                if pkey.startswith("backlog:"):
+                    parts = pkey.split(":", 2)
+                    if len(parts) == 3:
+                        sb_patch("backlog", f"title=eq.{parts[2]}", {"status": "done"})
         pushed = 0
         for item in backlog_items:
             priority = int(item.get("priority", 1))
