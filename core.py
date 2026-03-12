@@ -2249,6 +2249,8 @@ TOOLS = {
                                "desc": "Trigger Railway redeploy of CORE from latest GitHub commit. CORE manages its own deployment."},
     "logs":                   {"fn": t_logs,                   "perm": "READ",    "args": ["limit"],
                                "desc": "Fetch recent Railway deployment logs. limit=number of lines (default 50)."},
+    "review_evolutions":      {"fn": t_review_evolutions,      "perm": "READ",    "args": [],
+                               "desc": "Get URL to the interactive evolution review widget. Open in browser to translate pending evolutions into WHAT/WHY/WHERE/HOW structured prompts."},
 }
 
 # ── MCP JSON-RPC ──────────────────────────────────────────────────────────────
