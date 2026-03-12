@@ -625,9 +625,13 @@ def apply_evolution(evolution_id: int):
                     note = f"[groq] KB entry added: {title}"
                 else:
                     task_payload = json.dumps({"task": desc, "domain": domain, "source": "backlog", "title": title})
+                    try:
+                        _priority = int(float(evo.get("confidence") or 0.5) * 10)
+                    except Exception:
+                        _priority = 5
                     applied = bool(sb_post("task_queue", {
                         "type": "improvement", "payload": task_payload, "status": "pending",
-                        "priority": int(evo.get("confidence", 0.5) * 10), "source": "backlog_evolution",
+                        "priority": _priority, "source": "backlog_evolution",
                     }))
                     note = f"[groq] Task queued: {title}"
 
