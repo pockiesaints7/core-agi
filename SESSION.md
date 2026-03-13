@@ -111,9 +111,12 @@ Design doc: docs/BINANCE_CORE_AGI.md
 - [ ] 4.3 3 new MCP tools
 
 ### TASK 5 — Zapier MCP Integration (Prereq: Task 1)
-Design docs: docs/ZAPIER_CONNECTIONS.md + ZAPIER_MCP.md
-- [ ] 5.1 t_zapier_trigger(zap_id, payload)
-- [ ] 5.2 Map active Zapier connections
+Design docs: docs/ZAPIER_CONNECTIONS.md + docs/ZAPIER_MCP.md
+**SCOPE CORRECTED 2026-03-13**: No t_zapier_trigger needed — zapier:* tools callable directly from Claude Desktop.
+- [x] 5.0 Scope corrected — KB entry saved (2026-03-13)
+- [ ] 5.1 Write docs/ZAPIER_MCP.md — usage guide (enabled tools, output_hint rules)
+- [ ] 5.2 Enable P0 Zapier connections (Gmail, Todoist, Google Calendar, Webhooks, Perplexity)
+- [ ] 5.3 Test each P0 connection from Claude Desktop
 
 ### TASK 6 — v6.0 Version Stamp 🔒 (LOCKED until Tasks 1-5 done)
 Update version strings at lines 2721, 2757, 2771, 2961, 3001, 3082 → "CORE v6.0"
