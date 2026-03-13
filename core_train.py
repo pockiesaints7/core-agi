@@ -70,9 +70,10 @@ def get_latest_session():
 # -- Hot reflection ------------------------------------------------------------
 def auto_hot_reflection(session_data: dict):
     try:
-        summary   = session_data.get("summary", "")
-        actions   = session_data.get("actions", []) or []
-        interface = session_data.get("interface", "unknown")
+        summary       = session_data.get("summary", "")
+        actions       = session_data.get("actions", []) or []
+        interface     = session_data.get("interface", "unknown")
+        seed_patterns = session_data.get("seed_patterns", []) or []
         total     = max(len(actions), 1)
         verify_rate  = round(sum(1 for a in actions if any(k in str(a).lower() for k in ["verify","readback","confirm"])) / total, 2)
         mistake_rate = round(sum(1 for a in actions if any(k in str(a).lower() for k in ["mistake","error","fix","wrong"])) / total, 2)
@@ -84,26 +85,36 @@ def auto_hot_reflection(session_data: dict):
             return False
 
         # Extract patterns via Groq so cold processor has real signal
-        new_patterns = []
-        quality_score = None
+        new_patterns = list(seed_patterns)  # start with caller-supplied patterns
+        quality_score = session_data.get("quality") or None
         gaps_identified = None
         try:
             actions_str = ", ".join(str(a) for a in actions[:20])
+            seed_hint = f"Caller already identified: {seed_patterns}\n" if seed_patterns else ""
             prompt = (
                 f"Session summary: {summary[:500]}\n"
-                f"Actions taken: {actions_str}\n\n"
+                f"Actions taken: {actions_str}\n"
+                f"{seed_hint}\n"
                 f"Extract 2-5 reusable patterns from this session. "
                 f"Each pattern should be a short, generalizable rule or observation (under 120 chars). "
+                f"Do NOT duplicate patterns already listed above. "
                 f"Also rate session quality 0.0-1.0 and identify any gaps.\n"
                 f"Respond ONLY as JSON: "
                 f'{{"patterns": ["..."], "quality": 0.8, "gaps": "..or null"}}'
             )
             raw = groq_chat(prompt, model=GROQ_FAST, max_tokens=300)
             parsed = json.loads(raw.strip().lstrip("```json").rstrip("```").strip())
-            new_patterns = [p for p in parsed.get("patterns", []) if isinstance(p, str) and len(p) > 5][:5]
-            quality_score = float(parsed.get("quality") or 0.7)
+            groq_patterns = [p for p in parsed.get("patterns", []) if isinstance(p, str) and len(p) > 5][:5]
+            # Merge: seed patterns first, then Groq additions (deduplicated)
+            seen = set(p.lower() for p in new_patterns)
+            for p in groq_patterns:
+                if p.lower() not in seen:
+                    new_patterns.append(p)
+                    seen.add(p.lower())
+            if quality_score is None:
+                quality_score = float(parsed.get("quality") or 0.7)
             gaps_identified = parsed.get("gaps") or None
-            print(f"[HOT] Groq extracted {len(new_patterns)} patterns, quality={quality_score}")
+            print(f"[HOT] Groq extracted {len(groq_patterns)} patterns, merged total={len(new_patterns)}, quality={quality_score}")
         except Exception as e:
             print(f"[HOT] Pattern extraction failed (non-fatal): {e}")
 
