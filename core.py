@@ -1917,7 +1917,69 @@ def t_backlog_update(title: str, status: str):
     return {"ok": ok, "title": title, "new_status": status}
 
 
-def t_bulk_mark_applied(ids: str = "", change_type_filter: str = "backlog") -> dict:
+def t_list_suggestions(status: str = "pending_review", limit: int = 20) -> dict:
+    """List Groq improvement suggestions pending human review.
+    status: pending_review | approved | dismissed (default: pending_review)
+    """
+    try:
+        rows = sb_get("suggestions",
+                      f"select=id,title,description,domain,btype,plan,confidence,status,created_at"
+                      f"&status=eq.{status}&order=confidence.desc&limit={limit}",
+                      svc=True)
+        return {"ok": True, "count": len(rows), "suggestions": rows}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def t_action_suggestion(suggestion_id: str, action: str, notes: str = "") -> dict:
+    """Act on a Groq improvement suggestion.
+    action: approve | dismiss | convert_to_kb
+    - approve    → notify Claude Desktop to implement
+    - dismiss    → mark as dismissed, log reason
+    - convert_to_kb → extract description as KB entry directly
+    """
+    try:
+        rows = sb_get("suggestions", f"select=*&id=eq.{suggestion_id}&limit=1", svc=True)
+        if not rows:
+            return {"ok": False, "error": f"Suggestion {suggestion_id} not found"}
+        s = rows[0]
+        title = s.get("title", "")
+        desc  = s.get("description", "")
+        domain = s.get("domain", "general")
+
+        if action == "approve":
+            sb_patch("suggestions", f"id=eq.{suggestion_id}", {"status": "approved"})
+            notify(
+                f"✅ Suggestion approved — needs implementation\n"
+                f"Title: {title}\n"
+                f"Domain: {domain}\n\n"
+                f"Plan:\n{s.get('plan', desc)[:400]}\n\n"
+                f"Notes: {notes or '—'}"
+            )
+            return {"ok": True, "action": "approved", "title": title}
+
+        elif action == "dismiss":
+            sb_patch("suggestions", f"id=eq.{suggestion_id}", {"status": "dismissed"})
+            return {"ok": True, "action": "dismissed", "title": title}
+
+        elif action == "convert_to_kb":
+            ok = sb_post_critical("knowledge_base", {
+                "domain": domain, "topic": title, "content": desc,
+                "confidence": "medium", "tags": ["suggestion", "converted"],
+                "source": "suggestions",
+            })
+            if ok:
+                sb_patch("suggestions", f"id=eq.{suggestion_id}", {"status": "converted_to_kb"})
+            return {"ok": ok, "action": "convert_to_kb", "title": title}
+
+        else:
+            return {"ok": False, "error": f"Unknown action: {action}. Use: approve | dismiss | convert_to_kb"}
+
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+
     """Directly mark evolution_queue items as applied in Supabase.
     Use when apply_evolution fails due to code bugs but items are safe to mark done.
     ids: comma-separated list of IDs, or empty to mark ALL pending backlog items.
