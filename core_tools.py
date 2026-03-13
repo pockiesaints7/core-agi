@@ -1519,7 +1519,7 @@ TOOLS = {
                                "desc": "Get improvement backlog from Supabase."},
     "backlog_update":         {"fn": t_backlog_update,         "perm": "WRITE",   "args": ["title", "status", "result"],
                                "desc": "Update backlog item status. result required when status=done."},
-    "changelog_add":          {"fn": t_changelog_add,          "perm": "WRITE",   "args": ["version", "component", "summary", "before", "after"],
+    "changelog_add":          {"fn": t_changelog_add,          "perm": "WRITE",   "args": ["version", "component", "summary", "before", "after", "change_type"],
                                "desc": "Log a completed change to the changelog table + Telegram notify."},
     "bulk_apply":             {"fn": t_bulk_apply,             "perm": "WRITE",   "args": ["executor_override", "dry_run"],
                                "desc": "Apply ALL pending evolution_queue items."},
