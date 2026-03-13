@@ -23,6 +23,7 @@ CORE v5.4 is a Recursive Self-Improvement AGI running 24/7 on Railway.
 It learns from every session via a hot→cold reflection pipeline, distills patterns, and evolves its own behavior.
 Operated via Claude Desktop (MCP direct, 50 tools), claude.ai (web/mobile), and Telegram (@reinvagnarbot).
 Full self-knowledge: see `CORE_SELF.md`. Full tool rules: see `operating_context.json`.
+Local v6 plan: `C:\Users\rnvgg\.claude-skills\CORE_v6_plan.md`
 
 ---
 
