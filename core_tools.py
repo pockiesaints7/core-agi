@@ -1631,7 +1631,7 @@ TOOLS = {
     "sb_query":               {"fn": t_sb_query,               "perm": "READ",    "args": ["table", "filters", "limit"],
                                "desc": "Query Supabase table."},
     "list_evolutions":        {"fn": t_list_evolutions,        "perm": "READ",    "args": ["status"],
-                               "desc": "List evolutions."},
+                               "desc": "List evolutions. status=pending|synthesized|applied|rejected (default: pending). Use synthesized to see items Claude has already read via synthesize_evolutions."},
     "update_state":           {"fn": t_update_state,           "perm": "WRITE",   "args": ["key", "value", "reason"],
                                "desc": "Write state update to sessions table"},
     "add_knowledge":          {"fn": t_add_knowledge,          "perm": "WRITE",   "args": ["domain", "topic", "content", "tags", "confidence"],
