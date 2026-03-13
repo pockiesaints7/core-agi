@@ -28,7 +28,7 @@ from core_config import (
 )
 from core_config import _sbh, _sbh_count_svc
 from core_github import _ghh, _gh_blob_read, _gh_blob_write, gh_read, gh_write, notify
-from core_train import apply_evolution, reject_evolution, run_cold_processor
+from core_train import apply_evolution, reject_evolution, bulk_reject_evolutions, run_cold_processor
 
 # Alias — used in t_core_py_rollback and t_deploy_and_wait
 notify_owner = notify
@@ -213,6 +213,15 @@ def t_list_evolutions(status="pending"):
                   f"select=id,status,change_type,change_summary,confidence,pattern_key,created_at&status=eq.{status}&id=gt.1&order=created_at.desc&limit=20",
                   svc=True)
     return {"evolutions": rows, "count": len(rows)}
+
+
+def t_bulk_reject_evolutions(change_type: str = "", ids: str = "", reason: str = "") -> dict:
+    """Bulk reject pending evolutions silently — one Telegram summary at end.
+    change_type: 'backlog' | 'knowledge' | '' (all pending).
+    ids: comma-separated evolution IDs (overrides change_type).
+    reason: optional rejection reason."""
+    id_list = [int(i.strip()) for i in ids.split(",") if i.strip().isdigit()] if ids else []
+    return bulk_reject_evolutions(change_type=change_type, ids=id_list or None, reason=reason)
 
 
 def t_check_evolutions(limit: int = 20) -> dict:
