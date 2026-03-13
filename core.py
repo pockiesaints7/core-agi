@@ -1289,6 +1289,43 @@ def t_session_end(summary: str, actions: str, domain: str = "general",
         return {"ok": False, "error": str(e)}
 
 
+def t_core_py_rollback(commit_sha: str) -> dict:
+    """Emergency restore: fetch core.py at any commit SHA, write back as new commit, redeploy.
+    Replaces 5+ manual steps. Use when a bad deploy breaks CORE."""
+    try:
+        if not commit_sha or len(commit_sha) < 6:
+            return {"ok": False, "error": "commit_sha required (min 6 chars)"}
+        h = _ghh()
+        # Resolve short SHA to full SHA
+        ref_r = httpx.get(f"https://api.github.com/repos/{GITHUB_REPO}/commits/{commit_sha}",
+                          headers=h, timeout=10)
+        ref_r.raise_for_status()
+        full_sha = ref_r.json()["sha"]
+        short_sha = full_sha[:12]
+        # Fetch core.py at that commit
+        file_r = httpx.get(f"https://api.github.com/repos/{GITHUB_REPO}/contents/core.py?ref={full_sha}",
+                           headers=h, timeout=30)
+        file_r.raise_for_status()
+        old_content = base64.b64decode(file_r.json()["content"]).decode()
+        # Write back via blob API as new commit
+        new_commit = _gh_blob_write(
+            "core.py", old_content,
+            f"rollback: restore core.py from {short_sha}"
+        )
+        # Trigger redeploy
+        deploy = t_redeploy(f"rollback to {short_sha}")
+        notify_owner(f"🔄 ROLLBACK triggered — core.py restored from {short_sha}. Deploying...")
+        return {
+            "ok": True,
+            "restored_from": short_sha,
+            "new_commit": new_commit[:12],
+            "redeploying": deploy.get("ok", False),
+            "note": "Use build_status to confirm deploy succeeds"
+        }
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
 def t_deploy_and_wait(reason: str = "", timeout: str = "120") -> dict:
     """Trigger redeploy + poll until success/failure. Single call replaces redeploy + manual polling.
     Returns final state: success | failure | timeout."""
@@ -2514,6 +2551,8 @@ TOOLS = {
                                "desc": "One-call session bootstrap: health + counts + last session + recent mistakes + pending evolutions. Replaces 4 separate tool calls."},
     "session_end":            {"fn": t_session_end,            "perm": "WRITE",   "args": ["summary", "actions", "domain", "patterns", "quality"],
                                "desc": "One-call session close: logs session + hot_reflection in one call. actions=comma-separated. patterns=pipe-separated. Replaces 2-3 end-of-session tool calls."},
+    "core_py_rollback":       {"fn": t_core_py_rollback,       "perm": "EXECUTE", "args": ["commit_sha"],
+                               "desc": "Emergency restore: fetch core.py at commit_sha, write back, redeploy. Use when bad deploy breaks CORE. Replaces 5+ manual steps."},
     "deploy_and_wait":        {"fn": t_deploy_and_wait,        "perm": "EXECUTE", "args": ["reason", "timeout"],
                                "desc": "Trigger redeploy + poll until success/failure. timeout=seconds (default 120). Replaces redeploy + manual build_status polling."},
     "ping_health":            {"fn": t_ping_health,            "perm": "READ",    "args": [],
