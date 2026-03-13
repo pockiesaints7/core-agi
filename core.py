@@ -1990,8 +1990,7 @@ def t_bulk_mark_applied(ids: str = "", change_type_filter: str = "backlog") -> d
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
-
-
+def t_bulk_apply(executor_override: str = "claude_desktop", dry_run: bool = False):
     """Apply all pending evolution_queue items."""
     # MCP passes booleans as strings — normalize
     if isinstance(dry_run, str):
