@@ -82,12 +82,37 @@ def auto_hot_reflection(session_data: dict):
         if len(summary.strip()) < 50 and total <= 2:
             print(f"[HOT] Skipped trivial session: summary_len={len(summary)} actions={total}")
             return False
+
+        # Extract patterns via Groq so cold processor has real signal
+        new_patterns = []
+        quality_score = None
+        gaps_identified = None
+        try:
+            actions_str = ", ".join(str(a) for a in actions[:20])
+            prompt = (
+                f"Session summary: {summary[:500]}\n"
+                f"Actions taken: {actions_str}\n\n"
+                f"Extract 2-5 reusable patterns from this session. "
+                f"Each pattern should be a short, generalizable rule or observation (under 120 chars). "
+                f"Also rate session quality 0.0-1.0 and identify any gaps.\n"
+                f"Respond ONLY as JSON: "
+                f'{{"patterns": ["..."], "quality": 0.8, "gaps": "..or null"}}'
+            )
+            raw = groq_chat(prompt, model=GROQ_FAST, max_tokens=300)
+            parsed = json.loads(raw.strip().lstrip("```json").rstrip("```").strip())
+            new_patterns = [p for p in parsed.get("patterns", []) if isinstance(p, str) and len(p) > 5][:5]
+            quality_score = float(parsed.get("quality") or 0.7)
+            gaps_identified = parsed.get("gaps") or None
+            print(f"[HOT] Groq extracted {len(new_patterns)} patterns, quality={quality_score}")
+        except Exception as e:
+            print(f"[HOT] Pattern extraction failed (non-fatal): {e}")
+
         ok = sb_post("hot_reflections", {
             "task_summary": summary[:300], "domain": domain,
             "verify_rate": verify_rate, "mistake_consult_rate": mistake_rate,
-            "new_patterns": [], "new_mistakes": [],
-            "quality_score": None, "gaps_identified": None,
-            "reflection_text": f"Auto-generated from {interface} session. Actions: {total}.",
+            "new_patterns": new_patterns, "new_mistakes": [],
+            "quality_score": quality_score, "gaps_identified": gaps_identified,
+            "reflection_text": f"Auto-generated from {interface} session. Actions: {total}. Patterns: {len(new_patterns)}.",
             "processed_by_cold": False,
         })
         print(f"[HOT] ok={ok} domain={domain}")
