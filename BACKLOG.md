@@ -1,4 +1,4 @@
-# CORE Improvement Backlog
+# BACKLOG.md — DELETED
 
-_Error reading backlog: Client error '404 Not Found' for url 'https://qbfaplqiakwjvrtwpbmr.supabase.co/rest/v1/backlog?select=*&order=priority.desc&limit=500'
-For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/404_
+This file has been deprecated. Backlog is managed via Supabase `task_queue` table.
+See SESSION.md Task Registry for current task list.
