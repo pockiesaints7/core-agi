@@ -90,13 +90,14 @@ When user says "activate autonomous mode":
 Split core.py (3097 lines, 157KB) into 5 modules (core_config, core_github, core_train, core_tools, core_main).
 Full execution plan: `docs/TASK2_SPLIT_PLAN.md` (2026-03-13)
 - [x] 2.1 Map exact line ranges per module ✓ (2026-03-13, see docs/TASK2_SPLIT_PLAN.md)
-- [ ] 2.2 Extract core_github.py
-- [ ] 2.3 Extract core_train.py
-- [ ] 2.4 Extract core_tools.py
-- [ ] 2.5 Create core_main.py (imports from above)
-- [ ] 2.6 Smoke test all 50 tools
+- [x] 2.0 core_config.py created — constants, env vars, RateLimiter, sb_*, groq_chat ✓ (2026-03-13)
+- [x] 2.2 core_github.py created — gh_*, notify, set_webhook ✓ (2026-03-13)
+- [x] 2.3 core_train.py created — full training pipeline, 841 lines ✓ (2026-03-13)
+- [ ] 2.4 core_tools.py — extract all 50 t_* functions + TOOLS dict (Session B)
+- [ ] 2.5 core_main.py rewrite — FastAPI + routes + startup, import from above 4 modules
+- [ ] 2.6 Smoke test all 50 tools post-split
 - [ ] 2.7 Retire core.py monolith → core_legacy.py
-- [ ] 2.8 Update docs (entry_point in operating_context.json)
+- [ ] 2.8 Update operating_context.json: entry_point core.py → core_main.py
 
 ### TASK 3 — Project Mode (Prereq: Task 2)
 Design doc: docs/PROJECT_MODE_DESIGN.md
