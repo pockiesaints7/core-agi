@@ -553,8 +553,28 @@ def handle_msg(msg):
         else:
             notify(f"Backlog empty (total: {total}). Researcher runs every 60 min.", cid)
 
+    elif text.startswith("/project"):
+        from core_tools import t_project_list, t_project_prepare
+        parts = text.split()[1:]
+        if not parts or parts[0] == "list":
+            result = t_project_list()
+            projects = result.get("projects", [])
+            if projects:
+                lines = [f"*{p['name']}* ({p['project_id']}) — {p['status']}" for p in projects]
+                notify("*Projects:*\n" + "\n".join(lines), cid)
+            else:
+                notify("No projects registered. Use Claude Desktop to register first.", cid)
+        else:
+            ids = ",".join(parts)
+            result = t_project_prepare(ids)
+            prepared = result.get("prepared", [])
+            if prepared:
+                notify(f"Context prepared for: {', '.join(prepared)}. Open Claude Desktop to activate.", cid)
+            else:
+                notify(f"Could not prepare: {ids}. Check project IDs with /project list.", cid)
+
     else:
-        notify("Use /status or /backlog. Full interface → Claude Desktop.", cid)
+        notify("Use /status, /backlog, or /project. Full interface → Claude Desktop.", cid)
 
 
 # ---------------------------------------------------------------------------
