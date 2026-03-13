@@ -1,5 +1,7 @@
 # CORE SESSION MASTER
-> Last updated: 2026-03-13 | Owner: REINVAGNAR | Version: CORE v5.4 → v6.0 in progress
+> Last updated: 2026-03-14 | Owner: REINVAGNAR | Version: CORE v6.0
+
+## Current Step: Task 3 — Project Mode (9 new MCP tools, Supabase tables: projects + project_context)
 
 ---
 
