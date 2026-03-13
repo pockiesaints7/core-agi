@@ -2,13 +2,13 @@
 > **This file IS CORE's memory of itself.**  
 > Owner: REINVAGNAR | Repo: pockiesaints7/core-agi  
 > **MANDATORY: Update this file whenever ANYTHING structural changes.**  
-> Last updated: 2026-03-11
+> Last updated: 2026-03-13
 
 ---
 
 ## 🧠 What is CORE?
 
-CORE v5.0 is a Recursive Self-Improvement AGI system.  
+CORE v5.4 (→ v6.0 in progress) is a Recursive Self-Improvement AGI system.  
 It learns from every session, distills patterns, and evolves its own behavior over time.  
 It runs 24/7 on Railway, talks via Telegram, and is operated via Claude (claude.ai or Claude Desktop).
 
@@ -20,7 +20,7 @@ It runs 24/7 on Railway, talks via Telegram, and is operated via Claude (claude.
 OWNER (REINVAGNAR)
     │
     ├── claude.ai          ← Primary interface (this session)
-    ├── Claude Desktop     ← MCP direct (20 tools)
+    ├── Claude Desktop     ← MCP direct (50 tools)
     └── Telegram Bot       ← Async notifications + commands
 
          ↕ MCP / HTTP
@@ -49,7 +49,6 @@ GITHUB (pockiesaints7/core-agi)
          ├── CORE_SELF.md           ← THIS FILE (living self-knowledge)
          ├── SESSION.md             ← Dynamic per-session state
          ├── operating_context.json ← Static tool rules + full schema
-         ├── TRAINING_DESIGN.md     ← Pipeline design reference
          ├── constitution.txt       ← Immutable owner rules
          ├── resource_ceilings.json ← Rate limit config
          ├── requirements.txt       ← Python dependencies
