@@ -114,17 +114,15 @@ def sb_upsert(t, d, on_conflict):
     return r.is_success
 
 # -- Groq chat helper ----------------------------------------------------------
-def groq_chat(system: str, user: str, model: str = "", max_tokens: int = 800) -> str:
-    """Shared Groq chat helper used by training pipeline and tools."""
+def groq_chat(system: str, user: str, model: str = None, max_tokens: int = 1024) -> str:
+    """Shared Groq chat helper. Matches core.py signature exactly."""
+    m = model or GROQ_MODEL
     r = httpx.post(
         "https://api.groq.com/openai/v1/chat/completions",
         headers={"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"},
-        json={
-            "model": model or GROQ_MODEL,
-            "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
-            "max_tokens": max_tokens,
-            "temperature": 0.3,
-        },
+        json={"model": m, "max_tokens": max_tokens,
+              "messages": [{"role": "system", "content": system},
+                           {"role": "user", "content": user}]},
         timeout=30,
     )
     r.raise_for_status()
