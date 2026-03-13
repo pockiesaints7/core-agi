@@ -562,11 +562,7 @@ def cold_processor_loop():
                 run_cold_processor()
                 _last_cold_run = time.time()
                 _last_cold_kb_count = current_kb_count
-                try:
-                    gh_write("BACKLOG.md", _backlog_to_markdown(),
-                             f"chore(backlog): auto-refresh after cold processor ({trigger})")
-                except Exception as be:
-                    print(f"[COLD] backlog refresh error: {be}")
+                # BACKLOG.md deleted in Task 1.8 — backlog lives in Supabase only
 
             for evo in sb_get("evolution_queue",
                                "select=id,confidence,change_type&status=eq.pending&change_type=eq.knowledge&id=gt.1",
