@@ -1634,6 +1634,8 @@ TOOLS = {
                                "desc": "Compare file between two commits."},
     "deploy_and_wait":        {"fn": t_deploy_and_wait,        "perm": "EXECUTE", "args": ["reason", "timeout"],
                                "desc": "Trigger redeploy + poll until success/failure."},
+    "synthesize_evolutions":  {"fn": t_synthesize_evolutions,  "perm": "READ",    "args": [],
+                               "desc": "Claude reads ALL pending evolution_queue entries + pattern_frequency + cold_reflections + hot_reflection gaps + SESSION.md and acts as an UNCONSTRAINED ARCHITECT. No limits. Invent new tools, new tables, new architecture, new logic, or wild ideas CORE does not know it needs yet. Think 6 months ahead. Output: structured engineering blueprint with impact/effort matrix appended to SESSION.md as a new task chain. Processed evolutions marked synthesized. Manual trigger only."},
     "ping_health":            {"fn": t_ping_health,            "perm": "READ",    "args": [],
                                "desc": "Hit live Railway / endpoint."},
     "verify_live":            {"fn": t_verify_live,            "perm": "READ",    "args": ["expected_text", "timeout"],
