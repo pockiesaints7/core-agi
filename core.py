@@ -888,6 +888,14 @@ def t_read_file(path, repo=""):
     except Exception as e: return {"ok": False, "error": str(e)}
 
 def t_write_file(path, content, message, repo=""):
+    """Write file to GitHub repo — FULL OVERWRITE. Use for NEW files only.
+    GUARD: blocked for core.py — use gh_search_replace or multi_patch for surgical edits."""
+    if (repo or GITHUB_REPO) == GITHUB_REPO and path.strip().lstrip("/") == "core.py":
+        return {
+            "ok": False,
+            "error": "BLOCKED: write_file cannot overwrite core.py (full overwrite = corruption risk). "
+                     "Use multi_patch or gh_search_replace for surgical edits."
+        }
     ok = gh_write(path, content, message, repo or GITHUB_REPO)
     if ok: notify(f"MCP write: `{path}`")
     return {"ok": ok, "path": path}
@@ -1578,6 +1586,8 @@ def extract_signals(task: str) -> dict:
 
 
 def t_route(task: str, execute: bool = False):
+    """DEPRECATED: Telegram free-text routing removed. Route engine no longer needed.
+    Use t_ask() for Groq-powered Q&A. This function kept for backwards compatibility only."""
     if not task: return {"ok": False, "error": "task required"}
     sig = extract_signals(task)
     complexity = 3
@@ -2629,9 +2639,9 @@ TOOLS = {
     "gh_read_lines":          {"fn": t_gh_read_lines,          "perm": "READ",    "args": ["path", "start_line", "end_line", "repo"],
                                "desc": "Read specific line range from GitHub file with line numbers."},
     "write_file":             {"fn": t_write_file,             "perm": "EXECUTE", "args": ["path", "content", "message", "repo"],
-                               "desc": "Write file to GitHub repo. FULL OVERWRITE - use for new files only."},
+                               "desc": "Write NEW file to GitHub repo. FULL OVERWRITE — BLOCKED for core.py. Use multi_patch or gh_search_replace for edits."},
     "route":                  {"fn": t_route,                  "perm": "EXECUTE", "args": ["task", "execute"],
-                               "desc": "Route a task through CORE Routing Engine v2.0. execute=true to run via Groq."},
+                               "desc": "DEPRECATED — Telegram free-text routing removed. Use ask tool instead."},
     "ask":                    {"fn": t_ask,                    "perm": "READ",    "args": ["question", "domain"],
                                "desc": "Ask CORE anything. Pulls KB context + Groq generates answer."},
     "reflect":                {"fn": t_reflect,                "perm": "WRITE",   "args": ["task_summary", "domain", "patterns", "quality", "notes"],
