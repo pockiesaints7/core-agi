@@ -1,86 +1,39 @@
-<![CDATA[<div align="center">
+# CORE
 
-```
- ██████╗ ██████╗ ██████╗ ███████╗
-██╔════╝██╔═══██╗██╔══██╗██╔════╝
-██║     ██║   ██║██████╔╝█████╗  
-██║     ██║   ██║██╔══██╗██╔══╝  
-╚██████╗╚██████╔╝██║  ██║███████╗
- ╚═════╝ ╚═════╝ ╚═╝  ╚═╝╚══════╝
-```
+Personal AGI Orchestration System — built by REINVAGNAR, Indonesia.
 
-**Personal AGI Orchestration System**
-
-`v5.4` · `live` · `self-improving` · `50 MCP tools`
-
-*Built by **REINVAGNAR** 🇮🇩 Indonesia*
-
-</div>
+CORE is a persistent, self-improving AI brain running on Railway, Supabase, and GitHub. It connects to Claude via MCP, learns from every session, and evolves itself over time. Not a chatbot wrapper. An operating system for AI-assisted work.
 
 ---
 
-CORE is a persistent, cloud-native AGI brain. It connects to Claude Desktop via MCP, learns from every session, writes its own evolutions, and gets smarter over time — autonomously.
+## What it does
 
-This is not a chatbot wrapper. It's an operating system for AI-assisted work.
-
----
-
-## How it thinks
-
-```
-session
-  └─ reflect          → captures patterns from the session
-       └─ cold_processor   → distills patterns, queues evolutions
-            └─ approve          → owner reviews via MCP
-                 └─ applied          → CORE is now smarter
-```
-
-Every session feeds the loop. The system evolves itself.
+Every session, CORE captures patterns from the work done. A cold processor distills those patterns, queues proposed changes, and waits for owner approval. Once approved, the changes are applied — and CORE is measurably smarter than before. The loop runs indefinitely.
 
 ---
 
 ## Architecture
 
-```
-Claude Desktop  ──MCP──▶  Railway (core.py)
-                               ├── /mcp        tool dispatcher
-                               ├── /telegram   webhook
-                               └── queue_poller (60s, notify-only)
-                                       │
-                              ┌────────┴────────┐
-                           Supabase          GitHub
-                        (memory, KB,      (source of truth,
-                         mistakes,         state files,
-                         evolutions)       self-edits)
-```
+Claude connects to a FastAPI server on Railway via MCP. That server is the brain — it dispatches tool calls, handles Telegram webhooks, and runs a background queue poller every 60 seconds. State and source of truth live in two places: Supabase holds the memory (knowledge base, mistakes, evolutions, sessions), and GitHub holds the code and state files.
 
 ---
 
-## MCP Surface (50 tools)
+## MCP Surface
 
-| Class | Count | What it does |
-|---|---|---|
-| READ | 27 | query state, search KB, inspect code, check builds |
-| WRITE | 15 | learn, reflect, evolve, notify |
-| EXECUTE | 8 | patch code, redeploy, rollback |
+50 tools across three classes:
 
-One call to `session_start` bootstraps the full context. One call to `session_end` closes the loop.
+- Read (27) — query state, search the knowledge base, inspect code, check builds
+- Write (15) — log knowledge, reflect, queue evolutions, send notifications  
+- Execute (8) — patch code, redeploy, rollback to last good commit
 
----
-
-## Live state
-
-→ [`SESSION.md`](./SESSION.md) — always current
-
-```
-https://raw.githubusercontent.com/pockiesaints7/core-agi/main/SESSION.md
-```
+One call to `session_start` bootstraps full context. One call to `session_end` closes the loop and logs the session.
 
 ---
 
-<div align="center">
+## Current state
 
-**REINVAGNAR** · 🇮🇩 Indonesia · [@pockiesaints7](https://github.com/pockiesaints7)
+Live session state is always at SESSION.md in this repo. The knowledge base currently holds 3,368 entries across 205 sessions. Training pipeline is active.
 
-</div>
-]]>
+---
+
+REINVAGNAR · Indonesia · github.com/pockiesaints7
