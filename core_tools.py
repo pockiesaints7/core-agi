@@ -1375,11 +1375,7 @@ def t_bulk_apply(executor_override: str = "claude_desktop", dry_run: bool = Fals
         applied = [r for r in results if r.get("ok")]
         failed  = [r for r in results if not r.get("ok") and not r.get("action")]
         notify(f"Bulk apply done\nApplied: {len(applied)} | Failed: {len(failed)} | Total: {len(results)}\nExecutor: {executor_override}")
-        try:
-            gh_write("BACKLOG.md", _backlog_to_markdown(),
-                     f"chore(backlog): sync status after bulk_apply ({len(applied)} applied)")
-        except Exception as _be:
-            print(f"[BACKLOG] bulk refresh error: {_be}")
+        # BACKLOG.md deleted in Task 1.8 — backlog lives in Supabase only
         return {"ok": True, "applied": len(applied), "failed": len(failed), "results": results}
     except Exception as e:
         return {"ok": False, "error": str(e)}
