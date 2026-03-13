@@ -1042,6 +1042,138 @@ def t_gh_read_lines(path, start_line=1, end_line=50, repo=""):
         return {"ok": False, "error": str(ex), "path": path}
 
 
+# -- Agentic speed tools ------------------------------------------------------
+
+def t_search_in_file(path: str, pattern: str, repo: str = "") -> dict:
+    """Search for a pattern in a GitHub file. Returns all matching lines with line numbers.
+    Eliminates binary-search round trips when locating functions in large files like core.py."""
+    try:
+        content = gh_read(path, repo or GITHUB_REPO)
+        lines = content.splitlines()
+        matches = []
+        for i, line in enumerate(lines, 1):
+            if pattern.lower() in line.lower():
+                matches.append({"line": i, "content": line})
+        return {"ok": True, "path": path, "pattern": pattern,
+                "total_lines": len(lines), "matches": matches, "count": len(matches)}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def t_multi_patch(path: str, patches: str, message: str, repo: str = "") -> dict:
+    """Apply multiple find-replace patches to a file in a single fetch+write.
+    patches = JSON array of {old_str, new_str}. Faster than calling gh_search_replace N times."""
+    try:
+        repo = repo or GITHUB_REPO
+        if isinstance(patches, str):
+            patches = json.loads(patches)
+        r = httpx.get(f"https://api.github.com/repos/{repo}/contents/{path}",
+                      headers=_ghh(), timeout=15)
+        r.raise_for_status()
+        meta = r.json()
+        content = base64.b64decode(meta["content"]).decode()
+        sha = meta["sha"]
+        applied = []
+        skipped = []
+        for i, patch in enumerate(patches):
+            old = patch.get("old_str", "")
+            new = patch.get("new_str", "")
+            count = content.count(old)
+            if count == 0:
+                skipped.append({"index": i, "reason": "not found", "old_str": old[:60]})
+            elif count > 1:
+                skipped.append({"index": i, "reason": f"ambiguous ({count}x)", "old_str": old[:60]})
+            else:
+                content = content.replace(old, new, 1)
+                applied.append({"index": i, "old_str": old[:60]})
+        if not applied:
+            return {"ok": False, "error": "No patches applied", "skipped": skipped}
+        encoded = base64.b64encode(content.encode()).decode()
+        pr = httpx.put(f"https://api.github.com/repos/{repo}/contents/{path}",
+                       headers=_ghh(), json={"message": message, "content": encoded, "sha": sha}, timeout=20)
+        return {"ok": pr.is_success, "path": path, "applied": len(applied),
+                "skipped": len(skipped), "details": applied, "skipped_details": skipped}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def t_deploy_and_wait(reason: str = "", timeout: str = "120") -> dict:
+    """Trigger redeploy + poll until success/failure. Single call replaces redeploy + manual polling.
+    Returns final state: success | failure | timeout."""
+    try:
+        t_secs = int(timeout) if timeout else 120
+        # Trigger deploy
+        deploy_result = t_redeploy(reason)
+        if not deploy_result.get("ok"):
+            return {"ok": False, "error": f"redeploy failed: {deploy_result.get('error')}"}
+        commit_sha_short = deploy_result.get("commit", "")
+        # Get full SHA from latest commit
+        h = _ghh()
+        ref = httpx.get(f"https://api.github.com/repos/{GITHUB_REPO}/git/ref/heads/main", headers=h, timeout=10)
+        ref.raise_for_status()
+        full_sha = ref.json()["object"]["sha"]
+        # Poll for status
+        deadline = time.time() + t_secs
+        poll_count = 0
+        while time.time() < deadline:
+            time.sleep(8)
+            poll_count += 1
+            sr = httpx.get(f"https://api.github.com/repos/{GITHUB_REPO}/commits/{full_sha}/statuses",
+                           headers=h, timeout=10)
+            statuses = sr.json() if sr.status_code == 200 else []
+            railway = [s for s in statuses if "railway" in s.get("context","").lower()
+                       or "railway" in s.get("description","").lower()]
+            st = railway[0] if railway else {}
+            state = st.get("state", "")
+            if state == "success":
+                return {"ok": True, "state": "success", "commit": commit_sha_short,
+                        "description": st.get("description",""), "polls": poll_count,
+                        "elapsed_s": round(time.time() - (deadline - t_secs))}
+            if state == "failure":
+                return {"ok": False, "state": "failure", "commit": commit_sha_short,
+                        "description": st.get("description",""), "polls": poll_count}
+        return {"ok": False, "state": "timeout", "commit": commit_sha_short,
+                "polls": poll_count, "timeout_s": t_secs}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def t_ping_health() -> dict:
+    """Hit the live Railway / endpoint and return actual response. Confirms what version is running.
+    Faster than checking GitHub — directly verifies deployed code is live."""
+    try:
+        railway_url = os.environ.get("RAILWAY_PUBLIC_URL", "https://core-agi-production.up.railway.app")
+        r = httpx.get(f"{railway_url}/", timeout=10)
+        return {"ok": r.is_success, "status_code": r.status_code,
+                "response": r.json() if "application/json" in r.headers.get("content-type","") else r.text[:500]}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def t_verify_live(expected_text: str, timeout: str = "90") -> dict:
+    """Poll /state endpoint until expected_text appears in response. Confirms new code is live post-deploy.
+    Use after gh_search_replace to verify the patch actually deployed."""
+    try:
+        t_secs = int(timeout) if timeout else 90
+        railway_url = os.environ.get("RAILWAY_PUBLIC_URL", "https://core-agi-production.up.railway.app")
+        deadline = time.time() + t_secs
+        poll_count = 0
+        while time.time() < deadline:
+            try:
+                r = httpx.get(f"{railway_url}/state", timeout=8)
+                if r.is_success and expected_text in r.text:
+                    return {"ok": True, "found": True, "polls": poll_count,
+                            "elapsed_s": round(time.time() - (deadline - t_secs))}
+            except Exception:
+                pass
+            time.sleep(8)
+            poll_count += 1
+        return {"ok": False, "found": False, "polls": poll_count, "timeout_s": t_secs,
+                "note": "Text not found in /state within timeout — deploy may still be pending"}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
 # -- Groq LLM call ------------------------------------------------------------
 def groq_chat(system: str, user: str, model: str = None, max_tokens: int = 1024) -> str:
     m = model or GROQ_MODEL
