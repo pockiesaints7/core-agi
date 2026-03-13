@@ -624,16 +624,22 @@ def apply_evolution(evolution_id: int):
                     }))
                     note = f"[groq] KB entry added: {title}"
                 else:
-                    task_payload = json.dumps({"task": desc, "domain": domain, "source": "backlog", "title": title})
+                    # missing_data → suggestion for human review, NOT task_queue
                     try:
-                        _priority = int(float(evo.get("confidence") or 0.5) * 10)
+                        _confidence = float(evo.get("confidence") or 0.5)
                     except Exception:
-                        _priority = 5
-                    applied = bool(sb_post("task_queue", {
-                        "task": task_payload, "status": "pending",
-                        "priority": _priority, "source": "backlog_evolution",
+                        _confidence = 0.5
+                    applied = bool(sb_post("suggestions", {
+                        "title": title,
+                        "description": desc,
+                        "domain": domain,
+                        "btype": btype,
+                        "confidence": _confidence,
+                        "source": "evolution_queue",
+                        "status": "pending_review",
+                        "evolution_id": evolution_id,
                     }))
-                    note = f"[groq] Task queued: {title}"
+                    note = f"[suggestion] Queued for review: {title}"
 
             elif executor == "claude_desktop" or (executor == "auto" and btype in ("new_tool", "telegram_command")):
                 sb_patch("evolution_queue", f"id=eq.{evolution_id}", {"status": "pending_desktop"})
@@ -647,14 +653,22 @@ def apply_evolution(evolution_id: int):
                 note = f"[claude_desktop] Flagged for Desktop session: {title}"
 
             else:
+                # logic_improvement, performance, etc → generate plan, store as suggestion
                 plan_prompt = f"Generate a concise implementation plan for: {title}\nDescription: {desc}\nOutput as numbered steps, max 5 steps."
                 plan = groq_chat("You are CORE planning engine. Be concise.", plan_prompt,
                                  model=GROQ_FAST, max_tokens=300)
-                applied = bool(sb_post("task_queue", {
-                    "task": json.dumps({"title": title, "plan": plan, "domain": domain}),
-                    "status": "pending", "priority": 5, "source": "backlog_evolution",
+                applied = bool(sb_post("suggestions", {
+                    "title": title,
+                    "description": desc,
+                    "domain": domain,
+                    "btype": btype,
+                    "plan": plan,
+                    "confidence": float(evo.get("confidence") or 0.5),
+                    "source": "evolution_queue",
+                    "status": "pending_review",
+                    "evolution_id": evolution_id,
                 }))
-                note = f"[auto] Plan generated + queued: {title}"
+                note = f"[suggestion] Plan generated, pending review: {title}"
 
             # Update backlog status in Supabase
             sb_patch("backlog", f"title=eq.{title}",
