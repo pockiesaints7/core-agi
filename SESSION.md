@@ -1,7 +1,7 @@
 # CORE SESSION MASTER
 > Last updated: 2026-03-14 | Owner: REINVAGNAR | Version: CORE v6.0
 
-## Current Step: Task 8 — synthesize_evolutions (8.3 status=synthesized flow, 8.4 test, 8.5 docs)
+## Current Step: Task 8 — synthesize_evolutions (8.4 test, 8.5 docs) — ready to run live test next session
 
 ## last_good_commit: 2026-03-14 (post Task 7 — all 50 tools verified green)
 > If Railway goes down: use `github:get_file_contents` to read this SHA, restore via `github:push_files`. Do NOT use core-agi: tools when Railway is confirmed down — they all fail simultaneously.
@@ -174,6 +174,7 @@ Reject still needed: discards noise. synthesize only produces SESSION.md task ch
 
 | Date | Summary | Key Actions |
 |---|---|------|
+| 2026-03-13 | Diagnosed and fixed high fail rate in gh_search_replace and  | Patched t_gh_search_replace and t_multi_patch in core_tools.py via multi_patch. Verified readback. Build confirmed success on Railway. |
 | 2026-03-13 | Removed all 3 ghost BACKLOG.md gh_write calls from core_trai | identified 3 ghost BACKLOG.md gh_write calls surviving Task 1.8 deletion, attempted gh_search_replace but unicode em-dash blocked match, fetched full core_train.py via github:get_file_contents (+4 more) |
 | 2026-03-13 | Task 8.1+8.2 complete — t_synthesize_evolutions added to cor | read current core_tools.py via github:get_file_contents, wrote TOOLS registry entry via gh_search_replace, attempted function body insert via gh_search_replace timed out (+8 more) |
 | 2026-03-13 | Designed and registered Task 8 — synthesize_evolutions. Clau | read SESSION.md full, identified correct insertion point for Task 8, designed synthesize_evolutions tool spec (+4 more) |
