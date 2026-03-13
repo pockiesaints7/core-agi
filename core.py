@@ -2455,8 +2455,9 @@ def t_build_status() -> dict:
     Polls GitHub commit statuses — Railway posts here automatically, no RAILWAY_TOKEN needed."""
     try:
         h = _ghh()
-        # Get last 3 commits
-        r = httpx.get(f"https://api.github.com/repos/{GITHUB_REPO}/commits?per_page=3", headers=h, timeout=10)
+        now = datetime.utcnow()
+        # Get last 5 commits
+        r = httpx.get(f"https://api.github.com/repos/{GITHUB_REPO}/commits?per_page=5", headers=h, timeout=10)
         r.raise_for_status()
         commits = r.json()
         deploys = []
@@ -2467,12 +2468,22 @@ def t_build_status() -> dict:
             statuses = sr.json() if sr.status_code == 200 else []
             railway = [s for s in statuses if "railway" in s.get("context","").lower() or "railway" in s.get("description","").lower()]
             st = railway[0] if railway else (statuses[0] if statuses else {})
+            updated = st.get("updated_at", "")
+            time_since = ""
+            if updated:
+                try:
+                    dt = datetime.strptime(updated, "%Y-%m-%dT%H:%M:%SZ")
+                    delta = now - dt
+                    mins = int(delta.total_seconds() // 60)
+                    time_since = f"{mins}m ago" if mins < 60 else f"{mins//60}h{mins%60}m ago"
+                except: pass
             deploys.append({
-                "commit_sha": sha[:12],
-                "commit_msg": msg,
-                "state":      st.get("state", "no status"),
+                "commit_sha":  sha[:12],
+                "commit_msg":  msg,
+                "state":       st.get("state", "no status"),
                 "description": st.get("description", ""),
-                "updated_at": st.get("updated_at", ""),
+                "updated_at":  updated,
+                "time_since":  time_since,
             })
         latest = deploys[0] if deploys else {}
         return {
@@ -2638,7 +2649,7 @@ TOOLS = {
     "deploy_status":          {"fn": t_deploy_status,          "perm": "READ",    "args": [],
                                "desc": "Return active deploy info: build ID, commit SHA, deploy time."},
     "build_status":           {"fn": t_build_status,           "perm": "READ",    "args": [],
-                               "desc": "Check if latest GitHub push is building/succeeded/failed on Railway."},
+                               "desc": "Check last 5 commits build state on Railway. Includes time_since field for human-readable age."},
     "crash_report":           {"fn": t_crash_report,           "perm": "READ",    "args": [],
                                "desc": "Detect Railway restart loops. >2 restarts/hour = loop detected."},
     "review_evolutions":      {"fn": t_review_evolutions,      "perm": "READ",    "args": [],
@@ -2662,7 +2673,7 @@ TOOLS = {
     "diff":                   {"fn": t_diff,                   "perm": "READ",    "args": ["path", "sha_a", "sha_b"],
                                "desc": "Compare file between two commits. sha_a=older, sha_b=newer/branch (default:main). sha_a='prev' auto-uses parent. Shows exactly what changed."},
     "deploy_and_wait":        {"fn": t_deploy_and_wait,        "perm": "EXECUTE", "args": ["reason", "timeout"],
-                               "desc": "Trigger redeploy + poll until success/failure. timeout=seconds (default 120). Replaces redeploy + manual build_status polling."},
+                               "desc": "Trigger redeploy + poll until success/failure. Sends Telegram on complete. timeout=seconds (default 120). Replaces redeploy + manual build_status polling."},
     "ping_health":            {"fn": t_ping_health,            "perm": "READ",    "args": [],
                                "desc": "Hit live Railway / endpoint. Confirms what version is actually running right now."},
     "verify_live":            {"fn": t_verify_live,            "perm": "READ",    "args": ["expected_text", "timeout"],
