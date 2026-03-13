@@ -1,4 +1,4 @@
-# CORE v5.0 🧠
+# CORE v5.4 🧠
 ### Personal AGI Orchestration System
 
 > Built by **REINVAGNAR** 🇮🇩 — Indonesia
@@ -7,9 +7,9 @@
 
 ## What is CORE?
 
-CORE is a personal AGI system — a persistent, always-on brain that lives in the cloud, connects to Claude Desktop via MCP, and accepts tasks from anywhere via Telegram.
+CORE is a personal AGI system — a persistent, always-on brain that lives in the cloud, connects to Claude Desktop via MCP, and accepts tasks from anywhere via Telegram. It self-improves through a hot→cold training pipeline, manages its own knowledge base, and can modify its own codebase.
 
-Currently at **Step 0** — MCP server fully operational, memory connected, bot live.
+Currently at **v5.4** — fully operational with 50 MCP tools, autonomous training loop, and GOD MODE power tools.
 
 ---
 
@@ -18,11 +18,11 @@ Currently at **Step 0** — MCP server fully operational, memory connected, bot 
 ```
 You (Claude Desktop / Telegram)
     ↓ MCP protocol / Telegram webhook
-Railway — core.py (single process, port 8080)
-    ├── FastAPI HTTP server
-    ├── MCP server (/mcp/*)
-    ├── Telegram bot (/webhook)
-    └── Queue poller (30s)
+Railway — core.py (FastAPI, port 8080)
+    ├── MCP dispatcher (/mcp)
+    ├── Telegram webhook (/telegram)
+    ├── Queue poller (60s, notify-only)
+    └── Background training loop
     ↓
 Supabase — jarvis-brain (memory & knowledge)
     ↓
@@ -37,22 +37,32 @@ GitHub — pockiesaints7/core-agi (source of truth)
 |---------|------|
 | Railway | Host — single process, 24/7 |
 | Groq | LLM — llama-3.3-70b (main), llama-3.1-8b (fast) |
-| Supabase | Memory — knowledge, mistakes, playbook, state |
-| GitHub | Source of truth — code + master prompt |
+| Supabase | Memory — knowledge, mistakes, reflections, evolutions |
+| GitHub | Source of truth — code + state files |
 | Telegram | Remote control — @reinvagnarbot |
 | Cloudflare | Credential vault — core-vault worker |
 
 ---
 
-## MCP Tools (14)
+## MCP Tools (50)
 
-Claude Desktop connects via `/mcp/startup` and gets full system context.
+Claude Desktop connects via `/mcp` and gets full system context in one call (`session_start`).
 
-| Permission | Tools |
-|-----------|-------|
-| READ | `get_state`, `get_system_health`, `get_constitution`, `get_training_status`, `search_kb`, `get_mistakes`, `read_file`, `sb_query` |
-| WRITE | `update_state`, `add_knowledge`, `log_mistake`, `notify_owner`, `sb_insert` |
-| EXECUTE | `write_file` |
+| Permission | Count | Key Tools |
+|-----------|-------|-----------|
+| READ | 27 | `get_state`, `search_kb`, `get_mistakes`, `read_file`, `stats`, `build_status`, `core_py_fn` |
+| WRITE | 15 | `add_knowledge`, `log_mistake`, `reflect`, `approve_evolution`, `sb_bulk_insert` |
+| EXECUTE | 8 | `gh_search_replace`, `multi_patch`, `redeploy`, `deploy_and_wait`, `core_py_rollback` |
+
+---
+
+## Self-Improvement Pipeline
+
+```
+Claude session → hot_reflection → cold_processor → evolution_queue → approve → applied
+```
+
+CORE distills patterns from sessions, queues code/knowledge evolutions, and applies them with owner approval via Telegram.
 
 ---
 
@@ -64,38 +74,25 @@ Claude Desktop connects via `/mcp/startup` and gets full system context.
 /tasks   — recent task queue
 /ask X   — search knowledge base
 
-Any other message → queued for execution (Step 3)
+Any task → notify owner for approval (queue_poller, 60s)
 ```
 
 ---
 
-## Master Prompt
+## Live State
 
-Lives in two places simultaneously:
-- **Supabase** `master_prompt` table — live source of truth
-- **GitHub** `master_prompt.md` — offline reference
+Always-current session state: [SESSION.md](./SESSION.md)
 
-Fetch latest:
+Raw fetch:
 ```
-https://raw.githubusercontent.com/pockiesaints7/core-agi/main/master_prompt.md
+https://raw.githubusercontent.com/pockiesaints7/core-agi/main/SESSION.md
 ```
-
----
-
-## Roadmap
-
-| Step | Scope | Status |
-|------|-------|--------|
-| 0 | MCP server + Telegram bot + queue | 🔄 In progress |
-| 1 | Claude Desktop fully connected | ⏳ Pending |
-| 2 | Task execution via MCP tools | ⏳ Pending |
-| 3 | 24/7 training loop + agent pipeline | ⏳ Pending |
 
 ---
 
 ## Owner
 
-**REINVAGNAR** 🇮🇩  
-Indonesia  
-GitHub: [@pockiesaints7](https://github.com/pockiesaints7)  
+**REINVAGNAR** 🇮🇩
+Indonesia
+GitHub: [@pockiesaints7](https://github.com/pockiesaints7)
 Telegram Bot: [@reinvagnarbot](https://t.me/reinvagnarbot)
