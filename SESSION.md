@@ -1,7 +1,7 @@
 # CORE SESSION MASTER
 > Last updated: 2026-03-14 | Owner: REINVAGNAR | Version: CORE v6.0
 
-## Current Step: Task 5 fully complete including skill graph. Next: Task 3 (Project Mode) to unblock Task 6 v6.0 stamp. Paste updated CORE_AGI_SKILL.md into Claude Desktop before next session.
+## Current Step: Task 3 — 3.1/3.2/3.3 done. Remaining: 3.4 (register Equinix JK1-2 via project_register from Claude Desktop — tool not available in claude.ai MCP cache). Also: finish operating_context.json changelog table patch (1 skipped). Then Task 4 or Task 6 stamp if Ki skips Task 4.
 
 ## last_good_commit: 2026-03-14 (post Task 7 — all 50 tools verified green)
 > If Railway goes down: use `github:get_file_contents` to read this SHA, restore via `github:push_files`. Do NOT use core-agi: tools when Railway is confirmed down — they all fail simultaneously.
@@ -109,9 +109,9 @@ Split core.py (3097 lines, 157KB) into 5 modules.
 
 ### TASK 3 — Project Mode (Prereq: Task 2) 🔄 IN PROGRESS
 Design doc: docs/PROJECT_MODE_DESIGN.md
-- [ ] 3.1 9 new MCP tools
-- [ ] 3.2 Supabase tables: projects + project_context
-- [ ] 3.3 Local PROJECTS.md
+- [x] 3.1 9 new MCP tools
+- [x] 3.2 Supabase tables: projects + project_context
+- [x] 3.3 Local PROJECTS.md
 - [ ] 3.4 Index Equinix JK1-2 as first project
 
 ### TASK 4 — Binance/Crypto Integration (Prereq: Task 2)
@@ -222,6 +222,7 @@ The autonomous mode daemon (Section 4) already exists. The wild idea: CORE gener
 
 | Date | Summary | Key Actions |
 |---|---|------|
+| 2026-03-13 | Task 3 foundation complete. Built 9 project MCP tools (proje | session_start|read PROJECT_MODE_DESIGN.md full|checked mistakes domain=infrastructure|multi_patch 9 project tools into core_tools.py|multi_patch /project handler into core_main.py|core_py_validate — core_main.py clean, core_tools.py false positives confirmed pre-existing|build_status — both commits green|webhooks GET /state to verify deploy|PROJECTS.md created locally|multi_patch operating_context.json v2.4 (3/4 applied)|add_knowledge x2|changelog_add |
 | 2026-03-13 | Completed Zapier full skill enumeration and documentation. D | read ZAPIER_MCP.md|tool_search x6 for all Zapier domains|discovered 8 Gemini tools undetected in Task 5.3|built ZAPIER_SKILL_GRAPH.md (71 tools, 15 compound skills)|added tool priority system to CORE_AGI_SKILL.md|saved both locally to C:\Users\rnvgg\.claude-skills\|pushed ZAPIER_SKILL_GRAPH.md to docs/ in repo|add_knowledge tool priority system|changelog_add |
 | 2026-03-13 | Task 5 complete. Tested all 4 P0 Zapier connections: Gmail ( | read ZAPIER_MCP.md|tool_search for all 4 P0 tools|gmail_find_email test ✅|google_calendar_find_events test ✅|todoist_find_task test ✅|webhooks_by_zapier_post test ✅|changelog_add logged |
 | 2026-03-13 | Task 8 complete. synthesize_evolutions live-tested — confirm | synthesize_evolutions called|Claude produced Task 9 architect blueprint|SESSION.md updated with Task 9 (6 items) + 8.4 ticked|CORE_SELF.md rewritten: v6.0, 5-module arch, 50 tools (+4 more) |
