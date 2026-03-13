@@ -751,21 +751,23 @@ Output ONLY valid JSON array, no preamble."""
 # -- Real signal + simulation --------------------------------------------------
 def _extract_real_signal() -> bool:
     """Track A - extract patterns from real sessions + mistakes.
-    Scoped to since last processed hot_reflection — so no signal is ever skipped.
-    Falls back to 7 days if no hot_reflections exist yet.
+    Uses last_real_signal_ts state key as lower bound - processes everything since last run.
+    Soft-boot default: yesterday, so first run after any deploy rescans last 24h.
+    After each successful run, saves current timestamp as the new lower bound.
     """
     try:
-        # Use last hot_reflection created_at as lower bound — not a hardcoded window
-        last_hot = sb_get("hot_reflections",
-            "select=created_at&order=created_at.desc&limit=1",
+        # Read last_real_signal_ts from state (stored in sessions table as [state_update])
+        state_rows = sb_get("sessions",
+            "select=summary&summary=like.*last_real_signal_ts*&order=created_at.desc&limit=1",
             svc=True)
-        if last_hot and last_hot[0].get("created_at"):
-            raw_ts = last_hot[0]["created_at"]
-            since_ts = raw_ts.replace("Z", "").split("+")[0]
-            print(f"[RESEARCH/REAL] Using last hot_reflection ts: {since_ts}")
+        if state_rows and state_rows[0].get("summary"):
+            raw = state_rows[0]["summary"].split("last_real_signal_ts:")[-1].strip().split()[0]
+            since_ts = raw.replace("Z", "").split("+")[0]
+            print(f"[RESEARCH/REAL] Using last_real_signal_ts: {since_ts}")
         else:
-            since_ts = (datetime.utcnow() - timedelta(days=7)).isoformat()
-            print(f"[RESEARCH/REAL] No hot_reflections found, falling back to 7d window")
+            # Soft-boot: yesterday so first run after deploy always rescans recent data
+            since_ts = (datetime.utcnow() - timedelta(days=1)).isoformat()
+            print(f"[RESEARCH/REAL] No state key found, soft-boot to yesterday: {since_ts}")
 
         sessions = sb_get("sessions",
             f"select=summary,actions,interface&created_at=gte.{since_ts}&order=created_at.desc&limit=20",
