@@ -135,12 +135,12 @@ Skill graph designed: 2026-03-14 (claude.ai session).
 
 **Allowed evolution types from cold processor:** `knowledge`, `code`, `config` ONLY.
 
-- [ ] 7.1 PATCH `run_cold_processor()` — remove `change_type=backlog` output. Guard: `ALLOWED_EVO_TYPES = ["knowledge", "code", "config"]`
-- [ ] 7.2 PATCH `apply_evolution()` — delete entire `backlog` branch (~60 lines). Dead code, causes ghost task_queue entries with `result=null`
-- [ ] 7.3 PATCH `backlog_update()` — require `result` field when `status=done`. Reject if result is null/empty
-- [ ] 7.4 NEW `t_changelog_add()` — called on every task completion. Writes: version, component, what changed, before/after state to `changelog` table + Telegram notify
-- [ ] 7.5 PATCH `cold_processor_loop()` — remove auto-apply of `backlog` type evolutions from background_researcher loop
-- [ ] 7.6 UPDATE `SESSION.md` rule table — `evolution_queue` only accepts knowledge/code/config (done ✓ this session)
+- [x] 7.1 PATCH `run_cold_processor()` — remove `change_type=backlog` output. Guard: `ALLOWED_EVO_TYPES = ["knowledge", "code", "config"]` ✅ 2026-03-14
+- [x] 7.2 PATCH `apply_evolution()` — delete entire `backlog` branch (~60 lines). Dead code, causes ghost task_queue entries with `result=null` ✅ 2026-03-14
+- [x] 7.3 PATCH `backlog_update()` — require `result` field when `status=done`. Reject if result is null/empty ✅ 2026-03-14
+- [x] 7.4 NEW `t_changelog_add()` — called on every task completion. Writes: version, component, what changed, before/after state to `changelog` table + Telegram notify ✅ 2026-03-14
+- [x] 7.5 PATCH `cold_processor_loop()` — remove auto-apply of `backlog` type evolutions from background_researcher loop ✅ 2026-03-14
+- [x] 7.6 UPDATE `SESSION.md` rule table — `evolution_queue` only accepts knowledge/code/config (done ✓ this session) ✅ 2026-03-14
 - [ ] 7.7 Smoke test: run a full cycle — session_end → hot_reflection → cold_processor → evolution appears as knowledge only
 
 ---
