@@ -1,10 +1,10 @@
 {
   "_note": "Static tool rules + tombstone + FULL SCHEMA all active tables. Update ini kalau: (1) breaking change tool params, (2) tabel baru di-drop, (3) schema tabel berubah, (4) architecture berubah.",
-  "_last_updated": "2026-03-11",
-  "_version": "2.0",
+  "_last_updated": "2026-03-13",
+  "_version": "2.1",
 
   "architecture": {
-    "system_name": "CORE v5.0 — Recursive Self-Improvement AGI",
+    "system_name": "CORE v5.4 — Recursive Self-Improvement AGI",
     "owner": "REINVAGNAR",
     "repo": "pockiesaints7/core-agi",
     "railway_url": "https://core-agi-production.up.railway.app",
@@ -16,7 +16,7 @@
     "state_files": {
       "SESSION.md": "Dynamic: active tables, step status, next action — update every session",
       "operating_context.json": "Static: tool rules, full schema, tombstone tables — update only on structural change",
-      "TRAINING_DESIGN.md": "Pipeline design reference — read-only reference"
+      "CORE_SELF.md": "Living self-knowledge — what CORE is, what it can do, how it works"
     },
     "key_endpoints": {
       "GET /": "Health check + current step",
@@ -38,18 +38,21 @@
       "telegram_messages_per_hour": 30,
       "mcp_tool_calls_per_minute": 30
     },
-    "mcp_tools_count": 20,
-    "interfaces": ["claude.ai (primary)", "Claude Desktop (MCP direct)"]
+    "mcp_tools_count": 50,
+    "interfaces": ["claude.ai (primary)", "Claude Desktop (MCP direct)", "Telegram (@reinvagnarbot)"]
   },
 
   "tool_rules": {
     "read_file":   "OMIT repo arg — default pockiesaints7/core-agi sudah benar",
-    "write_file":  "OMIT repo arg — default pockiesaints7/core-agi sudah benar",
+    "write_file":  "OMIT repo arg — default pockiesaints7/core-agi sudah benar. BLOCKED on core.py (guard active)",
     "sb_query":    "param adalah 'filters' BUKAN 'query_string'. contoh: filters='domain=eq.mcp'",
     "log_mistake": "required: context, what_failed, fix. optional: domain, root_cause, how_to_avoid, severity",
     "sb_insert":   "data harus valid JSON string. sessions required: summary(str), actions(array), interface(str)",
     "add_knowledge": "prefer over sb_insert untuk knowledge_base. required: topic, content. optional: domain, confidence, tags",
-    "sb_insert_hot_reflections": "required: task_summary(str), domain(str), new_patterns(array), quality_score(float), reflection_text(str)"
+    "sb_insert_hot_reflections": "required: task_summary(str), domain(str), new_patterns(array), quality_score(float), reflection_text(str)",
+    "session_start": "call at start of every Desktop session — replaces 4 separate calls",
+    "session_end": "call at end of every Desktop session — replaces 2-3 calls",
+    "processed_by_cold": "use eq.0/eq.1 (integer) in filters, NOT eq.true/eq.false"
   },
 
   "conventions": {
@@ -126,7 +129,7 @@
   },
 
   "schema_evolution_protocol": {
-    "when_table_added": ["Add to active_tables in this file", "Add KB entry: 'CORE DB Schema — [table_name]'", "Update SESSION.md Active Tables section", "Update TRAINING_DESIGN.md if affects training pipeline"],
+    "when_table_added": ["Add to active_tables in this file", "Add KB entry: 'CORE DB Schema — [table_name]'", "Update SESSION.md Active Tables section"],
     "when_table_dropped": ["Move from active_tables to tombstone_tables", "Add KB entry marking table as tombstone", "Update SESSION.md", "Remove from all queries in core.py"],
     "when_schema_changes": ["Update schema in this file under active_tables", "Update KB entry for that table", "Add changelog entry", "Add migration note in core.py fix log"]
   },
