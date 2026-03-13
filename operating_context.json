@@ -1,7 +1,7 @@
 {
   "_note": "Static tool rules + tombstone + FULL SCHEMA all active tables. Update ini kalau: (1) breaking change tool params, (2) tabel baru di-drop, (3) schema tabel berubah, (4) architecture berubah.",
-  "_last_updated": "2026-03-14 (Task 8.5)",
-  "_version": "2.3",
+  "_last_updated": "2026-03-14 (Task 3.1)",
+  "_version": "2.4",
 
   "architecture": {
     "system_name": "CORE v6.0 — Recursive Self-Improvement AGI",
@@ -38,7 +38,7 @@
       "telegram_messages_per_hour": 30,
       "mcp_tool_calls_per_minute": 30
     },
-    "mcp_tools_count": 50,
+    "mcp_tools_count": 59,
     "interfaces": ["claude.ai (primary)", "Claude Desktop (MCP direct)", "Telegram (@reinvagnarbot)"]
   },
 
