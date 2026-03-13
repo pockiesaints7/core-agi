@@ -814,7 +814,7 @@ Output ONLY valid JSON, no preamble."""
             return False
 
         ok = sb_post("hot_reflections", {
-            "task_summary": f"Real signal extraction (24h) - {len(sessions)} sessions, {len(mistakes)} mistakes",
+            "task_summary": f"Real signal extraction (since last processed) - {len(sessions)} sessions, {len(mistakes)} mistakes",
             "domain": result.get("domain", "general"),
             "new_patterns": patterns,
             "gaps_identified": result.get("gaps", ""),
