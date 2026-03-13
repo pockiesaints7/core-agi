@@ -540,9 +540,12 @@ def t_multi_patch(path: str, patches: str, message: str, repo: str = "") -> dict
 
 
 def t_session_end(summary: str, actions: str, domain: str = "general",
-                  patterns: str = "", quality: str = "0.8") -> dict:
-    """One-call session close. Always logs hot_reflection via auto_hot_reflection
-    (Groq pattern extraction). Caller-supplied patterns are merged in."""
+                  patterns: str = "", quality: str = "0.8",
+                  completed_tasks: str = "", new_step: str = "") -> dict:
+    """One-call session close.
+    completed_tasks: pipe-separated task IDs to tick in SESSION.md e.g. '7.1|7.2|7.3'
+    new_step: if set, replaces the Current Step line in SESSION.md.
+    Always: logs session to Supabase, appends row to SESSION.md log table, runs Groq hot_reflection."""
     from core_train import auto_hot_reflection
     try:
         actions_list = [a.strip() for a in actions.split(",") if a.strip()]
@@ -550,12 +553,15 @@ def t_session_end(summary: str, actions: str, domain: str = "general",
             q = float(quality)
         except:
             q = 0.8
+
+        # 1. Log session to Supabase
         session_ok = sb_post("sessions", {
             "summary": summary,
             "actions": actions_list,
             "interface": "claude-desktop"
         })
-        # Always run Groq-powered reflection — passes caller patterns as seed
+
+        # 2. Always run Groq-powered hot reflection
         caller_patterns = [p.strip() for p in patterns.split("|") if p.strip()]
         r_ok = auto_hot_reflection({
             "summary": summary,
@@ -566,12 +572,67 @@ def t_session_end(summary: str, actions: str, domain: str = "general",
             "seed_patterns": caller_patterns,
         })
         reflection_id = "logged" if r_ok else "failed"
+
+        # 3. Auto-update SESSION.md
+        session_md_updated = False
+        try:
+            content = gh_read("SESSION.md")
+            original = content
+
+            # 3a. Tick completed_tasks checkboxes
+            if completed_tasks.strip():
+                for task_id in completed_tasks.split("|"):
+                    task_id = task_id.strip()
+                    if not task_id:
+                        continue
+                    content = content.replace(
+                        f"- [ ] {task_id} ",
+                        f"- [x] {task_id} "
+                    ).replace(
+                        f"- [ ] {task_id}.",
+                        f"- [x] {task_id}."
+                    ).replace(
+                        f"- [ ] {task_id}\n",
+                        f"- [x] {task_id}\n"
+                    )
+
+            # 3b. Update Current Step if provided
+            if new_step.strip():
+                lines = content.splitlines()
+                for i, line in enumerate(lines):
+                    if line.startswith("## Current Step"):
+                        lines[i] = f"## Current Step: {new_step.strip()}"
+                        break
+                content = "\n".join(lines)
+
+            # 3c. Append row to SESSION LOG table
+            date_str = datetime.utcnow().strftime("%Y-%m-%d")
+            actions_short = ", ".join(actions_list[:3])
+            if len(actions_list) > 3:
+                actions_short += f" (+{len(actions_list)-3} more)"
+            new_row = f"| {date_str} | {summary[:60]} | {actions_short} |"
+            lines = content.splitlines()
+            for i, line in enumerate(lines):
+                if line.startswith("| Date |") or line.startswith("| date |"):
+                    sep_line = i + 1
+                    lines.insert(sep_line + 1, new_row)
+                    break
+            content = "\n".join(lines)
+
+            if content != original:
+                gh_write("SESSION.md", content,
+                         f"chore(session): auto-update SESSION.md — {date_str} close")
+                session_md_updated = True
+
+        except Exception as e:
+            print(f"[SESSION_END] SESSION.md update failed: {e}")
+
         return {
             "ok": session_ok,
             "session_logged": session_ok,
             "reflection_logged": reflection_id,
+            "session_md_updated": session_md_updated,
             "actions_count": len(actions_list),
-            "tip": "Update SESSION.md manually if step status changed this session"
         }
     except Exception as e:
         return {"ok": False, "error": str(e)}
