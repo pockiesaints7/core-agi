@@ -91,9 +91,42 @@ def auto_hot_reflection(session_data: dict):
         try:
             actions_str = ", ".join(str(a) for a in actions[:20])
             seed_hint = f"Caller already identified: {seed_patterns}\n" if seed_patterns else ""
+
+            # --- Enrich: pull live context from 4 tables for richer Groq signal ---
+            enrichment = ""
+            try:
+                new_mistakes = sb_get("mistakes", "select=domain,what_failed,root_cause&order=id.desc&limit=5", svc=True)
+                if new_mistakes:
+                    enrichment += "\nNew mistakes this session:\n" + "\n".join(
+                        f"  [{r.get('domain','?')}] {r.get('what_failed','')[:120]} | root: {r.get('root_cause','')[:80]}"
+                        for r in new_mistakes)
+            except Exception: pass
+            try:
+                new_kb = sb_get("knowledge_base", "select=domain,topic&order=updated_at.desc&limit=5", svc=True)
+                if new_kb:
+                    enrichment += "\nKB entries added/updated:\n" + "\n".join(
+                        f"  [{r.get('domain','?')}] {r.get('topic','')[:100]}" for r in new_kb)
+            except Exception: pass
+            try:
+                task_updates = sb_get("task_queue", "select=task,status,result&order=updated_at.desc&limit=5", svc=True)
+                if task_updates:
+                    enrichment += "\nTask queue updates:\n" + "\n".join(
+                        f"  [{r.get('status','?')}] {str(r.get('task',''))[:100]} | result: {str(r.get('result','null'))[:60]}"
+                        for r in task_updates)
+            except Exception: pass
+            try:
+                changelog_rows = sb_get("changelog", "select=component,title,change_type&order=id.desc&limit=3", svc=True)
+                if changelog_rows:
+                    enrichment += "\nChangelog entries:\n" + "\n".join(
+                        f"  [{r.get('change_type','?')}] {r.get('component','?')}: {r.get('title','')[:100]}"
+                        for r in changelog_rows)
+            except Exception: pass
+            # --- End enrichment ---
+
             prompt = (
                 f"Session summary: {summary[:500]}\n"
                 f"Actions taken: {actions_str}\n"
+                f"{enrichment}\n"
                 f"{seed_hint}\n"
                 f"Extract 2-5 reusable patterns from this session. "
                 f"Each pattern should be a short, generalizable rule or observation (under 120 chars). "
