@@ -2342,6 +2342,8 @@ TOOLS = {
                                "desc": "Update backlog item status in Supabase: in_progress / done / dismissed."},
     "bulk_apply":             {"fn": t_bulk_apply,             "perm": "WRITE",   "args": ["executor_override", "dry_run"],
                                "desc": "Apply ALL pending evolution_queue items at once. executor_override=claude_desktop|groq|auto. dry_run=true to preview."},
+    "bulk_mark_applied":      {"fn": t_bulk_mark_applied,      "perm": "WRITE",   "args": ["ids", "change_type_filter"],
+                               "desc": "Directly mark evolution_queue items as applied. ids=comma-separated or empty for all pending backlog. Emergency use only."},
     "repopulate":             {"fn": _repopulate_evolution_queue, "perm": "WRITE", "args": [],
                                "desc": "Re-push all P3+ backlog items to evolution_queue. Use when evolution_queue is empty after restart."},
     "mine_kb":                {"fn": t_mine_kb,                "perm": "WRITE",   "args": ["max_batches", "force"],
