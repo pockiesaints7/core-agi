@@ -3039,29 +3039,36 @@ def handle_msg(msg):
         notify("Use /status or /backlog. Full interface → Claude Desktop.", cid)
 
 def queue_poller():
-    print("[QUEUE] Started - v5.4 live execution mode")
+    """Notify-only mode — no auto-execution without owner approval.
+    Polls task_queue for pending tasks and notifies owner via Telegram.
+    Owner reviews and executes via Claude Desktop MCP tools.
+    REMOVED: auto-execution via t_route() — ran tasks without owner oversight (dangerous)."""
+    print("[QUEUE] Started - notify-only mode (no auto-execution)")
+    _notified: set = set()  # avoid repeat notifications for same task
     while True:
         try:
-            tasks = sb_get("task_queue", "status=eq.pending&order=priority.asc&limit=1")
+            tasks = sb_get("task_queue", "status=eq.pending&order=priority.asc&limit=5")
             if tasks:
-                t = tasks[0]
-                tid = t["id"]
-                task_text = t.get("task", "")
-                chat_id = t.get("chat_id", "")
-                sb_patch("task_queue", f"id=eq.{tid}", {"status": "processing"})
-                result = t_route(task_text, execute=True)
-                if result.get("ok") and result.get("response"):
-                    sb_patch("task_queue", f"id=eq.{tid}", {"status": "completed", "error": None})
-                    if chat_id:
-                        notify(f"Task completed\n{result['response'][:800]}", chat_id)
-                else:
-                    err = result.get("error", "unknown error")
-                    sb_patch("task_queue", f"id=eq.{tid}", {"status": "failed", "error": err[:200]})
-                    if chat_id:
-                        notify(f"Task failed: {err[:200]}", chat_id)
+                for t in tasks:
+                    tid = t["id"]
+                    if tid in _notified:
+                        continue
+                    task_text = t.get("task", "")[:200]
+                    priority = t.get("priority", 0)
+                    source = t.get("source", "unknown")
+                    notify_owner(
+                        f"📋 Pending task (P{priority}) from {source}:\n"
+                        f"`{task_text}`\n"
+                        f"ID: `{tid}`\n"
+                        f"Review via Claude Desktop → task_queue"
+                    )
+                    _notified.add(tid)
+                    # Cap memory
+                    if len(_notified) > 200:
+                        _notified.clear()
         except Exception as e:
             print(f"[QUEUE] {e}")
-        time.sleep(10)
+        time.sleep(60)  # check every 60s (was 10s — reduce noise)
 
 @app.on_event("startup")
 def on_start():
