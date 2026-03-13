@@ -1,7 +1,7 @@
 # CORE SESSION MASTER
 > Last updated: 2026-03-14 | Owner: REINVAGNAR | Version: CORE v6.0
 
-## Current Step: Task 3 — 3.1/3.2/3.3 done. Remaining: 3.4 (register Equinix JK1-2 via project_register from Claude Desktop — tool not available in claude.ai MCP cache). Also: finish operating_context.json changelog table patch (1 skipped). Then Task 4 or Task 6 stamp if Ki skips Task 4.
+## Current Step: Task 3 ✅ COMPLETE. Next: Task 4 (Binance/Crypto) OR Task 9/10 execution. Task 6 stamp locked until Tasks 4+5 done.
 
 ## last_good_commit: 2026-03-14 (post Task 7 — all 50 tools verified green)
 > If Railway goes down: use `github:get_file_contents` to read this SHA, restore via `github:push_files`. Do NOT use core-agi: tools when Railway is confirmed down — they all fail simultaneously.
@@ -76,6 +76,7 @@ When user says "activate autonomous mode":
 | Task done | Tick checkbox in SESSION.md immediately + write result to backlog_update() |
 | evolution_queue | Only `knowledge`, `code`, `config` change_types allowed — never `backlog` |
 | Railway recovery | If Railway down: read last_good_commit above → restore via github: tools. Never retry core-agi: tools when Railway is confirmed down. |
+| gh_search_replace on Unicode files | SKIP if file contains em-dashes or non-ASCII. Use github:get_file_contents + github:create_or_update_file directly. |
 
 ---
 
@@ -107,12 +108,13 @@ Split core.py (3097 lines, 157KB) into 5 modules.
 - [x] 2.7 core_legacy.py created, Procfile updated → core_main.py ✓ (2026-03-14)
 - [x] 2.8 operating_context.json updated: entry_point → core_main.py ✓ (2026-03-14)
 
-### TASK 3 — Project Mode (Prereq: Task 2) 🔄 IN PROGRESS
+### TASK 3 — Project Mode ✅
 Design doc: docs/PROJECT_MODE_DESIGN.md
-- [x] 3.1 9 new MCP tools
-- [x] 3.2 Supabase tables: projects + project_context
-- [x] 3.3 Local PROJECTS.md
-- [ ] 3.4 Index Equinix JK1-2 as first project
+- [x] 3.1 9 new MCP tools (2026-03-13)
+- [x] 3.2 Supabase tables: projects + project_context (2026-03-13)
+- [x] 3.3 Local PROJECTS.md (2026-03-13)
+- [x] 3.4 Equinix JK1-2 registered via project_register ✓ (2026-03-14)
+- [x] 3.5 operating_context.json v2.5 — changelog enriched, projects + project_context added to active_tables ✓ (2026-03-14)
 
 ### TASK 4 — Binance/Crypto Integration (Prereq: Task 2)
 Design doc: docs/BINANCE_CORE_AGI.md
@@ -120,13 +122,13 @@ Design doc: docs/BINANCE_CORE_AGI.md
 - [ ] 4.2 Telegram alert→approve→execute flow
 - [ ] 4.3 3 new MCP tools
 
-### TASK 5 — Zapier MCP Integration (Prereq: Task 1)
+### TASK 5 — Zapier MCP Integration (Prereq: Task 1) ✅
 - [x] 5.0 Scope corrected — KB entry saved (2026-03-13)
 - [x] 5.1 Write docs/ZAPIER_MCP.md ✓ (2026-03-13)
 - [x] 5.2 Enable P0 Zapier connections (Gmail, Todoist, Google Calendar, Webhooks)
 - [x] 5.3 Test each P0 connection from Claude Desktop
 
-### TASK 6 — v6.0 Version Stamp 🔒 (LOCKED until Tasks 1-5 done)
+### TASK 6 — v6.0 Version Stamp 🔒 (LOCKED until Tasks 4+5 done)
 Update all version strings → "CORE v6.0" across active modules.
 
 ### TASK 7 — Training Pipeline Fix ✅
@@ -138,35 +140,14 @@ Update all version strings → "CORE v6.0" across active modules.
 - [x] 7.6 UPDATE SESSION.md rule table ✓ 2026-03-14
 - [x] 7.7 Smoke test + L4 execution — full cycle verified, 9 evolutions executed ✓ 2026-03-14
 
-### TASK 8 — synthesize_evolutions: Claude as CORE Architect (Prereq: Task 3)
+### TASK 8 — synthesize_evolutions: Claude as CORE Architect ✅
 > Design finalized 2026-03-14. Claude reads ALL pending evolution_queue entries and thinks as an unconstrained architect — inventing new tools, tables, architecture changes, logic fixes, or entirely new concepts CORE does not know it needs yet. Output is a structured engineering blueprint appended to SESSION.md as a new task chain.
 
-**Why Claude not Groq:** Groq extracts isolated patterns. Claude sees the whole picture, reasons across all signals simultaneously, and can invent what is unthinkable from individual patterns alone.
-
-**What it reads:**
-- All evolution_queue where status = pending
-- All pattern_frequency high-frequency entries
-- Recent cold_reflections (dominant themes)
-- Recent gaps_identified from hot_reflections
-- Current SESSION.md (existing task context)
-
-**What Claude produces:**
-A structured blueprint with concrete task chains — new tools, new tables, architecture changes, logic fixes, wild ideas. Each item tagged: impact (HIGH/MED/LOW), effort (HIGH/MED/LOW), category (new_tool / new_table / architecture / logic_change / wild).
-
-**Relationship with approve/reject — NOT a replacement:**
-synthesize_evolutions is the PLANNING GATE before approve/reject, not a substitute.
-Workflow: synthesize first (understand big picture + get blueprint) → then bulk approve/reject informed.
-Approve still needed: lands Groq KB entries into knowledge_base permanently.
-Reject still needed: discards noise. synthesize only produces SESSION.md task chain.
-
-**Evolution status after synthesis:** marked synthesized — acknowledged, not yet approved or rejected.
-**Trigger:** Manual only — owner calls it when ready for a planning session.
-
-- [x] 8.1 Add t_synthesize_evolutions() to core_tools.py — fetches all data, assembles full context payload, returns to Claude for unconstrained reasoning
-- [x] 8.2 Register in TOOLS dict with architect-level prompt: no constraints, invent freely, think 6 months ahead
-- [x] 8.3 Add status=synthesized handling in evolution_queue flow
-- [x] 8.4 Test: call tool, verify Claude produces blueprint with impact/effort matrix + wild ideas section ✓ 2026-03-14
-- [x] 8.5 Update CORE_SELF.md + operating_context.json
+- [x] 8.1 Add t_synthesize_evolutions() to core_tools.py ✓ 2026-03-14
+- [x] 8.2 Register in TOOLS dict with architect-level prompt ✓ 2026-03-14
+- [x] 8.3 Add status=synthesized handling in evolution_queue flow ✓ 2026-03-14
+- [x] 8.4 Test: call tool, verify Claude produces blueprint ✓ 2026-03-14
+- [x] 8.5 Update CORE_SELF.md + operating_context.json ✓ 2026-03-14
 
 ---
 
@@ -175,46 +156,74 @@ Reject still needed: discards noise. synthesize only produces SESSION.md task ch
 > Core insight: CORE is a world-class *logger*. The next leap is becoming a world-class *actor* — autonomous self-improvement without waiting for Ki to trigger it.
 
 #### 9.A — Pattern Enforcement Engine [architecture | impact: HIGH | effort: MED]
-The #1 pattern (190x) is "never assume interface — always verify." CORE keeps re-learning this because it's stored as knowledge, not enforced as a hard check. Build a `pattern_guard` that runs on every session_start and checks the top-10 highest-frequency patterns against a set of runtime assertions. If a session violates a pattern rule, Telegram alert fires before any tools are called.
 - [ ] 9.A.1 Define assertion schema for top-10 patterns → store in Supabase `pattern_guards` table
-- [ ] 9.A.2 Add `_run_pattern_guards()` call inside `t_session_start()` — runs assertions, returns violations
-- [ ] 9.A.3 session_start response includes `guard_violations: []` — Claude sees it immediately
+- [ ] 9.A.2 Add `_run_pattern_guards()` call inside `t_session_start()`
+- [ ] 9.A.3 session_start response includes `guard_violations: []`
 - [ ] 9.A.4 Telegram notify on any HIGH severity violation
 
 #### 9.B — Autonomous Evolution Executor [architecture | impact: HIGH | effort: HIGH]
-Right now CORE accumulates 297 evolutions and waits for Ki to call `bulk_apply`. That's a human bottleneck. Build a nightly autonomous executor: cold_processor runs → patterns hit threshold → evolution generated → if confidence ≥ 0.85 AND change_type = knowledge → auto-apply without human approval. Code changes still require approval. This gives CORE true self-improvement on knowledge, while keeping Ki in the loop for code.
-- [ ] 9.B.1 Add `auto_apply` column to evolution_queue with threshold config in core_config.py
-- [ ] 9.B.2 Patch `apply_evolution()` — knowledge-type evolutions with confidence ≥ 0.85 auto-apply at cold processor end
-- [ ] 9.B.3 Telegram summary: "Auto-applied N evolutions overnight. Review: [link]"
-- [ ] 9.B.4 Safety gate: max 10 auto-applies per 24h window, hard cap
+- [ ] 9.B.1 Add `auto_apply` column to evolution_queue with threshold config
+- [ ] 9.B.2 Patch `apply_evolution()` — knowledge-type, confidence ≥ 0.85 auto-apply at cold processor end
+- [ ] 9.B.3 Telegram summary: "Auto-applied N evolutions overnight."
+- [ ] 9.B.4 Safety gate: max 10 auto-applies per 24h window
 
 #### 9.C — Session Quality Scoring [new_table | impact: MED | effort: LOW]
-CORE logs sessions but doesn't score them. Add a `session_quality` table that tracks: tools used, mistakes made, patterns violated, evolutions generated, KB entries added, tasks completed. Groq scores the session 0-100 at session_end. Over time this builds a performance graph — CORE can see if it's getting better or worse week over week.
-- [ ] 9.C.1 Create `session_quality` Supabase table (session_id, score, tools_used, mistakes, patterns_violated, evolutions_gen, kb_added, tasks_done, notes)
-- [ ] 9.C.2 Patch `t_session_end()` to compute + insert quality row via Groq scoring prompt
-- [ ] 9.C.3 Add `get_quality_trend(days=7)` read tool — returns weekly score trend
-- [ ] 9.C.4 stats() tool includes quality trend in output
+- [ ] 9.C.1 Create `session_quality` Supabase table
+- [ ] 9.C.2 Patch `t_session_end()` to compute + insert quality row via Groq
+- [ ] 9.C.3 Add `get_quality_trend(days=7)` read tool
+- [ ] 9.C.4 stats() includes quality trend
 
 #### 9.D — Dead Pattern Pruner [logic_change | impact: MED | effort: LOW]
-3,325 KB entries, 190+ patterns — some of these are stale or superseded. Add a `last_reinforced_at` timestamp to `pattern_frequency`. Any pattern not reinforced in 30 days gets flagged as `stale` in a nightly job. Stale patterns are surfaced at session_start so Claude can decide to keep, reinforce, or delete. Prevents KB rot.
 - [ ] 9.D.1 Add `last_reinforced_at` + `stale` columns to `pattern_frequency`
-- [ ] 9.D.2 Patch cold_processor: update `last_reinforced_at` every time a pattern is incremented
-- [ ] 9.D.3 Nightly stale check: mark patterns not reinforced in 30d as stale=true
+- [ ] 9.D.2 Patch cold_processor: update `last_reinforced_at` on every increment
+- [ ] 9.D.3 Nightly stale check: mark patterns not reinforced in 30d
 - [ ] 9.D.4 session_start includes `stale_pattern_count` in response
 
 #### 9.E — Skill Graph [new_table | impact: HIGH | effort: HIGH]
-CORE knows facts (KB) and knows rules (patterns). It doesn't know *skills* — compound capabilities built from multiple patterns + tools working together. Add a `skill_graph` table: each skill is a named capability (e.g., "debug Railway deploy failure") with a list of required patterns, tools, and a success rate. CORE builds this graph autonomously by clustering cold_reflections where multiple patterns co-fired. Over time, CORE knows its own skill repertoire.
 - [ ] 9.E.1 Design `skill_graph` schema: (id, name, domain, patterns[], tools[], success_rate, last_used)
-- [ ] 9.E.2 Create Supabase table + add `t_get_skill_graph()` read tool
+- [ ] 9.E.2 Create Supabase table + `t_get_skill_graph()` read tool
 - [ ] 9.E.3 Cold processor: cluster co-firing patterns → auto-generate skill entries
 - [ ] 9.E.4 session_end: match session actions against skill_graph → update success_rate
 
 #### 9.F — WILD: CORE Self-Prompt Loop [wild | impact: EXTREME | effort: HIGH]
-The autonomous mode daemon (Section 4) already exists. The wild idea: CORE generates its own next prompt. At session_end, after Groq reflection, CORE writes a seed_prompt to a `next_session_prompt` state key — a specific, actionable question or task for the next session. When Ki opens Claude Desktop and says "let's go", CORE's first response is built from its own generated prompt, not from a blank slate. CORE becomes the initiator, not just the responder.
 - [ ] 9.F.1 Add `next_session_prompt` key to sessions state table
-- [ ] 9.F.2 Patch `t_session_end()`: Groq generates 1-sentence seed prompt based on session outcome + open tasks → store in state
-- [ ] 9.F.3 `t_session_start()` includes `next_session_prompt` in response — Claude sees it and leads with it
+- [ ] 9.F.2 Patch `t_session_end()`: Groq generates 1-sentence seed prompt → store in state
+- [ ] 9.F.3 `t_session_start()` includes `next_session_prompt` in response
 - [ ] 9.F.4 Ki can override by just talking normally — prompt is a suggestion, not a mandate
+
+---
+
+### TASK 10 — Architect Blueprint v2 (from synthesize_evolutions, 2026-03-14 session 2)
+> Generated after reading: 0 pending evolutions (all synthesized), 30 top patterns, 10 cold reflections.
+> New signal this round: the em-dash encoding failure reveals a deeper pattern — CORE's file editing toolchain has a hidden fragility layer that causes silent failures and wastes tool calls. Also: project_context table exists but has never actually been used (no indexing run on Equinix JK1-2). The project mode is built but inert.
+
+#### 10.A — File Edit Safety Layer [architecture | impact: HIGH | effort: LOW]
+The gh_search_replace / multi_patch failure on Unicode files is a recurring silent killer (this session: 4 failed tool calls, forced full-file push). Add a pre-flight Unicode detector in `t_gh_search_replace` and `t_multi_patch`: if the file contains non-ASCII characters, return a warning immediately with the recommendation to use `github:get_file_contents + github:create_or_update_file`. Zero code complexity, eliminates an entire class of silent failures permanently.
+- [ ] 10.A.1 Patch `t_gh_search_replace()` in core_tools.py: after fetching file, scan for non-ASCII chars → if found and old_str contains non-ASCII, return `{"ok": false, "error": "unicode_file — use get_file_contents + create_or_update_file instead", "hint": "file contains non-ASCII characters"}`
+- [ ] 10.A.2 Same patch for `t_multi_patch()`
+- [ ] 10.A.3 Add rule to ACTIVE RULES table in SESSION.md (done this session ✓)
+- [ ] 10.A.4 Add KB entry: "CORE File Edit — Unicode Safety Rule"
+
+#### 10.B — Project Indexer [new_tool | impact: HIGH | effort: MED]
+Equinix JK1-2 is registered but `last_indexed` is null and `project_context` table is empty — the project system built in Task 3 has never actually run. Build `project_index` tool: reads all files in `folder_path`, chunks content, writes KB entries tagged with `project_id`, updates `last_indexed`. This is the missing bridge between "project registered" and "CORE can answer questions about it."
+- [ ] 10.B.1 Build `t_project_index(project_id)` in core_tools.py: reads folder_path from projects table, walks directory tree, extracts text from .pdf/.xlsx/.docx/.txt files
+- [ ] 10.B.2 Chunk content → `add_knowledge` entries with domain=`project:{project_id}`, tags=[project_id]
+- [ ] 10.B.3 Call `project_update_index` at end to stamp `last_indexed`
+- [ ] 10.B.4 Telegram notify: "Indexed {N} files for project {name}"
+- [ ] 10.B.5 Test on Equinix JK1-2
+
+#### 10.C — Stale Session Step Auto-Updater [logic_change | impact: MED | effort: LOW]
+Current Step in SESSION.md is often stale across sessions — it said "Task 3 in progress" for multiple sessions even after 3.1/3.2/3.3 were done. Add logic in `t_session_end()`: after writing SESSION.md, compare completed_tasks param against the task registry and auto-suggest the correct next Current Step. Claude writes it, Groq doesn't need to understand the full task graph — just pattern-match on what was ticked.
+- [ ] 10.C.1 Patch `t_session_end()`: parse `completed_tasks` arg, generate `new_step` suggestion based on what's still open in SESSION.md
+- [ ] 10.C.2 If `new_step` already provided by caller, use that. If not, auto-generate from task scan.
+- [ ] 10.C.3 Test: call session_end without new_step, verify auto-generated step is correct
+
+#### 10.D — WILD: CORE's Own Mistake Predictor [wild | impact: HIGH | effort: MED]
+103 mistakes logged, 30 patterns extracted — CORE has enough signal to start predicting its own failures before they happen. Before any write operation (gh_search_replace, sb_insert, push_files), run a lightweight Groq call: "Given this action + these top-5 domain mistakes, what's the most likely failure?" If confidence > 0.7, surface the prediction as a warning in the tool response. CORE becomes self-aware of its own failure modes in real time.
+- [ ] 10.D.1 Build `_predict_failure(action_description, domain)` helper in core_tools.py — calls Groq fast model with top-5 domain mistakes as context
+- [ ] 10.D.2 Wire into `t_gh_search_replace`, `t_multi_patch`, `t_sb_insert` as optional pre-flight
+- [ ] 10.D.3 Return prediction in tool response as `{"warning": "...", "confidence": 0.8}` — non-blocking
+- [ ] 10.D.4 Log prediction accuracy back to mistakes table to improve over time
 
 ---
 
@@ -222,6 +231,7 @@ The autonomous mode daemon (Section 4) already exists. The wild idea: CORE gener
 
 | Date | Summary | Key Actions |
 |---|---|------|
+| 2026-03-14 | Task 3 ✅ complete. operating_context.json v2.5 pushed. Mistake logged (em-dash Unicode). Task 10 synthesize blueprint written. | session_start|project_list (3.4 already done)|gh_search_replace (failed Unicode)|github:get_file_contents+create_or_update_file operating_context.json v2.5|log_mistake em-dash encoding|synthesize_evolutions|SESSION.md updated Task 10 + Task 3 ticked |
 | 2026-03-13 | Task 3 foundation complete. Built 9 project MCP tools (proje | session_start|read PROJECT_MODE_DESIGN.md full|checked mistakes domain=infrastructure|multi_patch 9 project tools into core_tools.py|multi_patch /project handler into core_main.py|core_py_validate — core_main.py clean, core_tools.py false positives confirmed pre-existing|build_status — both commits green|webhooks GET /state to verify deploy|PROJECTS.md created locally|multi_patch operating_context.json v2.4 (3/4 applied)|add_knowledge x2|changelog_add |
 | 2026-03-13 | Completed Zapier full skill enumeration and documentation. D | read ZAPIER_MCP.md|tool_search x6 for all Zapier domains|discovered 8 Gemini tools undetected in Task 5.3|built ZAPIER_SKILL_GRAPH.md (71 tools, 15 compound skills)|added tool priority system to CORE_AGI_SKILL.md|saved both locally to C:\Users\rnvgg\.claude-skills\|pushed ZAPIER_SKILL_GRAPH.md to docs/ in repo|add_knowledge tool priority system|changelog_add |
 | 2026-03-13 | Task 5 complete. Tested all 4 P0 Zapier connections: Gmail ( | read ZAPIER_MCP.md|tool_search for all 4 P0 tools|gmail_find_email test ✅|google_calendar_find_events test ✅|todoist_find_task test ✅|webhooks_by_zapier_post test ✅|changelog_add logged |
@@ -232,17 +242,16 @@ The autonomous mode daemon (Section 4) already exists. The wild idea: CORE gener
 | 2026-03-13 | Task 8.1+8.2 complete — t_synthesize_evolutions added to cor | read current core_tools.py via github:get_file_contents, wrote TOOLS registry entry via gh_search_replace, attempted function body insert via gh_search_replace timed out (+8 more) |
 | 2026-03-13 | Designed and registered Task 8 — synthesize_evolutions. Clau | read SESSION.md full, identified correct insertion point for Task 8, designed synthesize_evolutions tool spec (+4 more) |
 | 2026-03-13 | Debugged and fixed the full hot reflection pipeline. Three f | read core_train.py auto_hot_reflection, identified missing created_at in session_end call, read core_config.py sb_post returns bool not row (+14 more) |
-| 2026-03-13 | Patched run_cold_processor to use Groq for both cold reflect | read core_train.py|added _groq_synthesize_cold — calls GROQ_MODEL with top 15 patterns + domain breakdown + session summaries → meaningful summary_text|added _groq_kb_content — calls GROQ_FAST per pattern that hits threshold → writes proper KB entry content instead of raw pattern string|patched run_cold_processor to call both helpers|patched apply_evolution knowledge branch comment to note change_summary is now Groq-written content|github:push_files|verify_live confirmed live |
-| 2026-03-13 | Patched core_train.py: (1) auto_hot_reflection enrichment qu | read core_train.py|diagnosed 3 bugs: no timestamp scoping, max_tokens too low, _extract_real_signal reading all-time|github:push_files patched core_train.py|build_status confirmed pending|verify_live confirmed success |
-| 2026-03-13 | Full historical enriched distill session. Read all 4 enrichm | session_start|sb_query mistakes all 100 rows|sb_query changelog all 50 rows|sb_query task_queue all 123 rows|synthesized 8 enriched hots cross-referencing all 4 tables|sb_bulk_insert 8 enriched hots|trigger_cold_processor → 77 patterns|session_end |
-| 2026-03-13 | Desktop session — patched auto_hot_reflection in core_train. | session_start|read core_train.py auto_hot_reflection function|designed 4-table enrichment (mistakes/KB/task_queue/changelog)|github:push_files core_train.py with enrichment patch|build_status confirmed success|session_end |
-| 2026-03-13 | claude.ai L4 execution session — full L1-L7 pipeline run. Sm | session_start|full supabase sweep all 9 tables|deep scan mistakes+patterns+hots|queued 5 real evolutions (293-297)|10 historical distill hots inserted|trigger_cold_processor → 101 patterns|L4: add_knowledge x5|SESSION.md patched last_good_commit|approve_evolution 293+241+240|reject_evolution 297 with triage note|session_end |
+| 2026-03-13 | Patched run_cold_processor to use Groq for both cold reflect | read core_train.py|added _groq_synthesize_cold|added _groq_kb_content|patched run_cold_processor|patched apply_evolution|github:push_files|verify_live confirmed live |
+| 2026-03-13 | Patched core_train.py: (1) auto_hot_reflection enrichment qu | read core_train.py|diagnosed 3 bugs|github:push_files patched core_train.py|build_status confirmed pending|verify_live confirmed success |
+| 2026-03-13 | Full historical enriched distill session. | session_start|sb_query mistakes+changelog+task_queue|synthesized 8 enriched hots|sb_bulk_insert 8 hots|trigger_cold_processor → 77 patterns|session_end |
+| 2026-03-13 | Desktop session — patched auto_hot_reflection. | session_start|read core_train.py|github:push_files core_train.py|build_status confirmed|session_end |
+| 2026-03-13 | claude.ai L4 execution session. | session_start|full supabase sweep|queued 5 real evolutions|10 historical hots|trigger_cold_processor → 101 patterns|approve/reject evolutions|session_end |
 | 2026-03-11 | v5.0 full launch | Training pipeline live, CORE_SELF.md created, self_sync_check added |
-| 2026-03-12 | v5.4 GOD MODE | 50 MCP tools, power tools (session_start/end, blobs, build_status, deploy_and_wait) |
-| 2026-03-13 | Cleanup + v6 prep | README updated, repo public, 7 stale files deleted, Jarvis OS KB purged, SESSION.md rewritten |
-| 2026-03-13 | Architecture split | core.py split into 5 modules, all 50 tools smoke tested, cold processor pattern pipeline fixed |
-| 2026-03-14 | Training pipeline design | Skill graph designed, backlog evolutions bulk rejected, SKILL.md updated, Task 7 registered |
-| 2026-03-14 | L1-L7 full execution | Smoke test passed, deep scan found 5 real evolutions, historical distill (10 hots, 101 patterns), L4 executed: 5 KB + SESSION.md patch + config triage. Task 7 ✅ |
+| 2026-03-12 | v5.4 GOD MODE | 50 MCP tools, power tools live |
+| 2026-03-13 | Cleanup + v6 prep | README, 7 files deleted, KB purged, SESSION.md rewritten |
+| 2026-03-13 | Architecture split | core.py → 5 modules, 50 tools smoke tested |
+| 2026-03-14 | Training pipeline design | Skill graph, Task 7 registered, L1-L7 executed |
 
 ---
 
@@ -256,3 +265,4 @@ The autonomous mode daemon (Section 4) already exists. The wild idea: CORE gener
 | 2026-03-12 | Supabase write rate limit hit (500/hr) | Wait 1hr for reset. |
 | 2026-03-12 | PowerShell Railway HTTP calls silently timeout | Never use PowerShell for Railway/GitHub calls. Use MCP tools directly. |
 | 2026-03-14 | core_train.py emitting change_type=backlog evolutions | 67 bulk rejected. Task 7 created to patch source permanently. |
+| 2026-03-14 | gh_search_replace silently fails on files with em-dash (U+2014) | Use github:get_file_contents + create_or_update_file. Rule added to Section 5. Mistake logged. |
