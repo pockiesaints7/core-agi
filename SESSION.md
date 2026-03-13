@@ -1,120 +1,127 @@
-# CORE v5.0 - Session State
-
-**Last updated:** 2026-03-11
-**Owner:** REINVAGNAR
-
-## Current Step: ✅ ALL STEPS COMPLETE — CORE v5.0 LIVE (Step 6 Training Pipeline verified 2026-03-12)
+# CORE SESSION MASTER
+> Last updated: 2026-03-13 | Owner: REINVAGNAR | Version: CORE v5.4 → v6.0 in progress
 
 ---
 
-## Next Action
-CORE v5.0 fully live. Training loop confirmed working.
-CORE_SELF.md created — living self-knowledge document. CORE now knows itself permanently.
-Schema evolution protocol in place — any structural change triggers update to CORE_SELF.md + operating_context.json + KB.
-Next: use CORE for real tasks. Feed hot_reflections naturally per session.
+## 1. SESSION START CHECKLIST
+
+**Claude Desktop:**
+1. Call `core-agi:session_start` → bootstraps health + counts + last session + mistakes + evolutions
+2. Read this file if task registry context needed
+3. Check `get_mistakes(domain=X)` before any write in that domain
+
+**claude.ai / mobile:**
+1. `web_fetch https://raw.githubusercontent.com/pockiesaints7/core-agi/main/SESSION.md`
+2. Use `POST /patch` for any core.py edits (never gh_search_replace from web)
+3. Use `github:*` tools for all other file reads/writes
 
 ---
 
-## Active Tables
-knowledge_base, mistakes, sessions, task_queue, changelog,
-hot_reflections, cold_reflections, evolution_queue, pattern_frequency
+## 2. WHAT IS CORE
+
+CORE v5.4 is a Recursive Self-Improvement AGI running 24/7 on Railway.
+It learns from every session via a hot→cold reflection pipeline, distills patterns, and evolves its own behavior.
+Operated via Claude Desktop (MCP direct, 50 tools), claude.ai (web/mobile), and Telegram (@reinvagnarbot).
+Full self-knowledge: see `CORE_SELF.md`. Full tool rules: see `operating_context.json`.
 
 ---
 
-## Step Status
-- ✅ Step 0: Railway MCP Server + Telegram Bot - COMPLETE 2026-03-11
-- ✅ Step 1: Claude Desktop Live Connection - COMPLETE 2026-03-11
-- ✅ PRE-STEP 2: Fix t_state() - DONE
-- ✅ Step 2: Audit Training Logic - DONE 2026-03-11
-- ✅ Step 3: Training Pipeline Implemented - DONE 2026-03-11 (commit fda0388)
-- ✅ Step 4: Simulation - DONE 2026-03-11 (commit 66fa36b)
-- ✅ Step 5: Deploy & Monitor - COMPLETE 2026-03-11
-- ✅ Step 6: CORE Self-Knowledge — COMPLETE 2026-03-11
+## 3. CURRENT SOP
+
+```
+plan → execute → log → reflect → stop
+```
+
+- **1 task at a time.** Finish, log, reflect, then move to next.
+- **Read before write.** Always. No exceptions.
+- **Check mistakes** (domain=X) before any write in that domain.
+- **End every Desktop session** with `session_end` tool.
+- **Stop at 90% context** → call session_end, standby for next session.
+- **When in doubt, do less and ask.**
 
 ---
 
-## System State (as of 2026-03-11 session)
-- Railway: live @ https://core-agi-production.up.railway.app
-- core.py: commit 19b0d0f (restored + self_sync_check added)
-- last_good_commit: 09b370a  (fix: import import os SyntaxError line 55)
-- knowledge_base: ~360+ entries
-- CORE_SELF.md: LIVE — single source of truth for CORE's self-knowledge
-- operating_context.json: v2.0 — full schema all 9 active tables + architecture
-- MCP on CORE: 20 tools active
-- resource_ceilings.json: v2 — includes _env_vars_declared + _ai_models + _last_verified
+## 4. ACTIVE RULES
 
-## Incident Log
-- 2026-03-11 INCIDENT(2): Wrong env detection — used claude.ai PowerShell workarounds on Claude Desktop. Mistake id=178 logged. Fix: updated env detection SOP in CORE_v5_plan.md.
-  - 2026-03-11 INCIDENT(3): import import os SyntaxError line 55 — duplicate keyword from bad patch. Fixed commit 09b370a.
-  - 2026-03-11 INCIDENT: write_file tool wiped core.py (929→26 lines). Railway down ~5min.
-  Root cause: write_file = full overwrite, used for partial docstring edit.
-  Recovery: github:get_file_contents from commit cc87e5c → restore via github:create_or_update_file.
-  Fixes applied: self_sync_check() added, write_file desc updated in TOOLS registry.
-  KB entries added: "CORE Critical Rule — write_file is FULL OVERWRITE" + recovery procedure.
+| Rule | Detail |
+|---|---|
+| `read_file` / `write_file` | OMIT `repo` arg — defaults to pockiesaints7/core-agi |
+| `sb_query` | Use `filters` param, NOT `query_string` |
+| `write_file` on core.py | BLOCKED — guard active. Use `gh_search_replace` or `POST /patch` |
+| `processed_by_cold` | Use `eq.0` / `eq.1` (integer), NOT `eq.true` / `eq.false` |
+| Editing core.py from Desktop | `gh_search_replace` (small) or `github:push_files` (full restore) |
+| Editing core.py from claude.ai | `POST /patch` ONLY |
+| Structural change | Update CORE_SELF.md FIRST, then operating_context.json, then KB |
+| Session end | Always call `session_end` — logs session + hot_reflection in one call |
 
 ---
 
-## Self-Knowledge Files (in order of authority)
-1. `CORE_SELF.md` — Master. Update FIRST on any structural change.
-2. `operating_context.json` — Static tool rules + schema (sync from CORE_SELF.md)
-3. KB domain=system — Supabase searchable copy (sync from CORE_SELF.md)
-4. `SESSION.md` (this file) — Dynamic per-session state only
+## 5. MASTER TASK REGISTRY (CORE v6.0)
+
+### TASK 1 — Repo Documentation Cleanup
+- [x] 1.0 README.md updated (2026-03-13)
+- [x] 1.1 SESSION.md rewritten as v6 unified master ← THIS FILE (2026-03-13)
+- [ ] 1.2 Slim CORE_SELF.md — remove v5.0 overlap; mcp_tools_count already 50 ✓
+- [ ] 1.3 Update operating_context.json — remove TRAINING_DESIGN ref (mcp_tools_count=50 already ✓)
+- [x] 1.4 PROJECT_MODE_DESIGN.md → moved to docs/ (already done)
+- [x] 1.5 Delete TRAINING_DESIGN.md ✓ (done prior session)
+- [x] 1.6 Delete GOD_MODE_PLAN.md ✓ (done prior session)
+- [x] 1.7 Delete MANIFEST.md ✓ (done prior session)
+- [ ] 1.8 Delete BACKLOG.md (stub still exists on GitHub)
+- [x] 1.9 Delete TOOL_AUDIT_TEST.md ✓ (done prior session)
+- [x] 1.10 Delete docs/HANDOFF_redeploy_fix.md ✓ (done prior session)
+- [ ] 1.11 Purge remaining Jarvis OS KB entries (verify clean)
+
+### TASK 2 — GOD MODE P2-5A: Architecture Split (Prereq: Task 1)
+Split core.py (3092 lines, 157KB) into 4 modules:
+- [ ] 2.1 Map exact line ranges per module
+- [ ] 2.2 Extract core_github.py
+- [ ] 2.3 Extract core_train.py
+- [ ] 2.4 Extract core_tools.py
+- [ ] 2.5 Create core_main.py (imports from above)
+- [ ] 2.6 Smoke test all 50 tools
+- [ ] 2.7 Retire core.py monolith → core_legacy.py
+- [ ] 2.8 Update docs (entry_point in operating_context.json)
+
+### TASK 3 — Project Mode (Prereq: Task 2)
+Design doc: docs/PROJECT_MODE_DESIGN.md
+- [ ] 3.1 9 new MCP tools
+- [ ] 3.2 Supabase tables: projects + project_context
+- [ ] 3.3 Local PROJECTS.md
+- [ ] 3.4 Index Equinix JK1-2 as first project
+
+### TASK 4 — Binance/Crypto Integration (Prereq: Task 2)
+Design doc: docs/BINANCE_CORE_AGI.md
+- [ ] 4.1 Price monitoring thread
+- [ ] 4.2 Telegram alert→approve→execute flow
+- [ ] 4.3 3 new MCP tools
+
+### TASK 5 — Zapier MCP Integration (Prereq: Task 1)
+Design docs: docs/ZAPIER_CONNECTIONS.md + ZAPIER_MCP.md
+- [ ] 5.1 t_zapier_trigger(zap_id, payload)
+- [ ] 5.2 Map active Zapier connections
+
+### TASK 6 — v6.0 Version Stamp 🔒 (LOCKED until Tasks 1-5 done)
+Update version strings at lines 2721, 2757, 2771, 2961, 3001, 3082 → "CORE v6.0"
 
 ---
 
-## Schema Evolution Protocol (summary)
-When ANYTHING structural changes → update in this order:
-1. CORE_SELF.md (GitHub) ← always first
-2. operating_context.json (GitHub)
-3. KB entry for that component (Supabase)
-4. SESSION.md if active tables changed
-5. changelog row (Supabase)
-Full protocol: see CORE_SELF.md → "Schema Evolution Protocol" section
+## 6. SESSION LOG
+
+| Date | Summary | Key Actions |
+|---|---|---|
+| 2026-03-11 | v5.0 full launch | Training pipeline live, CORE_SELF.md created, self_sync_check added |
+| 2026-03-12 | v5.4 GOD MODE | 50 MCP tools, power tools (session_start/end, blobs, build_status, deploy_and_wait) |
+| 2026-03-13 | Cleanup + v6 prep | README updated, repo public, 7 stale files deleted, Jarvis OS KB purged, SESSION.md rewritten |
 
 ---
 
-## Injected SOPs (searchable in knowledge_base domain=workflow)
-- SOP: Tool Routing — Read Operations
-- SOP: Tool Routing — Write Operations
-- SOP: Tool Routing — HTTP / External Calls
-- SOP: Session Start Checklist
-- SOP: Rate Limit Management
-- SOP: When to Use Claude Desktop vs claude.ai
-- SOP: CORE Routing Engine — Task Archetype Classification (A1-A7)
-- SOP: CORE Routing Engine — 5-Layer Decision Logic
-- SOP: CORE Routing Engine — Per-Archetype Tool Rules
-- SOP: CORE Routing Engine — Domain-Specific Routing Patterns
-- SOP: CORE Routing Engine — Top 10 Efficiency Insights
-- SOP: CORE Routing Engine — Evolved Rules from Edge-Case Simulation
-- SOP: CORE Routing Engine — Safety-Critical Domain Rules
+## 7. INCIDENT LOG
 
----
-
-## Surgical Edit Workflow (claude.ai)
-Use Desktop Commander PowerShell:
-  $body = @{secret="core_mcp_secret_2026_REINVAGNAR"; path="core.py"; old_str="..."; new_str="..."; message="fix: ..."} | ConvertTo-Json
-  Invoke-RestMethod -Uri "https://core-agi-production.up.railway.app/patch" -Method POST -ContentType "application/json" -Body $body
-
----
-
-## Rules for All Sessions
-- NEVER pass `repo` arg ke read_file atau write_file
-- NEVER gunakan `query_string` untuk sb_query - gunakan `filters`
-- NEVER hardcode step numbers di core.py
-- NEVER use write_file to edit existing files — it FULLY OVERWRITES (proven: wiped core.py)
-- ALWAYS read-back setelah setiap write
-- ALWAYS call get_mistakes(domain=X) sebelum remote write
-- ALWAYS update SESSION.md di akhir session kalau ada yang berubah
-- ALWAYS update CORE_SELF.md FIRST kalau ada structural change
-- ALWAYS update last_good_commit di SESSION.md setelah successful Railway deploy
-- Edit GitHub file dari claude.ai: POST /patch endpoint ONLY
-- Edit GitHub file dari Claude Desktop: gh_search_replace tool
-- If Railway down: pivot ke github: tools langsung, jangan pakai core-agi: tools
-
----
-
-## Context Files
-- `CORE_SELF.md` — MASTER: full self-knowledge, schemas, evolution protocol
-- `operating_context.json` — static: tool rules, schema (synced from CORE_SELF.md)
-- `SESSION.md` (this file) — dynamic: active tables, step status, next action
-- `TRAINING_DESIGN.md` — pipeline design reference
+| Date | Incident | Resolution |
+|---|---|---|
+| 2026-03-11 | `write_file` wiped core.py (929→26 lines) | Restored from commit cc87e5c. Guard added blocking write_file on core.py. |
+| 2026-03-11 | `import import os` SyntaxError line 55 | Fixed commit 09b370a |
+| 2026-03-11 | Wrong env detection — used PowerShell workarounds on Desktop | Mistake #178 logged. Env detection table added to plan. |
+| 2026-03-12 | Supabase write rate limit hit (500/hr) during heavy session | Wait 1hr for reset. GOD_MODE_PLAN.md saved to GitHub as backup. |
+| 2026-03-12 | PowerShell Railway HTTP calls silently timeout | Never use PowerShell for Railway/GitHub calls. Use MCP tools directly. |
