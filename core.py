@@ -300,9 +300,17 @@ def get_latest_session():
 
 def get_system_counts():
     counts = {}
-    for t in ["knowledge_base", "mistakes", "sessions", "task_queue", "hot_reflections", "evolution_queue"]:
+    table_filters = {
+        "knowledge_base":  "",
+        "mistakes":        "",
+        "sessions":        "",
+        "task_queue":      "",
+        "hot_reflections": "&processed_by_cold=eq.0",
+        "evolution_queue": "&status=eq.pending",
+    }
+    for t, extra in table_filters.items():
         try:
-            r = httpx.get(f"{SUPABASE_URL}/rest/v1/{t}?select=id&limit=1",
+            r = httpx.get(f"{SUPABASE_URL}/rest/v1/{t}?select=id&limit=1{extra}",
                           headers=_sbh_count_svc(), timeout=10)
             cr = r.headers.get("content-range", "*/0")
             counts[t] = int(cr.split("/")[-1]) if "/" in cr else 0
