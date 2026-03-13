@@ -1732,43 +1732,41 @@ def t_redeploy(reason: str = "") -> dict:
 
 
 def t_logs(limit: str = "50") -> dict:
-    """Fetch recent Railway deployment logs."""
+    """Fetch recent deploy log — uses GitHub commit history + Railway commit status.
+    No RAILWAY_TOKEN needed. For live stdout logs use Railway dashboard directly."""
     try:
-        token = os.environ.get("RAILWAY_TOKEN", "")
-        service_id = os.environ.get("RAILWAY_SERVICE_ID", "48ad55bd-6be2-4d8a-83df-34fc05facaa2")
-        env_id = os.environ.get("RAILWAY_ENV_ID", "ff3f2a4c-4085-445e-88ff-a423862d00e8")
-        if not token:
-            return {"ok": False, "error": "RAILWAY_TOKEN env var not set"}
         lim = int(limit) if limit else 50
-        dep_query = """query($sid:String!,$eid:String!){deployments(serviceId:$sid,environmentId:$eid,first:1){edges{node{id status}}}}"""
-        r = httpx.post(
-            "https://backboard.railway.app/graphql/v2",
-            headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
-            json={"query": dep_query, "variables": {"sid": service_id, "eid": env_id}},
-            timeout=15,
-        )
-        dep_data = r.json()
-        if "errors" in dep_data:
-            return {"ok": False, "error": f"dep query: {dep_data['errors'][0]['message']}"}
-        edges = dep_data.get("data", {}).get("deployments", {}).get("edges", [])
-        if not edges:
-            return {"ok": False, "error": "No deployments found"}
-        deploy_id = edges[0]["node"]["id"]
-        deploy_status = edges[0]["node"].get("status", "unknown")
-        log_query = """query($did:String!){deploymentLogs(deploymentId:$did){timestamp message}}"""
-        r2 = httpx.post(
-            "https://backboard.railway.app/graphql/v2",
-            headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
-            json={"query": log_query, "variables": {"did": deploy_id}},
-            timeout=20,
-        )
-        data = r2.json()
-        if "errors" in data:
-            return {"ok": False, "error": f"log query: {data['errors'][0]['message']}"}
-        logs = data.get("data", {}).get("deploymentLogs", [])
-        logs = logs[-lim:] if len(logs) > lim else logs
-        return {"ok": True, "deploy_id": deploy_id[:12], "deploy_status": deploy_status,
-                "count": len(logs), "logs": logs}
+        lim = min(lim, 50)
+        h = _ghh()
+        # Get recent commits with their Railway deploy status
+        r = httpx.get(f"https://api.github.com/repos/{GITHUB_REPO}/commits?per_page={lim}", headers=h, timeout=10)
+        r.raise_for_status()
+        commits = r.json()
+        logs = []
+        for commit in commits[:lim]:
+            sha = commit["sha"]
+            msg = commit.get("commit", {}).get("message", "")[:80]
+            ts  = commit.get("commit", {}).get("committer", {}).get("date", "")[:19]
+            # Get Railway status for this commit
+            sr = httpx.get(f"https://api.github.com/repos/{GITHUB_REPO}/commits/{sha}/statuses", headers=h, timeout=8)
+            statuses = sr.json() if sr.status_code == 200 else []
+            railway = [s for s in statuses if "railway" in s.get("context","").lower() or "railway" in s.get("description","").lower()]
+            st = railway[0] if railway else {}
+            logs.append({
+                "ts":      ts,
+                "sha":     sha[:10],
+                "message": msg,
+                "deploy":  st.get("state", "no_status"),
+                "detail":  st.get("description", ""),
+            })
+        latest = logs[0] if logs else {}
+        return {
+            "ok":     True,
+            "count":  len(logs),
+            "latest": latest,
+            "logs":   logs,
+            "note":   "For live stdout logs, check Railway dashboard → Deployments → Logs",
+        }
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
