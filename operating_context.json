@@ -1,15 +1,15 @@
 {
   "_note": "Static tool rules + tombstone + FULL SCHEMA all active tables. Update ini kalau: (1) breaking change tool params, (2) tabel baru di-drop, (3) schema tabel berubah, (4) architecture berubah.",
-  "_last_updated": "2026-03-13",
-  "_version": "2.1",
+  "_last_updated": "2026-03-14",
+  "_version": "2.2",
 
   "architecture": {
-    "system_name": "CORE v5.4 — Recursive Self-Improvement AGI",
+    "system_name": "CORE v6.0 — Recursive Self-Improvement AGI",
     "owner": "REINVAGNAR",
     "repo": "pockiesaints7/core-agi",
     "railway_url": "https://core-agi-production.up.railway.app",
     "railway_service": "core-agi",
-    "entry_point": "core.py",
+    "entry_point": "core_main.py (v6.0 split architecture: core_config, core_github, core_train, core_tools, core_main). core_legacy.py = retired monolith (read-only reference).",
     "language": "Python (FastAPI)",
     "ai_model": "Groq llama-3.3-70b-versatile (primary), llama-3.1-8b-instant (fast)",
     "database": "Supabase (PostgreSQL via PostgREST)",
