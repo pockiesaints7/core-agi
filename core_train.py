@@ -498,17 +498,19 @@ def reject_evolution(evolution_id: int, reason: str = "", silent: bool = False):
         return {"ok": False, "error": str(e)}
 
 
-def bulk_reject_evolutions(change_type: str = "", ids: list = None, reason: str = "") -> dict:
+def bulk_reject_evolutions(change_type: str = "", ids: list = None, reason: str = "", include_synthesized: bool = False) -> dict:
     """Bulk reject evolutions by change_type or explicit id list.
     Silent by default — one summary Telegram notify at the end.
+    include_synthesized: if True, also targets status=synthesized items (not just pending).
     """
     try:
+        statuses = "status=in.(pending,synthesized)" if include_synthesized else "status=eq.pending"
         if ids:
-            qs = f"select=id&status=eq.pending&id=in.({','.join(str(i) for i in ids)})"
+            qs = f"select=id&{statuses}&id=in.({','.join(str(i) for i in ids)})"
         elif change_type:
-            qs = f"select=id&status=eq.pending&change_type=eq.{change_type}"
+            qs = f"select=id&{statuses}&change_type=eq.{change_type}"
         else:
-            qs = "select=id&status=eq.pending"
+            qs = f"select=id&{statuses}"
         rows = sb_get("evolution_queue", qs + "&limit=500", svc=True)
         rejected = 0
         skipped  = 0
