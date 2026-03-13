@@ -1580,49 +1580,6 @@ def _repopulate_evolution_queue():
         return 0
 
 
-def _backlog_to_markdown() -> str:
-    """Generate BACKLOG.md from Supabase backlog table — always accurate after restarts."""
-    _sync_backlog_status()
-    try:
-        rows = sb_get("backlog", "select=*&order=priority.desc&limit=500", svc=True)
-    except Exception as e:
-        return f"# CORE Improvement Backlog\n\n_Error reading backlog: {e}_\n"
-    if not rows:
-        return "# CORE Improvement Backlog\n\n_No items yet._\n"
-    total     = len(rows)
-    n_done    = sum(1 for b in rows if b.get("status") == "done")
-    n_prog    = sum(1 for b in rows if b.get("status") == "in_progress")
-    n_pending = total - n_done - n_prog
-    lines = [
-        "# CORE Improvement Backlog",
-        f"\n_Auto-generated. Last updated: {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}_",
-        f"_Total: {total} | Pending: {n_pending} | In Progress: {n_prog} | Done: {n_done}_\n",
-        "---\n",
-    ]
-    by_type: dict = {}
-    for item in rows:
-        by_type.setdefault(item.get("type", "other"), []).append(item)
-    type_labels = {
-        "new_tool": "New Tools", "logic_improvement": "Logic Improvements",
-        "new_kb": "Knowledge Gaps", "telegram_command": "Telegram Commands",
-        "performance": "Performance", "missing_data": "Missing Data", "other": "Other",
-    }
-    status_icon = {"done": "[x]", "in_progress": "[~]", "pending": "[ ]"}
-    for t, items in by_type.items():
-        n_t_done = sum(1 for i in items if i.get("status") == "done")
-        lines.append(f"## {type_labels.get(t, t)} ({n_t_done}/{len(items)} done)\n")
-        for item in items:
-            p      = item.get("priority", 1)
-            status = item.get("status", "pending")
-            s_icon = status_icon.get(status, "[ ]")
-            lines.append(f"### {s_icon} P{p}: {item.get('title','')}")
-            lines.append(f"- **Status:** {status} | **Type:** {t} | **Effort:** {item.get('effort','?')} | **Impact:** {item.get('impact','?')} | **Domain:** {item.get('domain','?')}")
-            lines.append(f"- **What:** {item.get('description','')}")
-            lines.append(f"- **Discovered:** {item.get('discovered_at','')[:16]}")
-            lines.append("")
-    lines.append("---\n_CORE runs background_researcher every 60 min._")
-    lines.append("_Use `/backlog` in Telegram or `get_backlog` MCP tool to review._")
-    return "\n".join(lines)
 
 
 # ── KB Mining — one-time batch scan to populate backlog from raw KB ───────────
