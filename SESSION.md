@@ -1,7 +1,7 @@
 # CORE SESSION MASTER
 > Last updated: 2026-03-14 | Owner: REINVAGNAR | Version: CORE v6.0
 
-## Current Step: Task 8.4 ✅ complete — blueprint written as Task 9. Next: 8.5 docs, then pick Task 9 item to execute.
+## Current Step: Task 8 ✅ complete. Next: pick Task 9 item to execute — recommended start: 9.C (session quality scoring) — lowest effort, high value.
 
 ## last_good_commit: 2026-03-14 (post Task 7 — all 50 tools verified green)
 > If Railway goes down: use `github:get_file_contents` to read this SHA, restore via `github:push_files`. Do NOT use core-agi: tools when Railway is confirmed down — they all fail simultaneously.
@@ -164,9 +164,9 @@ Reject still needed: discards noise. synthesize only produces SESSION.md task ch
 
 - [x] 8.1 Add t_synthesize_evolutions() to core_tools.py — fetches all data, assembles full context payload, returns to Claude for unconstrained reasoning
 - [x] 8.2 Register in TOOLS dict with architect-level prompt: no constraints, invent freely, think 6 months ahead
-- [ ] 8.3 Add status=synthesized handling in evolution_queue flow
+- [x] 8.3 Add status=synthesized handling in evolution_queue flow
 - [x] 8.4 Test: call tool, verify Claude produces blueprint with impact/effort matrix + wild ideas section ✓ 2026-03-14
-- [ ] 8.5 Update CORE_SELF.md + operating_context.json
+- [x] 8.5 Update CORE_SELF.md + operating_context.json
 
 ---
 
@@ -222,6 +222,7 @@ The autonomous mode daemon (Section 4) already exists. The wild idea: CORE gener
 
 | Date | Summary | Key Actions |
 |---|---|------|
+| 2026-03-13 | Task 8 complete. synthesize_evolutions live-tested — confirm | synthesize_evolutions called|Claude produced Task 9 architect blueprint|SESSION.md updated with Task 9 (6 items) + 8.4 ticked|CORE_SELF.md rewritten: v6.0, 5-module arch, 50 tools (+4 more) |
 | 2026-03-14 | Task 8.4 ✅ — synthesize_evolutions live test + architect blueprint written as Task 9 | session_start → synthesize_evolutions → read SESSION.md SHA → wrote Task 9 blueprint (6 items: 9.A–9.F) |
 | 2026-03-13 | Diagnosed and fixed high fail rate in gh_search_replace and  | Patched t_gh_search_replace and t_multi_patch in core_tools.py via multi_patch. Verified readback. Build confirmed success on Railway. |
 | 2026-03-13 | Removed all 3 ghost BACKLOG.md gh_write calls from core_trai | identified 3 ghost BACKLOG.md gh_write calls surviving Task 1.8 deletion, attempted gh_search_replace but unicode em-dash blocked match, fetched full core_train.py via github:get_file_contents (+4 more) |
