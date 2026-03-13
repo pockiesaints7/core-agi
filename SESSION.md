@@ -153,6 +153,12 @@ Update all version strings → "CORE v6.0" across active modules.
 **What Claude produces:**
 A structured blueprint with concrete task chains — new tools, new tables, architecture changes, logic fixes, wild ideas. Each item tagged: impact (HIGH/MED/LOW), effort (HIGH/MED/LOW), category (new_tool / new_table / architecture / logic_change / wild).
 
+**Relationship with approve/reject — NOT a replacement:**
+synthesize_evolutions is the PLANNING GATE before approve/reject, not a substitute.
+Workflow: synthesize first (understand big picture + get blueprint) → then bulk approve/reject informed.
+Approve still needed: lands Groq KB entries into knowledge_base permanently.
+Reject still needed: discards noise. synthesize only produces SESSION.md task chain.
+
 **Evolution status after synthesis:** marked synthesized — acknowledged, not yet approved or rejected.
 **Trigger:** Manual only — owner calls it when ready for a planning session.
 
