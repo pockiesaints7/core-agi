@@ -174,6 +174,7 @@ Reject still needed: discards noise. synthesize only produces SESSION.md task ch
 
 | Date | Summary | Key Actions |
 |---|---|------|
+| 2026-03-13 | Removed all 3 ghost BACKLOG.md gh_write calls from core_trai | identified 3 ghost BACKLOG.md gh_write calls surviving Task 1.8 deletion, attempted gh_search_replace but unicode em-dash blocked match, fetched full core_train.py via github:get_file_contents (+4 more) |
 | 2026-03-13 | Task 8.1+8.2 complete — t_synthesize_evolutions added to cor | read current core_tools.py via github:get_file_contents, wrote TOOLS registry entry via gh_search_replace, attempted function body insert via gh_search_replace timed out (+8 more) |
 | 2026-03-13 | Designed and registered Task 8 — synthesize_evolutions. Clau | read SESSION.md full, identified correct insertion point for Task 8, designed synthesize_evolutions tool spec (+4 more) |
 | 2026-03-13 | Debugged and fixed the full hot reflection pipeline. Three f | read core_train.py auto_hot_reflection, identified missing created_at in session_end call, read core_config.py sb_post returns bool not row (+14 more) |
