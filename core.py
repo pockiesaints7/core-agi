@@ -1940,82 +1940,83 @@ def t_bulk_apply(executor_override: str = "claude_desktop", dry_run: bool = Fals
         return {"ok": False, "error": str(e)}
 
 
-def t_deploy_status() -> dict:
-    """Return active deploy info from Railway."""
+def _gh_commit_status(sha: str = "") -> dict:
+    """Read Railway deploy status from GitHub commit statuses — no RAILWAY_TOKEN needed.
+    Railway posts status back to GitHub automatically on every deploy."""
     try:
-        token      = os.environ.get("RAILWAY_TOKEN", "")
-        service_id = os.environ.get("RAILWAY_SERVICE_ID", "48ad55bd-6be2-4d8a-83df-34fc05facaa2")
-        env_id     = os.environ.get("RAILWAY_ENV_ID",     "ff3f2a4c-4085-445e-88ff-a423862d00e8")
-        if not token:
-            return {"ok": False, "error": "RAILWAY_TOKEN not set"}
-        query = """query($sid:String!,$eid:String!){
-          serviceInstance(serviceId:$sid,environmentId:$eid){
-            latestDeployment{ id status createdAt meta }
-          }
-        }"""
-        r = httpx.post(
-            "https://backboard.railway.app/graphql/v2",
-            headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
-            json={"query": query, "variables": {"sid": service_id, "eid": env_id}},
-            timeout=15,
-        )
-        data = r.json()
-        if "errors" in data:
-            return {"ok": False, "error": data["errors"][0]["message"]}
-        deploy = (data.get("data", {}).get("serviceInstance", {}).get("latestDeployment") or {})
-        meta = deploy.get("meta") or {}
+        h = _ghh()
+        if not sha:
+            ref = httpx.get(f"https://api.github.com/repos/{GITHUB_REPO}/git/ref/heads/main", headers=h, timeout=10)
+            ref.raise_for_status()
+            sha = ref.json()["object"]["sha"]
+        # Get commit statuses (Railway posts here)
+        r = httpx.get(f"https://api.github.com/repos/{GITHUB_REPO}/commits/{sha}/statuses", headers=h, timeout=10)
+        r.raise_for_status()
+        statuses = r.json()
+        # Get commit info
+        c = httpx.get(f"https://api.github.com/repos/{GITHUB_REPO}/commits/{sha}", headers=h, timeout=10)
+        c.raise_for_status()
+        commit_msg = c.json().get("commit", {}).get("message", "")[:80]
+        railway = [s for s in statuses if "railway" in s.get("context", "").lower() or "railway" in s.get("description", "").lower()]
+        latest = railway[0] if railway else (statuses[0] if statuses else {})
+        return {
+            "sha": sha[:12],
+            "commit_msg": commit_msg,
+            "state": latest.get("state", "unknown"),
+            "description": latest.get("description", "no status yet"),
+            "updated_at": latest.get("updated_at", ""),
+            "all_statuses": [{"context": s.get("context"), "state": s.get("state"), "description": s.get("description")} for s in statuses],
+        }
+    except Exception as e:
+        return {"state": "error", "description": str(e)}
+
+
+def t_deploy_status() -> dict:
+    """Return active deploy info — reads Railway status from GitHub commit statuses."""
+    try:
+        result = _gh_commit_status()
         return {
             "ok": True,
-            "deploy_id":  deploy.get("id", "unknown"),
-            "status":     deploy.get("status", "unknown"),
-            "created_at": deploy.get("createdAt", "unknown"),
-            "commit_sha": meta.get("commitHash", "unknown")[:12] if isinstance(meta, dict) else "unknown",
-            "commit_msg": meta.get("commitMessage", "unknown")[:80] if isinstance(meta, dict) else "unknown",
+            "commit_sha":  result.get("sha", "unknown"),
+            "commit_msg":  result.get("commit_msg", "unknown"),
+            "status":      result.get("state", "unknown"),
+            "description": result.get("description", ""),
+            "updated_at":  result.get("updated_at", ""),
         }
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
 
 def t_build_status() -> dict:
-    """Check if latest GitHub push is building/succeeded/failed on Railway."""
+    """Check if latest GitHub push is building/succeeded/failed on Railway.
+    Polls GitHub commit statuses — Railway posts here automatically, no RAILWAY_TOKEN needed."""
     try:
-        token      = os.environ.get("RAILWAY_TOKEN", "")
-        service_id = os.environ.get("RAILWAY_SERVICE_ID", "48ad55bd-6be2-4d8a-83df-34fc05facaa2")
-        env_id     = os.environ.get("RAILWAY_ENV_ID",     "ff3f2a4c-4085-445e-88ff-a423862d00e8")
-        if not token:
-            return {"ok": False, "error": "RAILWAY_TOKEN not set"}
-        query = """query($sid:String!,$eid:String!){
-          deployments(serviceId:$sid,environmentId:$eid,first:3){
-            edges{ node{ id status createdAt meta } }
-          }
-        }"""
-        r = httpx.post(
-            "https://backboard.railway.app/graphql/v2",
-            headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
-            json={"query": query, "variables": {"sid": service_id, "eid": env_id}},
-            timeout=15,
-        )
-        data = r.json()
-        if "errors" in data:
-            return {"ok": False, "error": data["errors"][0]["message"]}
-        edges = (data.get("data", {}).get("deployments", {}).get("edges", []))
+        h = _ghh()
+        # Get last 3 commits
+        r = httpx.get(f"https://api.github.com/repos/{GITHUB_REPO}/commits?per_page=3", headers=h, timeout=10)
+        r.raise_for_status()
+        commits = r.json()
         deploys = []
-        for e in edges:
-            node = e.get("node", {})
-            meta = node.get("meta") or {}
+        for commit in commits:
+            sha = commit["sha"]
+            msg = commit.get("commit", {}).get("message", "")[:60]
+            sr = httpx.get(f"https://api.github.com/repos/{GITHUB_REPO}/commits/{sha}/statuses", headers=h, timeout=10)
+            statuses = sr.json() if sr.status_code == 200 else []
+            railway = [s for s in statuses if "railway" in s.get("context","").lower() or "railway" in s.get("description","").lower()]
+            st = railway[0] if railway else (statuses[0] if statuses else {})
             deploys.append({
-                "id":         node.get("id", "")[:12],
-                "status":     node.get("status", "unknown"),
-                "created_at": node.get("createdAt", ""),
-                "commit_sha": meta.get("commitHash", "")[:12] if isinstance(meta, dict) else "",
-                "commit_msg": meta.get("commitMessage", "")[:60] if isinstance(meta, dict) else "",
+                "commit_sha": sha[:12],
+                "commit_msg": msg,
+                "state":      st.get("state", "no status"),
+                "description": st.get("description", ""),
+                "updated_at": st.get("updated_at", ""),
             })
         latest = deploys[0] if deploys else {}
         return {
             "ok": True,
             "latest": latest,
             "recent": deploys,
-            "summary": f"Latest deploy: {latest.get('status','?')} - {latest.get('commit_msg','?')}",
+            "summary": f"Latest: {latest.get('state','?')} — {latest.get('commit_msg','?')}",
         }
     except Exception as e:
         return {"ok": False, "error": str(e)}
