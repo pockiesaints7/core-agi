@@ -1206,12 +1206,15 @@ def t_get_backlog(status: str = "pending", limit: int = 20, min_priority: int = 
         return {"ok": False, "error": str(e), "items": []}
 
 
-def t_backlog_update(title: str, status: str):
-    ok = sb_patch("backlog", f"title=eq.{title}", {"status": status})
-    if ok:
-        sb_patch("evolution_queue",
-                 f"pattern_key=like.backlog%3A%25{title[:40]}%25",
-                 {"status": "applied" if status == "done" else status})
+def t_backlog_update(title: str, status: str, result: str = ""):
+    """Update backlog item status. When status=done, result is required."""
+    # Task 7.3: enforce result on done
+    if status == "done" and not result.strip():
+        return {"ok": False, "error": "result is required when status=done — describe what was built"}
+    patch_data = {"status": status}
+    if result.strip():
+        patch_data["result"] = result.strip()
+    ok = sb_patch("backlog", f"title=eq.{title}", patch_data)
     return {"ok": ok, "title": title, "new_status": status}
 
 
