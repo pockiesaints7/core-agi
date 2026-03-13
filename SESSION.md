@@ -127,7 +127,7 @@ Update all version strings → "CORE v6.0" across active modules.
 
 ### TASK 7 — Training Pipeline Fix (Prereq: Task 2) ⚠️ CRITICAL
 Fix core_train.py so the hot→cold→evolution loop is clean and closed.
-Skill graph designed: 2026-03-14 (claude.ai session).
+Skill graph designed: 2026-03-14 (claude-desktop session).
 
 **Problem:** cold processor emits `change_type=backlog` evolutions — wrong. Backlog is owner's decision, not Groq's. task_queue items marked done with `result=null` — no record of work. No changelog written on task completion.
 
