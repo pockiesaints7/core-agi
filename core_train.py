@@ -798,8 +798,8 @@ Output MUST be valid JSON:
 }
 Output ONLY valid JSON, no preamble."""
 
-        user = (f"RECENT SESSIONS (last 24h, {len(sessions)} entries):\n{sessions_text}\n\n"
-                f"RECENT MISTAKES (last 24h, {len(mistakes)} entries):\n{mistakes_text}\n\n"
+        user = (f"RECENT SESSIONS (since last processed, {len(sessions)} entries):\n{sessions_text}\n\n"
+                f"RECENT MISTAKES (since last processed, {len(mistakes)} entries):\n{mistakes_text}\n\n"
                 f"Extract patterns from this recent activity only.")
 
         raw = groq_chat(system, user, model=GROQ_MODEL, max_tokens=800)
