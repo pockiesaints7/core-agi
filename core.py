@@ -2467,14 +2467,8 @@ def handle_msg(msg):
         notify(f"*CORE v5.4*\n{step}\n"
                f"Knowledge: {counts.get('knowledge_base',0)} | Sessions: {counts.get('sessions',0)}\n\n"
                f"*Commands:*\n"
-               f"/status - health + training\n"
-               f"/ask <question> - ask CORE\n"
-               f"/route <task> - routing analysis\n"
-               f"/stats - analytics\n"
-               f"/backlog [min_priority] - improvement backlog\n"
-               f"/mine - scan KB for backlog items\n"
-               f"/mistakes [domain] - recent mistakes\n"
-               f"/tasks - task queue", cid)
+               f"/status - health + pipeline\n"
+               f"/backlog [min_priority] - improvement backlog", cid)
 
     elif text == "/status":
         h = t_health(); counts = get_system_counts(); ts = t_training_status()
