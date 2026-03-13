@@ -789,19 +789,17 @@ def background_researcher():
                     )
                     auto_applied = 0
                     for evo in groq_pending:
-                        try:
-                            meta = json.loads(evo.get("diff_content") or "{}")
-                        except Exception:
-                            meta = {}
-                        executor = meta.get("executor", "auto")
-                        btype    = meta.get("backlog_type", "")
-                        if executor == "groq" or (executor == "auto" and btype in ("new_kb", "missing_data")):
+                        # Task 7.5: only auto-apply knowledge evolutions with conf >= threshold
+                        # code/config/backlog are owner decisions — never auto-apply
+                        ctype = evo.get("change_type", "")
+                        conf  = float(evo.get("confidence") or 0)
+                        if ctype == "knowledge" and conf >= KNOWLEDGE_AUTO_CONFIDENCE:
                             r = apply_evolution(evo["id"])
                             if r.get("ok"):
                                 auto_applied += 1
                             time.sleep(1)
                     if auto_applied:
-                        print(f"[RESEARCH] Auto-applied {auto_applied} groq evolutions")
+                        print(f"[RESEARCH] Auto-applied {auto_applied} knowledge evolutions (conf>={KNOWLEDGE_AUTO_CONFIDENCE})")
                 except Exception as _ae:
                     print(f"[RESEARCH] auto-apply error: {_ae}")
 
