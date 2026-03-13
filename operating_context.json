@@ -1,7 +1,7 @@
 {
   "_note": "Static tool rules + tombstone + FULL SCHEMA all active tables. Update ini kalau: (1) breaking change tool params, (2) tabel baru di-drop, (3) schema tabel berubah, (4) architecture berubah.",
-  "_last_updated": "2026-03-14 (Task 3.1)",
-  "_version": "2.4",
+  "_last_updated": "2026-03-14 (Task 3 cleanup)",
+  "_version": "2.5",
 
   "architecture": {
     "system_name": "CORE v6.0 — Recursive Self-Improvement AGI",
@@ -122,10 +122,29 @@
       "read_schema": "id(uuid), task(str), status(str), priority(int), result, error, created_at, updated_at, source, chat_id",
       "status_values": ["pending", "in_progress", "done", "failed"]
     },
+    "projects": {
+      "purpose": "Registered projects CORE can index and answer questions about",
+      "insert_via": "project_register tool",
+      "required_fields": ["project_id", "name"],
+      "optional_fields": ["folder_path", "index_path", "status"],
+      "auto_fields": ["id (int)", "created_at", "last_indexed"],
+      "read_via": "project_list tool"
+    },
+    "project_context": {
+      "purpose": "Prepared project KB context waiting for Claude Desktop to consume",
+      "insert_via": "SYSTEM ONLY (project_prepare tool)",
+      "read_via": "project_context_check tool",
+      "note": "Rows consumed (deleted) after Claude Desktop loads them via project_consume"
+    },
     "changelog": {
-      "purpose": "System version history — major changes, upgrades, architecture shifts",
-      "insert_via": "sb_insert",
-      "read_schema": "id, version, change_type, component, title, description, triggered_by, growth_flag_type, before_state, after_state, files_changed(array), session_id, created_at"
+      "purpose": "Permanent audit log of all system changes deployed to CORE",
+      "insert_via": "changelog_add tool (preferred) or sb_insert",
+      "required_fields": ["version", "change_type", "component", "title", "description"],
+      "optional_fields": ["triggered_by", "growth_flag_type", "before_state", "after_state", "files_changed (array)", "session_id"],
+      "auto_fields": ["id (int)", "created_at"],
+      "change_type_values": ["upgrade", "fix", "refactor", "add", "remove", "config"],
+      "read_schema": "id, version, change_type, component, title, description, triggered_by, growth_flag_type, before_state, after_state, files_changed(array), session_id, created_at",
+      "read_via": "sb_query table=changelog"
     }
   },
 
@@ -135,9 +154,8 @@
     "when_schema_changes": ["Update schema in this file under active_tables", "Update KB entry for that table", "Add changelog entry", "Add migration note in core.py fix log"]
   },
 
-
   "tombstone_tables": [
-    "playbook", "memory", "master_prompt", "patterns", "projects",
+    "playbook", "memory", "master_prompt", "patterns",
     "training_sessions", "training_sessions_v2", "training_flags",
     "session_learning", "agent_registry", "knowledge_blocks",
     "agi_mistakes", "stack_registry", "vault_logs", "vault"
