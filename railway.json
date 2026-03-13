@@ -1,1 +1,1 @@
-{"deploy": {"startCommand": "python core.py"}}
+{"deploy": {"startCommand": "python core_main.py"}}
