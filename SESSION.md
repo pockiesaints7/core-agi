@@ -3,6 +3,9 @@
 
 ## Current Step: Task 3 — Project Mode (9 new MCP tools, Supabase tables: projects + project_context)
 
+## last_good_commit: 2026-03-14 (post Task 7 — all 50 tools verified green)
+> If Railway goes down: use `github:get_file_contents` to read this SHA, restore via `github:push_files`. Do NOT use core-agi: tools when Railway is confirmed down — they all fail simultaneously.
+
 ---
 
 ## 1. SESSION START CHECKLIST
@@ -72,6 +75,7 @@ When user says "activate autonomous mode":
 | Session end | Always call `session_end` — logs session + hot_reflection in one call |
 | Task done | Tick checkbox in SESSION.md immediately + write result to backlog_update() |
 | evolution_queue | Only `knowledge`, `code`, `config` change_types allowed — never `backlog` |
+| Railway recovery | If Railway down: read last_good_commit above → restore via github: tools. Never retry core-agi: tools when Railway is confirmed down. |
 
 ---
 
@@ -125,35 +129,27 @@ Design doc: docs/BINANCE_CORE_AGI.md
 ### TASK 6 — v6.0 Version Stamp 🔒 (LOCKED until Tasks 1-5 done)
 Update all version strings → "CORE v6.0" across active modules.
 
-### TASK 7 — Training Pipeline Fix (Prereq: Task 2) ⚠️ CRITICAL
-Fix core_train.py so the hot→cold→evolution loop is clean and closed.
-Skill graph designed: 2026-03-14 (claude-desktop session).
-
-**Problem:** cold processor emits `change_type=backlog` evolutions — wrong. Backlog is owner's decision, not Groq's. task_queue items marked done with `result=null` — no record of work. No changelog written on task completion.
-
-**Boundary:** Groq owns L1–L3 (hot reflection → cold processor → evolution_queue). Owner owns L4–L7 on Desktop.
-
-**Allowed evolution types from cold processor:** `knowledge`, `code`, `config` ONLY.
-
-- [x] 7.1 PATCH `run_cold_processor()` — remove `change_type=backlog` output. Guard: `ALLOWED_EVO_TYPES = ["knowledge", "code", "config"]` ✅ 2026-03-14
-- [x] 7.2 PATCH `apply_evolution()` — delete entire `backlog` branch (~60 lines). Dead code, causes ghost task_queue entries with `result=null` ✅ 2026-03-14
-- [x] 7.3 PATCH `backlog_update()` — require `result` field when `status=done`. Reject if result is null/empty ✅ 2026-03-14
-- [x] 7.4 NEW `t_changelog_add()` — called on every task completion. Writes: version, component, what changed, before/after state to `changelog` table + Telegram notify ✅ 2026-03-14
-- [x] 7.5 PATCH `cold_processor_loop()` — remove auto-apply of `backlog` type evolutions from background_researcher loop ✅ 2026-03-14
-- [x] 7.6 UPDATE `SESSION.md` rule table — `evolution_queue` only accepts knowledge/code/config (done ✓ this session) ✅ 2026-03-14
-- [ ] 7.7 Smoke test: run a full cycle — session_end → hot_reflection → cold_processor → evolution appears as knowledge only
+### TASK 7 — Training Pipeline Fix ✅
+- [x] 7.1 PATCH `run_cold_processor()` — ALLOWED_EVO_TYPES guard ✓ 2026-03-14
+- [x] 7.2 PATCH `apply_evolution()` — delete backlog branch ✓ 2026-03-14
+- [x] 7.3 PATCH `backlog_update()` — require result on done ✓ 2026-03-14
+- [x] 7.4 NEW `t_changelog_add()` — changelog + Telegram notify ✓ 2026-03-14
+- [x] 7.5 PATCH `cold_processor_loop()` — remove backlog auto-apply ✓ 2026-03-14
+- [x] 7.6 UPDATE SESSION.md rule table ✓ 2026-03-14
+- [x] 7.7 Smoke test + L4 execution — full cycle verified, 9 evolutions executed ✓ 2026-03-14
 
 ---
 
 ## 7. SESSION LOG
 
 | Date | Summary | Key Actions |
-|---|---|---|
+|---|---|------|
 | 2026-03-11 | v5.0 full launch | Training pipeline live, CORE_SELF.md created, self_sync_check added |
 | 2026-03-12 | v5.4 GOD MODE | 50 MCP tools, power tools (session_start/end, blobs, build_status, deploy_and_wait) |
 | 2026-03-13 | Cleanup + v6 prep | README updated, repo public, 7 stale files deleted, Jarvis OS KB purged, SESSION.md rewritten |
 | 2026-03-13 | Architecture split | core.py split into 5 modules, all 50 tools smoke tested, cold processor pattern pipeline fixed |
-| 2026-03-14 | Training pipeline design | Skill graph designed, backlog evolutions bulk rejected, SKILL.md updated to architecture-agnostic, Task 7 registered |
+| 2026-03-14 | Training pipeline design | Skill graph designed, backlog evolutions bulk rejected, SKILL.md updated, Task 7 registered |
+| 2026-03-14 | L1-L7 full execution | Smoke test passed, deep scan found 5 real evolutions, historical distill (10 hots, 101 patterns), L4 executed: 5 KB + SESSION.md patch + config triage. Task 7 ✅ |
 
 ---
 
