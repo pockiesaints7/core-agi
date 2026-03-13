@@ -558,6 +558,7 @@ def t_session_end(summary: str, actions: str, domain: str = "general",
             q = 0.8
 
         # 1. Log session to Supabase
+        session_created_at = datetime.utcnow().isoformat()
         session_ok = sb_post("sessions", {
             "summary": summary,
             "actions": actions_list,
@@ -573,6 +574,7 @@ def t_session_end(summary: str, actions: str, domain: str = "general",
             "domain": domain,
             "quality": q,
             "seed_patterns": caller_patterns,
+            "created_at": session_created_at,
         })
         reflection_id = "logged" if r_ok else "failed"
 
