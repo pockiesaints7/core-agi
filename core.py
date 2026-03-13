@@ -1088,6 +1088,66 @@ def t_gh_read_lines(path, start_line=1, end_line=50, repo=""):
 
 # -- Agentic speed tools ------------------------------------------------------
 
+def t_core_py_fn(fn_name: str) -> dict:
+    """Read a single function from core.py by name. Returns source + line range.
+    Replaces 3-5 gh_read_lines binary-search calls with 1 call."""
+    try:
+        content = _gh_blob_read("core.py")
+        lines = content.splitlines()
+        start = None
+        indent = None
+        for i, line in enumerate(lines):
+            if line.strip().startswith(f"def {fn_name}(") or line.strip() == f"def {fn_name}()":
+                start = i
+                indent = len(line) - len(line.lstrip())
+                break
+        if start is None:
+            return {"ok": False, "error": f"Function '{fn_name}' not found in core.py"}
+        end = start + 1
+        while end < len(lines):
+            line = lines[end]
+            if line.strip() == "":
+                end += 1
+                continue
+            cur_indent = len(line) - len(line.lstrip())
+            if cur_indent <= indent and line.strip().startswith("def "):
+                break
+            end += 1
+        source = "\n".join(lines[start:end])
+        return {"ok": True, "fn_name": fn_name, "start_line": start + 1,
+                "end_line": end, "line_count": end - start, "source": source}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def t_session_start() -> dict:
+    """One-call session bootstrap. Bundles get_state + health + recent mistakes + pending evolutions.
+    Replaces 4 separate tool calls at the start of every session."""
+    try:
+        state = t_state()
+        health = t_health()
+        mistakes = t_get_mistakes(domain="", limit=5)
+        evolutions = sb_get("evolution_queue",
+            "select=id,change_summary,change_type,confidence,executor&status=eq.pending&order=confidence.desc&limit=5")
+        training = t_training_status()
+        return {
+            "ok": True,
+            "health": health.get("overall", "unknown"),
+            "components": health.get("components", {}),
+            "counts": state.get("counts", {}),
+            "last_session": state.get("last_session", ""),
+            "last_session_ts": state.get("last_session_ts", ""),
+            "pending_tasks": state.get("pending_tasks", []),
+            "step": state.get("session_md", "")[:300],
+            "recent_mistakes": mistakes[:5] if isinstance(mistakes, list) else [],
+            "pending_evolutions": evolutions[:5] if isinstance(evolutions, list) else [],
+            "unprocessed_hot": training.get("unprocessed_hot", 0),
+            "pending_evo_count": training.get("pending_evolutions", 0),
+        }
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
 def t_search_in_file(path: str, pattern: str, repo: str = "") -> dict:
     """Search for a pattern in a GitHub file. Returns all matching lines with line numbers.
     Eliminates binary-search round trips when locating functions in large files like core.py."""
@@ -2351,6 +2411,10 @@ TOOLS = {
                                "desc": "Search for pattern in a GitHub file. Returns matching lines with line numbers. Locate functions in core.py without binary-searching."},
     "multi_patch":            {"fn": t_multi_patch,            "perm": "EXECUTE", "args": ["path", "patches", "message", "repo"],
                                "desc": "Apply multiple find-replace patches in one fetch+write. patches=JSON array of {old_str,new_str}. Faster than N separate gh_search_replace calls."},
+    "core_py_fn":             {"fn": t_core_py_fn,             "perm": "READ",    "args": ["fn_name"],
+                               "desc": "Read a single function from core.py by name. Returns source + line range. Replaces 3-5 gh_read_lines binary searches with 1 call."},
+    "session_start":          {"fn": t_session_start,          "perm": "READ",    "args": [],
+                               "desc": "One-call session bootstrap: health + counts + last session + recent mistakes + pending evolutions. Replaces 4 separate tool calls."},
     "deploy_and_wait":        {"fn": t_deploy_and_wait,        "perm": "EXECUTE", "args": ["reason", "timeout"],
                                "desc": "Trigger redeploy + poll until success/failure. timeout=seconds (default 120). Replaces redeploy + manual build_status polling."},
     "ping_health":            {"fn": t_ping_health,            "perm": "READ",    "args": [],
