@@ -398,22 +398,54 @@ def apply_evolution(evolution_id: int):
         return {"ok": False, "error": str(e)}
 
 
-def reject_evolution(evolution_id: int, reason: str = ""):
+def reject_evolution(evolution_id: int, reason: str = "", silent: bool = False):
+    """Reject a single evolution. silent=True skips Telegram notify + mistakes write (use for bulk ops)."""
     try:
         rows = sb_get("evolution_queue",
                       f"select=*&id=eq.{evolution_id}&status=eq.pending&limit=1", svc=True)
         if not rows: return {"ok": False, "error": f"Evolution {evolution_id} not found or not pending"}
         sb_patch("evolution_queue", f"id=eq.{evolution_id}", {"status": "rejected"})
-        sb_post("mistakes", {
-            "domain": "evolution", "context": f"Evolution #{evolution_id}: {rows[0].get('change_summary','')[:200]}",
-            "what_failed": "Evolution rejected by owner",
-            "correct_approach": reason or "Owner rejected - review pattern and confidence threshold",
-            "root_cause": reason or "Unknown",
-            "how_to_avoid": "Raise confidence threshold or improve pattern quality",
-            "severity": "low", "tags": ["evolution", "rejected"],
-        })
-        notify(f"Evolution #{evolution_id} rejected.\nReason: {reason or 'No reason given'}")
+        if not silent:
+            sb_post("mistakes", {
+                "domain": "evolution", "context": f"Evolution #{evolution_id}: {rows[0].get('change_summary','')[:200]}",
+                "what_failed": "Evolution rejected by owner",
+                "correct_approach": reason or "Owner rejected - review pattern and confidence threshold",
+                "root_cause": reason or "Unknown",
+                "how_to_avoid": "Raise confidence threshold or improve pattern quality",
+                "severity": "low", "tags": ["evolution", "rejected"],
+            })
+            notify(f"Evolution #{evolution_id} rejected.\nReason: {reason or 'No reason given'}")
         return {"ok": True, "evolution_id": evolution_id}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def bulk_reject_evolutions(change_type: str = "", ids: list = None, reason: str = "") -> dict:
+    """Bulk reject evolutions by change_type or explicit id list.
+    Silent by default — one summary Telegram notify at the end.
+    change_type: 'backlog', 'knowledge', or '' for all pending.
+    ids: explicit list of evolution IDs to reject (overrides change_type filter).
+    """
+    try:
+        if ids:
+            qs = f"select=id&status=eq.pending&id=in.({','.join(str(i) for i in ids)})"
+        elif change_type:
+            qs = f"select=id&status=eq.pending&change_type=eq.{change_type}"
+        else:
+            qs = "select=id&status=eq.pending"
+        rows = sb_get("evolution_queue", qs + "&limit=500", svc=True)
+        rejected = 0
+        skipped  = 0
+        for row in rows:
+            result = reject_evolution(row["id"], reason=reason, silent=True)
+            if result.get("ok"):
+                rejected += 1
+            else:
+                skipped += 1
+        summary = f"Bulk rejected {rejected} evolutions (type={change_type or 'all'}, skipped={skipped}). Reason: {reason or 'none'}"
+        print(f"[EVOLUTION] {summary}")
+        notify(summary)
+        return {"ok": True, "rejected": rejected, "skipped": skipped}
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
