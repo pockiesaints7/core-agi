@@ -144,6 +144,7 @@ Update all version strings → "CORE v6.0" across active modules.
 
 | Date | Summary | Key Actions |
 |---|---|------|
+| 2026-03-13 | Full historical enriched distill session. Read all 4 enrichm | session_start|sb_query mistakes all 100 rows|sb_query changelog all 50 rows|sb_query task_queue all 123 rows|synthesized 8 enriched hots cross-referencing all 4 tables|sb_bulk_insert 8 enriched hots|trigger_cold_processor → 77 patterns|session_end |
 | 2026-03-13 | Desktop session — patched auto_hot_reflection in core_train. | session_start|read core_train.py auto_hot_reflection function|designed 4-table enrichment (mistakes/KB/task_queue/changelog)|github:push_files core_train.py with enrichment patch|build_status confirmed success|session_end |
 | 2026-03-13 | claude.ai L4 execution session — full L1-L7 pipeline run. Sm | session_start|full supabase sweep all 9 tables|deep scan mistakes+patterns+hots|queued 5 real evolutions (293-297)|10 historical distill hots inserted|trigger_cold_processor → 101 patterns|L4: add_knowledge x5|SESSION.md patched last_good_commit|approve_evolution 293+241+240|reject_evolution 297 with triage note|session_end |
 | 2026-03-11 | v5.0 full launch | Training pipeline live, CORE_SELF.md created, self_sync_check added |
