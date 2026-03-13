@@ -15,7 +15,7 @@ NOTE: Split architecture is live. core.py has been deleted.
 import json
 import time
 from collections import Counter
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import httpx
 
@@ -92,30 +92,45 @@ def auto_hot_reflection(session_data: dict):
             actions_str = ", ".join(str(a) for a in actions[:20])
             seed_hint = f"Caller already identified: {seed_patterns}\n" if seed_patterns else ""
 
-            # --- Enrich: pull live context from 4 tables for richer Groq signal ---
+            # --- Enrich: pull session-scoped context from 4 tables ---
+            # Use session created_at as lower bound so Groq only sees THIS session's data.
+            # Fallback: if no created_at in session_data, use 2 hours ago to avoid empty results.
+            session_ts = session_data.get("created_at") or \
+                (datetime.utcnow() - timedelta(hours=2)).isoformat()
+            # Ensure timestamp has no trailing Z or timezone offset that PostgREST rejects
+            session_ts = session_ts.replace("Z", "").split("+")[0]
+
             enrichment = ""
             try:
-                new_mistakes = sb_get("mistakes", "select=domain,what_failed,root_cause&order=id.desc&limit=5", svc=True)
+                new_mistakes = sb_get("mistakes",
+                    f"select=domain,what_failed,root_cause&created_at=gte.{session_ts}&order=id.desc&limit=5",
+                    svc=True)
                 if new_mistakes:
                     enrichment += "\nNew mistakes this session:\n" + "\n".join(
                         f"  [{r.get('domain','?')}] {r.get('what_failed','')[:120]} | root: {r.get('root_cause','')[:80]}"
                         for r in new_mistakes)
             except Exception: pass
             try:
-                new_kb = sb_get("knowledge_base", "select=domain,topic&order=updated_at.desc&limit=5", svc=True)
+                new_kb = sb_get("knowledge_base",
+                    f"select=domain,topic&updated_at=gte.{session_ts}&order=updated_at.desc&limit=5",
+                    svc=True)
                 if new_kb:
                     enrichment += "\nKB entries added/updated:\n" + "\n".join(
                         f"  [{r.get('domain','?')}] {r.get('topic','')[:100]}" for r in new_kb)
             except Exception: pass
             try:
-                task_updates = sb_get("task_queue", "select=task,status,result&order=updated_at.desc&limit=5", svc=True)
+                task_updates = sb_get("task_queue",
+                    f"select=task,status,result&updated_at=gte.{session_ts}&order=updated_at.desc&limit=5",
+                    svc=True)
                 if task_updates:
                     enrichment += "\nTask queue updates:\n" + "\n".join(
                         f"  [{r.get('status','?')}] {str(r.get('task',''))[:100]} | result: {str(r.get('result','null'))[:60]}"
                         for r in task_updates)
             except Exception: pass
             try:
-                changelog_rows = sb_get("changelog", "select=component,title,change_type&order=id.desc&limit=3", svc=True)
+                changelog_rows = sb_get("changelog",
+                    f"select=component,title,change_type&created_at=gte.{session_ts}&order=id.desc&limit=3",
+                    svc=True)
                 if changelog_rows:
                     enrichment += "\nChangelog entries:\n" + "\n".join(
                         f"  [{r.get('change_type','?')}] {r.get('component','?')}: {r.get('title','')[:100]}"
@@ -135,7 +150,7 @@ def auto_hot_reflection(session_data: dict):
                 f"Respond ONLY as JSON: "
                 f'{{"patterns": ["..."], "quality": 0.8, "gaps": "..or null"}}'
             )
-            raw = groq_chat(prompt, model=GROQ_FAST, max_tokens=300)
+            raw = groq_chat(prompt, model=GROQ_FAST, max_tokens=500)
             parsed = json.loads(raw.strip().lstrip("```json").rstrip("```").strip())
             groq_patterns = [p for p in parsed.get("patterns", []) if isinstance(p, str) and len(p) > 5][:5]
             # Merge: seed patterns first, then Groq additions (deduplicated)
@@ -314,8 +329,6 @@ def apply_evolution(evolution_id: int):
                         fn_name = line.strip().split("(")[0].replace("def ", "").strip()
                         break
             if fn_name and fn_code:
-                # In split architecture: t_gh_search_replace must be called via tools import
-                # For now, log as pending_desktop for manual application
                 sb_patch("evolution_queue", f"id=eq.{evolution_id}", {"status": "pending_desktop"})
                 notify(f"[NEW TOOL] Evolution #{evolution_id} generated code for '{fn_name}'.\n"
                        f"Apply via Claude Desktop: add to core_tools.py + register in TOOLS dict.")
@@ -361,8 +374,6 @@ def apply_evolution(evolution_id: int):
 
         elif change_type == "backlog":
             # RETIRED 2026-03-14 (Task 7.2) — backlog is owner decision, never Groq's.
-            # evolution_queue only accepts: knowledge, code, config.
-            # Auto-reject and return immediately.
             reject_evolution(evolution_id, reason="backlog change_type retired — owner decides backlog", silent=True)
             return {"ok": False, "evolution_id": evolution_id, "change_type": change_type,
                     "note": "backlog change_type retired — auto-rejected"}
@@ -412,8 +423,6 @@ def reject_evolution(evolution_id: int, reason: str = "", silent: bool = False):
 def bulk_reject_evolutions(change_type: str = "", ids: list = None, reason: str = "") -> dict:
     """Bulk reject evolutions by change_type or explicit id list.
     Silent by default — one summary Telegram notify at the end.
-    change_type: 'backlog', 'knowledge', or '' for all pending.
-    ids: explicit list of evolution IDs to reject (overrides change_type filter).
     """
     try:
         if ids:
@@ -525,16 +534,11 @@ def _backlog_add(items: list) -> list:
         if ok:
             new_items.append(item)
         # NOTE: Backlog items are NEVER pushed to evolution_queue.
-        # evolution_queue is reserved for real system changes (code patches, KB writes)
-        # generated by the cold processor from repeated patterns.
-        # Backlog is managed exclusively in the backlog table.
     return new_items
 
 
 def _sync_backlog_status():
-    """No-op: backlog status is managed directly in the backlog table.
-    evolution_queue coupling has been removed — backlog items are never
-    pushed to evolution_queue, so there is nothing to sync from."""
+    """No-op: backlog status is managed directly in the backlog table."""
     return 0
 
 
@@ -668,15 +672,22 @@ Output ONLY valid JSON array, no preamble."""
 
 # -- Real signal + simulation --------------------------------------------------
 def _extract_real_signal() -> bool:
-    """Track A - extract patterns from real sessions + mistakes."""
+    """Track A - extract patterns from real sessions + mistakes.
+    Scoped to last 24h only — history is pre-filled, Groq processes new signal only.
+    """
     try:
+        # Scope to last 24h — avoid re-processing all-time history on every background cycle
+        since_ts = (datetime.utcnow() - timedelta(hours=24)).isoformat()
+
         sessions = sb_get("sessions",
-            "select=summary,actions,interface&order=created_at.desc&limit=20", svc=True)
+            f"select=summary,actions,interface&created_at=gte.{since_ts}&order=created_at.desc&limit=20",
+            svc=True)
         mistakes = sb_get("mistakes",
-            "select=domain,what_failed,root_cause,how_to_avoid&order=id.desc&limit=20", svc=True)
+            f"select=domain,what_failed,root_cause,how_to_avoid&created_at=gte.{since_ts}&order=id.desc&limit=20",
+            svc=True)
 
         if not sessions and not mistakes:
-            print("[RESEARCH/REAL] No data yet - skipping")
+            print("[RESEARCH/REAL] No new sessions or mistakes in last 24h - skipping")
             return False
 
         sessions_text = "\n".join([
@@ -699,9 +710,9 @@ Output MUST be valid JSON:
 }
 Output ONLY valid JSON, no preamble."""
 
-        user = (f"RECENT SESSIONS ({len(sessions)}):\n{sessions_text}\n\n"
-                f"RECENT MISTAKES ({len(mistakes)}):\n{mistakes_text}\n\n"
-                f"Extract patterns from this real activity.")
+        user = (f"RECENT SESSIONS (last 24h, {len(sessions)} entries):\n{sessions_text}\n\n"
+                f"RECENT MISTAKES (last 24h, {len(mistakes)} entries):\n{mistakes_text}\n\n"
+                f"Extract patterns from this recent activity only.")
 
         raw = groq_chat(system, user, model=GROQ_MODEL, max_tokens=800)
         raw = raw.strip()
@@ -715,7 +726,7 @@ Output ONLY valid JSON, no preamble."""
             return False
 
         ok = sb_post("hot_reflections", {
-            "task_summary": f"Real signal extraction - {len(sessions)} sessions, {len(mistakes)} mistakes",
+            "task_summary": f"Real signal extraction (24h) - {len(sessions)} sessions, {len(mistakes)} mistakes",
             "domain": result.get("domain", "general"),
             "new_patterns": patterns,
             "gaps_identified": result.get("gaps", ""),
