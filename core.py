@@ -1079,8 +1079,9 @@ def t_reject_evolution(evolution_id, reason=""):
     except: return {"ok": False, "error": "evolution_id must be a number"}
     return reject_evolution(eid, reason)
 
-def t_gh_search_replace(path, old_str, new_str, message, repo=""):
-    """Surgical find-replace using Git Blobs API — no file size limit."""
+def t_gh_search_replace(path, old_str, new_str, message, repo="", dry_run="false"):
+    """Surgical find-replace using Git Blobs API — no file size limit.
+    dry_run=true shows what WOULD change without committing — safe preview before writing."""
     try:
         repo = repo or GITHUB_REPO
         file_content = _gh_blob_read(path, repo)
@@ -1090,8 +1091,18 @@ def t_gh_search_replace(path, old_str, new_str, message, repo=""):
         if count > 1:
             return {"ok": False, "error": f"old_str found {count}x - be more specific"}
         new_content = file_content.replace(old_str, new_str, 1)
+        if str(dry_run).lower() == "true":
+            import difflib
+            diff = list(difflib.unified_diff(
+                file_content.splitlines(keepends=True),
+                new_content.splitlines(keepends=True),
+                fromfile=f"{path} (before)", tofile=f"{path} (after)", n=3
+            ))
+            return {"ok": True, "dry_run": True, "path": path,
+                    "would_replace": old_str[:80], "diff": "".join(diff)[:3000]}
         commit_sha = _gh_blob_write(path, new_content, message, repo)
-        return {"ok": True, "path": path, "replaced": old_str[:80], "commit": commit_sha[:12]}
+        return {"ok": True, "dry_run": False, "path": path,
+                "replaced": old_str[:80], "commit": commit_sha[:12]}
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
@@ -1228,17 +1239,30 @@ def t_core_py_validate() -> dict:
         return {"ok": False, "error": str(e), "errors": [str(e)], "warnings": []}
 
 
-def t_search_in_file(path: str, pattern: str, repo: str = "") -> dict:
+def t_search_in_file(path: str, pattern: str, repo: str = "",
+                     regex: str = "false", case_sensitive: str = "false") -> dict:
     """Search for a pattern in a GitHub file. Returns all matching lines with line numbers.
+    regex=true enables regex matching. case_sensitive=true for exact case.
     Eliminates binary-search round trips when locating functions in large files like core.py."""
+    import re as _re
     try:
         content = _gh_blob_read(path, repo or GITHUB_REPO)
         lines = content.splitlines()
         matches = []
+        use_regex = str(regex).lower() == "true"
+        use_case  = str(case_sensitive).lower() == "true"
+        flags = 0 if use_case else _re.IGNORECASE
         for i, line in enumerate(lines, 1):
-            if pattern.lower() in line.lower():
-                matches.append({"line": i, "content": line})
+            if use_regex:
+                if _re.search(pattern, line, flags):
+                    matches.append({"line": i, "content": line})
+            else:
+                hay = line if use_case else line.lower()
+                ndl = pattern if use_case else pattern.lower()
+                if ndl in hay:
+                    matches.append({"line": i, "content": line})
         return {"ok": True, "path": path, "pattern": pattern,
+                "regex": use_regex, "case_sensitive": use_case,
                 "total_lines": len(lines), "matches": matches, "count": len(matches)}
     except Exception as e:
         return {"ok": False, "error": str(e)}
@@ -2577,8 +2601,8 @@ TOOLS = {
                                "desc": "Approve and apply a pending evolution by ID"},
     "reject_evolution":       {"fn": t_reject_evolution,       "perm": "WRITE",   "args": ["evolution_id", "reason"],
                                "desc": "Reject a pending evolution by ID. reason=optional"},
-    "gh_search_replace":      {"fn": t_gh_search_replace,      "perm": "EXECUTE", "args": ["path", "old_str", "new_str", "message", "repo"],
-                               "desc": "Surgical find-and-replace in a GitHub file. Fails safely if old_str not found or ambiguous."},
+    "gh_search_replace":      {"fn": t_gh_search_replace,      "perm": "EXECUTE", "args": ["path", "old_str", "new_str", "message", "repo", "dry_run"],
+                               "desc": "Surgical find-and-replace in a GitHub file. dry_run=true previews diff without committing. Fails safely if old_str not found or ambiguous."},
     "gh_read_lines":          {"fn": t_gh_read_lines,          "perm": "READ",    "args": ["path", "start_line", "end_line", "repo"],
                                "desc": "Read specific line range from GitHub file with line numbers."},
     "write_file":             {"fn": t_write_file,             "perm": "EXECUTE", "args": ["path", "content", "message", "repo"],
@@ -2621,8 +2645,8 @@ TOOLS = {
                                "desc": "Get URL to the interactive evolution review widget."},
     "check_evolutions":       {"fn": t_check_evolutions,       "perm": "READ",    "args": ["limit"],
                                "desc": "Groq-powered evolution brief. Reads pending evolutions + mistakes + patterns, generates actionable session plan."},
-    "search_in_file":         {"fn": t_search_in_file,         "perm": "READ",    "args": ["path", "pattern", "repo"],
-                               "desc": "Search for pattern in a GitHub file. Returns matching lines with line numbers. Locate functions in core.py without binary-searching."},
+    "search_in_file":         {"fn": t_search_in_file,         "perm": "READ",    "args": ["path", "pattern", "repo", "regex", "case_sensitive"],
+                               "desc": "Search for pattern in a GitHub file. regex=true enables regex. case_sensitive=true for exact case. Returns matching lines + line numbers."},
     "multi_patch":            {"fn": t_multi_patch,            "perm": "EXECUTE", "args": ["path", "patches", "message", "repo"],
                                "desc": "Apply multiple find-replace patches in one fetch+write. patches=JSON array of {old_str,new_str}. Faster than N separate gh_search_replace calls."},
     "core_py_fn":             {"fn": t_core_py_fn,             "perm": "READ",    "args": ["fn_name"],
