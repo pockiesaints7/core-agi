@@ -532,30 +532,31 @@ def t_multi_patch(path: str, patches: str, message: str, repo: str = "") -> dict
 
 def t_session_end(summary: str, actions: str, domain: str = "general",
                   patterns: str = "", quality: str = "0.8") -> dict:
-    """One-call session close."""
+    """One-call session close. Always logs hot_reflection via auto_hot_reflection
+    (Groq pattern extraction). Caller-supplied patterns are merged in."""
+    from core_train import auto_hot_reflection
     try:
         actions_list = [a.strip() for a in actions.split(",") if a.strip()]
+        try:
+            q = float(quality)
+        except:
+            q = 0.8
         session_ok = sb_post("sessions", {
             "summary": summary,
             "actions": actions_list,
             "interface": "claude-desktop"
         })
-        reflection_id = None
-        if patterns.strip():
-            patterns_list = [p.strip() for p in patterns.split("|") if p.strip()]
-            try:
-                q = float(quality)
-            except:
-                q = 0.8
-            r_ok = sb_post("hot_reflections", {
-                "task_summary": summary,
-                "domain": domain,
-                "new_patterns": patterns_list,
-                "quality_score": min(1.0, max(0.0, q)),
-                "reflection_text": f"Session end auto-reflection. Patterns: {'; '.join(patterns_list)}",
-                "processed_by_cold": 0
-            })
-            reflection_id = "logged" if r_ok else "failed"
+        # Always run Groq-powered reflection — passes caller patterns as seed
+        caller_patterns = [p.strip() for p in patterns.split("|") if p.strip()]
+        r_ok = auto_hot_reflection({
+            "summary": summary,
+            "actions": actions_list,
+            "interface": "claude-desktop",
+            "domain": domain,
+            "quality": q,
+            "seed_patterns": caller_patterns,
+        })
+        reflection_id = "logged" if r_ok else "failed"
         return {
             "ok": session_ok,
             "session_logged": session_ok,
