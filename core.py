@@ -1249,6 +1249,46 @@ def t_multi_patch(path: str, patches: str, message: str, repo: str = "") -> dict
         return {"ok": False, "error": str(e)}
 
 
+def t_session_end(summary: str, actions: str, domain: str = "general",
+                  patterns: str = "", quality: str = "0.8") -> dict:
+    """One-call session close. Bundles sb_insert(sessions) + reflect() hot_reflection.
+    Replaces 2-3 separate tool calls at end of every session. actions=comma-separated string."""
+    try:
+        actions_list = [a.strip() for a in actions.split(",") if a.strip()]
+        # 1. Log session
+        session_ok = sb_post("sessions", {
+            "summary": summary,
+            "actions": actions_list,
+            "interface": "claude-desktop"
+        })
+        # 2. Log hot reflection if patterns provided
+        reflection_id = None
+        if patterns.strip():
+            patterns_list = [p.strip() for p in patterns.split("|") if p.strip()]
+            try:
+                q = float(quality)
+            except:
+                q = 0.8
+            r_ok = sb_post("hot_reflections", {
+                "task_summary": summary,
+                "domain": domain,
+                "new_patterns": patterns_list,
+                "quality_score": min(1.0, max(0.0, q)),
+                "reflection_text": f"Session end auto-reflection. Patterns: {'; '.join(patterns_list)}",
+                "processed_by_cold": 0
+            })
+            reflection_id = "logged" if r_ok else "failed"
+        return {
+            "ok": session_ok,
+            "session_logged": session_ok,
+            "reflection_logged": reflection_id,
+            "actions_count": len(actions_list),
+            "tip": "Update SESSION.md manually if step status changed this session"
+        }
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
 def t_deploy_and_wait(reason: str = "", timeout: str = "120") -> dict:
     """Trigger redeploy + poll until success/failure. Single call replaces redeploy + manual polling.
     Returns final state: success | failure | timeout."""
@@ -2472,6 +2512,8 @@ TOOLS = {
                                "desc": "Pre-deploy syntax checker for core.py. Catches double keywords, broken TOOLS dict, missing fn refs, stale references. Run before redeploy."},
     "session_start":          {"fn": t_session_start,          "perm": "READ",    "args": [],
                                "desc": "One-call session bootstrap: health + counts + last session + recent mistakes + pending evolutions. Replaces 4 separate tool calls."},
+    "session_end":            {"fn": t_session_end,            "perm": "WRITE",   "args": ["summary", "actions", "domain", "patterns", "quality"],
+                               "desc": "One-call session close: logs session + hot_reflection in one call. actions=comma-separated. patterns=pipe-separated. Replaces 2-3 end-of-session tool calls."},
     "deploy_and_wait":        {"fn": t_deploy_and_wait,        "perm": "EXECUTE", "args": ["reason", "timeout"],
                                "desc": "Trigger redeploy + poll until success/failure. timeout=seconds (default 120). Replaces redeploy + manual build_status polling."},
     "ping_health":            {"fn": t_ping_health,            "perm": "READ",    "args": [],
