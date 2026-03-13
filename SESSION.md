@@ -42,7 +42,19 @@ plan → execute → log → reflect → stop
 
 ---
 
-## 4. ACTIVE RULES
+## 4. AUTONOMOUS MODE PROTOCOL
+
+When user says "activate autonomous mode":
+1. Launch daemon: `C:\Python314\python.exe "C:\Users\rnvgg\.claude-skills\selfchat\core_selfchat.py" --mode watch`
+2. Write seed prompt to `C:\Users\rnvgg\.claude-skills\selfchat\prompt.txt`
+3. Daemon sends prompt when Claude goes idle (polls for "Stop response" button absence)
+4. Claude responds → **IMMEDIATELY write next prompt to prompt.txt** ← CRITICAL, loop dies without this
+5. Repeat until task complete or user says stop
+6. Stop: write `stop` to `status.txt`
+
+---
+
+## 5. ACTIVE RULES
 
 | Rule | Detail |
 |---|---|
