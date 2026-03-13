@@ -59,6 +59,14 @@ GITHUB (pockiesaints7/core-agi)
 
 ---
 
+## 📁 Owner Local Workspace
+
+| File | Path | Purpose |
+|---|---|---|
+| CORE v6 Plan | `C:\Users\rnvgg\.claude-skills\CORE_v6_plan.md` | Active planning doc for v6.0 (created 2026-03-13) |
+
+---
+
 ## 🤖 AI Models
 
 | Role | Model | Provider |
