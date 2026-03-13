@@ -826,6 +826,15 @@ Output ONLY valid JSON, no preamble."""
             "quality_score": None,
         })
         print(f"[RESEARCH/REAL] ok={ok} patterns={len(patterns)} domain={result.get('domain')}")
+        if ok:
+            # Save current timestamp as new lower bound for next run
+            run_ts = datetime.utcnow().isoformat()
+            sb_post("sessions", {
+                "summary": f"[state_update] last_real_signal_ts: {run_ts}",
+                "actions": [f"last_real_signal_ts={run_ts} - auto updated after real signal extraction"],
+                "interface": "mcp"
+            })
+            print(f"[RESEARCH/REAL] Saved last_real_signal_ts: {run_ts}")
         return ok
     except Exception as e:
         print(f"[RESEARCH/REAL] error: {e}")
