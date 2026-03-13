@@ -114,7 +114,7 @@ Design doc: docs/BINANCE_CORE_AGI.md
 Design docs: docs/ZAPIER_CONNECTIONS.md + docs/ZAPIER_MCP.md
 **SCOPE CORRECTED 2026-03-13**: No t_zapier_trigger needed — zapier:* tools callable directly from Claude Desktop.
 - [x] 5.0 Scope corrected — KB entry saved (2026-03-13)
-- [ ] 5.1 Write docs/ZAPIER_MCP.md — usage guide (enabled tools, output_hint rules)
+- [x] 5.1 Write docs/ZAPIER_MCP.md — usage guide (enabled tools, output_hint rules) ✓ (2026-03-13)
 - [ ] 5.2 Enable P0 Zapier connections (Gmail, Todoist, Google Calendar, Webhooks, Perplexity)
 - [ ] 5.3 Test each P0 connection from Claude Desktop
 
