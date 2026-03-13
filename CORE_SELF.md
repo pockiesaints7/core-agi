@@ -2,13 +2,13 @@
 > **This file IS CORE's memory of itself.**  
 > Owner: REINVAGNAR | Repo: pockiesaints7/core-agi  
 > **MANDATORY: Update this file whenever ANYTHING structural changes.**  
-> Last updated: 2026-03-13
+> Last updated: 2026-03-14
 
 ---
 
 ## 🧠 What is CORE?
 
-CORE v5.4 (→ v6.0 in progress) is a Recursive Self-Improvement AGI system.  
+CORE v6.0 is a Recursive Self-Improvement AGI system.  
 It learns from every session, distills patterns, and evolves its own behavior over time.  
 It runs 24/7 on Railway, talks via Telegram, and is operated via Claude (claude.ai or Claude Desktop).
 
@@ -26,17 +26,15 @@ OWNER (REINVAGNAR)
          ↕ MCP / HTTP
     
 RAILWAY (core-agi-production.up.railway.app)
-    └── core.py (FastAPI, Python)
+    └── core_main.py (FastAPI, Python — entry point)
          ├── /state         → full system state
          ├── /patch         → surgical file edit
          ├── /mcp           → MCP tool dispatcher  
-         ├── /telegram      → Telegram webhook
-         └── mcp_tools/
-              ├── actions.py      (routing, context engine)
-              ├── brain.py        (KB + training ops)
-              ├── brain_health.py (health scanner)
-              ├── changelog.py    (version history)
-              └── db.py           (DB helpers)
+         └── /telegram      → Telegram webhook
+    ├── core_tools.py   (50 MCP tool functions)
+    ├── core_train.py   (cold processor, evolution pipeline)
+    ├── core_github.py  (GitHub read/write helpers)
+    └── core_config.py  (env, constants, Supabase helpers)
 
          ↕ PostgREST
 
@@ -145,30 +143,63 @@ GITHUB (pockiesaints7/core-agi)
 
 ---
 
-## 🛠️ MCP Tools (20 active)
+## 🛠️ MCP Tools (50 active)
 
 | Tool | Purpose |
 |---|---|
-| `get_state` | Full system state — call at session start |
+| `session_start` | **One-call bootstrap** — health + counts + last session + mistakes + evolutions |
+| `session_end` | **One-call close** — logs session + hot_reflection + SESSION.md update |
+| `get_state` | Full system state |
 | `get_constitution` | Immutable owner rules |
+| `get_system_health` | Health check all components |
+| `get_training_status` | Training pipeline status |
 | `search_kb` | Search knowledge_base |
 | `add_knowledge` | Insert to knowledge_base |
 | `log_mistake` | Insert to mistakes |
+| `get_mistakes` | Get mistake records |
+| `search_mistakes` | Semantic mistake search |
 | `sb_query` | Read any Supabase table |
 | `sb_insert` | Write any Supabase table |
+| `sb_bulk_insert` | Batch insert rows |
 | `read_file` | Read file from GitHub repo |
-| `write_file` | Write file to GitHub repo |
+| `write_file` | Write NEW file to GitHub repo |
 | `gh_read_lines` | Read specific line range from GitHub file |
 | `gh_search_replace` | Surgical find-and-replace in GitHub file |
+| `multi_patch` | Apply multiple patches in one GitHub write |
+| `search_in_file` | Search pattern in GitHub file |
+| `core_py_fn` | Read a single function from source by name |
+| `core_py_validate` | Pre-deploy syntax checker |
+| `core_py_rollback` | Emergency restore from commit SHA |
+| `diff` | Compare file between two commits |
 | `notify_owner` | Send Telegram notification |
-| `get_mistakes` | Get mistake records |
-| `get_training_status` | Training pipeline status |
 | `approve_evolution` | Approve pending evolution |
 | `reject_evolution` | Reject pending evolution |
+| `bulk_reject_evolutions` | Bulk reject by type or IDs |
+| `bulk_apply` | Apply all pending evolutions |
 | `list_evolutions` | List evolution queue |
+| `check_evolutions` | Groq-powered evolution brief |
+| `synthesize_evolutions` | **Claude architect mode** — reads all signals, produces engineering blueprint appended to SESSION.md |
+| `review_evolutions` | Get interactive evolution review widget URL |
 | `trigger_cold_processor` | Manually trigger cold processor |
 | `update_state` | Write to sessions table |
-| `get_system_health` | Health check all components |
+| `ask` | Ask CORE anything (Groq-powered) |
+| `reflect` | Log a hot reflection manually |
+| `stats` | Analytics: domain distribution, top patterns |
+| `get_backlog` | Get improvement backlog |
+| `backlog_update` | Update backlog item status |
+| `changelog_add` | Log change + Telegram notify |
+| `mine_kb` | Mine KB entries to generate backlog items |
+| `redeploy` | Trigger Railway redeploy |
+| `deploy_and_wait` | Redeploy + poll until success/failure |
+| `deploy_status` | Return active deploy info |
+| `build_status` | Check last 5 commits build state |
+| `logs` | Fetch recent Railway deployment logs |
+| `crash_report` | Detect Railway restart loops |
+| `ping_health` | Hit live Railway endpoint |
+| `verify_live` | Poll /state until expected_text appears |
+| `repopulate` | Re-push P3+ backlog items to evolution_queue |
+| `list_templates` | List reusable script templates |
+| `run_template` | Retrieve a stored script template |
 
 **⚠️ Tool rules:**
 - `read_file` / `write_file`: OMIT `repo` arg — default already set to pockiesaints7/core-agi
@@ -194,8 +225,9 @@ Cold processor runs (core.py: cold_processor())
     → Marks hot_reflections as processed_by_cold=1
     
 evolution_queue
-    → Owner reviews → approve_evolution or reject_evolution
-    → Approved evolutions applied to core.py or operating_context.json
+    → synthesize_evolutions (manual) → Claude reads all signals as architect → blueprint written to SESSION.md as new task chain → evolutions marked synthesized
+    → Owner reviews → approve_evolution or reject_evolution (approve lands KB entries; reject discards noise)
+    → Approved evolutions applied to source files or operating_context.json
 ```
 
 **Thresholds:**
