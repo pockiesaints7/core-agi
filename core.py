@@ -665,11 +665,6 @@ def apply_evolution(evolution_id: int):
                      {"status": "applied", "applied_at": datetime.utcnow().isoformat()})
             notify(f"✅ Evolution #{evolution_id} applied\nType: {change_type}\n{note}")
             check_evolution_self_sync(evo)
-            try:
-                gh_write("BACKLOG.md", _backlog_to_markdown(),
-                         f"chore(backlog): sync after evo #{evolution_id} applied [{change_type}]")
-            except Exception as _be:
-                print(f"[BACKLOG] refresh error: {_be}")
         else:
             # Only notify for structural failures — suppress routine backlog noise
             if change_type not in ("backlog",):
