@@ -1627,7 +1627,7 @@ TOOLS = {
     "session_start":          {"fn": t_session_start,          "perm": "READ",    "args": [],
                                "desc": "One-call session bootstrap."},
     "session_end":            {"fn": t_session_end,            "perm": "WRITE",   "args": ["summary", "actions", "domain", "patterns", "quality", "completed_tasks", "new_step"],
-                               "desc": "One-call session close. completed_tasks=pipe-separated IDs to tick in SESSION.md. new_step=update Current Step. Auto-logs session + Groq reflection + SESSION.md update."},
+                               "desc": "One-call session close. BEFORE calling this you MUST: (1) log_mistake for every error made this session, (2) add_knowledge for every new insight or rule learned, (3) changelog_add for every system change deployed, (4) update task statuses in task_queue. Only THEN call session_end. completed_tasks=pipe-separated IDs to tick in SESSION.md. new_step=update Current Step. Auto-logs session + Groq reflection + SESSION.md update."},
     "core_py_rollback":       {"fn": t_core_py_rollback,       "perm": "EXECUTE", "args": ["commit_sha"],
                                "desc": "Emergency restore: fetch any CORE file at commit_sha, write back, redeploy. file= param (default: core_main.py)."},
     "diff":                   {"fn": t_diff,                   "perm": "READ",    "args": ["path", "sha_a", "sha_b"],
