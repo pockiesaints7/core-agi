@@ -138,6 +138,30 @@ Update all version strings → "CORE v6.0" across active modules.
 - [x] 7.6 UPDATE SESSION.md rule table ✓ 2026-03-14
 - [x] 7.7 Smoke test + L4 execution — full cycle verified, 9 evolutions executed ✓ 2026-03-14
 
+### TASK 8 — synthesize_evolutions: Claude as CORE Architect (Prereq: Task 3)
+> Design finalized 2026-03-14. Claude reads ALL pending evolution_queue entries and thinks as an unconstrained architect — inventing new tools, tables, architecture changes, logic fixes, or entirely new concepts CORE does not know it needs yet. Output is a structured engineering blueprint appended to SESSION.md as a new task chain.
+
+**Why Claude not Groq:** Groq extracts isolated patterns. Claude sees the whole picture, reasons across all signals simultaneously, and can invent what is unthinkable from individual patterns alone.
+
+**What it reads:**
+- All evolution_queue where status = pending
+- All pattern_frequency high-frequency entries
+- Recent cold_reflections (dominant themes)
+- Recent gaps_identified from hot_reflections
+- Current SESSION.md (existing task context)
+
+**What Claude produces:**
+A structured blueprint with concrete task chains — new tools, new tables, architecture changes, logic fixes, wild ideas. Each item tagged: impact (HIGH/MED/LOW), effort (HIGH/MED/LOW), category (new_tool / new_table / architecture / logic_change / wild).
+
+**Evolution status after synthesis:** marked synthesized — acknowledged, not yet approved or rejected.
+**Trigger:** Manual only — owner calls it when ready for a planning session.
+
+- [ ] 8.1 Add t_synthesize_evolutions() to core_tools.py — fetches all data, assembles full context payload, returns to Claude for unconstrained reasoning
+- [ ] 8.2 Register in TOOLS dict with architect-level prompt: no constraints, invent freely, think 6 months ahead
+- [ ] 8.3 Add status=synthesized handling in evolution_queue flow
+- [ ] 8.4 Test: call tool, verify Claude produces blueprint with impact/effort matrix + wild ideas section
+- [ ] 8.5 Update CORE_SELF.md + operating_context.json
+
 ---
 
 ## 7. SESSION LOG
