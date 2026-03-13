@@ -2684,7 +2684,7 @@ def handle_msg(msg):
                 lines.append(f"{star} P{p} [{item.get('type','?')[:10]}] *{item.get('title','')[:50]}*")
                 lines.append(f"  ↳ {item.get('description','')[:80]}")
             notify(f"📋 *Backlog* ({result['filtered']} pending / {total} total)\n\n" +
-                   "\n".join(lines) + "\n\n_Full list: BACKLOG.md on GitHub_", cid)
+                   "\n".join(lines), cid)
         else:
             notify(f"📋 Backlog empty (total: {total}). Researcher runs every 60 min.", cid)
 
