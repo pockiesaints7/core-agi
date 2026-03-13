@@ -135,6 +135,17 @@
     "when_schema_changes": ["Update schema in this file under active_tables", "Update KB entry for that table", "Add changelog entry", "Add migration note in core.py fix log"]
   },
 
+  "changelog": {
+      "purpose": "Permanent audit log of all system changes deployed to CORE",
+      "insert_via": "changelog_add tool (preferred) or sb_insert",
+      "required_fields": ["version", "change_type", "component", "title", "description"],
+      "optional_fields": ["triggered_by", "growth_flag_type", "before_state", "after_state", "files_changed (array)", "session_id"],
+      "auto_fields": ["id (int)", "created_at"],
+      "change_type_values": ["upgrade", "fix", "refactor", "add", "remove", "config"],
+      "read_via": "sb_query table=changelog"
+    }
+  },
+
   "tombstone_tables": [
     "playbook", "memory", "master_prompt", "patterns", "projects",
     "training_sessions", "training_sessions_v2", "training_flags",
