@@ -1459,12 +1459,16 @@ def t_deploy_and_wait(reason: str = "", timeout: str = "120") -> dict:
             st = railway[0] if railway else {}
             state = st.get("state", "")
             if state == "success":
+                elapsed = round(time.time() - (deadline - t_secs))
+                notify_owner(f"✅ Deploy SUCCESS — {commit_sha_short} live in {elapsed}s")
                 return {"ok": True, "state": "success", "commit": commit_sha_short,
                         "description": st.get("description",""), "polls": poll_count,
-                        "elapsed_s": round(time.time() - (deadline - t_secs))}
+                        "elapsed_s": elapsed}
             if state == "failure":
+                notify_owner(f"❌ Deploy FAILED — {commit_sha_short}")
                 return {"ok": False, "state": "failure", "commit": commit_sha_short,
                         "description": st.get("description",""), "polls": poll_count}
+        notify_owner(f"⏱ Deploy TIMEOUT — {commit_sha_short} after {t_secs}s")
         return {"ok": False, "state": "timeout", "commit": commit_sha_short,
                 "polls": poll_count, "timeout_s": t_secs}
     except Exception as e:
