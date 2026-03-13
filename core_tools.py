@@ -1516,6 +1516,160 @@ def t_review_evolutions() -> dict:
     return {"ok": True, "url": url, "note": "Open URL in browser to review pending evolutions."}
 
 
+# -- Project Mode tools -------------------------------------------------------
+
+def t_project_list() -> dict:
+    """List all registered projects from Supabase."""
+    try:
+        rows = sb_get("projects", "select=project_id,name,status,last_indexed,folder_path&order=created_at.asc", svc=True) or []
+        return {"ok": True, "projects": rows, "count": len(rows)}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def t_project_get(project_ids: str = "") -> dict:
+    """Load full context for one or more projects. project_ids = comma-separated slugs."""
+    try:
+        ids = [p.strip() for p in project_ids.split(",") if p.strip()]
+        if not ids:
+            return {"ok": False, "error": "project_ids required"}
+        results = []
+        for pid in ids:
+            # Try unconsumed prepared context first
+            ctx_rows = sb_get("project_context",
+                f"select=context_md,id&project_id=eq.{pid}&consumed=eq.false&order=prepared_at.desc&limit=1",
+                svc=True) or []
+            if ctx_rows:
+                ctx = ctx_rows[0].get("context_md", "")
+            else:
+                # Fall back to top 30 KB entries
+                kb = sb_get("knowledge_base",
+                    f"select=topic,content&domain=eq.project%3A{pid}&order=updated_at.desc&limit=30",
+                    svc=True) or []
+                ctx = "\n\n".join([f"### {r['topic']}\n{r['content']}" for r in kb])
+            results.append({"project_id": pid, "context": ctx})
+        return {"ok": True, "results": results}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def t_project_search(project_id: str = "", query: str = "") -> dict:
+    """Search KB entries for a specific project."""
+    try:
+        if not project_id or not query:
+            return {"ok": False, "error": "project_id and query required"}
+        domain = f"project:{project_id}"
+        rows = sb_get("knowledge_base",
+            f"select=topic,content,confidence&domain=eq.{domain}&limit=10",
+            svc=True) or []
+        # Simple text filter client-side
+        q = query.lower()
+        hits = [r for r in rows if q in r.get("topic", "").lower() or q in r.get("content", "").lower()]
+        return {"ok": True, "project_id": project_id, "query": query, "hits": hits, "count": len(hits)}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def t_project_context_check() -> dict:
+    """Check for unconsumed prepared project contexts (Telegram-prepared, waiting for Desktop)."""
+    try:
+        rows = sb_get("project_context",
+            "select=project_id,prepared_by,prepared_at&consumed=eq.false&order=prepared_at.desc",
+            svc=True) or []
+        return {"ok": True, "pending": rows, "count": len(rows)}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def t_project_register(project_id: str = "", name: str = "", folder_path: str = "", index_path: str = "") -> dict:
+    """Register a new project in Supabase."""
+    try:
+        if not project_id or not name:
+            return {"ok": False, "error": "project_id and name required"}
+        ok = sb_post_critical("projects", {
+            "project_id": project_id,
+            "name": name,
+            "folder_path": folder_path,
+            "index_path": index_path,
+            "status": "active",
+        })
+        if ok:
+            return {"ok": True, "project_id": project_id, "name": name}
+        return {"ok": False, "error": "insert failed"}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def t_project_update_kb(project_id: str = "", topic: str = "", content: str = "", confidence: str = "high") -> dict:
+    """Add or update a KB entry for a project. domain=project:{project_id}."""
+    try:
+        if not project_id or not topic or not content:
+            return {"ok": False, "error": "project_id, topic, content required"}
+        domain = f"project:{project_id}"
+        ok = sb_upsert("knowledge_base",
+            {"domain": domain, "topic": topic, "content": content, "confidence": confidence},
+            on_conflict="domain,topic")
+        return {"ok": bool(ok), "domain": domain, "topic": topic}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def t_project_update_index(project_id: str = "", last_indexed: str = "") -> dict:
+    """Update last_indexed timestamp for a project in Supabase."""
+    try:
+        if not project_id:
+            return {"ok": False, "error": "project_id required"}
+        ts = last_indexed or datetime.utcnow().isoformat()
+        ok = sb_patch("projects", f"project_id=eq.{project_id}", {"last_indexed": ts})
+        return {"ok": bool(ok), "project_id": project_id, "last_indexed": ts}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def t_project_prepare(project_ids: str = "") -> dict:
+    """Railway-side: assemble context for project(s) and store in project_context for Desktop to consume."""
+    try:
+        ids = [p.strip() for p in project_ids.split(",") if p.strip()]
+        if not ids:
+            return {"ok": False, "error": "project_ids required"}
+        prepared = []
+        for pid in ids:
+            proj_rows = sb_get("projects", f"select=name&project_id=eq.{pid}&limit=1", svc=True) or []
+            if not proj_rows:
+                continue
+            name = proj_rows[0].get("name", pid)
+            kb = sb_get("knowledge_base",
+                f"select=topic,content&domain=eq.project%3A{pid}&order=updated_at.desc&limit=30",
+                svc=True) or []
+            context_md = f"# Project Context: {name}\n\n"
+            context_md += "\n\n".join([f"### {r['topic']}\n{r['content']}" for r in kb])
+            sb_post_critical("project_context", {
+                "project_id": pid,
+                "prepared_by": "railway",
+                "context_md": context_md,
+                "consumed": False,
+            })
+            _notify(f"Project ready: {name}. Open Claude Desktop to activate.", level="info")
+            prepared.append(pid)
+        return {"ok": True, "prepared": prepared, "count": len(prepared)}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def t_project_consume(project_id: str = "") -> dict:
+    """Mark project_context rows as consumed after Claude Desktop has loaded them."""
+    try:
+        if not project_id:
+            return {"ok": False, "error": "project_id required"}
+        ts = datetime.utcnow().isoformat()
+        ok = sb_patch("project_context",
+            f"project_id=eq.{project_id}&consumed=eq.false",
+            {"consumed": True, "consumed_at": ts})
+        return {"ok": bool(ok), "project_id": project_id, "consumed_at": ts}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
 # -- synthesize_evolutions ----------------------------------------------------
 def t_synthesize_evolutions() -> dict:
     """Fetch all signals CORE has accumulated and return as structured context
@@ -1717,6 +1871,24 @@ TOOLS = {
                                "desc": "Trigger redeploy + poll until success/failure."},
     "synthesize_evolutions":  {"fn": t_synthesize_evolutions,  "perm": "READ",    "args": [],
                                "desc": "Claude reads ALL pending evolution_queue entries + pattern_frequency + cold_reflections + hot_reflection gaps + SESSION.md and acts as an UNCONSTRAINED ARCHITECT. No limits. Invent new tools, new tables, new architecture, new logic, or wild ideas CORE does not know it needs yet. Think 6 months ahead. Output: structured engineering blueprint with impact/effort matrix appended to SESSION.md as a new task chain. Processed evolutions marked synthesized. Manual trigger only."},
+    "project_list":           {"fn": t_project_list,           "perm": "READ",    "args": [],
+                               "desc": "List all registered projects: project_id, name, status, last_indexed, folder_path."},
+    "project_get":            {"fn": t_project_get,            "perm": "READ",    "args": ["project_ids"],
+                               "desc": "Load full context for one or more projects. project_ids=comma-separated slugs. Returns context_md ready for session injection."},
+    "project_search":         {"fn": t_project_search,         "perm": "READ",    "args": ["project_id", "query"],
+                               "desc": "Search KB entries for a specific project by query string."},
+    "project_context_check":  {"fn": t_project_context_check,  "perm": "READ",    "args": [],
+                               "desc": "Check for unconsumed prepared project contexts waiting for Claude Desktop."},
+    "project_register":       {"fn": t_project_register,       "perm": "WRITE",   "args": ["project_id", "name", "folder_path", "index_path"],
+                               "desc": "Register a new project in Supabase projects table."},
+    "project_update_kb":      {"fn": t_project_update_kb,      "perm": "WRITE",   "args": ["project_id", "topic", "content", "confidence"],
+                               "desc": "Add or update a KB entry for a project. domain=project:{project_id}."},
+    "project_update_index":   {"fn": t_project_update_index,   "perm": "WRITE",   "args": ["project_id", "last_indexed"],
+                               "desc": "Update last_indexed timestamp for a project in Supabase."},
+    "project_prepare":        {"fn": t_project_prepare,        "perm": "WRITE",   "args": ["project_ids"],
+                               "desc": "Railway-side: assemble KB context for project(s) and store in project_context for Claude Desktop to consume. Sends Telegram notify."},
+    "project_consume":        {"fn": t_project_consume,        "perm": "WRITE",   "args": ["project_id"],
+                               "desc": "Mark project_context rows as consumed after Claude Desktop has loaded them."},
     "ping_health":            {"fn": t_ping_health,            "perm": "READ",    "args": [],
                                "desc": "Hit live Railway / endpoint."},
     "verify_live":            {"fn": t_verify_live,            "perm": "READ",    "args": ["expected_text", "timeout"],
