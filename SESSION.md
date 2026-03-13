@@ -14,18 +14,18 @@
 
 **claude.ai / mobile:**
 1. `web_fetch https://raw.githubusercontent.com/pockiesaints7/core-agi/main/SESSION.md`
-2. Use `POST /patch` for any core.py edits (never gh_search_replace from web)
+2. Use `POST /patch` for any source file edits (never gh_search_replace from web)
 3. Use `github:*` tools for all other file reads/writes
 
 ---
 
 ## 2. WHAT IS CORE
 
-CORE v5.4 is a Recursive Self-Improvement AGI running 24/7 on Railway.
+CORE v6.0 is a Recursive Self-Improvement AGI running 24/7 on Railway.
 It learns from every session via a hot→cold reflection pipeline, distills patterns, and evolves its own behavior.
 Operated via Claude Desktop (MCP direct, 50 tools), claude.ai (web/mobile), and Telegram (@reinvagnarbot).
 Full self-knowledge: see `CORE_SELF.md`. Full tool rules: see `operating_context.json`.
-Local v6 plan: `C:\Users\rnvgg\.claude-skills\CORE_v6_plan.md`
+Architecture: split into core_main.py, core_tools.py, core_train.py, core_github.py, core_config.py.
 
 ---
 
@@ -41,6 +41,7 @@ plan → execute → log → reflect → stop
 - **End every Desktop session** with `session_end` tool.
 - **Stop at 90% context** → call session_end, standby for next session.
 - **When in doubt, do less and ask.**
+- **SESSION.md is the single source of truth for all tasks.** When a task item is done, tick it here immediately. No other file tracks task status.
 
 ---
 
@@ -63,45 +64,46 @@ When user says "activate autonomous mode":
 |---|---|
 | `read_file` / `write_file` | OMIT `repo` arg — defaults to pockiesaints7/core-agi |
 | `sb_query` | Use `filters` param, NOT `query_string` |
-| `write_file` on core.py | BLOCKED — guard active. Use `gh_search_replace` or `POST /patch` |
+| Source file edits | NEVER hardcode filenames — fetch live from `session_start → architecture.entry_point` |
+| Editing source from Desktop | `gh_search_replace` (small) or `github:push_files` (full restore) |
+| Editing source from claude.ai | `POST /patch` ONLY |
 | `processed_by_cold` | Use `eq.0` / `eq.1` (integer), NOT `eq.true` / `eq.false` |
-| Editing core.py from Desktop | `gh_search_replace` (small) or `github:push_files` (full restore) |
-| Editing core.py from claude.ai | `POST /patch` ONLY |
 | Structural change | Update CORE_SELF.md FIRST, then operating_context.json, then KB |
 | Session end | Always call `session_end` — logs session + hot_reflection in one call |
+| Task done | Tick checkbox in SESSION.md immediately + write result to backlog_update() |
+| evolution_queue | Only `knowledge`, `code`, `config` change_types allowed — never `backlog` |
 
 ---
 
-## 5. MASTER TASK REGISTRY (CORE v6.0)
+## 6. MASTER TASK REGISTRY (CORE v6.0)
 
-### TASK 1 — Repo Documentation Cleanup
+### TASK 1 — Repo Documentation Cleanup ✅
 - [x] 1.0 README.md updated (2026-03-13)
-- [x] 1.1 SESSION.md rewritten as v6 unified master ← THIS FILE (2026-03-13)
-- [x] 1.2 Slim CORE_SELF.md — version v5.0→v5.4, tools 20→50, removed TRAINING_DESIGN ref, date updated ✓ (2026-03-13)
-- [x] 1.3 Update operating_context.json — already complete from prior session ✓ (verified 2026-03-13)
-- [x] 1.4 PROJECT_MODE_DESIGN.md → moved to docs/ (already done)
-- [x] 1.5 Delete TRAINING_DESIGN.md ✓ (done prior session)
-- [x] 1.6 Delete GOD_MODE_PLAN.md ✓ (done prior session)
-- [x] 1.7 Delete MANIFEST.md ✓ (done prior session)
-- [x] 1.8 Delete BACKLOG.md (deleted 2026-03-13, was broken 404 stub)
-- [x] 1.9 Delete TOOL_AUDIT_TEST.md ✓ (done prior session)
-- [x] 1.10 Delete docs/HANDOFF_redeploy_fix.md ✓ (done prior session)
+- [x] 1.1 SESSION.md rewritten as v6 unified master (2026-03-13)
+- [x] 1.2 Slim CORE_SELF.md — version v5.0→v5.4, tools 20→50 ✓ (2026-03-13)
+- [x] 1.3 Update operating_context.json ✓ (verified 2026-03-13)
+- [x] 1.4 PROJECT_MODE_DESIGN.md → moved to docs/
+- [x] 1.5 Delete TRAINING_DESIGN.md ✓
+- [x] 1.6 Delete GOD_MODE_PLAN.md ✓
+- [x] 1.7 Delete MANIFEST.md ✓
+- [x] 1.8 Delete BACKLOG.md (2026-03-13)
+- [x] 1.9 Delete TOOL_AUDIT_TEST.md ✓
+- [x] 1.10 Delete docs/HANDOFF_redeploy_fix.md ✓
 - [x] 1.11 Purge remaining Jarvis OS KB entries — 62 entries deleted 2026-03-13 ✓
 
-### TASK 2 — GOD MODE P2-5A: Architecture Split (Prereq: Task 1)
-Split core.py (3097 lines, 157KB) into 5 modules (core_config, core_github, core_train, core_tools, core_main).
-Full execution plan: `docs/TASK2_SPLIT_PLAN.md` (2026-03-13)
-- [x] 2.1 Map exact line ranges per module ✓ (2026-03-13, see docs/TASK2_SPLIT_PLAN.md)
-- [x] 2.0 core_config.py created — constants, env vars, RateLimiter, sb_*, groq_chat ✓ (2026-03-13)
-- [x] 2.2 core_github.py created — gh_*, notify, set_webhook ✓ (2026-03-13)
-- [x] 2.3 core_train.py created — full training pipeline, 841 lines ✓ (2026-03-13)
-- [x] 2.4 core_tools.py created — all 50 t_* functions + TOOLS dict + handle_jsonrpc, imports from core_config/core_github/core_train ✓ (2026-03-14)
-- [x] 2.5 core_main.py created — FastAPI + routes + startup, imports from 4 modules ✓ (2026-03-14)
-- [x] 2.6 Smoke test all 50 tools post-split — all 50 tools reachable via MCP, all categories verified ✓ (2026-03-14)
-- [x] 2.7 core_legacy.py created (retired monolith stub), Procfile updated → core_main.py ✓ (2026-03-14)
-- [x] 2.8 operating_context.json updated: entry_point → core_main.py, system_name → v6.0, version → 2.2 ✓ (2026-03-14)
+### TASK 2 — Architecture Split ✅
+Split core.py (3097 lines, 157KB) into 5 modules.
+- [x] 2.1 Map exact line ranges per module ✓ (2026-03-13)
+- [x] 2.0 core_config.py created ✓ (2026-03-13)
+- [x] 2.2 core_github.py created ✓ (2026-03-13)
+- [x] 2.3 core_train.py created ✓ (2026-03-13)
+- [x] 2.4 core_tools.py created ✓ (2026-03-14)
+- [x] 2.5 core_main.py created ✓ (2026-03-14)
+- [x] 2.6 Smoke test all 50 tools post-split ✓ (2026-03-14)
+- [x] 2.7 core_legacy.py created, Procfile updated → core_main.py ✓ (2026-03-14)
+- [x] 2.8 operating_context.json updated: entry_point → core_main.py ✓ (2026-03-14)
 
-### TASK 3 — Project Mode (Prereq: Task 2)
+### TASK 3 — Project Mode (Prereq: Task 2) 🔄 IN PROGRESS
 Design doc: docs/PROJECT_MODE_DESIGN.md
 - [ ] 3.1 9 new MCP tools
 - [ ] 3.2 Supabase tables: projects + project_context
@@ -115,34 +117,53 @@ Design doc: docs/BINANCE_CORE_AGI.md
 - [ ] 4.3 3 new MCP tools
 
 ### TASK 5 — Zapier MCP Integration (Prereq: Task 1)
-Design docs: docs/ZAPIER_CONNECTIONS.md + docs/ZAPIER_MCP.md
-**SCOPE CORRECTED 2026-03-13**: No t_zapier_trigger needed — zapier:* tools callable directly from Claude Desktop.
 - [x] 5.0 Scope corrected — KB entry saved (2026-03-13)
-- [x] 5.1 Write docs/ZAPIER_MCP.md — usage guide (enabled tools, output_hint rules) ✓ (2026-03-13)
-- [ ] 5.2 Enable P0 Zapier connections (Gmail, Todoist, Google Calendar, Webhooks, Perplexity)
+- [x] 5.1 Write docs/ZAPIER_MCP.md ✓ (2026-03-13)
+- [ ] 5.2 Enable P0 Zapier connections (Gmail, Todoist, Google Calendar, Webhooks)
 - [ ] 5.3 Test each P0 connection from Claude Desktop
 
 ### TASK 6 — v6.0 Version Stamp 🔒 (LOCKED until Tasks 1-5 done)
-Update version strings at lines 2721, 2757, 2771, 2961, 3001, 3082 → "CORE v6.0"
+Update all version strings → "CORE v6.0" across active modules.
+
+### TASK 7 — Training Pipeline Fix (Prereq: Task 2) ⚠️ CRITICAL
+Fix core_train.py so the hot→cold→evolution loop is clean and closed.
+Skill graph designed: 2026-03-14 (claude.ai session).
+
+**Problem:** cold processor emits `change_type=backlog` evolutions — wrong. Backlog is owner's decision, not Groq's. task_queue items marked done with `result=null` — no record of work. No changelog written on task completion.
+
+**Boundary:** Groq owns L1–L3 (hot reflection → cold processor → evolution_queue). Owner owns L4–L7 on Desktop.
+
+**Allowed evolution types from cold processor:** `knowledge`, `code`, `config` ONLY.
+
+- [ ] 7.1 PATCH `run_cold_processor()` — remove `change_type=backlog` output. Guard: `ALLOWED_EVO_TYPES = ["knowledge", "code", "config"]`
+- [ ] 7.2 PATCH `apply_evolution()` — delete entire `backlog` branch (~60 lines). Dead code, causes ghost task_queue entries with `result=null`
+- [ ] 7.3 PATCH `backlog_update()` — require `result` field when `status=done`. Reject if result is null/empty
+- [ ] 7.4 NEW `t_changelog_add()` — called on every task completion. Writes: version, component, what changed, before/after state to `changelog` table + Telegram notify
+- [ ] 7.5 PATCH `cold_processor_loop()` — remove auto-apply of `backlog` type evolutions from background_researcher loop
+- [ ] 7.6 UPDATE `SESSION.md` rule table — `evolution_queue` only accepts knowledge/code/config (done ✓ this session)
+- [ ] 7.7 Smoke test: run a full cycle — session_end → hot_reflection → cold_processor → evolution appears as knowledge only
 
 ---
 
-## 6. SESSION LOG
+## 7. SESSION LOG
 
 | Date | Summary | Key Actions |
 |---|---|---|
 | 2026-03-11 | v5.0 full launch | Training pipeline live, CORE_SELF.md created, self_sync_check added |
 | 2026-03-12 | v5.4 GOD MODE | 50 MCP tools, power tools (session_start/end, blobs, build_status, deploy_and_wait) |
 | 2026-03-13 | Cleanup + v6 prep | README updated, repo public, 7 stale files deleted, Jarvis OS KB purged, SESSION.md rewritten |
+| 2026-03-13 | Architecture split | core.py split into 5 modules, all 50 tools smoke tested, cold processor pattern pipeline fixed |
+| 2026-03-14 | Training pipeline design | Skill graph designed, backlog evolutions bulk rejected, SKILL.md updated to architecture-agnostic, Task 7 registered |
 
 ---
 
-## 7. INCIDENT LOG
+## 8. INCIDENT LOG
 
 | Date | Incident | Resolution |
 |---|---|---|
-| 2026-03-11 | `write_file` wiped core.py (929→26 lines) | Restored from commit cc87e5c. Guard added blocking write_file on core.py. |
+| 2026-03-11 | `write_file` wiped core.py (929→26 lines) | Restored from commit cc87e5c. Guard added. |
 | 2026-03-11 | `import import os` SyntaxError line 55 | Fixed commit 09b370a |
-| 2026-03-11 | Wrong env detection — used PowerShell workarounds on Desktop | Mistake #178 logged. Env detection table added to plan. |
-| 2026-03-12 | Supabase write rate limit hit (500/hr) during heavy session | Wait 1hr for reset. GOD_MODE_PLAN.md saved to GitHub as backup. |
+| 2026-03-11 | Wrong env detection — PowerShell workarounds on Desktop | Mistake #178 logged. Env detection table added. |
+| 2026-03-12 | Supabase write rate limit hit (500/hr) | Wait 1hr for reset. |
 | 2026-03-12 | PowerShell Railway HTTP calls silently timeout | Never use PowerShell for Railway/GitHub calls. Use MCP tools directly. |
+| 2026-03-14 | core_train.py emitting change_type=backlog evolutions | 67 bulk rejected. Task 7 created to patch source permanently. |
