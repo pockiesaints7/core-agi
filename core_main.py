@@ -6,7 +6,7 @@ Import chain:
   core_main imports: core_config, core_github, core_train, core_tools
   (no circular deps — core_config has no internal imports)
 
-NOTE: This file is NOT yet active. core.py remains the live entry point.
+NOTE: This IS the live entry point (Procfile: web: python core_main.py). core.py deleted.
 Activation: rename/swap after smoke test passes (Task 2.6).
 """
 import asyncio
