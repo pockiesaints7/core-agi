@@ -1,98 +1,86 @@
-# CORE v5.4 🧠
-### Personal AGI Orchestration System
+<![CDATA[<div align="center">
 
-> Built by **REINVAGNAR** 🇮🇩 — Indonesia
+```
+ ██████╗ ██████╗ ██████╗ ███████╗
+██╔════╝██╔═══██╗██╔══██╗██╔════╝
+██║     ██║   ██║██████╔╝█████╗  
+██║     ██║   ██║██╔══██╗██╔══╝  
+╚██████╗╚██████╔╝██║  ██║███████╗
+ ╚═════╝ ╚═════╝ ╚═╝  ╚═╝╚══════╝
+```
+
+**Personal AGI Orchestration System**
+
+`v5.4` · `live` · `self-improving` · `50 MCP tools`
+
+*Built by **REINVAGNAR** 🇮🇩 Indonesia*
+
+</div>
 
 ---
 
-## What is CORE?
+CORE is a persistent, cloud-native AGI brain. It connects to Claude Desktop via MCP, learns from every session, writes its own evolutions, and gets smarter over time — autonomously.
 
-CORE is a personal AGI system — a persistent, always-on brain that lives in the cloud, connects to Claude Desktop via MCP, and accepts tasks from anywhere via Telegram. It self-improves through a hot→cold training pipeline, manages its own knowledge base, and can modify its own codebase.
+This is not a chatbot wrapper. It's an operating system for AI-assisted work.
 
-Currently at **v5.4** — fully operational with 50 MCP tools, autonomous training loop, and GOD MODE power tools.
+---
+
+## How it thinks
+
+```
+session
+  └─ reflect          → captures patterns from the session
+       └─ cold_processor   → distills patterns, queues evolutions
+            └─ approve          → owner reviews via MCP
+                 └─ applied          → CORE is now smarter
+```
+
+Every session feeds the loop. The system evolves itself.
 
 ---
 
 ## Architecture
 
 ```
-You (Claude Desktop / Telegram)
-    ↓ MCP protocol / Telegram webhook
-Railway — core.py (FastAPI, port 8080)
-    ├── MCP dispatcher (/mcp)
-    ├── Telegram webhook (/telegram)
-    ├── Queue poller (60s, notify-only)
-    └── Background training loop
-    ↓
-Supabase — jarvis-brain (memory & knowledge)
-    ↓
-GitHub — pockiesaints7/core-agi (source of truth)
+Claude Desktop  ──MCP──▶  Railway (core.py)
+                               ├── /mcp        tool dispatcher
+                               ├── /telegram   webhook
+                               └── queue_poller (60s, notify-only)
+                                       │
+                              ┌────────┴────────┐
+                           Supabase          GitHub
+                        (memory, KB,      (source of truth,
+                         mistakes,         state files,
+                         evolutions)       self-edits)
 ```
 
 ---
 
-## Stack (100% Free Tier)
+## MCP Surface (50 tools)
 
-| Service | Role |
-|---------|------|
-| Railway | Host — single process, 24/7 |
-| Groq | LLM — llama-3.3-70b (main), llama-3.1-8b (fast) |
-| Supabase | Memory — knowledge, mistakes, reflections, evolutions |
-| GitHub | Source of truth — code + state files |
-| Telegram | Remote control — @reinvagnarbot |
-| Cloudflare | Credential vault — core-vault worker |
+| Class | Count | What it does |
+|---|---|---|
+| READ | 27 | query state, search KB, inspect code, check builds |
+| WRITE | 15 | learn, reflect, evolve, notify |
+| EXECUTE | 8 | patch code, redeploy, rollback |
 
----
-
-## MCP Tools (50)
-
-Claude Desktop connects via `/mcp` and gets full system context in one call (`session_start`).
-
-| Permission | Count | Key Tools |
-|-----------|-------|-----------|
-| READ | 27 | `get_state`, `search_kb`, `get_mistakes`, `read_file`, `stats`, `build_status`, `core_py_fn` |
-| WRITE | 15 | `add_knowledge`, `log_mistake`, `reflect`, `approve_evolution`, `sb_bulk_insert` |
-| EXECUTE | 8 | `gh_search_replace`, `multi_patch`, `redeploy`, `deploy_and_wait`, `core_py_rollback` |
+One call to `session_start` bootstraps the full context. One call to `session_end` closes the loop.
 
 ---
 
-## Self-Improvement Pipeline
+## Live state
 
-```
-Claude session → hot_reflection → cold_processor → evolution_queue → approve → applied
-```
+→ [`SESSION.md`](./SESSION.md) — always current
 
-CORE distills patterns from sessions, queues code/knowledge evolutions, and applies them with owner approval via Telegram.
-
----
-
-## Telegram Commands
-
-```
-/start   — system status overview
-/status  — component health check
-/tasks   — recent task queue
-/ask X   — search knowledge base
-
-Any task → notify owner for approval (queue_poller, 60s)
-```
-
----
-
-## Live State
-
-Always-current session state: [SESSION.md](./SESSION.md)
-
-Raw fetch:
 ```
 https://raw.githubusercontent.com/pockiesaints7/core-agi/main/SESSION.md
 ```
 
 ---
 
-## Owner
+<div align="center">
 
-**REINVAGNAR** 🇮🇩
-Indonesia
-GitHub: [@pockiesaints7](https://github.com/pockiesaints7)
-Telegram Bot: [@reinvagnarbot](https://t.me/reinvagnarbot)
+**REINVAGNAR** · 🇮🇩 Indonesia · [@pockiesaints7](https://github.com/pockiesaints7)
+
+</div>
+]]>
