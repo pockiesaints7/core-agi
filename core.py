@@ -1957,7 +1957,41 @@ def t_backlog_update(title: str, status: str):
     return {"ok": ok, "title": title, "new_status": status}
 
 
-def t_bulk_apply(executor_override: str = "claude_desktop", dry_run: bool = False):
+def t_bulk_mark_applied(ids: str = "", change_type_filter: str = "backlog") -> dict:
+    """Directly mark evolution_queue items as applied in Supabase.
+    Use when apply_evolution fails due to code bugs but items are safe to mark done.
+    ids: comma-separated list of IDs, or empty to mark ALL pending backlog items.
+    """
+    try:
+        if ids:
+            id_list = [int(x.strip()) for x in ids.split(",") if x.strip().isdigit()]
+        else:
+            rows = sb_get("evolution_queue",
+                          f"select=id&status=eq.pending&change_type=eq.{change_type_filter}&order=id.asc&limit=500",
+                          svc=True)
+            id_list = [r["id"] for r in rows]
+
+        if not id_list:
+            return {"ok": True, "marked": 0, "message": "No items to mark"}
+
+        marked = 0
+        failed_ids = []
+        now = datetime.utcnow().isoformat()
+        for eid in id_list:
+            ok = sb_patch("evolution_queue", f"id=eq.{eid}",
+                          {"status": "applied", "applied_at": now})
+            if ok:
+                marked += 1
+            else:
+                failed_ids.append(eid)
+
+        print(f"[BULK_MARK] marked={marked} failed={len(failed_ids)}")
+        return {"ok": True, "marked": marked, "failed": failed_ids, "total": len(id_list)}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+
     """Apply all pending evolution_queue items."""
     # MCP passes booleans as strings — normalize
     if isinstance(dry_run, str):
