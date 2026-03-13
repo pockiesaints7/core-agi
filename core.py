@@ -672,7 +672,11 @@ def apply_evolution(evolution_id: int):
             except Exception as _be:
                 print(f"[BACKLOG] refresh error: {_be}")
         else:
-            notify(f"❌ Evolution #{evolution_id} apply failed\nType: {change_type}")
+            # Only notify for structural failures — suppress routine backlog noise
+            if change_type not in ("backlog",):
+                notify(f"❌ Evolution #{evolution_id} apply failed\nType: {change_type}")
+            else:
+                print(f"[EVO] #{evolution_id} backlog apply failed silently — will retry via background_researcher")
         return {"ok": applied, "evolution_id": evolution_id, "change_type": change_type, "note": note}
     except Exception as e:
         print(f"[EVO] error: {e}")
