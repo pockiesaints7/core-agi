@@ -1,0 +1,1 @@
+{"action": "patch SESSION.md", "add_field": "last_good_commit: <sha>", "location": "top of file under version header", "also_patch": "CORE_SELF.md incident recovery section", "source_mistake_id": 177}
