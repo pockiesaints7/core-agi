@@ -43,15 +43,18 @@ SUPABASE (PostgreSQL)
 
 GITHUB (pockiesaints7/core-agi)
     └── Source of truth for all files
-         ├── core.py                ← Main app
-         ├── CORE_SELF.md           ← THIS FILE (living self-knowledge)
-         ├── SESSION.md             ← Dynamic per-session state
-         ├── operating_context.json ← Static tool rules + full schema
-         ├── constitution.txt       ← Immutable owner rules
-         ├── resource_ceilings.json ← Rate limit config
-         ├── requirements.txt       ← Python dependencies
-         ├── railway.json           ← Railway deploy config
-         └── mcp_tools/             ← MCP tool implementations
+         ├── core_main.py          ← Entry point (FastAPI)
+         ├── core_tools.py         ← 50 MCP tools
+         ├── core_train.py         ← Training pipeline
+         ├── core_github.py        ← GitHub helpers
+         ├── core_config.py        ← Config + DB helpers
+         ├── CORE_SELF.md          ← THIS FILE (living self-knowledge)
+         ├── SESSION.md            ← Dynamic per-session state
+         ├── operating_context.json← Static tool rules + full schema
+         ├── constitution.txt      ← Immutable owner rules
+         ├── resource_ceilings.json← Rate limit config
+         ├── requirements.txt      ← Python dependencies
+         └── railway.json          ← Railway deploy config
 ```
 
 ---
@@ -103,15 +106,16 @@ GITHUB (pockiesaints7/core-agi)
 
 ### `cold_reflections`
 - **Purpose:** Distilled output of cold processor runs
-- **Insert via:** SYSTEM ONLY (cold_processor in core.py)
+- **Insert via:** SYSTEM ONLY (cold_processor in core_train.py)
 - **Schema:** `id`, `created_at`, `period_start`, `period_end`, `hot_count`, `patterns_found`, `evolutions_queued`, `auto_applied`, `summary_text`
 - **⚠️ NOTE:** Never insert manually
 
 ### `evolution_queue`
 - **Purpose:** Proposed system changes pending owner approval
 - **Insert via:** SYSTEM (cold_processor) or manual proposals
-- **Schema:** `id`, `created_at`, `status` (pending/approved/rejected/applied), `confidence`, `impact`, `reversible` (bool), `change_type`, `change_summary`, `diff_content`, `pattern_key`, `frequency`, `owner_notified`, `applied_at`
+- **Schema:** `id`, `created_at`, `status` (pending/synthesized/approved/rejected/applied), `confidence`, `impact`, `reversible` (bool), `change_type`, `change_summary`, `diff_content`, `pattern_key`, `frequency`, `owner_notified`, `applied_at`
 - **Approve via:** `approve_evolution` tool | **Reject via:** `reject_evolution` tool
+- **Synthesize via:** `synthesize_evolutions` tool (marks status=synthesized after Claude reads)
 
 ### `pattern_frequency`
 - **Purpose:** Tracks pattern recurrence — drives evolution threshold
@@ -217,7 +221,7 @@ Session ends
 hot_reflections accumulates
     → Cold processor triggers when: 10+ unprocessed rows OR 24h elapsed
     
-Cold processor runs (core.py: cold_processor())
+Cold processor runs (core_train.py: cold_processor())
     → Reads all unprocessed hot_reflections
     → Extracts patterns → updates pattern_frequency
     → pattern frequency >= 3 → queues to evolution_queue
@@ -256,19 +260,11 @@ evolution_queue
 ## ✂️ Surgical Edit Workflow
 
 **From claude.ai** (no bash access):
-```powershell
-# Via Desktop Commander PowerShell:
-$body = @{
-  secret  = "core_mcp_secret_2026_REINVAGNAR"
-  path    = "core.py"
-  old_str = "..."
-  new_str = "..."
-  message = "fix: ..."
-} | ConvertTo-Json
-Invoke-RestMethod -Uri "https://core-agi-production.up.railway.app/patch" -Method POST -ContentType "application/json" -Body $body
-```
+- Use `POST /patch` endpoint for source file edits
+- Use `github:*` tools for all other file reads/writes
+- **NEVER use `gh_search_replace` from claude.ai** — Railway MCP timeout risk on large files
 
-**From Claude Desktop:** use `gh_search_replace` tool directly  
+**From Claude Desktop:** use `gh_search_replace` (small) or `github:push_files` (full restore)  
 **⚠️ NEVER do full file rewrite from claude.ai** — costs 1 GitHub push per call (only 20/hr budget)
 
 ---
@@ -280,23 +276,20 @@ Invoke-RestMethod -Uri "https://core-agi-production.up.railway.app/patch" -Metho
 2. Add KB entry: topic = `"CORE DB Schema — [table_name]"`
 3. Update `SESSION.md` Active Tables section
 4. Add section to THIS FILE (CORE_SELF.md) under Database
-5. Update TRAINING_DESIGN.md if it affects the training pipeline
-6. Add `changelog` row
+5. Add `changelog` row
 
 **When a TABLE is DROPPED:**
 1. Move from active_tables → tombstone_tables in `operating_context.json`
 2. Add to tombstone list in THIS FILE
 3. Add KB entry marking tombstone
 4. Update `SESSION.md`
-5. Remove all queries in `core.py`
-6. Add `changelog` row
+5. Add `changelog` row
 
 **When SCHEMA CHANGES (field added/removed/renamed):**
 1. Update `operating_context.json` → `active_tables` → that table's entry
 2. Update the table section in THIS FILE
 3. Update KB entry for that table (`search_kb` → find it → update)
-4. Add fix-log note in `core.py` docstring
-5. Add `changelog` row
+4. Add `changelog` row
 
 **When MCP TOOL is ADDED/REMOVED:**
 1. Update MCP Tools table in THIS FILE
@@ -314,10 +307,10 @@ Invoke-RestMethod -Uri "https://core-agi-production.up.railway.app/patch" -Metho
 ## 📋 Session Start Checklist
 
 Every new session MUST run:
-1. `get_state` → loads SESSION.md + operating_context.json
+1. `session_start` → bootstraps health + counts + last session + mistakes + evolutions
 2. If doing DB writes → read THIS FILE or `search_kb("CORE DB Schema [table]")` first
 3. If modifying code → check `get_mistakes(domain=github)` before pushing
-4. End of session → `sb_insert sessions` + update `SESSION.md` if anything changed + log `hot_reflection`
+4. End of session → call `session_end` (auto-logs session + hot_reflection + SESSION.md update)
 
 ---
 
@@ -325,18 +318,16 @@ Every new session MUST run:
 
 | File | Purpose | Update when |
 |---|---|---|
-| `core.py` | Main app — FastAPI + all logic | Code changes |
+| `core_main.py` | Entry point — FastAPI + routing | Entry point changes |
+| `core_tools.py` | All 50 MCP tool functions | Tool adds/removes/edits |
+| `core_train.py` | Cold processor, evolution pipeline | Training logic changes |
+| `core_github.py` | GitHub read/write helpers | GitHub API changes |
+| `core_config.py` | Env, constants, Supabase helpers | Config/DB changes |
 | `CORE_SELF.md` | THIS — living self-knowledge | ANY structural change |
 | `SESSION.md` | Dynamic session state | Every session with changes |
 | `operating_context.json` | Static tool rules + full schema | Schema/architecture changes |
-| `TRAINING_DESIGN.md` | Training pipeline design | Pipeline changes |
 | `constitution.txt` | Immutable — NEVER touch | Never |
 | `resource_ceilings.json` | Rate limit config | Ceiling changes |
-| `mcp_tools/actions.py` | MCP routing + context engine | MCP tool changes |
-| `mcp_tools/brain.py` | KB + training ops | Training logic changes |
-| `mcp_tools/brain_health.py` | Health scanner | Health check changes |
-| `mcp_tools/changelog.py` | Version history | Changelog logic changes |
-| `mcp_tools/db.py` | DB helpers | DB connection changes |
 
 ---
 
