@@ -50,8 +50,8 @@ from pathlib import Path
 # ── Config ────────────────────────────────────────────────────────────────────
 CORE_URL        = "https://core-agi-production.up.railway.app"
 MCP_SECRET      = "core_mcp_secret_2026_REINVAGNAR"
-SUPABASE_URL    = "https://qbfaplqiakwjvrtwpbmr.supabase.co"
-SUPABASE_SVC    = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFiZmFwbHFpYWt3anZydHdwYm1yIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3Mjg3NDM4OCwiZXhwIjoyMDg4NDUwMzg4fQ.TvFmdhef4cyAhI4tSoDKEuk6Q2SQRxav199uQmlY6Gc"
+SUPABASE_URL    = os.environ["SUPABASE_URL"]
+SUPABASE_SVC    = os.environ["SUPABASE_SERVICE_KEY"]
 AGENT_DIR       = Path(r"C:\Users\rnvgg\.claude-skills")
 LOG_FILE        = AGENT_DIR / "core_agent.log"
 DB_PATH         = Path(r"C:\Users\rnvgg\mcp-data\core_events.db")
