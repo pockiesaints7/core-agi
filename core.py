@@ -3,7 +3,22 @@ Owner: REINVAGNAR
 Step status is dynamic - always read from SESSION.md on GitHub.
 Do NOT hardcode step numbers anywhere in this file.
 
-Fix log:Fix log:
+!! CRITICAL EDIT RULE (PERMANENT) !!
+  core.py HANYA boleh diedit via github: tools dari claude.ai:
+    - github:create_or_update_file  (fetch SHA dulu sebelum write)
+    - github:push_files
+  JANGAN PERNAH gunakan core-agi MCP tools untuk edit core.py:
+    - core-agi:gh_search_replace  ← DILARANG untuk core.py
+    - core-agi:write_file          ← DILARANG untuk core.py
+  ALASAN: core-agi MCP tools diserve OLEH core.py itu sendiri.
+  Kalau Railway redeploy di tengah edit (triggered by GitHub push),
+  koneksi MCP putus → partial write → file corrupt / kosong.
+  SAFE path:
+    patch kecil  → POST /patch endpoint Railway (kalau online)
+    edit apapun  → github:create_or_update_file + SHA
+    full restore → github:create_or_update_file + full content + SHA
+
+Fix log:
   2026-03-11e: t_state() fetches operating_context.json + SESSION.md from GitHub.
   2026-03-11f: cold_processor uses Counter for batch freq counting.
   2026-03-11g: cold_reflections insert uses sb_post_critical (bypasses rate limiter).
@@ -83,6 +98,8 @@ Fix log:Fix log:
                with empty new_patterns[] — zero-value rows wasted cold processor cycles.
   2026-03-13: RESTORE from commit 1d14b2656f — v5.4 full restore after session corruption.
                101 functions, background_researcher, backlog system, Railway tools all restored.
+  2026-03-13: CRITICAL EDIT RULE ditambahkan ke docstring header.
+               core.py hanya boleh diedit via github: tools. Lihat bagian atas file ini.
 """
 import asyncio
 import base64
@@ -2304,10 +2321,7 @@ async function go(){
   const btn=document.getElementById('btn');
   btn.disabled=true;btn.innerHTML='<span class="spin"></span> Translating...';
   const res=document.getElementById('res');res.style.display='none';
-  const sys=`You are CORE's evolution analyst. Translate a raw evolution entry into a structured prompt.
-Output MUST be valid JSON:
-{"what":"1-2 sentences","why":"1-2 sentences","where":"which component","how":"2-4 concrete steps","expected_outcome":"1 sentence"}
-Output ONLY valid JSON, no preamble.`;
+  const sys=`You are CORE's evolution analyst. Translate a raw evolution entry into a structured prompt.\nOutput MUST be valid JSON:\n{"what":"1-2 sentences","why":"1-2 sentences","where":"which component","how":"2-4 concrete steps","expected_outcome":"1 sentence"}\nOutput ONLY valid JSON, no preamble.`;
   const usr="Evolution ID: "+evo.id+"\\nType: "+evo.change_type+"\\nSummary: "+evo.change_summary+"\\nConfidence: "+evo.confidence+"\\nTranslate this evolution.";
   try{
     const r=await fetch('https://api.anthropic.com/v1/messages',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model:'claude-sonnet-4-20250514',max_tokens:1000,system:sys,messages:[{role:'user',content:usr}]})});
