@@ -1695,24 +1695,38 @@ def t_mine_kb(max_batches: str = "50", force: str = "false") -> dict:
 
 
 def t_redeploy(reason: str = "") -> dict:
-    """Trigger Railway redeploy of CORE."""
+    """Trigger Railway redeploy via empty GitHub commit — no Railway token needed.
+    Railway watches the repo and auto-deploys on every push."""
     try:
-        token = os.environ.get("RAILWAY_TOKEN", "")
-        service_id = os.environ.get("RAILWAY_SERVICE_ID", "48ad55bd-6be2-4d8a-83df-34fc05facaa2")
-        if not token:
-            return {"ok": False, "error": "RAILWAY_TOKEN env var not set"}
-        query = "mutation($id:String!,$eid:String!){serviceInstanceRedeploy(serviceId:$id,environmentId:$eid)}"
-        r = httpx.post(
-            "https://backboard.railway.app/graphql/v2",
-            headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
-            json={"query": query, "variables": {"id": service_id, "eid": os.environ.get("RAILWAY_ENV_ID", "ff3f2a4c-4085-445e-88ff-a423862d00e8")}},
+        h = _ghh()
+        # Get current HEAD SHA
+        ref = httpx.get(f"https://api.github.com/repos/{GITHUB_REPO}/git/ref/heads/main", headers=h, timeout=10)
+        ref.raise_for_status()
+        current_sha = ref.json()["object"]["sha"]
+        # Get tree SHA from current commit
+        commit = httpx.get(f"https://api.github.com/repos/{GITHUB_REPO}/git/commits/{current_sha}", headers=h, timeout=10)
+        commit.raise_for_status()
+        tree_sha = commit.json()["tree"]["sha"]
+        # Create empty commit (same tree = no file changes, just triggers Railway)
+        msg = f"chore: trigger redeploy — {reason or 'manual trigger'}"
+        new_commit = httpx.post(
+            f"https://api.github.com/repos/{GITHUB_REPO}/git/commits",
+            headers=h,
+            json={"message": msg, "tree": tree_sha, "parents": [current_sha]},
             timeout=15,
         )
-        data = r.json()
-        if "errors" in data:
-            return {"ok": False, "error": data["errors"][0]["message"]}
-        notify(f"CORE redeploying\nReason: {reason or 'manual trigger'}")
-        return {"ok": True, "reason": reason}
+        new_commit.raise_for_status()
+        new_sha = new_commit.json()["sha"]
+        # Update main branch to new commit
+        update = httpx.patch(
+            f"https://api.github.com/repos/{GITHUB_REPO}/git/refs/heads/main",
+            headers=h,
+            json={"sha": new_sha},
+            timeout=15,
+        )
+        update.raise_for_status()
+        notify(f"CORE redeploying\nReason: {reason or 'manual trigger'}\nCommit: {new_sha[:12]}")
+        return {"ok": True, "reason": reason, "commit": new_sha[:12]}
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
