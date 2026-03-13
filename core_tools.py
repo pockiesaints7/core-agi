@@ -1219,25 +1219,26 @@ def t_backlog_update(title: str, status: str, result: str = ""):
 
 
 def t_changelog_add(version: str = "", component: str = "", summary: str = "",
-                    before: str = "", after: str = "") -> dict:
+                    before: str = "", after: str = "", change_type: str = "upgrade") -> dict:
     """Task 7.4 — Log a completed change to the changelog table + Telegram notify.
-    Call after every task completion to maintain a living changelog.
-    version: e.g. 'v6.1' or leave blank to auto-stamp date.
-    component: e.g. 'core_train', 'core_tools', 'backlog_update'.
-    summary: what changed in 1-2 sentences.
-    before: brief description of old behavior.
-    after: brief description of new behavior."""
+    Matches actual changelog table schema.
+    version: e.g. 'v6.1' or auto-stamps date.
+    component: e.g. 'core_train', 'core_tools'.
+    summary/before/after: what changed.
+    change_type: upgrade | bugfix | feature | growth (default: upgrade)."""
     try:
         ts = datetime.utcnow().isoformat()
         ver = version.strip() or datetime.utcnow().strftime("v%Y%m%d")
         ok = sb_post("changelog", {
-            "version":   ver,
-            "component": component.strip() or "general",
-            "summary":   summary.strip()[:500],
-            "before":    before.strip()[:300],
-            "after":     after.strip()[:300],
-            "logged_at": ts,
-            "source":    "claude_desktop",
+            "version":      ver,
+            "change_type":  change_type.strip() or "upgrade",
+            "component":    component.strip() or "general",
+            "title":        summary.strip()[:120],
+            "description":  summary.strip()[:500],
+            "before_state": before.strip()[:300],
+            "after_state":  after.strip()[:300],
+            "triggered_by": "claude_desktop",
+            "created_at":   ts,
         })
         if ok:
             notify(f"CHANGELOG [{ver}] {component}\n{summary[:200]}")
