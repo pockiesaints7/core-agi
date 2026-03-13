@@ -2200,23 +2200,26 @@ def t_redeploy(reason: str = "") -> dict:
         return {"ok": False, "error": str(e)}
 
 
-def t_logs(limit: str = "50") -> dict:
+def t_logs(limit: str = "50", keyword: str = "") -> dict:
     """Fetch recent deploy log — uses GitHub commit history + Railway commit status.
+    keyword: filter commit messages containing this string (case-insensitive).
     No RAILWAY_TOKEN needed. For live stdout logs use Railway dashboard directly."""
     try:
         lim = int(limit) if limit else 50
         lim = min(lim, 50)
         h = _ghh()
-        # Get recent commits with their Railway deploy status
         r = httpx.get(f"https://api.github.com/repos/{GITHUB_REPO}/commits?per_page={lim}", headers=h, timeout=10)
         r.raise_for_status()
         commits = r.json()
         logs = []
+        kw = keyword.strip().lower() if keyword else ""
         for commit in commits[:lim]:
             sha = commit["sha"]
             msg = commit.get("commit", {}).get("message", "")[:80]
             ts  = commit.get("commit", {}).get("committer", {}).get("date", "")[:19]
-            # Get Railway status for this commit
+            # Apply keyword filter before fetching statuses (saves API calls)
+            if kw and kw not in msg.lower():
+                continue
             sr = httpx.get(f"https://api.github.com/repos/{GITHUB_REPO}/commits/{sha}/statuses", headers=h, timeout=8)
             statuses = sr.json() if sr.status_code == 200 else []
             railway = [s for s in statuses if "railway" in s.get("context","").lower() or "railway" in s.get("description","").lower()]
@@ -2232,6 +2235,7 @@ def t_logs(limit: str = "50") -> dict:
         return {
             "ok":     True,
             "count":  len(logs),
+            "keyword": kw or "(none)",
             "latest": latest,
             "logs":   logs,
             "note":   "For live stdout logs, check Railway dashboard → Deployments → Logs",
@@ -2286,20 +2290,24 @@ def background_researcher():
         time.sleep(300)
 
 
-def t_get_backlog(status: str = "pending", limit: int = 20, min_priority: int = 1):
-    """Read backlog from Supabase - restart-proof."""
+def t_get_backlog(status: str = "pending", limit: int = 20, min_priority: int = 1, type: str = ""):
+    """Read backlog from Supabase - restart-proof.
+    type filter: new_tool / logic_improvement / knowledge_gap / process_improvement / etc."""
     try:
         lim = int(limit) if limit else 20
         min_p = int(min_priority) if min_priority else 1
         qs = f"select=*&status=eq.{status}&order=priority.desc&limit={lim}"
         if min_p > 1:
             qs += f"&priority=gte.{min_p}"
+        if type and type.strip():
+            qs += f"&type=eq.{type.strip()}"
         items = sb_get("backlog", qs, svc=True)
         total = int(httpx.get(
             f"{SUPABASE_URL}/rest/v1/backlog?select=id&limit=1",
             headers=_sbh_count_svc(), timeout=10
         ).headers.get("content-range", "*/0").split("/")[-1])
-        return {"ok": True, "total": total, "filtered": len(items), "items": items}
+        return {"ok": True, "total": total, "filtered": len(items),
+                "type_filter": type or "all", "items": items}
     except Exception as e:
         return {"ok": False, "error": str(e), "items": []}
 
@@ -2632,8 +2640,8 @@ TOOLS = {
                                "desc": "Analytics: domain distribution, top patterns, mistake frequency, avg quality score."},
     "search_mistakes":        {"fn": t_search_mistakes,        "perm": "READ",    "args": ["query", "domain", "limit"],
                                "desc": "Semantic mistake search. Returns what_failed + correct_approach."},
-    "get_backlog":            {"fn": t_get_backlog,            "perm": "READ",    "args": ["status", "limit", "min_priority"],
-                               "desc": "Get improvement backlog from Supabase. status=pending/done/dismissed."},
+    "get_backlog":            {"fn": t_get_backlog,            "perm": "READ",    "args": ["status", "limit", "min_priority", "type"],
+                               "desc": "Get improvement backlog from Supabase. status=pending/done/dismissed. type=new_tool/logic_improvement/knowledge_gap/process_improvement."},
     "backlog_update":         {"fn": t_backlog_update,         "perm": "WRITE",   "args": ["title", "status"],
                                "desc": "Update backlog item status: in_progress / done / dismissed."},
     "bulk_apply":             {"fn": t_bulk_apply,             "perm": "WRITE",   "args": ["executor_override", "dry_run"],
@@ -2648,8 +2656,8 @@ TOOLS = {
                                "desc": "Retrieve a stored script template by name."},
     "redeploy":               {"fn": t_redeploy,               "perm": "EXECUTE", "args": ["reason"],
                                "desc": "Trigger Railway redeploy of CORE from latest GitHub commit."},
-    "logs":                   {"fn": t_logs,                   "perm": "READ",    "args": ["limit"],
-                               "desc": "Fetch recent Railway deployment logs."},
+    "logs":                   {"fn": t_logs,                   "perm": "READ",    "args": ["limit", "keyword"],
+                               "desc": "Fetch recent Railway deployment logs. keyword= filter commit messages (case-insensitive)."},
     "deploy_status":          {"fn": t_deploy_status,          "perm": "READ",    "args": [],
                                "desc": "Return active deploy info: build ID, commit SHA, deploy time."},
     "build_status":           {"fn": t_build_status,           "perm": "READ",    "args": [],
