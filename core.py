@@ -630,7 +630,7 @@ def apply_evolution(evolution_id: int):
                     except Exception:
                         _priority = 5
                     applied = bool(sb_post("task_queue", {
-                        "type": "improvement", "payload": task_payload, "status": "pending",
+                        "task": task_payload, "status": "pending",
                         "priority": _priority, "source": "backlog_evolution",
                     }))
                     note = f"[groq] Task queued: {title}"
