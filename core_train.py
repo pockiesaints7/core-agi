@@ -751,10 +751,21 @@ Output ONLY valid JSON array, no preamble."""
 # -- Real signal + simulation --------------------------------------------------
 def _extract_real_signal() -> bool:
     """Track A - extract patterns from real sessions + mistakes.
-    Scoped to last 24h only — history is pre-filled, Groq processes new signal only.
+    Scoped to since last processed hot_reflection — so no signal is ever skipped.
+    Falls back to 7 days if no hot_reflections exist yet.
     """
     try:
-        since_ts = (datetime.utcnow() - timedelta(hours=24)).isoformat()
+        # Use last hot_reflection created_at as lower bound — not a hardcoded window
+        last_hot = sb_get("hot_reflections",
+            "select=created_at&order=created_at.desc&limit=1",
+            svc=True)
+        if last_hot and last_hot[0].get("created_at"):
+            raw_ts = last_hot[0]["created_at"]
+            since_ts = raw_ts.replace("Z", "").split("+")[0]
+            print(f"[RESEARCH/REAL] Using last hot_reflection ts: {since_ts}")
+        else:
+            since_ts = (datetime.utcnow() - timedelta(days=7)).isoformat()
+            print(f"[RESEARCH/REAL] No hot_reflections found, falling back to 7d window")
 
         sessions = sb_get("sessions",
             f"select=summary,actions,interface&created_at=gte.{since_ts}&order=created_at.desc&limit=20",
