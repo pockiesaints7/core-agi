@@ -1738,7 +1738,7 @@ def handle_jsonrpc(body: dict, session_id: str = "") -> dict:
     if method == "initialize":
         return ok({"protocolVersion": MCP_PROTOCOL_VERSION,
                    "capabilities": {"tools": {"listChanged": False}},
-                   "serverInfo": {"name": "CORE v5.4", "version": "5.4"}})
+                   "serverInfo": {"name": "CORE v6.0", "version": "6.0"}})
     elif method == "notifications/initialized": return None
     elif method == "ping": return ok({})
     elif method == "tools/list":
