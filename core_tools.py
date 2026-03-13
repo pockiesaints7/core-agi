@@ -1218,6 +1218,34 @@ def t_backlog_update(title: str, status: str, result: str = ""):
     return {"ok": ok, "title": title, "new_status": status}
 
 
+def t_changelog_add(version: str = "", component: str = "", summary: str = "",
+                    before: str = "", after: str = "") -> dict:
+    """Task 7.4 — Log a completed change to the changelog table + Telegram notify.
+    Call after every task completion to maintain a living changelog.
+    version: e.g. 'v6.1' or leave blank to auto-stamp date.
+    component: e.g. 'core_train', 'core_tools', 'backlog_update'.
+    summary: what changed in 1-2 sentences.
+    before: brief description of old behavior.
+    after: brief description of new behavior."""
+    try:
+        ts = datetime.utcnow().isoformat()
+        ver = version.strip() or datetime.utcnow().strftime("v%Y%m%d")
+        ok = sb_post("changelog", {
+            "version":   ver,
+            "component": component.strip() or "general",
+            "summary":   summary.strip()[:500],
+            "before":    before.strip()[:300],
+            "after":     after.strip()[:300],
+            "logged_at": ts,
+            "source":    "claude_desktop",
+        })
+        if ok:
+            notify(f"CHANGELOG [{ver}] {component}\n{summary[:200]}")
+        return {"ok": ok, "version": ver, "component": component, "logged_at": ts}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
 def t_bulk_apply(executor_override: str = "claude_desktop", dry_run: bool = False):
     """Apply all pending evolution_queue items."""
     if isinstance(dry_run, str):
@@ -1488,8 +1516,10 @@ TOOLS = {
                                "desc": "Semantic mistake search."},
     "get_backlog":            {"fn": t_get_backlog,            "perm": "READ",    "args": ["status", "limit", "min_priority", "type"],
                                "desc": "Get improvement backlog from Supabase."},
-    "backlog_update":         {"fn": t_backlog_update,         "perm": "WRITE",   "args": ["title", "status"],
-                               "desc": "Update backlog item status."},
+    "backlog_update":         {"fn": t_backlog_update,         "perm": "WRITE",   "args": ["title", "status", "result"],
+                               "desc": "Update backlog item status. result required when status=done."},
+    "changelog_add":          {"fn": t_changelog_add,          "perm": "WRITE",   "args": ["version", "component", "summary", "before", "after"],
+                               "desc": "Log a completed change to the changelog table + Telegram notify."},
     "bulk_apply":             {"fn": t_bulk_apply,             "perm": "WRITE",   "args": ["executor_override", "dry_run"],
                                "desc": "Apply ALL pending evolution_queue items."},
     "repopulate":             {"fn": _repopulate_evolution_queue, "perm": "WRITE", "args": [],
