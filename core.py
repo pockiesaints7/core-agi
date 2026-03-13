@@ -1351,6 +1351,61 @@ def t_core_py_rollback(commit_sha: str) -> dict:
         return {"ok": False, "error": str(e)}
 
 
+def t_diff(path: str, sha_a: str, sha_b: str = "main") -> dict:
+    """Compare a file between two commits and return a unified diff.
+    sha_a: older commit (or 'prev' to auto-use parent of sha_b).
+    sha_b: newer commit or branch name (default: main HEAD).
+    Use case: 'what exactly changed in the last 3 patches?' — currently impossible without GitHub UI."""
+    try:
+        import difflib
+        h = _ghh()
+        def fetch_at(ref):
+            r = httpx.get(
+                f"https://api.github.com/repos/{GITHUB_REPO}/contents/{path}?ref={ref}",
+                headers=h, timeout=20
+            )
+            r.raise_for_status()
+            return base64.b64decode(r.json()["content"]).decode().splitlines(keepends=True)
+        # Resolve sha_b to full SHA if it's a branch
+        if sha_b == "main" or len(sha_b) < 20:
+            ref_r = httpx.get(f"https://api.github.com/repos/{GITHUB_REPO}/git/ref/heads/{sha_b if sha_b != 'main' else 'main'}",
+                              headers=h, timeout=10)
+            if ref_r.is_success:
+                sha_b_full = ref_r.json()["object"]["sha"]
+            else:
+                sha_b_full = sha_b
+        else:
+            sha_b_full = sha_b
+        # Resolve sha_a — if 'prev', get parent of sha_b
+        if sha_a == "prev":
+            commit_r = httpx.get(f"https://api.github.com/repos/{GITHUB_REPO}/git/commits/{sha_b_full}",
+                                 headers=h, timeout=10)
+            commit_r.raise_for_status()
+            parents = commit_r.json().get("parents", [])
+            if not parents:
+                return {"ok": False, "error": "No parent commit found"}
+            sha_a = parents[0]["sha"]
+        lines_a = fetch_at(sha_a)
+        lines_b = fetch_at(sha_b_full)
+        diff = list(difflib.unified_diff(
+            lines_a, lines_b,
+            fromfile=f"{path}@{sha_a[:8]}",
+            tofile=f"{path}@{sha_b_full[:8]}",
+            n=3
+        ))
+        diff_text = "".join(diff)
+        added   = sum(1 for l in diff if l.startswith("+") and not l.startswith("+++"))
+        removed = sum(1 for l in diff if l.startswith("-") and not l.startswith("---"))
+        return {
+            "ok": True, "path": path,
+            "sha_a": sha_a[:12], "sha_b": sha_b_full[:12],
+            "added": added, "removed": removed,
+            "diff": diff_text[:8000] if diff_text else "(no changes)"
+        }
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
 def t_deploy_and_wait(reason: str = "", timeout: str = "120") -> dict:
     """Trigger redeploy + poll until success/failure. Single call replaces redeploy + manual polling.
     Returns final state: success | failure | timeout."""
@@ -2580,6 +2635,8 @@ TOOLS = {
                                "desc": "One-call session close: logs session + hot_reflection in one call. actions=comma-separated. patterns=pipe-separated. Replaces 2-3 end-of-session tool calls."},
     "core_py_rollback":       {"fn": t_core_py_rollback,       "perm": "EXECUTE", "args": ["commit_sha"],
                                "desc": "Emergency restore: fetch core.py at commit_sha, write back, redeploy. Use when bad deploy breaks CORE. Replaces 5+ manual steps."},
+    "diff":                   {"fn": t_diff,                   "perm": "READ",    "args": ["path", "sha_a", "sha_b"],
+                               "desc": "Compare file between two commits. sha_a=older, sha_b=newer/branch (default:main). sha_a='prev' auto-uses parent. Shows exactly what changed."},
     "deploy_and_wait":        {"fn": t_deploy_and_wait,        "perm": "EXECUTE", "args": ["reason", "timeout"],
                                "desc": "Trigger redeploy + poll until success/failure. timeout=seconds (default 120). Replaces redeploy + manual build_status polling."},
     "ping_health":            {"fn": t_ping_health,            "perm": "READ",    "args": [],
