@@ -76,7 +76,7 @@ When user says "activate autonomous mode":
 - [x] 1.0 README.md updated (2026-03-13)
 - [x] 1.1 SESSION.md rewritten as v6 unified master ← THIS FILE (2026-03-13)
 - [ ] 1.2 Slim CORE_SELF.md — remove v5.0 overlap; mcp_tools_count already 50 ✓
-- [ ] 1.3 Update operating_context.json — remove TRAINING_DESIGN ref (mcp_tools_count=50 already ✓)
+- [x] 1.3 Update operating_context.json — already complete from prior session ✓ (verified 2026-03-13)
 - [x] 1.4 PROJECT_MODE_DESIGN.md → moved to docs/ (already done)
 - [x] 1.5 Delete TRAINING_DESIGN.md ✓ (done prior session)
 - [x] 1.6 Delete GOD_MODE_PLAN.md ✓ (done prior session)
