@@ -1148,6 +1148,61 @@ def t_session_start() -> dict:
         return {"ok": False, "error": str(e)}
 
 
+def t_core_py_validate() -> dict:
+    """Pre-deploy syntax checker for core.py. Catches common corruption patterns before redeploy.
+    Run before any redeploy when core.py was edited."""
+    try:
+        content = _gh_blob_read("core.py")
+        lines = content.splitlines()
+        errors = []
+        warnings = []
+        size_kb = round(len(content.encode()) / 1024, 1)
+        line_count = len(lines)
+
+        # Check 1: double keywords (past incidents)
+        for i, line in enumerate(lines, 1):
+            stripped = line.strip()
+            if stripped.startswith("def def ") or stripped.startswith("import import "):
+                errors.append(f"L{i}: double keyword — {stripped[:60]}")
+
+        # Check 2: TOOLS dict has exactly one closing brace at col 0
+        tools_close = [i+1 for i, l in enumerate(lines) if l.strip() == "}" and not lines[i].startswith(" ")]
+        if len(tools_close) != 1:
+            errors.append(f"TOOLS closing brace count={len(tools_close)} (expected 1) at lines {tools_close}")
+
+        # Check 3: all t_* fn refs in TOOLS dict exist as functions
+        import re
+        tool_fn_refs = re.findall(r'"fn":\s*(t_\w+)', content)
+        defined_fns  = set(re.findall(r'^def (t_\w+)\(', content, re.MULTILINE))
+        for ref in tool_fn_refs:
+            if ref not in defined_fns:
+                errors.append(f"TOOLS refs '{ref}' but function not defined")
+
+        # Check 4: no stale Railway/backboard references
+        for i, line in enumerate(lines, 1):
+            if "backboard.railway" in line:
+                errors.append(f"L{i}: stale backboard.railway reference")
+
+        # Check 5: TOOLS dict exists
+        if "TOOLS = {" not in content:
+            errors.append("TOOLS dict not found — critical corruption")
+
+        # Warning: file size
+        if size_kb > 150:
+            warnings.append(f"core.py is {size_kb}KB — consider splitting (>150KB)")
+
+        # Warning: unmatched triple-quotes (rough check)
+        triple_count = content.count('"""')
+        if triple_count % 2 != 0:
+            warnings.append(f"Odd number of triple-quotes ({triple_count}) — possible unclosed docstring")
+
+        ok = len(errors) == 0
+        return {"ok": ok, "errors": errors, "warnings": warnings,
+                "line_count": line_count, "size_kb": size_kb}
+    except Exception as e:
+        return {"ok": False, "error": str(e), "errors": [str(e)], "warnings": []}
+
+
 def t_search_in_file(path: str, pattern: str, repo: str = "") -> dict:
     """Search for a pattern in a GitHub file. Returns all matching lines with line numbers.
     Eliminates binary-search round trips when locating functions in large files like core.py."""
@@ -2413,6 +2468,8 @@ TOOLS = {
                                "desc": "Apply multiple find-replace patches in one fetch+write. patches=JSON array of {old_str,new_str}. Faster than N separate gh_search_replace calls."},
     "core_py_fn":             {"fn": t_core_py_fn,             "perm": "READ",    "args": ["fn_name"],
                                "desc": "Read a single function from core.py by name. Returns source + line range. Replaces 3-5 gh_read_lines binary searches with 1 call."},
+    "core_py_validate":       {"fn": t_core_py_validate,       "perm": "READ",    "args": [],
+                               "desc": "Pre-deploy syntax checker for core.py. Catches double keywords, broken TOOLS dict, missing fn refs, stale references. Run before redeploy."},
     "session_start":          {"fn": t_session_start,          "perm": "READ",    "args": [],
                                "desc": "One-call session bootstrap: health + counts + last session + recent mistakes + pending evolutions. Replaces 4 separate tool calls."},
     "deploy_and_wait":        {"fn": t_deploy_and_wait,        "perm": "EXECUTE", "args": ["reason", "timeout"],
