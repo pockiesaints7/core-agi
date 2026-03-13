@@ -908,6 +908,31 @@ def t_sb_insert(table, data):
         except Exception as e: return {"ok": False, "error": f"data must be valid JSON: {e}"}
     return {"ok": sb_post(table, data), "table": table}
 
+def t_sb_bulk_insert(table: str, rows: str) -> dict:
+    """Insert multiple rows into Supabase in a single HTTP call.
+    rows = JSON array of objects. PostgREST accepts array body natively.
+    Faster than calling sb_insert N times — use for batch KB entries, sessions, etc."""
+    try:
+        if isinstance(rows, str):
+            rows = json.loads(rows)
+        if not isinstance(rows, list):
+            return {"ok": False, "error": "rows must be a JSON array"}
+        if len(rows) == 0:
+            return {"ok": False, "error": "rows array is empty"}
+        r = httpx.post(
+            f"{SUPABASE_URL}/rest/v1/{table}",
+            headers={**_sbh(True), "Prefer": "return=minimal"},
+            json=rows,
+            timeout=30
+        )
+        ok = r.is_success
+        if not ok:
+            print(f"[SB BULK] {table} failed: {r.status_code} {r.text[:200]}")
+        return {"ok": ok, "table": table, "rows_attempted": len(rows),
+                "status_code": r.status_code}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
 def t_training_status():
     try:
         unprocessed = sb_get("hot_reflections", "select=id&processed_by_cold=eq.0&id=gt.1", svc=True)
@@ -2489,6 +2514,8 @@ TOOLS = {
                                "desc": "Send Telegram notification. level=info/warn/alert/ok"},
     "sb_insert":              {"fn": t_sb_insert,              "perm": "WRITE",   "args": ["table", "data"],
                                "desc": "Insert row into Supabase table. data=JSON string"},
+    "sb_bulk_insert":         {"fn": t_sb_bulk_insert,         "perm": "WRITE",   "args": ["table", "rows"],
+                               "desc": "Insert multiple rows into Supabase in one HTTP call. rows=JSON array. Faster than N sb_insert calls."},
     "trigger_cold_processor": {"fn": t_trigger_cold_processor, "perm": "WRITE",   "args": [],
                                "desc": "Manually trigger cold processor: distill patterns, queue evolutions"},
     "approve_evolution":      {"fn": t_approve_evolution,      "perm": "WRITE",   "args": ["evolution_id"],
