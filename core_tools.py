@@ -342,10 +342,10 @@ def t_reject_evolution(evolution_id, reason=""):
     return reject_evolution(eid, reason)
 
 def t_gh_search_replace(path, old_str, new_str, message, repo="", dry_run="false"):
-    """Surgical find-replace using Git Blobs API — no file size limit."""
+    """Surgical find-replace using Contents API (gh_read/gh_write) — 2 HTTP calls, proven stable."""
     try:
         repo = repo or GITHUB_REPO
-        file_content = _gh_blob_read(path, repo)
+        file_content = gh_read(path, repo)
         if old_str not in file_content:
             return {"ok": False, "error": f"old_str not found in {path}"}
         count = file_content.count(old_str)
@@ -360,9 +360,10 @@ def t_gh_search_replace(path, old_str, new_str, message, repo="", dry_run="false
             ))
             return {"ok": True, "dry_run": True, "path": path,
                     "would_replace": old_str[:80], "diff": "".join(diff)[:3000]}
-        commit_sha = _gh_blob_write(path, new_content, message, repo)
-        return {"ok": True, "dry_run": False, "path": path,
-                "replaced": old_str[:80], "commit": commit_sha[:12]}
+        ok = gh_write(path, new_content, message, repo)
+        if not ok:
+            return {"ok": False, "error": "gh_write returned False"}
+        return {"ok": True, "dry_run": False, "path": path, "replaced": old_str[:80]}
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
@@ -516,12 +517,12 @@ def t_search_in_file(path: str, pattern: str, repo: str = "",
 
 
 def t_multi_patch(path: str, patches: str, message: str, repo: str = "") -> dict:
-    """Apply multiple find-replace patches via Git Blobs API."""
+    """Apply multiple find-replace patches via Contents API (gh_read/gh_write) — 2 HTTP calls, proven stable."""
     try:
         repo = repo or GITHUB_REPO
         if isinstance(patches, str):
             patches = json.loads(patches)
-        content = _gh_blob_read(path, repo)
+        content = gh_read(path, repo)
         applied = []
         skipped = []
         for i, patch in enumerate(patches):
@@ -537,9 +538,11 @@ def t_multi_patch(path: str, patches: str, message: str, repo: str = "") -> dict
                 applied.append({"index": i, "old_str": old[:60]})
         if not applied:
             return {"ok": False, "error": "No patches applied", "skipped": skipped, "skipped_details": skipped}
-        commit_sha = _gh_blob_write(path, content, message, repo)
+        ok = gh_write(path, content, message, repo)
+        if not ok:
+            return {"ok": False, "error": "gh_write returned False"}
         return {"ok": True, "path": path, "applied": len(applied), "skipped": len(skipped),
-                "details": applied, "skipped_details": skipped, "commit": commit_sha[:12]}
+                "details": applied, "skipped_details": skipped}
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
