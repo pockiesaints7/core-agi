@@ -1,1 +1,1 @@
-web: python core_main.py
+web: uvicorn core_main:app --host 0.0.0.0 --port $PORT --timeout-keep-alive 75
