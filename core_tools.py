@@ -1,14 +1,13 @@
 """core_tools.py — CORE AGI MCP tool implementations
-All 50 t_* functions, TOOLS registry, _mcp_tool_schema, handle_jsonrpc.
-Extracted from core.py as part of Task 2 architecture split.
+All t_* functions, TOOLS registry, _mcp_tool_schema, handle_jsonrpc.
+Part of v6.0 split architecture: core_config, core_github, core_train, core_tools, core_main.
 
 Import chain:
   core_tools imports: core_config, core_github, core_train
   core_main imports: core_tools (TOOLS, handle_jsonrpc)
 
-NOTE: This file is currently NOT active. core.py remains the live entry point.
-Activation happens when core_main.py is written and smoke test passes.
-"""
+NOTE: This IS the live implementation. Entry point = core_main.py (Procfile confirmed).
+core.py has been deleted — it was legacy monolith."""
 import base64
 import difflib
 import json
@@ -135,11 +134,11 @@ def t_read_file(path, repo=""):
 
 def t_write_file(path, content, message, repo=""):
     """Write file to GitHub repo — FULL OVERWRITE. Use for NEW files only.
-    GUARD: blocked for core.py — use gh_search_replace or multi_patch for surgical edits."""
-    if (repo or GITHUB_REPO) == GITHUB_REPO and path.strip().lstrip("/") == "core.py":
+    GUARD: blocked for core_main.py — use gh_search_replace or multi_patch for surgical edits."""
+    if (repo or GITHUB_REPO) == GITHUB_REPO and path.strip().lstrip("/") == "core_main.py":
         return {
             "ok": False,
-            "error": "BLOCKED: write_file cannot overwrite core.py (full overwrite = corruption risk). "
+            "error": "BLOCKED: write_file cannot overwrite core_main.py (full overwrite = corruption risk). "
                      "Use multi_patch or gh_search_replace for surgical edits."
         }
     ok = gh_write(path, content, message, repo or GITHUB_REPO)
@@ -383,10 +382,11 @@ def t_gh_read_lines(path, start_line=1, end_line=50, repo=""):
 
 # -- Agentic speed tools ------------------------------------------------------
 
-def t_core_py_fn(fn_name: str) -> dict:
-    """Read a single function from core.py by name."""
+def t_core_py_fn(fn_name: str, file: str = "core_tools.py") -> dict:
+    """Read a single function from a CORE source file by name. Defaults to core_tools.py."""
     try:
-        content = _gh_blob_read("core.py")
+        target = file if file else "core_tools.py"
+        content = _gh_blob_read(target)
         lines = content.splitlines()
         start = None
         indent = None
@@ -396,7 +396,7 @@ def t_core_py_fn(fn_name: str) -> dict:
                 indent = len(line) - len(line.lstrip())
                 break
         if start is None:
-            return {"ok": False, "error": f"Function '{fn_name}' not found in core.py"}
+            return {"ok": False, "error": f"Function '{fn_name}' not found in {target}"}
         end = start + 1
         while end < len(lines):
             line = lines[end]
@@ -447,39 +447,42 @@ def t_session_start() -> dict:
 
 
 def t_core_py_validate() -> dict:
-    """Pre-deploy syntax checker for core.py."""
+    """Pre-deploy syntax checker for core_tools.py and core_main.py."""
     try:
-        content = _gh_blob_read("core.py")
-        lines = content.splitlines()
-        errors = []
-        warnings = []
-        size_kb = round(len(content.encode()) / 1024, 1)
-        line_count = len(lines)
-        for i, line in enumerate(lines, 1):
-            stripped = line.strip()
-            if stripped.startswith("def def ") or stripped.startswith("import import "):
-                errors.append(f"L{i}: double keyword — {stripped[:60]}")
-        tools_close = [i+1 for i, l in enumerate(lines) if l.strip() == "}" and not lines[i].startswith(" ")]
-        if len(tools_close) != 1:
-            errors.append(f"TOOLS closing brace count={len(tools_close)} (expected 1) at lines {tools_close}")
-        tool_fn_refs = _re.findall(r'"fn":\s*(t_\w+)', content)
-        defined_fns  = set(_re.findall(r'^def (t_\w+)\(', content, _re.MULTILINE))
-        for ref in tool_fn_refs:
-            if ref not in defined_fns:
-                errors.append(f"TOOLS refs '{ref}' but function not defined")
-        for i, line in enumerate(lines, 1):
-            if "backboard.railway" in line:
-                errors.append(f"L{i}: stale backboard.railway reference")
-        if "TOOLS = {" not in content:
-            errors.append("TOOLS dict not found — critical corruption")
-        if size_kb > 150:
-            warnings.append(f"core.py is {size_kb}KB — consider splitting (>150KB)")
-        triple_count = content.count('"""')
-        if triple_count % 2 != 0:
-            warnings.append(f"Odd number of triple-quotes ({triple_count}) — possible unclosed docstring")
-        ok = len(errors) == 0
-        return {"ok": ok, "errors": errors, "warnings": warnings,
-                "line_count": line_count, "size_kb": size_kb}
+        results = {}
+        for target in ["core_tools.py", "core_main.py"]:
+            content = _gh_blob_read(target)
+            lines = content.splitlines()
+            errors = []
+            warnings = []
+            size_kb = round(len(content.encode()) / 1024, 1)
+            line_count = len(lines)
+            for i, line in enumerate(lines, 1):
+                stripped = line.strip()
+                if stripped.startswith("def def ") or stripped.startswith("import import "):
+                    errors.append(f"L{i}: double keyword — {stripped[:60]}")
+            if target == "core_tools.py":
+                tool_fn_refs = _re.findall(r'"fn":\s*(t_\w+)', content)
+                defined_fns  = set(_re.findall(r'^def (t_\w+)\(', content, _re.MULTILINE))
+                for ref in tool_fn_refs:
+                    if ref not in defined_fns:
+                        errors.append(f"TOOLS refs '{ref}' but function not defined")
+                if "TOOLS = {" not in content:
+                    errors.append("TOOLS dict not found — critical corruption")
+            for i, line in enumerate(lines, 1):
+                if "backboard.railway" in line:
+                    errors.append(f"L{i}: stale backboard.railway reference")
+                if "core.py" in line and not line.strip().startswith("#"):
+                    warnings.append(f"L{i}: stale core.py reference — file deleted")
+            if size_kb > 150:
+                warnings.append(f"{target} is {size_kb}KB — consider splitting (>150KB)")
+            triple_count = content.count('"""')
+            if triple_count % 2 != 0:
+                warnings.append(f"Odd number of triple-quotes ({triple_count}) — possible unclosed docstring")
+            results[target] = {"ok": len(errors) == 0, "errors": errors,
+                               "warnings": warnings, "line_count": line_count, "size_kb": size_kb}
+        overall_ok = all(r["ok"] for r in results.values())
+        return {"ok": overall_ok, "files": results}
     except Exception as e:
         return {"ok": False, "error": str(e), "errors": [str(e)], "warnings": []}
 
@@ -638,29 +641,34 @@ def t_session_end(summary: str, actions: str, domain: str = "general",
         return {"ok": False, "error": str(e)}
 
 
-def t_core_py_rollback(commit_sha: str) -> dict:
-    """Emergency restore: fetch core.py at any commit SHA, write back, redeploy."""
+def t_core_py_rollback(commit_sha: str, file: str = "core_main.py") -> dict:
+    """Emergency restore: fetch any CORE source file at a commit SHA, write back, redeploy.
+    Defaults to core_main.py. core.py is deleted — do not use."""
     try:
         if not commit_sha or len(commit_sha) < 6:
             return {"ok": False, "error": "commit_sha required (min 6 chars)"}
+        target = file if file else "core_main.py"
+        if target == "core.py":
+            return {"ok": False, "error": "core.py has been deleted. Use core_main.py or core_tools.py."}
         h = _ghh()
         ref_r = httpx.get(f"https://api.github.com/repos/{GITHUB_REPO}/commits/{commit_sha}",
                           headers=h, timeout=10)
         ref_r.raise_for_status()
         full_sha = ref_r.json()["sha"]
         short_sha = full_sha[:12]
-        file_r = httpx.get(f"https://api.github.com/repos/{GITHUB_REPO}/contents/core.py?ref={full_sha}",
+        file_r = httpx.get(f"https://api.github.com/repos/{GITHUB_REPO}/contents/{target}?ref={full_sha}",
                            headers=h, timeout=30)
         file_r.raise_for_status()
         old_content = base64.b64decode(file_r.json()["content"]).decode()
         new_commit = _gh_blob_write(
-            "core.py", old_content,
-            f"rollback: restore core.py from {short_sha}"
+            target, old_content,
+            f"rollback: restore {target} from {short_sha}"
         )
-        deploy = t_redeploy(f"rollback to {short_sha}")
-        notify_owner(f"ROLLBACK triggered — core.py restored from {short_sha}. Deploying...")
+        deploy = t_redeploy(f"rollback {target} to {short_sha}")
+        notify_owner(f"ROLLBACK triggered — {target} restored from {short_sha}. Deploying...")
         return {
             "ok": True,
+            "file": target,
             "restored_from": short_sha,
             "new_commit": new_commit[:12],
             "redeploying": deploy.get("ok", False),
