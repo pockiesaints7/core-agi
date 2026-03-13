@@ -75,7 +75,7 @@ When user says "activate autonomous mode":
 ### TASK 1 — Repo Documentation Cleanup
 - [x] 1.0 README.md updated (2026-03-13)
 - [x] 1.1 SESSION.md rewritten as v6 unified master ← THIS FILE (2026-03-13)
-- [ ] 1.2 Slim CORE_SELF.md — remove v5.0 overlap; mcp_tools_count already 50 ✓
+- [x] 1.2 Slim CORE_SELF.md — version v5.0→v5.4, tools 20→50, removed TRAINING_DESIGN ref, date updated ✓ (2026-03-13)
 - [x] 1.3 Update operating_context.json — already complete from prior session ✓ (verified 2026-03-13)
 - [x] 1.4 PROJECT_MODE_DESIGN.md → moved to docs/ (already done)
 - [x] 1.5 Delete TRAINING_DESIGN.md ✓ (done prior session)
