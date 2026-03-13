@@ -214,13 +214,15 @@ def t_list_evolutions(status="pending"):
     return {"evolutions": rows, "count": len(rows)}
 
 
-def t_bulk_reject_evolutions(change_type: str = "", ids: str = "", reason: str = "") -> dict:
+def t_bulk_reject_evolutions(change_type: str = "", ids: str = "", reason: str = "", include_synthesized: str = "false") -> dict:
     """Bulk reject pending evolutions silently — one Telegram summary at end.
     change_type: 'backlog' | 'knowledge' | '' (all pending).
     ids: comma-separated evolution IDs (overrides change_type).
+    include_synthesized: 'true' to also reject status=synthesized items.
     reason: optional rejection reason."""
     id_list = [int(i.strip()) for i in ids.split(",") if i.strip().isdigit()] if ids else []
-    return bulk_reject_evolutions(change_type=change_type, ids=id_list or None, reason=reason)
+    inc_syn = str(include_synthesized).lower() in ("true", "1", "yes")
+    return bulk_reject_evolutions(change_type=change_type, ids=id_list or None, reason=reason, include_synthesized=inc_syn)
 
 
 def t_check_evolutions(limit: int = 20) -> dict:
