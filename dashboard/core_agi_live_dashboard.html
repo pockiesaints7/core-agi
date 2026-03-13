@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CORE AGI — Command Center</title>
+<style>
+/*
+  CORE AGI Live Dashboard
+  Owner: REINVAGNAR
+  Repo: pockiesaints7/core-agi
+  Usage: Upload to claude.ai in any session, or say "open my CORE dashboard"
+         All buttons use sendPrompt() — Claude handles MCP tool calls server-side.
+  Updated: 2026-03-13
+*/
+:root {
+  --bg:#0a0a0f; --bg1:#0f0f17; --bg2:#14141f; --bg3:#1a1a28;
+  --border:rgba(120,120,200,0.12); --border-hi:rgba(120,120,200,0.28);
+  --teal:#00e5b0; --teal-dim:rgba(0,229,176,0.12);
+  --purple:#a78bfa; --amber:#f59e0b; --red:#f87171;
+  --text:#e8e8f0; --text2:#9090b0; --text3:#505070;
+  --mono:'JetBrains Mono',monospace; --sans:'Space Grotesk',sans-serif;
+}
+*{box-sizing:border-box;margin:0;padding:0;}
+body{background:var(--bg);color:var(--text);font-family:var(--mono);min-height:100vh;}
+body::before{content:'';position:fixed;inset:0;background-image:linear-gradient(rgba(120,120,200,0.03) 1px,transparent 1px),linear-gradient(90deg,rgba(120,120,200,0.03) 1px,transparent 1px);background-size:40px 40px;pointer-events:none;z-index:0;}
+.app{position:relative;z-index:1;max-width:1100px;margin:0 auto;padding:24px 20px;}
+
+.header{display:flex;align-items:center;justify-content:space-between;margin-bottom:24px;padding-bottom:16px;border-bottom:1px solid var(--border);}
+.logo{display:flex;align-items:center;gap:12px;}
+.pulse-wrap{position:relative;width:30px;height:30px;display:flex;align-items:center;justify-content:center;}
+.pulse-dot{width:9px;height:9px;border-radius:50%;background:var(--teal);animation:breathe 2.5s ease-in-out infinite;}
+@keyframes breathe{0%,100%{opacity:1}50%{opacity:.4}}
+.pulse-ring{position:absolute;inset:0;border-radius:50%;border:1px solid var(--teal);animation:ring 2.5s ease-out infinite;}
+@keyframes ring{0%{transform:scale(.5);opacity:.8}100%{transform:scale(1.5);opacity:0}}
+.logo-title{font-size:16px;font-weight:700;letter-spacing:.1em;}
+.logo-sub{font-size:9px;color:var(--text3);letter-spacing:.06em;margin-top:2px;}
+.badge{font-size:10px;padding:4px 12px;border-radius:20px;background:rgba(0,229,176,.1);border:1px solid rgba(0,229,176,.3);color:var(--teal);letter-spacing:.06em;}
+
+.metrics{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:8px;margin-bottom:14px;}
+.metric{background:var(--bg1);border:1px solid var(--border);border-radius:10px;padding:14px;position:relative;overflow:hidden;}
+.metric::before{content:'';position:absolute;top:0;left:0;right:0;height:1px;background:linear-gradient(90deg,transparent,rgba(0,229,176,.12),transparent);}
+.ml{font-size:9px;letter-spacing:.1em;color:var(--text3);margin-bottom:6px;text-transform:uppercase;}
+.mv{font-size:22px;font-weight:700;line-height:1;margin-bottom:3px;}
+.ms{font-size:10px;color:var(--text3);}
+.ms.ok{color:var(--teal);}
+
+.grid2{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:10px;margin-bottom:10px;}
+.panel{background:var(--bg1);border:1px solid var(--border);border-radius:10px;padding:16px;}
+.ph{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;padding-bottom:8px;border-bottom:1px solid var(--border);}
+.pt{font-size:9px;letter-spacing:.1em;color:var(--text3);text-transform:uppercase;}
+
+.health-list{display:flex;flex-direction:column;gap:8px;}
+.hrow{display:flex;align-items:center;gap:8px;}
+.hdot{width:6px;height:6px;border-radius:50%;background:var(--teal);flex-shrink:0;}
+.hname{font-size:11px;color:var(--text2);width:70px;flex-shrink:0;}
+.hbg{flex:1;height:3px;background:var(--bg3);border-radius:2px;overflow:hidden;}
+.hbf{height:100%;border-radius:2px;background:var(--teal);}
+.hval{font-size:10px;color:var(--teal);width:24px;text-align:right;flex-shrink:0;}
+
+.irow{display:flex;justify-content:space-between;align-items:baseline;gap:8px;padding:5px 0;border-bottom:1px solid var(--border);font-size:11px;}
+.irow:last-child{border-bottom:none;}
+.il{color:var(--text3);flex-shrink:0;}
+.iv{color:var(--text2);text-align:right;}
+.iv.ok{color:var(--teal);}
+.iv a{color:var(--purple);text-decoration:none;}
+
+.actions{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-bottom:10px;}
+.ac{background:var(--bg1);border:1px solid var(--border);border-radius:9px;padding:12px;cursor:pointer;text-align:left;transition:border-color .15s,background .15s;}
+.ac:hover{border-color:var(--border-hi);background:var(--bg2);}
+.ac:active{transform:scale(.98);}
+.acn{font-size:10px;color:var(--teal);font-weight:700;display:block;margin-bottom:3px;letter-spacing:.04em;}
+.acd{font-size:9px;color:var(--text3);display:block;}
+
+.grid3{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;}
+
+.footer{margin-top:14px;padding-top:12px;border-top:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;}
+.fl{font-size:10px;color:var(--text3);}
+.fl span{color:var(--teal);}
+.rb{font-size:10px;padding:5px 14px;border-radius:7px;border:1px solid var(--border);background:none;color:var(--text2);cursor:pointer;letter-spacing:.04em;transition:all .15s;}
+.rb:hover{border-color:var(--teal);color:var(--teal);}
+</style>
+</head>
+<body>
+<div class="app">
+
+  <div class="header">
+    <div class="logo">
+      <div class="pulse-wrap"><div class="pulse-dot"></div><div class="pulse-ring"></div></div>
+      <div>
+        <div class="logo-title">CORE AGI</div>
+        <div class="logo-sub">REINVAGNAR · railway + supabase + github · v5.0</div>
+      </div>
+    </div>
+    <span class="badge" id="status-badge">● all systems ok</span>
+  </div>
+
+  <div class="metrics">
+    <div class="metric"><div class="ml">knowledge base</div><div class="mv" id="m-kb">3,368</div><div class="ms ok">entries</div></div>
+    <div class="metric"><div class="ml">sessions</div><div class="mv" id="m-sess">205</div><div class="ms">total runs</div></div>
+    <div class="metric"><div class="ml">mistakes</div><div class="mv" id="m-err">97</div><div class="ms">logged</div></div>
+    <div class="metric"><div class="ml">task queue</div><div class="mv" id="m-tasks">123</div><div class="ms">items</div></div>
+    <div class="metric"><div class="ml">evolutions</div><div class="mv" id="m-ev">0</div><div class="ms ok" id="m-ev-sub">all clear</div></div>
+  </div>
+
+  <div class="actions">
+    <button class="ac" onclick="send('Run get_state and get_system_health on CORE. Full live status: counts, component health, last session. Be concise.')">
+      <span class="acn">⚡ full status ↗</span><span class="acd">state + health refresh</span>
+    </button>
+    <button class="ac" onclick="send('Call get_training_status on CORE. Pipeline status, unprocessed hot reflections, pending evolutions, next action needed.')">
+      <span class="acn">🧠 training pipeline ↗</span><span class="acd">status + next action</span>
+    </button>
+    <button class="ac" onclick="send('Call list_evolutions status=pending on CORE. List pending evolutions with summary + confidence. If none, confirm all clear.')">
+      <span class="acn">🔄 evolutions ↗</span><span class="acd">pending review</span>
+    </button>
+    <button class="ac" onclick="send('Fetch CORE Railway deploy logs — call logs tool, show last 15 lines. Flag any errors or crash loops.')">
+      <span class="acn">🚂 deploy logs ↗</span><span class="acd">railway · last 15 lines</span>
+    </button>
+    <button class="ac" onclick="send('Search CORE knowledge base (search_kb) for the 3 most important recent patterns or SOPs. Summarize each in 1-2 sentences.')">
+      <span class="acn">📚 kb patterns ↗</span><span class="acd">recent learnings</span>
+    </button>
+    <button class="ac" onclick="send('Show last 5 CORE mistakes: what failed + correct approach. Use get_mistakes. Be concise.')">
+      <span class="acn">⚠ mistakes log ↗</span><span class="acd">last 5 errors</span>
+    </button>
+    <button class="ac" onclick="send('Check CORE task_queue for pending items: sb_query on task_queue with filters status=eq.pending. List with priority.')">
+      <span class="acn">📋 task queue ↗</span><span class="acd">pending items</span>
+    </button>
+    <button class="ac" onclick="send('Run build_status on CORE — last 5 Railway commits and build state. Any failures?')">
+      <span class="acn">🏗 build status ↗</span><span class="acd">last 5 commits</span>
+    </button>
+    <button class="ac" onclick="send('Run get_state on CORE and refresh the dashboard with latest live numbers: kb, sessions, mistakes, tasks, evolutions.')">
+      <span class="acn">↻ refresh data ↗</span><span class="acd">pull latest counts</span>
+    </button>
+  </div>
+
+  <div class="grid2" style="margin-bottom:10px;">
+    <div class="panel">
+      <div class="ph"><span class="pt">system health — live verified 2026-03-13 13:07 UTC</span></div>
+      <div class="health-list">
+        <div class="hrow"><div class="hdot"></div><div class="hname">supabase</div><div class="hbg"><div class="hbf" style="width:99%"></div></div><div class="hval">ok</div></div>
+        <div class="hrow"><div class="hdot"></div><div class="hname">groq</div><div class="hbg"><div class="hbf" style="width:99%"></div></div><div class="hval">ok</div></div>
+        <div class="hrow"><div class="hdot"></div><div class="hname">telegram</div><div class="hbg"><div class="hbf" style="width:99%"></div></div><div class="hval">ok</div></div>
+        <div class="hrow"><div class="hdot"></div><div class="hname">github</div><div class="hbg"><div class="hbf" style="width:99%"></div></div><div class="hval">ok</div></div>
+        <div class="hrow"><div class="hdot"></div><div class="hname">railway</div><div class="hbg"><div class="hbf" style="width:99%"></div></div><div class="hval">ok</div></div>
+      </div>
+    </div>
+    <div class="panel">
+      <div class="ph"><span class="pt">last session</span></div>
+      <div class="irow"><span class="il">synced</span><span class="iv">2026-03-13 12:12 UTC</span></div>
+      <div class="irow"><span class="il">step</span><span class="iv ok">all steps complete</span></div>
+      <div class="irow"><span class="il">next</span><span class="iv">P2-5A architecture split</span></div>
+      <div class="irow"><span class="il">hot reflect.</span><span class="iv ok">0 unprocessed</span></div>
+      <div class="irow"><span class="il">pipeline</span><span class="iv ok">active</span></div>
+      <div class="irow"><span class="il">railway</span><span class="iv"><a href="https://core-agi-production.up.railway.app" target="_blank">production ↗</a></span></div>
+      <div class="irow"><span class="il">repo</span><span class="iv"><a href="https://github.com/pockiesaints7/core-agi" target="_blank">pockiesaints7/core-agi ↗</a></span></div>
+    </div>
+  </div>
+
+  <div class="grid3">
+    <div class="panel">
+      <div class="ph"><span class="pt">architecture</span></div>
+      <div class="irow"><span class="il">system</span><span class="iv ok">CORE v5.0</span></div>
+      <div class="irow"><span class="il">language</span><span class="iv">Python / FastAPI</span></div>
+      <div class="irow"><span class="il">primary AI</span><span class="iv">llama-3.3-70b</span></div>
+      <div class="irow"><span class="il">fast AI</span><span class="iv">llama-3.1-8b</span></div>
+      <div class="irow"><span class="il">mcp tools</span><span class="iv ok">20 active</span></div>
+      <div class="irow"><span class="il">interfaces</span><span class="iv">claude.ai + desktop + tg</span></div>
+    </div>
+    <div class="panel">
+      <div class="ph"><span class="pt">training pipeline</span></div>
+      <div class="irow"><span class="il">status</span><span class="iv ok">ACTIVE</span></div>
+      <div class="irow"><span class="il">unprocessed hot</span><span class="iv ok">0</span></div>
+      <div class="irow"><span class="il">pending evolutions</span><span class="iv ok">0</span></div>
+      <div class="irow"><span class="il">cold threshold</span><span class="iv">10</span></div>
+      <div class="irow"><span class="il">pattern threshold</span><span class="iv">3</span></div>
+      <div class="irow"><span class="il">auto-apply conf</span><span class="iv">0.7</span></div>
+    </div>
+    <div class="panel">
+      <div class="ph"><span class="pt">links</span></div>
+      <div class="irow"><span class="il">railway</span><span class="iv"><a href="https://core-agi-production.up.railway.app" target="_blank">production ↗</a></span></div>
+      <div class="irow"><span class="il">github</span><span class="iv"><a href="https://github.com/pockiesaints7/core-agi" target="_blank">core-agi ↗</a></span></div>
+      <div class="irow"><span class="il">telegram</span><span class="iv"><a href="https://t.me/reinvagnarbot" target="_blank">@reinvagnarbot ↗</a></span></div>
+      <div class="irow"><span class="il">mcp endpoint</span><span class="iv">/mcp (POST)</span></div>
+      <div class="irow"><span class="il">health check</span><span class="iv"><a href="https://core-agi-production.up.railway.app" target="_blank">GET / ↗</a></span></div>
+      <div class="irow"><span class="il">supabase</span><span class="iv" style="font-size:9px;">qbfaplqiakwjvrtwpbmr</span></div>
+    </div>
+  </div>
+
+  <div class="footer">
+    <div class="fl">CORE AGI · <span>REINVAGNAR</span> · claude.ai · 2026-03-13</div>
+    <button class="rb" onclick="send('Open my CORE dashboard: run get_state, get_system_health, get_training_status and render a fresh live dashboard.')">↻ full refresh ↗</button>
+  </div>
+
+</div>
+<script>
+function send(msg) {
+  if (typeof sendPrompt === 'function') {
+    sendPrompt(msg);
+  } else {
+    alert('Run this inside claude.ai — buttons route through Claude which has live CORE MCP access.\n\nTo open: upload this file to claude.ai or say "open my CORE dashboard"');
+  }
+}
+</script>
+</body>
+</html>
