@@ -1,7 +1,7 @@
 # CORE SESSION MASTER
 > Last updated: 2026-03-14 | Owner: REINVAGNAR | Version: CORE v6.0
 
-## Current Step: Task 8 ✅ complete. Next: pick Task 9 item to execute — recommended start: 9.C (session quality scoring) — lowest effort, high value.
+## Current Step: Task 5 ✅ complete. Next: Task 3 (Project Mode) to fully unblock Task 6 v6.0 stamp. Alternatively start Task 9.C (session quality scoring) for quick win.
 
 ## last_good_commit: 2026-03-14 (post Task 7 — all 50 tools verified green)
 > If Railway goes down: use `github:get_file_contents` to read this SHA, restore via `github:push_files`. Do NOT use core-agi: tools when Railway is confirmed down — they all fail simultaneously.
@@ -123,8 +123,8 @@ Design doc: docs/BINANCE_CORE_AGI.md
 ### TASK 5 — Zapier MCP Integration (Prereq: Task 1)
 - [x] 5.0 Scope corrected — KB entry saved (2026-03-13)
 - [x] 5.1 Write docs/ZAPIER_MCP.md ✓ (2026-03-13)
-- [ ] 5.2 Enable P0 Zapier connections (Gmail, Todoist, Google Calendar, Webhooks)
-- [ ] 5.3 Test each P0 connection from Claude Desktop
+- [x] 5.2 Enable P0 Zapier connections (Gmail, Todoist, Google Calendar, Webhooks)
+- [x] 5.3 Test each P0 connection from Claude Desktop
 
 ### TASK 6 — v6.0 Version Stamp 🔒 (LOCKED until Tasks 1-5 done)
 Update all version strings → "CORE v6.0" across active modules.
@@ -222,6 +222,7 @@ The autonomous mode daemon (Section 4) already exists. The wild idea: CORE gener
 
 | Date | Summary | Key Actions |
 |---|---|------|
+| 2026-03-13 | Task 5 complete. Tested all 4 P0 Zapier connections: Gmail ( | read ZAPIER_MCP.md|tool_search for all 4 P0 tools|gmail_find_email test ✅|google_calendar_find_events test ✅|todoist_find_task test ✅|webhooks_by_zapier_post test ✅|changelog_add logged |
 | 2026-03-13 | Task 8 complete. synthesize_evolutions live-tested — confirm | synthesize_evolutions called|Claude produced Task 9 architect blueprint|SESSION.md updated with Task 9 (6 items) + 8.4 ticked|CORE_SELF.md rewritten: v6.0, 5-module arch, 50 tools (+4 more) |
 | 2026-03-14 | Task 8.4 ✅ — synthesize_evolutions live test + architect blueprint written as Task 9 | session_start → synthesize_evolutions → read SESSION.md SHA → wrote Task 9 blueprint (6 items: 9.A–9.F) |
 | 2026-03-13 | Diagnosed and fixed high fail rate in gh_search_replace and  | Patched t_gh_search_replace and t_multi_patch in core_tools.py via multi_patch. Verified readback. Build confirmed success on Railway. |
