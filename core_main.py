@@ -53,9 +53,15 @@ def get_current_step() -> str:
                 label = line.replace("## Current Step:", "").strip()
                 _step_cache = {"label": label, "ts": time.time()}
                 return label
+        # Fallback: find next incomplete task in registry
+        for line in md.splitlines():
+            if line.strip().startswith("- [ ]"):
+                label = line.strip().lstrip("- [ ]").strip()
+                _step_cache = {"label": label, "ts": time.time()}
+                return label
     except Exception as e:
         print(f"[STEP] Failed to read SESSION.md: {e}")
-    return _step_cache.get("label") or "unknown - check SESSION.md"
+    return _step_cache.get("label") or "check SESSION.md"
 
 
 def get_latest_session():
