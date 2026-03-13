@@ -87,8 +87,9 @@ When user says "activate autonomous mode":
 - [x] 1.11 Purge remaining Jarvis OS KB entries — 62 entries deleted 2026-03-13 ✓
 
 ### TASK 2 — GOD MODE P2-5A: Architecture Split (Prereq: Task 1)
-Split core.py (3092 lines, 157KB) into 4 modules:
-- [ ] 2.1 Map exact line ranges per module
+Split core.py (3097 lines, 157KB) into 5 modules (core_config, core_github, core_train, core_tools, core_main).
+Full execution plan: `docs/TASK2_SPLIT_PLAN.md` (2026-03-13)
+- [x] 2.1 Map exact line ranges per module ✓ (2026-03-13, see docs/TASK2_SPLIT_PLAN.md)
 - [ ] 2.2 Extract core_github.py
 - [ ] 2.3 Extract core_train.py
 - [ ] 2.4 Extract core_tools.py
