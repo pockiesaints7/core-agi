@@ -182,10 +182,79 @@ def auto_hot_reflection(session_data: dict):
 
 
 # -- Cold processor ------------------------------------------------------------
+def _groq_synthesize_cold(hots: list, batch_counts: Counter, batch_domain: dict) -> str:
+    """Ask Groq to synthesize a meaningful cold reflection summary from the batch.
+    Returns a rich summary string. Falls back to dumb counter string on failure.
+    """
+    fallback = f"Processed {len(hots)} hots. {len(batch_counts)} unique patterns."
+    try:
+        # Build top-patterns context: top 15 by frequency in this batch
+        top = sorted(batch_counts.items(), key=lambda x: x[1], reverse=True)[:15]
+        top_text = "\n".join(
+            f"  [{batch_domain.get(k,'?')}] ({v}x) {k[:120]}"
+            for k, v in top
+        )
+        # Domain breakdown
+        domain_counts: Counter = Counter(batch_domain[k] for k in batch_counts)
+        domain_text = ", ".join(f"{d}:{n}" for d, n in domain_counts.most_common(6))
+        # Session summaries (task_summary field from hots)
+        session_summaries = "\n".join(
+            f"  - {h.get('task_summary','')[:150]}" for h in hots[:10]
+        )
+        prompt = (
+            f"You are CORE's cold processor synthesis engine.\n"
+            f"You just processed {len(hots)} hot reflections covering {len(batch_counts)} unique patterns.\n\n"
+            f"Domain breakdown: {domain_text}\n\n"
+            f"Session summaries:\n{session_summaries}\n\n"
+            f"Top patterns by frequency:\n{top_text}\n\n"
+            f"Write a 3-5 sentence synthesis of this batch. Cover:\n"
+            f"1. What themes/domains dominated\n"
+            f"2. Most important recurring patterns (name them)\n"
+            f"3. Any gaps or risks identified\n"
+            f"4. Overall system health signal\n"
+            f"Be specific and actionable. No preamble. Plain text only."
+        )
+        synthesis = groq_chat(prompt, model=GROQ_MODEL, max_tokens=400)
+        synthesis = synthesis.strip()
+        if len(synthesis) > 50:
+            return synthesis
+        return fallback
+    except Exception as e:
+        print(f"[COLD] synthesis failed (non-fatal): {e}")
+        return fallback
+
+
+def _groq_kb_content(pattern_key: str, domain: str, frequency: int, src_key: str) -> str:
+    """Ask Groq to write proper KB entry content for a pattern that hit threshold.
+    Returns a rich content string. Falls back to the raw pattern key on failure.
+    """
+    try:
+        prompt = (
+            f"You are CORE's knowledge base writer.\n"
+            f"A pattern has recurred {frequency}x across real sessions (source: {src_key}).\n"
+            f"Domain: {domain}\n"
+            f"Pattern: {pattern_key}\n\n"
+            f"Write a concise KB entry for this pattern. Include:\n"
+            f"1. The rule stated clearly (1-2 sentences)\n"
+            f"2. Why it matters / what failure it prevents\n"
+            f"3. How to apply it (concrete action)\n"
+            f"4. Any known exceptions\n"
+            f"Max 200 words. No markdown headers. Plain paragraphs only."
+        )
+        content = groq_chat(prompt, model=GROQ_FAST, max_tokens=350)
+        content = content.strip()
+        if len(content) > 30:
+            return content
+        return pattern_key
+    except Exception as e:
+        print(f"[COLD] kb_content generation failed (non-fatal): {e}")
+        return pattern_key
+
+
 def run_cold_processor():
     try:
         hots = sb_get("hot_reflections",
-                      "select=id,domain,new_patterns,new_mistakes,quality_score,source&processed_by_cold=eq.0&id=gt.1&order=created_at.asc",
+                      "select=id,domain,new_patterns,new_mistakes,quality_score,source,task_summary&processed_by_cold=eq.0&id=gt.1&order=created_at.asc",
                       svc=True)
         if not hots:
             print("[COLD] No unprocessed hot reflections.")
@@ -240,19 +309,22 @@ def run_cold_processor():
                 total_freq = batch_count
 
             # ALLOWED_EVO_TYPES: cold processor only emits knowledge/code/config — never backlog
-            ALLOWED_EVO_TYPES = ["knowledge", "code", "config"]
             if total_freq >= PATTERN_EVO_THRESHOLD and not (existing or {}).get("auto_applied"):
-                base_conf   = min(0.5 + total_freq * 0.05, 0.95)
-                final_conf  = round(base_conf * src_mult, 3)
+                base_conf  = min(0.5 + total_freq * 0.05, 0.95)
+                final_conf = round(base_conf * src_mult, 3)
+
+                # Groq writes proper KB content for the evolution instead of raw pattern string
+                kb_content = _groq_kb_content(key, domain, total_freq, src_key)
+
                 ok = sb_post_critical("evolution_queue", {
-                    "change_type":    "knowledge",  # always knowledge from cold processor — owner decides backlog
-                    "change_summary": f"Recurring pattern ({total_freq}x, src={src_key}): {key[:200]}",
+                    "change_type":    "knowledge",
+                    "change_summary": kb_content[:500],
                     "pattern_key":    key,
                     "confidence":     final_conf,
                     "status":         "pending",
                     "source":         src_key,
                     "impact":         domain,
-                    "recommendation": f"Pattern appears {total_freq}x. src_mult={src_mult}. Consider KB entry or tool.",
+                    "recommendation": f"Pattern appears {total_freq}x (src={src_key}). KB content Groq-generated.",
                 })
                 if ok:
                     evolutions_queued += 1
@@ -260,16 +332,21 @@ def run_cold_processor():
                               {"pattern_key": key, "auto_applied": True},
                               on_conflict="pattern_key")
 
+        # Groq synthesizes a meaningful cold reflection summary
+        groq_summary = _groq_synthesize_cold(hots, batch_counts, batch_domain)
+        counter_suffix = f" | hots={len(hots)} patterns={len(batch_counts)} evos={evolutions_queued}"
+        summary_text = groq_summary + counter_suffix
+
         sb_post_critical("cold_reflections", {
             "period_start": period_start, "period_end": datetime.utcnow().isoformat(),
             "hot_count": len(hots), "patterns_found": len(batch_counts),
             "evolutions_queued": evolutions_queued, "auto_applied": 0,
-            "summary_text": f"Processed {len(hots)} hots. {len(batch_counts)} unique patterns. {evolutions_queued} evolutions queued.",
+            "summary_text": summary_text[:2000],
         })
         for h in hots:
             sb_patch("hot_reflections", f"id=eq.{h['id']}", {"processed_by_cold": 1})
         if evolutions_queued > 0:
-            notify(f"Cold processor: {evolutions_queued} evolution(s) queued from {len(hots)} sessions.\nReview via Claude Desktop.")
+            notify(f"Cold processor: {evolutions_queued} evolution(s) queued.\n{groq_summary[:300]}\nReview via Claude Desktop.")
         print(f"[COLD] Done: processed={len(hots)} patterns={len(batch_counts)} evolutions={evolutions_queued}")
         return {"ok": True, "processed": len(hots), "patterns_found": len(batch_counts), "evolutions_queued": evolutions_queued}
     except Exception as e:
@@ -293,10 +370,11 @@ def apply_evolution(evolution_id: int):
         applied = False; note = ""
 
         if change_type == "knowledge":
+            # change_summary is now Groq-generated KB content — use it directly as content
             applied = sb_post_critical("knowledge_base", {
                 "domain": evo.get("impact", "general"),
-                "topic": pattern_key or change_summary[:100],
-                "content": change_summary,
+                "topic": pattern_key[:100] or change_summary[:100],
+                "content": change_summary,  # rich Groq-written content
                 "confidence": "high" if confidence >= 0.8 else "medium",
                 "tags": ["evolution", "auto"], "source": "evolution_queue",
             })
@@ -676,7 +754,6 @@ def _extract_real_signal() -> bool:
     Scoped to last 24h only — history is pre-filled, Groq processes new signal only.
     """
     try:
-        # Scope to last 24h — avoid re-processing all-time history on every background cycle
         since_ts = (datetime.utcnow() - timedelta(hours=24)).isoformat()
 
         sessions = sb_get("sessions",
@@ -745,7 +822,6 @@ Output ONLY valid JSON, no preamble."""
 def _run_simulation_batch() -> bool:
     """Track B - grounded simulation of 1M user population."""
     try:
-        # TOOLS imported lazily to avoid circular import
         try:
             from core_tools import TOOLS
             tool_list = list(TOOLS.keys())
@@ -824,7 +900,6 @@ def background_researcher():
                 time.sleep(3)
                 sim_ok  = _run_simulation_batch()
 
-                # Auto-apply groq-executable pending evolutions
                 try:
                     groq_pending = sb_get(
                         "evolution_queue",
@@ -833,8 +908,6 @@ def background_researcher():
                     )
                     auto_applied = 0
                     for evo in groq_pending:
-                        # Task 7.5: only auto-apply knowledge evolutions with conf >= threshold
-                        # code/config/backlog are owner decisions — never auto-apply
                         ctype = evo.get("change_type", "")
                         conf  = float(evo.get("confidence") or 0)
                         if ctype == "knowledge" and conf >= KNOWLEDGE_AUTO_CONFIDENCE:
@@ -847,7 +920,6 @@ def background_researcher():
                 except Exception as _ae:
                     print(f"[RESEARCH] auto-apply error: {_ae}")
 
-                # Auto-run KB mining if backlog underpopulated
                 try:
                     counts = get_system_counts()
                     kb_count = counts.get("knowledge_base", 0)
