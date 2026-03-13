@@ -1171,8 +1171,13 @@ def t_session_start() -> dict:
         state = t_state()
         health = t_health()
         mistakes = t_get_mistakes(domain="", limit=5)
-        evolutions = sb_get("evolution_queue",
-            "select=id,change_summary,change_type,confidence,executor&status=eq.pending&order=confidence.desc&limit=5")
+        try:
+            evolutions = sb_get("evolution_queue",
+                "select=id,change_summary,change_type,confidence&status=eq.pending&order=confidence.desc&limit=5")
+            if not isinstance(evolutions, list):
+                evolutions = []
+        except Exception:
+            evolutions = []
         training = t_training_status()
         return {
             "ok": True,
