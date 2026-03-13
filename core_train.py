@@ -480,8 +480,8 @@ def reject_evolution(evolution_id: int, reason: str = "", silent: bool = False):
     """Reject a single evolution. silent=True skips Telegram notify + mistakes write (use for bulk ops)."""
     try:
         rows = sb_get("evolution_queue",
-                      f"select=*&id=eq.{evolution_id}&status=eq.pending&limit=1", svc=True)
-        if not rows: return {"ok": False, "error": f"Evolution {evolution_id} not found or not pending"}
+                      f"select=*&id=eq.{evolution_id}&status=in.(pending,synthesized)&limit=1", svc=True)
+        if not rows: return {"ok": False, "error": f"Evolution {evolution_id} not found or not pending/synthesized"}
         sb_patch("evolution_queue", f"id=eq.{evolution_id}", {"status": "rejected"})
         if not silent:
             sb_post("mistakes", {
