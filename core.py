@@ -4,19 +4,29 @@ Step status is dynamic - always read from SESSION.md on GitHub.
 Do NOT hardcode step numbers anywhere in this file.
 
 !! CRITICAL EDIT RULE (PERMANENT) !!
-  core.py HANYA boleh diedit via github: tools dari claude.ai:
-    - github:create_or_update_file  (fetch SHA dulu sebelum write)
-    - github:push_files
-  JANGAN PERNAH gunakan core-agi MCP tools untuk edit core.py:
-    - core-agi:gh_search_replace  ← DILARANG untuk core.py
-    - core-agi:write_file          ← DILARANG untuk core.py
-  ALASAN: core-agi MCP tools diserve OLEH core.py itu sendiri.
-  Kalau Railway redeploy di tengah edit (triggered by GitHub push),
-  koneksi MCP putus → partial write → file corrupt / kosong.
-  SAFE path:
-    patch kecil  → POST /patch endpoint Railway (kalau online)
-    edit apapun  → github:create_or_update_file + SHA
-    full restore → github:create_or_update_file + full content + SHA
+  core.py edits dari Claude Desktop — GUNAKAN SELALU:
+    SURGICAL (small edits):
+      core-agi:gh_search_replace  ← find-replace, atomic per chunk, SAFE
+    FULL FILE (restore / large refactor):
+      github:push_files           ← atomic Git Trees API, no size limit, SAFE
+      JANGAN github:create_or_update_file ← truncates at ~130KB, CORRUPT
+
+  JANGAN dari claude.ai (web/mobile):
+    github:create_or_update_file  ← response gets cut off mid-file = CORRUPT
+    core-agi:gh_search_replace    ← Railway bisa disconnect mid-edit = CORRUPT
+
+  ALASAN core-agi tools DILARANG dari claude.ai:
+    core-agi MCP diserve OLEH core.py itu sendiri.
+    Railway redeploy di tengah edit → koneksi MCP putus → partial write → CORRUPT.
+    Claude Desktop tidak punya masalah ini karena tidak trigger redeploy.
+
+  DECISION TREE:
+    Dari Claude Desktop?
+      edit kecil (< 50 lines)  → core-agi:gh_search_replace
+      full restore / big edit  → github:push_files
+    Dari claude.ai (web)?
+      TIDAK ADA cara aman edit core.py langsung.
+      Buat issue di GitHub, lanjutkan di Claude Desktop.
 
 Fix log:
   2026-03-11e: t_state() fetches operating_context.json + SESSION.md from GitHub.
