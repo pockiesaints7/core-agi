@@ -651,8 +651,7 @@ def apply_evolution(evolution_id: int):
                 plan = groq_chat("You are CORE planning engine. Be concise.", plan_prompt,
                                  model=GROQ_FAST, max_tokens=300)
                 applied = bool(sb_post("task_queue", {
-                    "type": "improvement",
-                    "payload": json.dumps({"title": title, "plan": plan, "domain": domain}),
+                    "task": json.dumps({"title": title, "plan": plan, "domain": domain}),
                     "status": "pending", "priority": 5, "source": "backlog_evolution",
                 }))
                 note = f"[auto] Plan generated + queued: {title}"
