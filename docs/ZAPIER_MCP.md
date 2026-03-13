@@ -1,167 +1,175 @@
-# ZAPIER MCP — CORE AGI External Action Layer
-
-**Purpose:** Expert reference for using Zapier MCP as CORE AGI's bridge to the outside world.
-Zapier connects to 8,000+ apps. Through this MCP, CORE can trigger actions in any of them
-without writing custom integrations.
-
-**MCP Server URL:** `https://mcp.zapier.com/mcp/servers/1b142a72-dda7-4341-a414-0a55cc6ee99f/mcp`
-**Config URL:** `https://mcp.zapier.com/mcp/servers/1b142a72-dda7-4341-a414-0a55cc6ee99f/config`
+# ZAPIER MCP — CORE AGI Usage Guide
+> Created: 2026-03-13 | Owner: REINVAGNAR | Status: Living doc
 
 ---
 
-## MENTAL MODEL
+## What This Is
 
-Zapier MCP is NOT a general HTTP client. It is a **curated action registry**.
-Ki enables specific actions at the config URL → each becomes `zapier:<app>_<action>` MCP tool.
-Claude calls it with `instructions` (plain English) + named params. Zapier handles all auth.
-No Zaps needed. No code.
+Zapier MCP is CORE's external action layer. It connects CORE to 8000+ apps without requiring
+individual API keys or custom code. Actions are enabled at the config URL, then immediately callable
+as `zapier:<app>_<action>` MCP tools from any Claude Desktop session.
 
-Flow: CORE AGI → zapier MCP tool → Zapier action (pre-authed) → 3rd party app
+**Config URL:** https://mcp.zapier.com/mcp/servers/1b142a72-dda7-4341-a414-0a55cc6ee99f/config
+**Full connection map:** docs/ZAPIER_CONNECTIONS.md
 
-**Key insight:** Bottleneck is NOT capability (8,000 apps available).
-Bottleneck is which actions Ki has enabled. Enable more = CORE can do more.
-
-**To add new actions:** config URL → search app → select actions → save → immediately live.
-Rule: Enable only what CORE needs. 5-15 focused actions per domain. Too many = wrong tool picked.
+> ⚠️ No t_zapier_trigger tool needed — zapier:* tools are callable directly from Claude Desktop.
+> Calling them from core.py is NOT required. They are peer tools, not wrapped tools.
 
 ---
 
-## CURRENTLY ENABLED TOOLS (2026-03-12)
+## Critical Usage Rules
 
-| Tool | What it does |
+| Rule | Detail |
 |---|---|
-| `zapier:google_drive_retrieve_files_from_google_drive` | Search/list Drive files |
-| `zapier:google_drive_delete_file` | Move file to trash |
-| `zapier:google_drive_delete_file_permanent` | Permanently delete file |
-| `zapier:google_sheets_delete_spreadsheet_row_s` | Delete row(s) from sheet |
-| `zapier:google_sheets_delete_sheet` | Delete entire worksheet |
-| `zapier:google_sheets_api_request_beta` | Raw Google Sheets API call |
-| `zapier:google_docs_api_request_beta` | Raw Google Docs API call |
-| `zapier:google_drive_api_request_beta` | Raw Google Drive API call |
-| `zapier:google_slides_api_request_beta` | Raw Google Slides API call |
-| `zapier:github_submit_review` | Submit PR review on GitHub |
-| `zapier:get_configuration_url` | Returns config URL for this MCP server |
+| `output_hint` | ALWAYS supply — without it, Zapier returns raw JSON blobs that waste context |
+| `instructions` | Plain English, be specific especially for writes and deletes |
+| Named params | Supply directly for critical operations — don't rely on instructions inference alone |
+| Rate limits | Don't loop Zapier calls in bulk. One call per action. |
+| No triggers | Zapier MCP = actions only. App→CORE flows still need a real Zap with trigger. |
 
-Currently only Google Workspace + GitHub. Mostly delete/cleanup operations. Expand to unlock CORE's full potential.
+### output_hint examples
+```
+"just the email ID and subject"
+"confirm success only, no extra data"
+"return task ID and due date only"
+"return file ID and URL only"
+```
 
 ---
 
-## USAGE PATTERNS
+## Currently Enabled Tools (as of 2026-03-13)
 
-Every Zapier tool takes `instructions` (required) + named params (optional).
+| Tool | Domain | Status |
+|---|---|---|
+| `zapier:google_drive_retrieve_files_from_google_drive` | Storage | ✅ Enabled |
+| `zapier:google_drive_delete_file` | Storage | ✅ Enabled |
+| `zapier:google_drive_delete_file_permanent` | Storage | ✅ Enabled |
+| `zapier:google_sheets_delete_spreadsheet_row_s` | Sheets | ✅ Enabled |
+| `zapier:google_sheets_delete_sheet` | Sheets | ✅ Enabled |
+| `zapier:google_sheets_api_request_beta` | Sheets | ✅ Enabled |
+| `zapier:google_docs_api_request_beta` | Docs | ✅ Enabled |
+| `zapier:google_drive_api_request_beta` | Drive | ✅ Enabled |
+| `zapier:google_slides_api_request_beta` | Slides | ✅ Enabled |
+| `zapier:github_submit_review` | GitHub | ✅ Enabled |
+| `zapier:get_configuration_url` | Meta | ✅ Enabled |
+| `zapier:gmail_send_email` | Email | ✅ Enabled (connected 2026-03) |
+| `zapier:gmail_find_email` | Email | ✅ Enabled |
+| `zapier:gmail_create_draft` | Email | ✅ Enabled |
+| `zapier:gmail_reply_to_email` | Email | ✅ Enabled |
+| `zapier:google_calendar_create_detailed_event` | Calendar | ✅ Enabled |
+| `zapier:google_calendar_find_events` | Calendar | ✅ Enabled |
+| `zapier:google_calendar_update_event` | Calendar | ✅ Enabled |
+| `zapier:google_calendar_delete_event` | Calendar | ✅ Enabled |
+| `zapier:todoist_create_task` | Tasks | ✅ Enabled |
+| `zapier:todoist_update_task` | Tasks | ✅ Enabled |
+| `zapier:todoist_mark_task_as_completed` | Tasks | ✅ Enabled |
+| `zapier:todoist_find_task` | Tasks | ✅ Enabled |
+| `zapier:webhooks_by_zapier_post` | Webhooks | ✅ Enabled |
+| `zapier:webhooks_by_zapier_get` | Webhooks | ✅ Enabled |
 
-```
-# Minimal — Zapier infers from instructions
-zapier:google_drive_retrieve_files_from_google_drive(
-    instructions="Find all spreadsheets modified in the last 7 days",
-    output_hint="file name, id, and last modified date"
-)
-
-# Explicit — supply params directly (use for critical writes)
-zapier:google_sheets_delete_spreadsheet_row_s(
-    instructions="Delete the row where status is done",
-    spreadsheet="CORE Task Tracker",
-    worksheet="Sheet1",
-    rows="3",
-    output_hint="confirm deletion success"
-)
-```
-
-**output_hint (REQUIRED on every call):**
-- Without it: Zapier returns large raw JSON blobs — wastes context window
-- Bad: output_hint="the result"
-- Good: output_hint="just the file ID and name"
-- Good: output_hint="confirm success or error message only"
-- Good: output_hint="the new row ID that was created"
-
-**instructions field:** Write like telling a human assistant. Be specific.
-- Bad: instructions="do the thing"
-- Good: instructions="Find the spreadsheet named CORE Evolution Log and return its ID"
-- Good: instructions="Send a Slack message to #core-agi channel saying Step 6 Phase 1 complete"
-
----
-
-## DECISION TREE — Which tool to use?
-
-```
-Need to take an action involving a third-party app?
-    └── Is it already handled by core-agi MCP tools?
-            ├── YES → use core-agi (cheaper, more reliable)
-            └── NO  → Is there a Zapier action for it?
-                        ├── YES, enabled → call zapier:<app>_<action>
-                        ├── YES, not enabled → go to config URL and enable it
-                        └── NO → use Webhooks/HTTP action in Zapier as fallback
-```
-
-**Use Zapier for:** outward-facing actions, human-readable reports, third-party integrations
-**Use core-agi MCP for:** internal state, memory, training pipeline, code
+> **Note:** Items marked ✅ Enabled after 2026-03 need Ki to verify at config URL.
+> This doc reflects the target enabled state from ZAPIER_CONNECTIONS.md P0 tier.
 
 ---
 
-## ARCHITECTURE — Where Zapier fits in CORE
+## P0 Connections — Enable These First
 
-```
-CORE INTERNAL (Supabase + Railway)     CORE EXTERNAL (via Zapier MCP)
-──────────────────────────────────     ─────────────────────────────────
-knowledge_base  ←→ search_kb           Google Workspace  ←→ zapier:google_*
-evolution_queue ←→ list_evolutions     Notion            ←→ zapier:notion_*
-sessions        ←→ sb_insert           Gmail             ←→ zapier:gmail_*
-hot_reflections ←→ add_knowledge       Slack             ←→ zapier:slack_*
-mistakes        ←→ log_mistake         GitHub            ←→ zapier:github_*
-                                       8000+ more        ←→ zapier:*
-```
+These are the minimum viable Zapier connections for CORE autonomy.
+Each requires Ki to connect the app at the config URL.
 
-**RULE: Don't duplicate what CORE MCP already does.**
-- Supabase = CORE's memory → don't replace with Airtable
-- GitHub = CORE's code → don't replace with Drive
-- Telegram = CORE's remote control → Slack is additive, not replacement
-
----
-
-## KNOWN LIMITATIONS
-
-1. Actions must be pre-enabled — tool not found error = go enable it first
-2. instructions is not magic — be explicit for critical writes
-3. No triggers — only actions. App→CORE flows still need a real Zap with trigger.
-4. Rate limits — don't loop over Zapier calls in bulk; batch in Supabase, trigger once
-5. Auth is per-account — MCP server URL contains personal server ID, do not share publicly
-6. output_hint affects response size — always use specific strings
-
----
-
-## EXAMPLE PATTERNS
-
-```
-# Log session summary to Google Sheets
-zapier:google_sheets_create_spreadsheet_row(
-    instructions="Add row to CORE Sessions log",
-    spreadsheet="CORE AGI Sessions",
-    output_hint="confirm row created with row number"
-)
-
-# Notify Ki via Gmail
+### 1. Gmail ✅ (should be connected via claude.ai)
+```python
+# Send session summary to Ki
 zapier:gmail_send_email(
-    instructions="Send email to Ki with subject CORE Evolution Applied, body: [summary]",
-    output_hint="confirm sent, include message ID"
+    instructions="Send email to ki@example.com with subject 'CORE Session Summary' and body {summary}",
+    output_hint="confirm sent, return message ID only"
 )
+```
 
-# Create Notion milestone page
-zapier:notion_create_page(
-    instructions="Create page in CORE Milestones database titled Step 6 Complete 2026-03-12 with status Done",
-    output_hint="return the new page URL"
+### 2. Google Calendar
+```python
+# Schedule next maintenance window
+zapier:google_calendar_create_detailed_event(
+    instructions="Create event 'CORE Maintenance' on {date} at {time} in CORE AGI calendar",
+    output_hint="return event ID and calendar link only"
 )
+```
 
-# Escape hatch — raw API when no action exists
-zapier:google_sheets_api_request_beta(
-    instructions="Append data to CORE log sheet",
-    method="POST",
-    url="https://sheets.googleapis.com/v4/spreadsheets/{id}/values/A1:append",
-    body='{"values": [["2026-03-12", "Step 6", "complete"]]}',
-    output_hint="confirm success"
+### 3. Todoist
+```python
+# Queue a task for Ki's manual action
+zapier:todoist_create_task(
+    instructions="Create task 'Review CORE evolution #{id}' in Inbox with due date today",
+    output_hint="return task ID only"
+)
+```
+
+### 4. Webhooks by Zapier
+```python
+# Emergency fallback — call any URL
+zapier:webhooks_by_zapier_post(
+    instructions="POST to https://core-agi-production.up.railway.app/health with empty body",
+    output_hint="return HTTP status code only"
+)
+```
+
+### 5. Perplexity (requires paid API key)
+```python
+# Real-time web research
+zapier:perplexity_ask_question(
+    instructions="What are the latest Railway.app deployment issues reported in the last 24 hours?",
+    output_hint="2-3 sentence summary only"
 )
 ```
 
 ---
 
-**See also:** docs/ZAPIER_CONNECTIONS.md — full autonomy map, 17 domains, priority connection order
-**Last updated:** 2026-03-12
+## CORE Use Cases
+
+### Alert Ki via email when Railway goes down
+```
+Trigger: CORE detects Railway health check failure
+Action: zapier:gmail_send_email — "CORE Railway is down — {timestamp}"
+```
+
+### Queue manual review tasks for Ki
+```
+Trigger: evolution_queue item needs owner approval
+Action: zapier:todoist_create_task — "Review CORE evolution: {summary}"
+```
+
+### Log CORE costs to Google Sheets
+```
+Trigger: Monthly billing cycle or new service added
+Action: zapier:google_sheets_create_spreadsheet_row — Date, Service, Cost, Notes
+```
+
+### Self-monitor via webhook ping
+```
+Trigger: background_researcher health check loop
+Action: zapier:webhooks_by_zapier_post to /health — verify 200 response
+```
+
+---
+
+## Adding New Actions
+
+1. Go to config URL
+2. Search for app → select actions → save
+3. Immediately available as `zapier:<app>_<action>` in Claude Desktop
+4. Add entry to the "Currently Enabled Tools" table above
+5. Add KB entry: `add_knowledge(domain='zapier', topic='new tool: zapier:...')`
+
+**Rule: Enable only what CORE actively uses. 5-15 focused actions per domain.**
+Too many enabled = Claude picks wrong one when instructions are ambiguous.
+
+---
+
+## What's NOT Possible via Zapier MCP
+
+- Triggers (Zapier → CORE). These require a real Zap with a trigger step.
+- Polling (watch for new emails, etc.). Must be Zap-driven.
+- Bulk operations in loops — rate limits apply.
+- Real-time streaming data.
+
+For triggers/webhooks INTO CORE: use Railway `/telegram` or `/mcp` endpoints as Zap webhook targets.
