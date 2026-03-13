@@ -2310,6 +2310,16 @@ TOOLS = {
                                "desc": "Get URL to the interactive evolution review widget."},
     "check_evolutions":       {"fn": t_check_evolutions,       "perm": "READ",    "args": ["limit"],
                                "desc": "Groq-powered evolution brief. Reads pending evolutions + mistakes + patterns, generates actionable session plan."},
+    "search_in_file":         {"fn": t_search_in_file,         "perm": "READ",    "args": ["path", "pattern", "repo"],
+                               "desc": "Search for pattern in a GitHub file. Returns matching lines with line numbers. Locate functions in core.py without binary-searching."},
+    "multi_patch":            {"fn": t_multi_patch,            "perm": "EXECUTE", "args": ["path", "patches", "message", "repo"],
+                               "desc": "Apply multiple find-replace patches in one fetch+write. patches=JSON array of {old_str,new_str}. Faster than N separate gh_search_replace calls."},
+    "deploy_and_wait":        {"fn": t_deploy_and_wait,        "perm": "EXECUTE", "args": ["reason", "timeout"],
+                               "desc": "Trigger redeploy + poll until success/failure. timeout=seconds (default 120). Replaces redeploy + manual build_status polling."},
+    "ping_health":            {"fn": t_ping_health,            "perm": "READ",    "args": [],
+                               "desc": "Hit live Railway / endpoint. Confirms what version is actually running right now."},
+    "verify_live":            {"fn": t_verify_live,            "perm": "READ",    "args": ["expected_text", "timeout"],
+                               "desc": "Poll /state until expected_text appears. Confirms patch is live post-deploy. timeout=seconds (default 90)."},
 }
 
 # -- MCP JSON-RPC -------------------------------------------------------------
