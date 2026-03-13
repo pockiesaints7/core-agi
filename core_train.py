@@ -10,7 +10,7 @@ Extracted from core.py. Contains:
   - background_researcher
 
 Depends on: core_config, core_github
-NOTE: core.py remains the live entry point until full smoke test passes.
+NOTE: Split architecture is live. core.py has been deleted.
 """
 import json
 import time
