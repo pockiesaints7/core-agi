@@ -2026,53 +2026,42 @@ _startup_times: list = []
 
 
 def t_crash_report() -> dict:
-    """Detect Railway restart loops."""
+    """Detect Railway restart loops via GitHub commit statuses.
+    Railway posts 'failure' state on crash — no RAILWAY_TOKEN needed."""
     try:
-        token      = os.environ.get("RAILWAY_TOKEN", "")
-        service_id = os.environ.get("RAILWAY_SERVICE_ID", "48ad55bd-6be2-4d8a-83df-34fc05facaa2")
-        env_id     = os.environ.get("RAILWAY_ENV_ID",     "ff3f2a4c-4085-445e-88ff-a423862d00e8")
-        if not token:
-            return {"ok": False, "error": "RAILWAY_TOKEN not set"}
-        query = """query($sid:String!,$eid:String!){
-          deployments(serviceId:$sid,environmentId:$eid,first:10){
-            edges{ node{ id status createdAt meta } }
-          }
-        }"""
-        r = httpx.post(
-            "https://backboard.railway.app/graphql/v2",
-            headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
-            json={"query": query, "variables": {"sid": service_id, "eid": env_id}},
-            timeout=15,
-        )
-        data = r.json()
-        if "errors" in data:
-            return {"ok": False, "error": data["errors"][0]["message"]}
-
-        edges = (data.get("data", {}).get("deployments", {}).get("edges", []))
+        h = _ghh()
+        # Get last 10 commits and their Railway deploy statuses
+        r = httpx.get(f"https://api.github.com/repos/{GITHUB_REPO}/commits?per_page=10", headers=h, timeout=10)
+        r.raise_for_status()
+        commits = r.json()
         now = datetime.utcnow()
         cutoff = now - timedelta(seconds=_crash_window_secs)
         failed_recent = []
-        for e in edges:
-            node   = e.get("node", {})
-            status = node.get("status", "")
-            ts_str = node.get("createdAt", "")
-            if status in ("FAILED", "CRASHED", "ERROR"):
-                try:
-                    ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00")).replace(tzinfo=None)
-                    if ts >= cutoff:
-                        meta = node.get("meta") or {}
-                        failed_recent.append({
-                            "id":     node.get("id", "")[:12],
-                            "status": status,
-                            "ts":     ts_str[:19],
-                            "commit": meta.get("commitHash", "")[:10] if isinstance(meta, dict) else "",
-                        })
-                except Exception:
-                    pass
-
-        crash_count = len(failed_recent)
+        for commit in commits:
+            sha = commit["sha"]
+            ts_str = commit.get("commit", {}).get("committer", {}).get("date", "")
+            msg = commit.get("commit", {}).get("message", "")[:60]
+            # Check if within crash window
+            try:
+                ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00")).replace(tzinfo=None)
+                if ts < cutoff:
+                    continue
+            except Exception:
+                continue
+            # Get Railway status
+            sr = httpx.get(f"https://api.github.com/repos/{GITHUB_REPO}/commits/{sha}/statuses", headers=h, timeout=8)
+            statuses = sr.json() if sr.status_code == 200 else []
+            railway = [s for s in statuses if "railway" in s.get("context","").lower() or "railway" in s.get("description","").lower()]
+            st = railway[0] if railway else {}
+            if st.get("state") == "failure":
+                failed_recent.append({
+                    "sha":     sha[:10],
+                    "ts":      ts_str[:19],
+                    "message": msg,
+                    "detail":  st.get("description", ""),
+                })
+        crash_count  = len(failed_recent)
         loop_detected = crash_count > _crash_threshold
-
         if loop_detected:
             sb_post("mistakes", {
                 "domain":           "infrastructure",
@@ -2087,7 +2076,7 @@ def t_crash_report() -> dict:
             notify(
                 f"CORE Restart Loop Detected\n"
                 f"Failures in last hour: {crash_count}\n"
-                f"Recent failed commits: {', '.join(d['commit'] for d in failed_recent[:3])}"
+                f"Recent failed commits: {', '.join(d['sha'] for d in failed_recent[:3])}"
             )
         summary = f"{'Restart loop: ' + str(crash_count) + ' failures' if loop_detected else 'OK - ' + str(crash_count) + ' failures'} in last hour."
         return {
