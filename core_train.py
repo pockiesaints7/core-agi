@@ -775,7 +775,7 @@ def _extract_real_signal() -> bool:
             svc=True)
 
         if not sessions and not mistakes:
-            print("[RESEARCH/REAL] No new sessions or mistakes in last 24h - skipping")
+            print("[RESEARCH/REAL] No new sessions or mistakes since last processed - skipping")
             return False
 
         sessions_text = "\n".join([
