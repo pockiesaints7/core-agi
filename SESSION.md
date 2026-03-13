@@ -94,7 +94,7 @@ Full execution plan: `docs/TASK2_SPLIT_PLAN.md` (2026-03-13)
 - [x] 2.2 core_github.py created — gh_*, notify, set_webhook ✓ (2026-03-13)
 - [x] 2.3 core_train.py created — full training pipeline, 841 lines ✓ (2026-03-13)
 - [x] 2.4 core_tools.py created — all 50 t_* functions + TOOLS dict + handle_jsonrpc, imports from core_config/core_github/core_train ✓ (2026-03-14)
-- [ ] 2.5 core_main.py rewrite — FastAPI + routes + startup, import from above 4 modules
+- [x] 2.5 core_main.py created — FastAPI + routes + startup, imports from 4 modules ✓ (2026-03-14)
 - [ ] 2.6 Smoke test all 50 tools post-split
 - [ ] 2.7 Retire core.py monolith → core_legacy.py
 - [ ] 2.8 Update operating_context.json: entry_point core.py → core_main.py
