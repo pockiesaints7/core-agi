@@ -274,6 +274,49 @@ def gh_write(path, content, msg, repo=None):
     if sha: p["sha"] = sha
     return httpx.put(f"https://api.github.com/repos/{repo}/contents/{path}", headers=h, json=p, timeout=20).is_success
 
+def _gh_blob_read(path, repo=None):
+    """Read file via Git Blobs API — no size limit, works for any file size."""
+    repo = repo or GITHUB_REPO
+    h = _ghh()
+    ref = httpx.get(f"https://api.github.com/repos/{repo}/git/ref/heads/main", headers=h, timeout=10)
+    ref.raise_for_status()
+    commit = httpx.get(f"https://api.github.com/repos/{repo}/git/commits/{ref.json()['object']['sha']}", headers=h, timeout=10)
+    commit.raise_for_status()
+    tree = httpx.get(f"https://api.github.com/repos/{repo}/git/trees/{commit.json()['tree']['sha']}", headers=h, timeout=10)
+    tree.raise_for_status()
+    blob = next((f for f in tree.json()["tree"] if f["path"] == path), None)
+    if not blob: raise FileNotFoundError(f"{path} not found in repo")
+    r = httpx.get(f"https://api.github.com/repos/{repo}/git/blobs/{blob['sha']}",
+                  headers={**h, "Accept": "application/vnd.github.v3.raw"}, timeout=30)
+    r.raise_for_status()
+    return r.text
+
+def _gh_blob_write(path, content, message, repo=None):
+    """Write file via Git Trees API — atomic commit, no size limit."""
+    repo = repo or GITHUB_REPO
+    h = _ghh()
+    ref = httpx.get(f"https://api.github.com/repos/{repo}/git/ref/heads/main", headers=h, timeout=10)
+    ref.raise_for_status()
+    current_sha = ref.json()["object"]["sha"]
+    commit = httpx.get(f"https://api.github.com/repos/{repo}/git/commits/{current_sha}", headers=h, timeout=10)
+    commit.raise_for_status()
+    tree_sha = commit.json()["tree"]["sha"]
+    blob_r = httpx.post(f"https://api.github.com/repos/{repo}/git/blobs", headers=h,
+                        json={"content": content, "encoding": "utf-8"}, timeout=60)
+    blob_r.raise_for_status()
+    new_blob_sha = blob_r.json()["sha"]
+    tree_r = httpx.post(f"https://api.github.com/repos/{repo}/git/trees", headers=h,
+                        json={"base_tree": tree_sha, "tree": [{"path": path, "mode": "100644", "type": "blob", "sha": new_blob_sha}]}, timeout=20)
+    tree_r.raise_for_status()
+    new_tree_sha = tree_r.json()["sha"]
+    commit_r = httpx.post(f"https://api.github.com/repos/{repo}/git/commits", headers=h,
+                          json={"message": message, "tree": new_tree_sha, "parents": [current_sha]}, timeout=15)
+    commit_r.raise_for_status()
+    new_commit_sha = commit_r.json()["sha"]
+    httpx.patch(f"https://api.github.com/repos/{repo}/git/refs/heads/main", headers=h,
+                json={"sha": new_commit_sha}, timeout=15).raise_for_status()
+    return new_commit_sha
+
 # -- Dynamic step label -------------------------------------------------------
 _step_cache: dict = {"label": "unknown", "ts": 0.0}
 _STEP_CACHE_TTL = 300
@@ -1012,32 +1055,25 @@ def t_reject_evolution(evolution_id, reason=""):
     return reject_evolution(eid, reason)
 
 def t_gh_search_replace(path, old_str, new_str, message, repo=""):
+    """Surgical find-replace using Git Blobs API — no file size limit."""
     try:
         repo = repo or GITHUB_REPO
-        r = httpx.get(f"https://api.github.com/repos/{repo}/contents/{path}",
-                      headers=_ghh(), timeout=15)
-        r.raise_for_status()
-        meta = r.json()
-        file_content = base64.b64decode(meta["content"]).decode()
-        sha = meta["sha"]
+        file_content = _gh_blob_read(path, repo)
         if old_str not in file_content:
             return {"ok": False, "error": f"old_str not found in {path}"}
         count = file_content.count(old_str)
         if count > 1:
             return {"ok": False, "error": f"old_str found {count}x - be more specific"}
         new_content = file_content.replace(old_str, new_str, 1)
-        encoded = base64.b64encode(new_content.encode()).decode()
-        pr = httpx.put(f"https://api.github.com/repos/{repo}/contents/{path}",
-                       headers=_ghh(), json={"message": message, "content": encoded, "sha": sha}, timeout=20)
-        ok = pr.is_success
-        return {"ok": ok, "path": path, "replaced": old_str[:80]}
+        commit_sha = _gh_blob_write(path, new_content, message, repo)
+        return {"ok": True, "path": path, "replaced": old_str[:80], "commit": commit_sha[:12]}
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
 
 def t_gh_read_lines(path, start_line=1, end_line=50, repo=""):
     try:
-        file_content = gh_read(path, repo or GITHUB_REPO)
+        file_content = _gh_blob_read(path, repo or GITHUB_REPO)
         lines = file_content.splitlines()
         total = len(lines)
         s = max(1, int(start_line)) - 1
@@ -1056,7 +1092,7 @@ def t_search_in_file(path: str, pattern: str, repo: str = "") -> dict:
     """Search for a pattern in a GitHub file. Returns all matching lines with line numbers.
     Eliminates binary-search round trips when locating functions in large files like core.py."""
     try:
-        content = gh_read(path, repo or GITHUB_REPO)
+        content = _gh_blob_read(path, repo or GITHUB_REPO)
         lines = content.splitlines()
         matches = []
         for i, line in enumerate(lines, 1):
@@ -1069,18 +1105,13 @@ def t_search_in_file(path: str, pattern: str, repo: str = "") -> dict:
 
 
 def t_multi_patch(path: str, patches: str, message: str, repo: str = "") -> dict:
-    """Apply multiple find-replace patches to a file in a single fetch+write.
-    patches = JSON array of {old_str, new_str}. Faster than calling gh_search_replace N times."""
+    """Apply multiple find-replace patches via Git Blobs API — single fetch+write, no size limit.
+    patches = JSON array of {old_str, new_str}."""
     try:
         repo = repo or GITHUB_REPO
         if isinstance(patches, str):
             patches = json.loads(patches)
-        r = httpx.get(f"https://api.github.com/repos/{repo}/contents/{path}",
-                      headers=_ghh(), timeout=15)
-        r.raise_for_status()
-        meta = r.json()
-        content = base64.b64decode(meta["content"]).decode()
-        sha = meta["sha"]
+        content = _gh_blob_read(path, repo)
         applied = []
         skipped = []
         for i, patch in enumerate(patches):
@@ -1095,12 +1126,10 @@ def t_multi_patch(path: str, patches: str, message: str, repo: str = "") -> dict
                 content = content.replace(old, new, 1)
                 applied.append({"index": i, "old_str": old[:60]})
         if not applied:
-            return {"ok": False, "error": "No patches applied", "skipped": skipped}
-        encoded = base64.b64encode(content.encode()).decode()
-        pr = httpx.put(f"https://api.github.com/repos/{repo}/contents/{path}",
-                       headers=_ghh(), json={"message": message, "content": encoded, "sha": sha}, timeout=20)
-        return {"ok": pr.is_success, "path": path, "applied": len(applied),
-                "skipped": len(skipped), "details": applied, "skipped_details": skipped}
+            return {"ok": False, "error": "No patches applied", "skipped": skipped, "skipped_details": skipped}
+        commit_sha = _gh_blob_write(path, content, message, repo)
+        return {"ok": True, "path": path, "applied": len(applied), "skipped": len(skipped),
+                "details": applied, "skipped_details": skipped, "commit": commit_sha[:12]}
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
