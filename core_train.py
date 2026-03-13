@@ -191,11 +191,13 @@ def run_cold_processor():
                           on_conflict="pattern_key")
                 total_freq = batch_count
 
+            # ALLOWED_EVO_TYPES: cold processor only emits knowledge/code/config — never backlog
+            ALLOWED_EVO_TYPES = ["knowledge", "code", "config"]
             if total_freq >= PATTERN_EVO_THRESHOLD and not (existing or {}).get("auto_applied"):
                 base_conf   = min(0.5 + total_freq * 0.05, 0.95)
                 final_conf  = round(base_conf * src_mult, 3)
                 ok = sb_post_critical("evolution_queue", {
-                    "change_type":    "knowledge",
+                    "change_type":    "knowledge",  # always knowledge from cold processor — owner decides backlog
                     "change_summary": f"Recurring pattern ({total_freq}x, src={src_key}): {key[:200]}",
                     "pattern_key":    key,
                     "confidence":     final_conf,
