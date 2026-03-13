@@ -81,7 +81,7 @@ When user says "activate autonomous mode":
 - [x] 1.5 Delete TRAINING_DESIGN.md ✓ (done prior session)
 - [x] 1.6 Delete GOD_MODE_PLAN.md ✓ (done prior session)
 - [x] 1.7 Delete MANIFEST.md ✓ (done prior session)
-- [ ] 1.8 Delete BACKLOG.md (stub still exists on GitHub)
+- [x] 1.8 Delete BACKLOG.md (deleted 2026-03-13, was broken 404 stub)
 - [x] 1.9 Delete TOOL_AUDIT_TEST.md ✓ (done prior session)
 - [x] 1.10 Delete docs/HANDOFF_redeploy_fix.md ✓ (done prior session)
 - [ ] 1.11 Purge remaining Jarvis OS KB entries (verify clean)
