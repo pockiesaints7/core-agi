@@ -1,7 +1,7 @@
 # CORE SESSION MASTER
 > Last updated: 2026-03-14 | Owner: REINVAGNAR | Version: CORE v6.0
 
-## Current Step: TASK 8 -- Improve CORE patching tools. Start with 8.1 patch_file (server-side patch + py_compile + push), then 8.2 validate_syntax, then 8.3 append_to_file.
+## Current Step: TASK 9 — TBD. Task 8 complete. All three patching tools live: patch_file, validate_syntax, append_to_file.
 
 ### TASK 8 -- Patch Tooling Improvement
 **Problem:** Patching large .py files (core_tools.py, core_train.py) currently requires:
@@ -15,9 +15,9 @@ No syntax validation before push = preventable crashes.
 - Without manual Python patch scripts written each session
 
 **Proposed solutions to design and implement:**
-- [ ] 8.1 `patch_file` tool: takes path + list of {old_str, new_str} patches, fetches file on Railway server-side, applies patches, runs py_compile, pushes -- never sends file content to Claude context
-- [ ] 8.2 `validate_syntax` tool: py_compile check on any GitHub file server-side, returns ok/error before any push
-- [ ] 8.3 `append_to_file` tool: appends a new function/block to end of a GitHub file without fetching full content -- for adding new tools to core_tools.py
+- [x] 8.1 `patch_file` tool: takes path + list of {old_str, new_str} patches, fetches file on Railway server-side, applies patches, runs py_compile, pushes -- never sends file content to Claude context
+- [x] 8.2 `validate_syntax` tool: py_compile check on any GitHub file server-side, returns ok/error before any push
+- [x] 8.3 `append_to_file` tool: appends a new function/block to end of a GitHub file without fetching full content -- for adding new tools to core_tools.py
 - [ ] 8.4 Update patching KB rules to reflect new tools once built
 
 **Why this is important:** Every large patch session wastes 30-50% of context budget just on file I/O.
@@ -252,6 +252,7 @@ Current Step in SESSION.md is often stale across sessions — it said "Task 3 in
 
 | Date | Summary | Key Actions |
 |---|---|------|
+| 2026-03-14 | Task 8 complete. Added three server-side patching tools to C | added t_patch_file to core_tools.py, added t_validate_syntax to core_tools.py, added t_append_to_file to core_tools.py (+5 more) |
 | 2026-03-14 | Task 8 registered in SESSION.md: improve CORE patching tools | 1. Registered Task 8 in SESSION.md -- patch tooling improvement. 2. Updated Current Step to Task 8. 3. Cleaned up tmp files from this session. |
 | 2026-03-14 | Three main deliverables this session. (1) Root cause found f | 1. Found root cause of add_knowledge failures: wrong confidence values. 2. Logged mistake + KB rule for confidence mapping. 3. Seeded 8 default KB entries (electrical_eng x2, core_agi x2, agentic x2 (+2 more) |
 | 2026-03-14 | Three-task cleanup session. (1) system_map cleanup: tombston | 1. Tombstoned CORE_AGI_SKILL_v2.md in system_map, registered V4. 2. Registered 6 untracked local files in system_map. 3. Deleted AGI-MASTERPROMPT.md + STEPS_tmp.md locally and tombstoned in system_map. 4. Patched core_tools.py: stubbed t_mine_kb/t_get_backlog/t_backlog_update, removed from TOOLS registry (-1530 chars). 5. Patched core_train.py: stubbed run_kb_mining (+4 more) |
