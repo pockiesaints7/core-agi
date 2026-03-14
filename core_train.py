@@ -279,6 +279,7 @@ def run_cold_processor():
 
         period_start      = datetime.utcnow().isoformat()
         evolutions_queued = 0
+        auto_applied_count = 0
         batch_counts: Counter = Counter()
         batch_domain: dict    = {}
         batch_sources: dict   = {}
@@ -373,7 +374,7 @@ def run_cold_processor():
         sb_post_critical("cold_reflections", {
             "period_start": period_start, "period_end": datetime.utcnow().isoformat(),
             "hot_count": len(hots), "patterns_found": len(batch_counts),
-            "evolutions_queued": evolutions_queued, "auto_applied": 0,
+            "evolutions_queued": evolutions_queued, "auto_applied": auto_applied_count,
             "summary_text": summary_text[:2000],
         })
         for h in hots:
