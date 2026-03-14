@@ -830,6 +830,35 @@ Output ONLY valid JSON, no preamble."""
         return False
 
 
+# -- Public source ingestion ---------------------------------------------------
+def _ingest_public_sources() -> str:
+    """Fetch 2 public GitHub README sources per cycle (rotated by hour).
+    Returns combined trimmed content string, or empty string on failure.
+    Never raises -- always fails silently.
+    """
+    sources = [
+        "https://raw.githubusercontent.com/langchain-ai/langchain/master/README.md",
+        "https://raw.githubusercontent.com/openai/openai-cookbook/main/README.md",
+        "https://raw.githubusercontent.com/anthropics/anthropic-sdk-python/main/README.md",
+        "https://raw.githubusercontent.com/tiangolo/fastapi/master/README.md",
+        "https://raw.githubusercontent.com/crewAIInc/crewAI/main/README.md",
+    ]
+    hour_slot = int(time.time() // 3600) % len(sources)
+    to_fetch = [sources[hour_slot], sources[(hour_slot + 1) % len(sources)]]
+    combined = []
+    headers = {"User-Agent": "CORE-AGI/6.0"}
+    for url in to_fetch:
+        try:
+            r = httpx.get(url, timeout=8, follow_redirects=True, headers=headers)
+            if r.status_code == 200:
+                text = r.text.strip()[:2000]
+                source_name = url.split("/")[4]  # repo owner as label
+                combined.append(f"[{source_name}]\n{text}")
+        except Exception:
+            pass  # fail silently
+    return "\n\n".join(combined)
+
+
 # -- Background researcher -----------------------------------------------------
 def background_researcher():
     global _last_research_run
