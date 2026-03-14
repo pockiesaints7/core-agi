@@ -295,10 +295,18 @@ def run_cold_processor():
                     raw_patterns = [x.strip() for x in raw_patterns.replace("\n", ",").split(",") if x.strip()]
             for p in raw_patterns:
                 if p and isinstance(p, str) and len(p) > 3:
-                    key = str(p)[:200]
+                    key = str(p)[:500]  # raised from 200 -- long patterns need full key for identity
                     batch_counts[key] += 1
                     batch_domain.setdefault(key, h.get("domain", "general"))
                     batch_sources.setdefault(key, set()).add(src)
+
+        # --- Semantic clustering: merge near-identical patterns before counting ---
+        # Fixes fragmentation bug: same concept with different wording = separate keys
+        # that never accumulate past threshold. Groq clusters them into canonical keys.
+        if len(batch_counts) > 1:
+            batch_counts, batch_domain, batch_sources = _groq_cluster_patterns(
+                batch_counts, batch_domain, batch_sources
+            )
 
         all_pf = {r["pattern_key"]: r for r in sb_get(
             "pattern_frequency", "select=id,pattern_key,frequency,auto_applied&limit=2000", svc=True
@@ -326,7 +334,15 @@ def run_cold_processor():
                 total_freq = batch_count
 
             # ALLOWED_EVO_TYPES: cold processor only emits knowledge/code/config — never backlog
-            if total_freq >= PATTERN_EVO_THRESHOLD and not (existing or {}).get("auto_applied"):
+            # auto_applied fix: re-queue at milestone frequencies (10, 25, 50) so high-frequency
+            # patterns get re-evaluated as KB entries, not permanently silenced after first queue.
+            _milestones = {10, 25, 50, 100}
+            _already_applied = (existing or {}).get("auto_applied", False)
+            _at_milestone = total_freq in _milestones
+            _should_queue = total_freq >= PATTERN_EVO_THRESHOLD and (
+                not _already_applied or _at_milestone
+            )
+            if _should_queue:
                 base_conf  = min(0.5 + total_freq * 0.05, 0.95)
                 final_conf = round(base_conf * src_mult, 3)
 
