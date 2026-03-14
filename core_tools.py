@@ -2154,6 +2154,8 @@ TOOLS = {
 # -- MCP JSON-RPC handler ------------------------------------------------------
 def _mcp_tool_schema(name, tool):
     # Params that should be typed as array (not string) in MCP schema
+    # NOTE: 'actions' removed as emergency workaround -- session_end still splits by comma.
+    # Re-add 'actions' here AFTER t_session_end handles array input (TASK-13.C.4).
     _ARRAY_PARAMS = {"patches", "project_ids", "ids", "files", "edits"}
     props = {}
     for a in tool["args"]:
