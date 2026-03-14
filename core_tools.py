@@ -1193,6 +1193,7 @@ def t_stats():
             "top_patterns": [{"pattern": p.get("pattern_key","")[:80], "freq": p.get("frequency",0), "domain": p.get("domain","")} for p in patterns],
             "evolution_queue": dict(evo_counts),
             "last_cold_processor_run": last_cold,
+            "quality_trend_7d": t_get_quality_trend("7"),
         }
     except Exception as e:
         return {"ok": False, "error": str(e)}
