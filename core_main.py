@@ -282,8 +282,8 @@ function render(){
   const el=document.getElementById('list');
   if(!evos.length){el.innerHTML='<p style="color:#555;font-size:13px">No pending evolutions.</p>';return;}
   el.innerHTML=evos.map(e=>{
-    const p=(e.change_summary||'').match(/P(\d)/)?.[1]||'3';
-    const t=(e.change_summary||'').replace(/\[.*?\]/g,'').replace(/^\s*:\s*/,'').trim().slice(0,80);
+    const p=(e.change_summary||'').match(/P(\\d)/)?.[1]||'3';
+    const t=(e.change_summary||'').replace(/\\[.*?\\]/g,'').replace(/^\\s*:\\s*/,'').trim().slice(0,80);
     return '<div class="card" id="c'+e.id+'" onclick="pick('+e.id+')"><div class="meta"><span class="badge p'+p+'">P'+p+'</span><span class="badge btype">'+e.change_type+'</span><span class="conf">conf: '+(e.confidence||0).toFixed(2)+'</span></div><div class="etitle">#'+e.id+' &mdash; '+(t||e.change_summary?.slice(0,80)||'unnamed')+'</div></div>';
   }).join('');
 }
@@ -597,7 +597,7 @@ def queue_poller():
                     priority = t.get("priority", 0)
                     source = t.get("source", "unknown")
                     notify(
-                        f"📋 Pending task (P{priority}) from {source}:\n"
+                        f"Pending task (P{priority}) from {source}:\n"
                         f"`{task_text}`\n"
                         f"ID: `{tid}`\n"
                         f"Review via Claude Desktop → task_queue"

@@ -748,3 +748,200 @@ def t_session_end(summary: str, actions: str, domain: str = "general",
         }
     except Exception as e:
         return {"ok": False, "error": str(e)}
+
+
+# -- Stubs for Telegram commands (implement fully when backlog table confirmed) --
+def t_get_backlog(status: str = "pending", limit: int = 10, min_priority: int = 1) -> dict:
+    """Fetch backlog items from task_queue."""
+    try:
+        qs = f"select=id,type,task,priority,status,description&status=eq.{status}&priority=gte.{min_priority}&order=priority.desc&limit={limit}"
+        rows = sb_get("task_queue", qs, svc=True)
+        if not isinstance(rows, list):
+            rows = []
+        # Normalize: use 'task' as 'title' if no dedicated title column
+        items = []
+        for r in rows:
+            items.append({
+                "id": r.get("id"),
+                "type": r.get("type", "task"),
+                "title": r.get("task", "")[:80],
+                "description": r.get("description", ""),
+                "priority": r.get("priority", 1),
+                "status": r.get("status", "pending"),
+            })
+        try:
+            total_r = httpx.get(
+                f"{SUPABASE_URL}/rest/v1/task_queue?select=id&limit=1",
+                headers=_sbh_count_svc(), timeout=10
+            )
+            total = int(total_r.headers.get("content-range", "*/0").split("/")[-1])
+        except Exception:
+            total = -1
+        return {"ok": True, "items": items, "filtered": len(items), "total": total}
+    except Exception as e:
+        return {"ok": False, "items": [], "filtered": 0, "total": 0, "error": str(e)}
+
+
+def t_project_list() -> dict:
+    """List all projects from KB (domain=project:*)."""
+    try:
+        rows = sb_get("knowledge_base", "select=domain,topic,content&domain=ilike.project:*&limit=50", svc=True)
+        if not isinstance(rows, list):
+            rows = []
+        projects = []
+        for r in rows:
+            domain = r.get("domain", "")
+            pid = domain.replace("project:", "") if domain.startswith("project:") else domain
+            projects.append({
+                "project_id": pid,
+                "name": r.get("topic", pid),
+                "status": "active",
+                "summary": r.get("content", "")[:120],
+            })
+        return {"ok": True, "projects": projects, "count": len(projects)}
+    except Exception as e:
+        return {"ok": False, "projects": [], "error": str(e)}
+
+
+def t_project_prepare(project_ids: str) -> dict:
+    """Prepare project context — fetch KB entries for given project IDs."""
+    try:
+        ids = [i.strip() for i in project_ids.split(",") if i.strip()]
+        prepared = []
+        context = {}
+        for pid in ids:
+            rows = sb_get("knowledge_base",
+                f"select=topic,content,confidence&domain=eq.project:{pid}&limit=20", svc=True)
+            if isinstance(rows, list) and rows:
+                context[pid] = rows
+                prepared.append(pid)
+        return {"ok": True, "prepared": prepared, "context": context}
+    except Exception as e:
+        return {"ok": False, "prepared": [], "error": str(e)}
+
+
+# ---------------------------------------------------------------------------
+# TOOLS registry — maps MCP tool names to functions + metadata
+# ---------------------------------------------------------------------------
+TOOLS = {
+    "state":                  {"fn": t_state,               "perm": "read",  "args": {}},
+    "health":                 {"fn": t_health,              "perm": "read",  "args": {}},
+    "constitution":           {"fn": t_constitution,        "perm": "read",  "args": {}},
+    "search_kb":              {"fn": t_search_kb,           "perm": "read",  "args": {"query": "", "domain": "", "limit": 10}},
+    "get_mistakes":           {"fn": t_get_mistakes,        "perm": "read",  "args": {"domain": "", "limit": 10}},
+    "update_state":           {"fn": t_update_state,        "perm": "write", "args": {"key": "", "value": "", "reason": ""}},
+    "add_knowledge":          {"fn": t_add_knowledge,       "perm": "write", "args": {"domain": "", "topic": "", "content": "", "tags": "", "confidence": "medium"}},
+    "log_mistake":            {"fn": t_log_mistake,         "perm": "write", "args": {"context": "", "what_failed": "", "fix": "", "domain": "general", "root_cause": "", "how_to_avoid": "", "severity": "medium"}},
+    "read_file":              {"fn": t_read_file,           "perm": "read",  "args": {"path": "", "repo": ""}},
+    "write_file":             {"fn": t_write_file,          "perm": "write", "args": {"path": "", "content": "", "message": "", "repo": ""}},
+    "notify":                 {"fn": t_notify,              "perm": "write", "args": {"message": "", "level": "info"}},
+    "sb_query":               {"fn": t_sb_query,            "perm": "read",  "args": {"table": "", "filters": "", "limit": 20}},
+    "sb_insert":              {"fn": t_sb_insert,           "perm": "write", "args": {"table": "", "data": ""}},
+    "sb_bulk_insert":         {"fn": t_sb_bulk_insert,      "perm": "write", "args": {"table": "", "rows": ""}},
+    "training_status":        {"fn": t_training_status,     "perm": "read",  "args": {}},
+    "trigger_cold_processor": {"fn": t_trigger_cold_processor, "perm": "exec", "args": {}},
+    "list_evolutions":        {"fn": t_list_evolutions,     "perm": "read",  "args": {"status": "pending"}},
+    "bulk_reject_evolutions": {"fn": t_bulk_reject_evolutions, "perm": "write", "args": {"change_type": "", "ids": "", "reason": "", "include_synthesized": "false"}},
+    "check_evolutions":       {"fn": t_check_evolutions,    "perm": "read",  "args": {"limit": 20}},
+    "approve_evolution":      {"fn": t_approve_evolution,   "perm": "write", "args": {"evolution_id": ""}},
+    "reject_evolution":       {"fn": t_reject_evolution,    "perm": "write", "args": {"evolution_id": "", "reason": ""}},
+    "gh_search_replace":      {"fn": t_gh_search_replace,   "perm": "write", "args": {"path": "", "old_str": "", "new_str": "", "message": "", "repo": "", "dry_run": "false"}},
+    "gh_read_lines":          {"fn": t_gh_read_lines,       "perm": "read",  "args": {"path": "", "start_line": 1, "end_line": 50, "repo": ""}},
+    "core_py_fn":             {"fn": t_core_py_fn,          "perm": "read",  "args": {"fn_name": "", "file": "core_tools.py"}},
+    "session_start":          {"fn": t_session_start,       "perm": "read",  "args": {}},
+    "session_end":            {"fn": t_session_end,         "perm": "write", "args": {"summary": "", "actions": "", "domain": "general", "patterns": "", "quality": "0.8", "completed_tasks": "", "new_step": ""}},
+    "core_py_validate":       {"fn": t_core_py_validate,    "perm": "read",  "args": {}},
+    "search_in_file":         {"fn": t_search_in_file,      "perm": "read",  "args": {"path": "", "pattern": "", "repo": "", "regex": "false", "case_sensitive": "false"}},
+    "multi_patch":            {"fn": t_multi_patch,         "perm": "write", "args": {"path": "", "patches": "", "message": "", "repo": ""}},
+    "get_backlog":            {"fn": t_get_backlog,         "perm": "read",  "args": {"status": "pending", "limit": 10, "min_priority": 1}},
+    "project_list":           {"fn": t_project_list,        "perm": "read",  "args": {}},
+    "project_prepare":        {"fn": t_project_prepare,     "perm": "read",  "args": {"project_ids": ""}},
+}
+
+
+# ---------------------------------------------------------------------------
+# JSON-RPC 2.0 dispatcher — called by core_main.py MCP routes
+# ---------------------------------------------------------------------------
+def handle_jsonrpc(body: dict):
+    """Handle a single JSON-RPC 2.0 request. Returns response dict or None for notifications."""
+    method = body.get("method", "")
+    params = body.get("params", {})
+    req_id = body.get("id")
+
+    # Notifications (no id) — fire and forget
+    if req_id is None and method not in ("initialize", "ping"):
+        return None
+
+    def ok(result):
+        return {"jsonrpc": "2.0", "id": req_id, "result": result}
+
+    def err(code, msg):
+        return {"jsonrpc": "2.0", "id": req_id, "error": {"code": code, "message": msg}}
+
+    # --- MCP lifecycle ---
+    if method == "initialize":
+        return ok({
+            "protocolVersion": MCP_PROTOCOL_VERSION,
+            "serverInfo": {"name": "CORE AGI", "version": "6.0"},
+            "capabilities": {"tools": {"listChanged": False}},
+        })
+
+    if method == "ping":
+        return ok({})
+
+    if method == "notifications/initialized":
+        return None
+
+    # --- Tool listing ---
+    if method == "tools/list":
+        tools_list = []
+        for name, meta in TOOLS.items():
+            schema_props = {}
+            required = []
+            for arg_name, default in meta["args"].items():
+                if isinstance(default, bool):
+                    schema_props[arg_name] = {"type": "boolean"}
+                elif isinstance(default, int):
+                    schema_props[arg_name] = {"type": "integer"}
+                elif isinstance(default, float):
+                    schema_props[arg_name] = {"type": "number"}
+                else:
+                    schema_props[arg_name] = {"type": "string"}
+                # Mark as required only if default is empty string (mandatory text args)
+                if default == "" and arg_name not in ("repo", "tags", "root_cause", "how_to_avoid",
+                                                       "domain", "filters", "reason", "dry_run",
+                                                       "patterns", "completed_tasks", "new_step",
+                                                       "regex", "case_sensitive", "include_synthesized"):
+                    required.append(arg_name)
+            tools_list.append({
+                "name": name,
+                "description": (meta["fn"].__doc__ or name).strip().split("\n")[0][:120],
+                "inputSchema": {
+                    "type": "object",
+                    "properties": schema_props,
+                    "required": required,
+                },
+            })
+        return ok({"tools": tools_list})
+
+    # --- Tool call ---
+    if method == "tools/call":
+        tool_name = params.get("name", "")
+        args = params.get("arguments", {})
+        if tool_name not in TOOLS:
+            return err(-32601, f"Tool not found: {tool_name}")
+        try:
+            result = TOOLS[tool_name]["fn"](**args) if args else TOOLS[tool_name]["fn"]()
+            # MCP spec: result must be {content: [{type, text}]}
+            result_text = json.dumps(result, default=str)
+            return ok({"content": [{"type": "text", "text": result_text}]})
+        except TypeError as e:
+            return err(-32602, f"Invalid params for {tool_name}: {e}")
+        except Exception as e:
+            return err(-32603, f"Tool error ({tool_name}): {e}")
+
+    # --- Resources (stub — not used but some clients probe) ---
+    if method in ("resources/list", "prompts/list"):
+        return ok({"resources": []} if "resources" in method else {"prompts": []})
+
+    return err(-32601, f"Method not found: {method}")
