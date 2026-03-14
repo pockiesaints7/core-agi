@@ -1608,7 +1608,7 @@ _startup_times: list = []
 def t_crash_report() -> dict:
     try:
         h = _ghh()
-        r = httpx.get(f"https://api.github.com/repos/{GITHUB_REPO}/commits?per_page=10", headers=h, timeout=10)
+        r = httpx.get(f"https://api.github.com/repos/{GITHUB_REPO}/commits?per_page=5", headers=h, timeout=10)
         r.raise_for_status()
         commits = r.json()
         now = datetime.utcnow()
