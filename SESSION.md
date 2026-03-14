@@ -1,7 +1,7 @@
 # CORE SESSION MASTER
 > Last updated: 2026-03-14 | Owner: REINVAGNAR | Version: CORE v6.0
 
-## Current Step: TASK-9.C: Session Quality Scoring. 9.C.1 create session_quality table. 9.C.2 patch session_end to compute+insert. 9.C.3 get_quality_trend tool. 9.C.4 stats() trend.
+## Current Step: TASK-9.C: Session Quality Scoring. 9.C.1 create session_quality table. 9.C.2 patch session_end to compute+insert. 9.C.3 get_quality_trend tool. 9.C.4 stats() integration.
 > Stored in Supabase. Query at session start:
 > `sb_query table=task_queue filters=source=eq.core_v6_registry&status=eq.pending&order=priority.desc`
 
@@ -118,6 +118,7 @@ Task history (Tasks 1–11 registered 2026-03-14):
 
 | Date | Summary | Key Actions |
 |---|---|------|
+| 2026-03-14 | Two architectural changes this session. TASK-17: auto-apply  | {'action': 'patch core_train.py: TASK-17 auto-apply gate in run_cold_processor'}, {'action': 'patch core_tools.py: synthesize_evolutions stripped to pure data fetcher'}, {'action': 'changelog_add x2'} (+2 more) |
 | 2026-03-14 | Rewrote synthesize_evolutions from a context-assembler-for-C | {'action': 'rewrote t_synthesize_evolutions: Groq acts as architect server-side, reads 5 signal sources, generates 3-8 structured JSON tasks, inserts into task_queue source=core_v6_registry, marks evolutions synthesized, sends Telegram notify'}, {'action': 'updated TOOLS dict desc for synthesize_evolutions: perm READ->WRITE, desc reflects new behavior'}, {'action': 'changelog_add'} |
 | 2026-03-14 | Full evolution pipeline cycle completed: 2 pending evolution | {'action': 'synthesize_evolutions: 2 pending evolutions synthesized, architect blueprint produced'}, {'action': 'applied evolution 299 to KB: core_agi.code_patching / read_before_patch_rule'}, {'action': 'applied evolution 300 to KB: core_agi.training / cold_reflections_audit_trail'} (+4 more) |
 | 2026-03-14 | Fixed all 3 cold processor bugs that were silently killing t | {'action': 'diagnosed 3 cold processor bugs: pattern fragmentation, auto_applied permanent block, 200-char key truncation'}, {'action': 'appended _groq_cluster_patterns() to core_train.py -- semantic deduplication before counting'}, {'action': 'patched run_cold_processor: wired clustering, raised key truncation to 500, added milestone re-queuing at freq 10/25/50/100'} (+3 more) |
