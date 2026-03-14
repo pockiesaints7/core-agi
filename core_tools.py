@@ -2415,6 +2415,70 @@ def t_add_evolution_rule(
         return {"ok": False, "error": str(e)}
 
 
+def t_get_quality_trend(days: str = "7") -> dict:
+    """Return session quality trend for the last N days.
+    Shows daily average quality score, overall trend direction, and best/worst day."""
+    try:
+        d = int(days) if days else 7
+        cutoff = (datetime.utcnow() - timedelta(days=d)).isoformat()
+        rows = sb_get(
+            "hot_reflections",
+            f"select=quality_score,created_at,domain,source&quality_score=not.is.null"
+            f"&source=eq.real&created_at=gte.{cutoff}&order=created_at.asc",
+            svc=True
+        ) or []
+        if not rows:
+            return {"ok": True, "days": d, "entries": 0, "trend": "no_data",
+                    "daily": [], "avg": None, "best_day": None, "worst_day": None}
+
+        # Group by day
+        daily: dict = {}
+        for r in rows:
+            day = r.get("created_at", "")[:10]
+            score = float(r.get("quality_score", 0))
+            if day not in daily:
+                daily[day] = []
+            daily[day].append(score)
+
+        daily_avgs = [
+            {"date": day, "avg": round(sum(scores) / len(scores), 3), "count": len(scores)}
+            for day, scores in sorted(daily.items())
+        ]
+
+        all_scores = [r["avg"] for r in daily_avgs]
+        overall_avg = round(sum(all_scores) / len(all_scores), 3)
+
+        # Trend: compare first half vs second half
+        mid = len(all_scores) // 2
+        if mid > 0 and len(all_scores) >= 2:
+            first_half = sum(all_scores[:mid]) / mid
+            second_half = sum(all_scores[mid:]) / len(all_scores[mid:])
+            if second_half - first_half > 0.03:
+                trend = "improving"
+            elif first_half - second_half > 0.03:
+                trend = "declining"
+            else:
+                trend = "stable"
+        else:
+            trend = "stable"
+
+        best = max(daily_avgs, key=lambda x: x["avg"])
+        worst = min(daily_avgs, key=lambda x: x["avg"])
+
+        return {
+            "ok": True,
+            "days": d,
+            "entries": len(rows),
+            "overall_avg": overall_avg,
+            "trend": trend,
+            "daily": daily_avgs,
+            "best_day": best,
+            "worst_day": worst,
+        }
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
 # -- Tool registry ------------------------------------------------------------
 TOOLS = {
     "get_state":              {"fn": t_state,                  "perm": "READ",    "args": [],
