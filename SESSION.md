@@ -1,7 +1,7 @@
 # CORE SESSION MASTER
 > Last updated: 2026-03-14 | Owner: REINVAGNAR | Version: CORE v6.0
 
-## Current Step: TASK-16.B: executor layer auto-sync — GitHub API list repo root .py files, diff vs system_map executor file entries, insert new, tombstone removed. Wire into t_system_map_scan(session_end) after brain reconciliation block. Then 16.C (skeleton .md/.json docs). Then 16.D (skill update). Then 16.E (session_start drift summary).
+## Current Step: TASK-16.B: executor layer auto-sync -- GitHub API list repo root .py files, diff vs system_map executor file entries, insert new, tombstone removed. Wire into t_system_map_scan(session_end) after brain reconciliation block.
 > Stored in Supabase. Query at session start:
 > `sb_query table=task_queue filters=source=eq.core_v6_registry&status=eq.pending&order=priority.desc`
 
@@ -118,6 +118,7 @@ Task history (Tasks 1–11 registered 2026-03-14):
 
 | Date | Summary | Key Actions |
 |---|---|------|
+| 2026-03-14 | Two owner directives executed. (1) Taught CORE skill file lo | {'action': 'kb_update domain=system.config topic=skill_file_location -- skill file path + upload protocol'}, {'action': 'kb_update domain=system.zapier topic=tool_priority_and_connections -- Zapier rank 1, active connections, config URL'}, {'action': 'kb_update domain=system.config topic=tool_namespace_priority -- full 7-rank priority table'} (+3 more) |
 | 2026-03-14 | Two major fixes this session. (1) TASK-16.A complete: _recon | {'action': 'patched core_tools.py: replace deploy_and_wait 120s polling loop with thin build_status wrapper'}, {'action': 'patched SESSION.md: updated deploy SOP rule'}, {'action': 'kb_update domain=core_agi.deploy topic=deploy_sop with new SOP'} (+8 more) |
 | 2026-03-14 | Made system_map executor.tool layer fully automatic and vers | session_start, build confirmed success, patch t_system_map_scan — auto-reconcile tools at session_end (+6 more) |
 | 2026-03-14 | Session focused on Layer 3 S-END-5 system_map reconciliation | session_start, S-START-2 tool count verified: 71 live = 71 Telegram, task_queue statuses audited and corrected by UUID (+2 more) |
