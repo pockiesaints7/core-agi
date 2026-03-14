@@ -365,6 +365,17 @@ def run_cold_processor():
                     sb_upsert("pattern_frequency",
                               {"pattern_key": key, "auto_applied": True},
                               on_conflict="pattern_key")
+                    # TASK-17: auto-apply gate -- knowledge + confidence>=0.65 + source=real
+                    # code/config/new_tool always require owner review
+                    if final_conf >= 0.65 and src_key == "real":
+                        new_evo = sb_get("evolution_queue",
+                            f"select=id&pattern_key=eq.{key[:100]}&status=eq.pending&order=id.desc&limit=1",
+                            svc=True)
+                        if new_evo:
+                            result = apply_evolution(new_evo[0]["id"])
+                            if result.get("ok"):
+                                auto_applied_count += 1
+                                print(f"[COLD] Auto-applied evolution #{new_evo[0]['id']}: {key[:80]}")
 
         # Groq synthesizes a meaningful cold reflection summary
         groq_summary = _groq_synthesize_cold(hots, batch_counts, batch_domain)
@@ -380,9 +391,9 @@ def run_cold_processor():
         for h in hots:
             sb_patch("hot_reflections", f"id=eq.{h['id']}", {"processed_by_cold": 1})
         if evolutions_queued > 0:
-            notify(f"Cold processor: {evolutions_queued} evolution(s) queued.\n{groq_summary[:300]}\nReview via Claude Desktop.")
-        print(f"[COLD] Done: processed={len(hots)} patterns={len(batch_counts)} evolutions={evolutions_queued}")
-        return {"ok": True, "processed": len(hots), "patterns_found": len(batch_counts), "evolutions_queued": evolutions_queued}
+            notify(f"Cold processor: {evolutions_queued} evolution(s) queued, {auto_applied_count} auto-applied.\n{groq_summary[:300]}\nPending owner review: {evolutions_queued - auto_applied_count}")
+        print(f"[COLD] Done: processed={len(hots)} patterns={len(batch_counts)} evolutions={evolutions_queued} auto_applied={auto_applied_count}")
+        return {"ok": True, "processed": len(hots), "patterns_found": len(batch_counts), "evolutions_queued": evolutions_queued, "auto_applied": auto_applied_count}
     except Exception as e:
         print(f"[COLD] error: {e}")
         return {"ok": False, "error": str(e)}
