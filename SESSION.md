@@ -1,7 +1,7 @@
 # CORE SESSION MASTER
 > Last updated: 2026-03-14 | Owner: REINVAGNAR | Version: CORE v6.0
 
-## Current Step: TASK-9.C: Session Quality Scoring. 9.C.1 create session_quality table. 9.C.2 patch session_end to compute+insert. 9.C.3 get_quality_trend tool. 9.C.4 stats() integration.
+## Current Step: TASK-9.C: Session Quality Scoring. 9.C.1 create session_quality table. 9.C.2 patch session_end to compute+insert. 9.C.3 get_quality_trend tool. 9.C.4 stats() integration. Also verify simulation entries appear in hot_reflections after next researcher cycle.
 > Stored in Supabase. Query at session start:
 > `sb_query table=task_queue filters=source=eq.core_v6_registry&status=eq.pending&order=priority.desc`
 
@@ -118,6 +118,7 @@ Task history (Tasks 1–11 registered 2026-03-14):
 
 | Date | Summary | Key Actions |
 |---|---|------|
+| 2026-03-14 | Investigated simulation mode producing zero entries. Root ca | {'action': 'investigated simulation mode -- zero entries ever generated'}, {'action': 'root cause: processed_by_cold=False (bool) not 0 (int) -- both background researcher insert points'}, {'action': 'patch_file core_train.py: fixed both _run_simulation_batch and _extract_real_signal'} (+4 more) |
 | 2026-03-14 | TASK-21 fully complete. All 5 subtasks done: (A) add_evoluti | {'action': 'TASK-21.D: backfilled all Section 12 hard rules to KB as proven instruction entries (10 entries)'}, {'action': 'TASK-21.E: updated skill file Layer 2 S2 with complete 3-step evolution persistence flow'}, {'action': 'updated Layer 2 footer timestamp'} (+2 more) |
 | 2026-03-14 | TASK-21.A complete. t_add_evolution_rule() built and deploye | {'action': 'patch_file core_tools.py: added t_add_evolution_rule() before TOOLS dict'}, {'action': 'patch_file core_tools.py: registered add_evolution_rule in TOOLS dict'}, {'action': 'verified both commits green: a279f7c37e53 + 45e80a4be8f1'} (+2 more) |
 | 2026-03-14 | Owner caught ambiguous wording: NEVER push to GitHub written | {'action': 'filesystem:edit_file skill file Rules 25-26-27: reworded to be specific to CORE_AGI_SKILL_V4.md only, clarified all other CORE files go to GitHub normally'}, {'action': 'edit Layer 2 S2 Write-Back: same clarification added'}, {'action': 'sb_patch KB id=6418: instruction updated with same precision -- local-only applies to skill file only'} |
