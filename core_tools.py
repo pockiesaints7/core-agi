@@ -197,10 +197,10 @@ def t_set_simulation(instruction: str) -> dict:
         return {"ok": False, "error": str(e)}
 
 
-def t_log_mistake(context, what_failed, fix, domain="general", root_cause="", how_to_avoid="", severity="medium"):
+def t_log_mistake(context, what_failed, correct_approach, domain="general", root_cause="", how_to_avoid="", severity="medium"):
     ok = sb_post("mistakes", {"domain": domain, "context": context, "what_failed": what_failed,
-                              "correct_approach": fix, "root_cause": root_cause or what_failed,
-                              "how_to_avoid": how_to_avoid or fix, "severity": severity, "tags": []})
+                              "correct_approach": correct_approach, "root_cause": root_cause or what_failed,
+                              "how_to_avoid": how_to_avoid or correct_approach, "severity": severity, "tags": []})
     return {"ok": ok}
 
 def t_read_file(path, repo="", start_line="", end_line=""):
