@@ -2169,6 +2169,8 @@ TOOLS = {
                                "desc": "Poll /state until expected_text appears."},
     "sb_patch":               {"fn": t_sb_patch,               "perm": "WRITE",   "args": ["table", "filters", "data"],
                                "desc": "Update rows in a Supabase table. filters=PostgREST filter string (e.g. id=eq.abc123) REQUIRED -- rejected if empty. data=JSON fields to update e.g. {\"status\": \"done\"}. Returns updated_fields list. Use for: updating task status, marking flags, changing any field. Never call without filters."},
+    "sb_upsert":              {"fn": t_sb_upsert,              "perm": "WRITE",   "args": ["table", "data", "on_conflict"],
+                               "desc": "Insert a row or update it if already exists. on_conflict=column(s) defining uniqueness (e.g. domain,topic for knowledge_base -- project_id for projects -- name for script_templates). Use instead of sb_insert when you want to avoid duplicates or update an existing entry. data=full row as JSON."},
 }
 
 
