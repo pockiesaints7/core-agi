@@ -622,12 +622,17 @@ def on_start():
     threading.Thread(target=background_researcher, daemon=True).start()
     counts = get_system_counts()
     step = get_current_step()
+    evos  = counts.get('evolution_queue', 0)
+    tasks = counts.get('task_queue', 0)
+    hots  = counts.get('hot_reflections', 0)
+    evo_line   = f"Evolutions pending: {evos}" if evos > 0 else "No pending evolutions"
+    task_line  = f"Tasks queued: {tasks}" if tasks > 0 else "Task queue clear"
     notify(
-        f"*CORE v6.0 Online*\n{step}\n"
-        f"Knowledge: {counts.get('knowledge_base',0)} | Sessions: {counts.get('sessions',0)}\n"
+        f"*CORE Online*\n{step}\n"
+        f"KB: {counts.get('knowledge_base',0)} | Mistakes: {counts.get('mistakes',0)} | Sessions: {counts.get('sessions',0)}\n"
         f"MCP: {len(TOOLS)} tools\n"
-        f"Background researcher: ACTIVE (60 min interval)\n"
-        f"KB mining: auto-triggers on startup if backlog underpopulated\n"
+        f"{evo_line} | {task_line}\n"
+        f"Unprocessed reflections: {hots}\n"
         f"Cold processor: auto-triggers on KB growth (+{COLD_KB_GROWTH_THRESHOLD} entries)"
     )
     print(f"[CORE] v6.0 online :{PORT} - {step}")
