@@ -2397,6 +2397,8 @@ TOOLS = {
                                "desc": "Check health of all components: Supabase, Groq, Telegram, GitHub"},
     "get_constitution":       {"fn": t_constitution,           "perm": "READ",    "args": [],
                                "desc": "Get CORE immutable constitution"},
+    "add_evolution_rule":     {"fn": t_add_evolution_rule,     "perm": "WRITE",   "args": ["rule", "domain", "category", "source"],
+                               "desc": "TASK-21: Persist a new behavioral rule to KB + SESSION.md atomically. Call when any new hard rule, SOP, correction or architectural decision is established this session. Returns reminder to also write to local skill file via Windows-MCP:FileSystem. category=hard_rule|sop|architectural_decision|correction."},
     "get_training_status":    {"fn": t_training_status,        "perm": "READ",    "args": [],
                                "desc": "Get training pipeline status: unprocessed hot, pending evolutions, thresholds"},
     "search_kb":              {"fn": t_search_kb,              "perm": "READ",    "args": ["query", "domain", "limit"],
