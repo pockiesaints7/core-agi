@@ -884,18 +884,32 @@ def _ingest_public_sources() -> str:
 
 # -- Background researcher -----------------------------------------------------
 def background_researcher():
-    global _last_research_run
-    print("[RESEARCH] background researcher started - real signal + simulation mode")
+    global _last_research_run, _last_public_source_run
+    print("[RESEARCH] background researcher started - real signal + simulation + public source mode")
+    _cycle_count = 0
 
     while True:
         try:
-            if time.time() - _last_research_run >= _IMPROVEMENT_INTERVAL:
+            now = time.time()
+            if now - _last_research_run >= _IMPROVEMENT_INTERVAL:
                 print("[RESEARCH] Running signal extraction cycle...")
-                _last_research_run = time.time()
+                _last_research_run = now
+                _cycle_count += 1
+
+                # Track B-ext: public source ingestion every 6h
+                public_content = ""
+                if now - _last_public_source_run >= _PUBLIC_SOURCE_INTERVAL:
+                    print("[RESEARCH] Fetching public sources...")
+                    public_content = _ingest_public_sources()
+                    if public_content:
+                        _last_public_source_run = now
+                        print(f"[RESEARCH] Public sources fetched: {len(public_content)} chars")
+                    else:
+                        print("[RESEARCH] Public sources returned empty - skipping")
 
                 real_ok = _extract_real_signal()
                 time.sleep(3)
-                sim_ok  = _run_simulation_batch()
+                sim_ok = _run_simulation_batch()
 
                 try:
                     groq_pending = sb_get(
@@ -917,6 +931,16 @@ def background_researcher():
                 except Exception as _ae:
                     print(f"[RESEARCH] auto-apply error: {_ae}")
 
+                # Telegram cycle summary every cycle
+                try:
+                    src_status = f"public_src={'ok' if public_content else 'skip'}"
+                    cycle_msg = (
+                        f"[CORE] Researcher cycle #{_cycle_count} complete\n"
+                        f"real={real_ok} sim={sim_ok} auto_applied={auto_applied} {src_status}"
+                    )
+                    notify(cycle_msg)
+                except Exception:
+                    pass  # never block loop on notify failure
 
         except Exception as e:
             print(f"[RESEARCH] loop error: {e}")
