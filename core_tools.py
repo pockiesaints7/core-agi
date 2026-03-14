@@ -67,10 +67,7 @@ def _sync_system_map(live_counts: dict) -> dict:
     """Compare live Supabase counts against CORE_SYSTEM_MAP.md and patch if changed.
     Called automatically at session_end. Zero-cost if nothing changed."""
     try:
-        # Read current system map
         smap = gh_read("CORE_SYSTEM_MAP.md")
-
-        # Build new counts block
         date_str = datetime.utcnow().strftime("%Y-%m-%d")
         kb  = live_counts.get("knowledge_base", 0)
         mis = live_counts.get("mistakes", 0)
@@ -88,7 +85,6 @@ def _sync_system_map(live_counts: dict) -> dict:
             f"| task_queue | {tq} entries |"
         )
 
-        # Check if counts in file match live counts (simple substring check)
         counts_changed = (
             f"| knowledge_base | {kb:,} entries |" not in smap or
             f"| mistakes | {mis} entries |" not in smap or
@@ -98,7 +94,6 @@ def _sync_system_map(live_counts: dict) -> dict:
         if not counts_changed:
             return {"updated": False, "reason": "no diff"}
 
-        # Rebuild the counts section — find and replace the block between markers
         lines = smap.splitlines()
         new_lines = []
         in_counts = False
@@ -109,7 +104,6 @@ def _sync_system_map(live_counts: dict) -> dict:
                 continue
             if in_counts:
                 if line.startswith("| task_queue |"):
-                    # Inject new block
                     for cl in new_counts_block.splitlines():
                         new_lines.append(cl)
                     in_counts = False
@@ -122,7 +116,6 @@ def _sync_system_map(live_counts: dict) -> dict:
         if not replaced:
             return {"updated": False, "reason": "could not locate counts block"}
 
-        # Also update _last_updated line
         final_lines = []
         for line in new_lines:
             if line.startswith("> Last updated:"):
@@ -421,7 +414,6 @@ def t_gh_search_replace(path, old_str, new_str, message, repo="", dry_run="false
     """Surgical find-replace using Contents API (gh_read/gh_write) — 2 HTTP calls, proven stable."""
     try:
         repo = repo or GITHUB_REPO
-        # Unicode pre-flight: warn if old_str contains non-ASCII (em-dashes etc cause silent mismatches)
         if any(ord(c) > 127 for c in old_str):
             non_ascii = [f'U+{ord(c):04X}({c})' for c in old_str if ord(c) > 127][:5]
             return {"ok": False, "error": "unicode_in_old_str",
@@ -499,45 +491,47 @@ def t_core_py_fn(fn_name: str, file: str = "core_tools.py") -> dict:
         return {"ok": False, "error": str(e)}
 
 
+# -- system_map scan ----------------------------------------------------------
+
 def t_system_map_scan(trigger: str = "manual") -> dict:
-    """Scan system_map table and detect drift vs live state.
-    Called at session_start (trigger=session_start) and session_end (trigger=session_end).
-    At session_start: read-only snapshot — returns full wiring for Claude context.
-    At session_end: read-write — updates tool_count, last_updated for volatile rows.
+    """Scan system_map table — snapshot at session_start, drift-fix at session_end.
+    session_start: read-only, returns full wiring for Claude context.
+    session_end: read-write, updates volatile key_facts (tool_count etc) if changed.
+    manual: same as session_start (read-only snapshot).
     """
     try:
-        rows = sb_get("system_map", "select=id,layer,component,item_type,name,role,responsibility,key_facts,is_volatile,status&order=layer,component,name", svc=True)
+        rows = sb_get(
+            "system_map",
+            "select=id,layer,component,item_type,name,role,responsibility,key_facts,is_volatile,status"
+            "&order=layer,component,name",
+            svc=True
+        )
         if not isinstance(rows, list):
             return {"ok": False, "error": "system_map query failed", "rows": []}
 
         updates = []
         if trigger == "session_end":
-            # Live facts to sync back into system_map
             live_tool_count = len(TOOLS)
-            live_tables = [r["name"] for r in rows if r["component"] == "supabase" and r["item_type"] == "table"]
-
             for row in rows:
                 if not row.get("is_volatile"):
                     continue
                 kf = row.get("key_facts") or {}
                 new_kf = dict(kf)
                 changed = False
-
-                # Update tool_count on core_tools.py row
+                # Sync live tool count into core_tools.py row
                 if row["name"] == "core_tools.py" and row["component"] == "railway":
                     if kf.get("tool_count") != live_tool_count:
                         new_kf["tool_count"] = live_tool_count
                         changed = True
-
                 if changed:
                     sb_patch("system_map", row["id"], {
                         "key_facts": new_kf,
                         "last_updated": datetime.utcnow().isoformat(),
                         "updated_by": "session_end"
                     })
-                    updates.append({"name": row["name"], "changed": list(new_kf.keys())})
+                    updates.append({"name": row["name"], "updated_fields": list(new_kf.keys())})
 
-        # Build compact wiring summary for Claude context
+        # Build compact wiring summary grouped by layer
         wiring = {}
         for row in rows:
             layer = row["layer"]
@@ -564,7 +558,7 @@ def t_system_map_scan(trigger: str = "manual") -> dict:
 
 
 def t_session_start() -> dict:
-    """One-call session bootstrap."""
+    """One-call session bootstrap — includes system_map snapshot."""
     try:
         state = t_state()
         health = t_health()
@@ -580,8 +574,8 @@ def t_session_start() -> dict:
         # Scan system_map on session start — read-only snapshot
         try:
             smap = t_system_map_scan(trigger="session_start")
-        except Exception:
-            smap = {"ok": False, "error": "system_map scan failed"}
+        except Exception as e:
+            smap = {"ok": False, "error": f"system_map scan failed: {e}"}
         return {
             "ok": True,
             "health": health.get("overall", "unknown"),
@@ -674,7 +668,6 @@ def t_multi_patch(path: str, patches: str, message: str, repo: str = "") -> dict
         repo = repo or GITHUB_REPO
         if isinstance(patches, str):
             patches = json.loads(patches)
-        # Unicode pre-flight: warn if any old_str contains non-ASCII
         for i, patch in enumerate(patches):
             old = patch.get("old_str", "")
             if any(ord(c) > 127 for c in old):
@@ -711,11 +704,7 @@ def t_multi_patch(path: str, patches: str, message: str, repo: str = "") -> dict
 def t_session_end(summary: str, actions: str, domain: str = "general",
                   patterns: str = "", quality: str = "0.8",
                   completed_tasks: str = "", new_step: str = "") -> dict:
-    """One-call session close.
-    completed_tasks: pipe-separated task IDs to tick in SESSION.md e.g. '7.1|7.2|7.3'
-    new_step: if set, replaces the Current Step line in SESSION.md.
-    Always: logs session to Supabase, appends row to SESSION.md log table, runs Groq hot_reflection,
-    and auto-syncs CORE_SYSTEM_MAP.md if any counts changed this session."""
+    """One-call session close — includes system_map drift scan at end."""
     from core_train import auto_hot_reflection
     try:
         actions_list = [a.strip() for a in actions.split(",") if a.strip()]
@@ -751,7 +740,6 @@ def t_session_end(summary: str, actions: str, domain: str = "general",
             content = gh_read("SESSION.md")
             original = content
 
-            # 3a. Tick completed_tasks checkboxes
             if completed_tasks.strip():
                 for task_id in completed_tasks.split("|"):
                     task_id = task_id.strip()
@@ -768,7 +756,6 @@ def t_session_end(summary: str, actions: str, domain: str = "general",
                         f"- [x] {task_id}\n"
                     )
 
-            # 3b. Update Current Step if provided
             if new_step.strip():
                 lines = content.splitlines()
                 for i, line in enumerate(lines):
@@ -777,7 +764,6 @@ def t_session_end(summary: str, actions: str, domain: str = "general",
                         break
                 content = "\n".join(lines)
 
-            # 3c. Append row to SESSION LOG table
             date_str = datetime.utcnow().strftime("%Y-%m-%d")
             actions_short = ", ".join(actions_list[:3])
             if len(actions_list) > 3:
@@ -799,13 +785,20 @@ def t_session_end(summary: str, actions: str, domain: str = "general",
         except Exception as e:
             print(f"[SESSION_END] SESSION.md update failed: {e}")
 
-        # 4. Auto-sync CORE_SYSTEM_MAP.md — compare live counts, update if changed
+        # 4. Auto-sync CORE_SYSTEM_MAP.md counts
         system_map_result = {"updated": False, "reason": "skipped"}
         try:
             live_counts = get_system_counts()
             system_map_result = _sync_system_map(live_counts)
         except Exception as e:
             system_map_result = {"updated": False, "reason": f"error: {e}"}
+
+        # 5. Scan system_map table — detect drift, update volatile rows
+        smap_scan = {"ok": False, "error": "skipped"}
+        try:
+            smap_scan = t_system_map_scan(trigger="session_end")
+        except Exception as e:
+            smap_scan = {"ok": False, "error": str(e)}
 
         return {
             "ok": session_ok,
@@ -814,13 +807,14 @@ def t_session_end(summary: str, actions: str, domain: str = "general",
             "session_md_updated": session_md_updated,
             "system_map_synced": system_map_result.get("updated", False),
             "system_map_reason": system_map_result.get("reason", ""),
+            "system_map_scan": smap_scan,
             "actions_count": len(actions_list),
         }
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
 
-# -- Stubs for Telegram commands (implement fully when backlog table confirmed) --
+# -- Stubs for Telegram commands ----------------------------------------------
 def t_get_backlog(status: str = "pending", limit: int = 10, min_priority: int = 1) -> dict:
     """Fetch backlog items from task_queue."""
     try:
@@ -828,7 +822,6 @@ def t_get_backlog(status: str = "pending", limit: int = 10, min_priority: int = 
         rows = sb_get("task_queue", qs, svc=True)
         if not isinstance(rows, list):
             rows = []
-        # Normalize: use 'task' as 'title' if no dedicated title column
         items = []
         for r in rows:
             items.append({
@@ -891,7 +884,7 @@ def t_project_prepare(project_ids: str) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# TOOLS registry — maps MCP tool names to functions + metadata
+# TOOLS registry
 # ---------------------------------------------------------------------------
 TOOLS = {
     "state":                  {"fn": t_state,               "perm": "read",  "args": {}},
@@ -918,6 +911,7 @@ TOOLS = {
     "gh_search_replace":      {"fn": t_gh_search_replace,   "perm": "write", "args": {"path": "", "old_str": "", "new_str": "", "message": "", "repo": "", "dry_run": "false"}},
     "gh_read_lines":          {"fn": t_gh_read_lines,       "perm": "read",  "args": {"path": "", "start_line": 1, "end_line": 50, "repo": ""}},
     "core_py_fn":             {"fn": t_core_py_fn,          "perm": "read",  "args": {"fn_name": "", "file": "core_tools.py"}},
+    "system_map_scan":        {"fn": t_system_map_scan,     "perm": "read",  "args": {"trigger": "manual"}},
     "session_start":          {"fn": t_session_start,       "perm": "read",  "args": {}},
     "session_end":            {"fn": t_session_end,         "perm": "write", "args": {"summary": "", "actions": "", "domain": "general", "patterns": "", "quality": "0.8", "completed_tasks": "", "new_step": ""}},
     "core_py_validate":       {"fn": t_core_py_validate,    "perm": "read",  "args": {}},
@@ -930,7 +924,7 @@ TOOLS = {
 
 
 # ---------------------------------------------------------------------------
-# JSON-RPC 2.0 dispatcher — called by core_main.py MCP routes
+# JSON-RPC 2.0 dispatcher
 # ---------------------------------------------------------------------------
 def handle_jsonrpc(body: dict):
     """Handle a single JSON-RPC 2.0 request. Returns response dict or None for notifications."""
@@ -938,7 +932,6 @@ def handle_jsonrpc(body: dict):
     params = body.get("params", {})
     req_id = body.get("id")
 
-    # Notifications (no id) — fire and forget
     if req_id is None and method not in ("initialize", "ping"):
         return None
 
@@ -948,7 +941,6 @@ def handle_jsonrpc(body: dict):
     def err(code, msg):
         return {"jsonrpc": "2.0", "id": req_id, "error": {"code": code, "message": msg}}
 
-    # --- MCP lifecycle ---
     if method == "initialize":
         return ok({
             "protocolVersion": MCP_PROTOCOL_VERSION,
@@ -962,7 +954,6 @@ def handle_jsonrpc(body: dict):
     if method == "notifications/initialized":
         return None
 
-    # --- Tool listing ---
     if method == "tools/list":
         tools_list = []
         for name, meta in TOOLS.items():
@@ -977,7 +968,6 @@ def handle_jsonrpc(body: dict):
                     schema_props[arg_name] = {"type": "number"}
                 else:
                     schema_props[arg_name] = {"type": "string"}
-                # Mark as required only if default is empty string (mandatory text args)
                 if default == "" and arg_name not in ("repo", "tags", "root_cause", "how_to_avoid",
                                                        "domain", "filters", "reason", "dry_run",
                                                        "patterns", "completed_tasks", "new_step",
@@ -994,7 +984,6 @@ def handle_jsonrpc(body: dict):
             })
         return ok({"tools": tools_list})
 
-    # --- Tool call ---
     if method == "tools/call":
         tool_name = params.get("name", "")
         args = params.get("arguments", {})
@@ -1002,7 +991,6 @@ def handle_jsonrpc(body: dict):
             return err(-32601, f"Tool not found: {tool_name}")
         try:
             result = TOOLS[tool_name]["fn"](**args) if args else TOOLS[tool_name]["fn"]()
-            # MCP spec: result must be {content: [{type, text}]}
             result_text = json.dumps(result, default=str)
             return ok({"content": [{"type": "text", "text": result_text}]})
         except TypeError as e:
@@ -1010,7 +998,6 @@ def handle_jsonrpc(body: dict):
         except Exception as e:
             return err(-32603, f"Tool error ({tool_name}): {e}")
 
-    # --- Resources (stub — not used but some clients probe) ---
     if method in ("resources/list", "prompts/list"):
         return ok({"resources": []} if "resources" in method else {"prompts": []})
 
