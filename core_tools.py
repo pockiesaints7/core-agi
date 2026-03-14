@@ -1691,9 +1691,14 @@ def t_project_get(project_ids: str = "") -> dict:
             else:
                 # Fall back to top 30 KB entries
                 kb = sb_get("knowledge_base",
-                    f"select=topic,content&domain=eq.project%3A{pid}&order=updated_at.desc&limit=30",
+                    f"select=topic,instruction,content&domain=eq.project%3A{pid}&order=updated_at.desc&limit=30",
                     svc=True) or []
-                ctx = "\n\n".join([f"### {r['topic']}\n{r['content']}" for r in kb])
+                ctx = "\n\n".join([
+                    f"### {r['topic']}\n" +
+                    (f"**Directive:** {r['instruction']}\n" if r.get('instruction') else "") +
+                    r.get('content', '')
+                    for r in kb
+                ])
             results.append({"project_id": pid, "context": ctx})
         return {"ok": True, "results": results}
     except Exception as e:
