@@ -2138,6 +2138,113 @@ def t_sb_delete(table: str, filters: str, confirm: str = "") -> dict:
     return {"ok": ok, "table": table, "filters": filters, "deleted": ok}
 
 
+# -- 13.F New tools -----------------------------------------------------------
+
+def t_get_state_key(key: str) -> dict:
+    """Read back a specific state key written by update_state. Fills the read-back gap."""
+    if not key:
+        return {"ok": False, "error": "key required"}
+    try:
+        rows = sb_get("sessions",
+            f"select=summary&summary=like.[state_update] {key}:%&order=id.desc&limit=1",
+            svc=True) or []
+        if not rows:
+            return {"ok": False, "key": key, "found": False, "value": None}
+        raw = rows[0].get("summary", "")
+        prefix = f"[state_update] {key}: "
+        value = raw[len(prefix):].strip() if raw.startswith(prefix) else raw
+        return {"ok": True, "key": key, "value": value, "found": True}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def t_task_update(task_id: str, status: str, result: str = "") -> dict:
+    """Update a task_queue row status. task_id = UUID or TASK-N string. status = pending/in_progress/done/failed."""
+    valid = {"pending", "in_progress", "done", "failed"}
+    if not task_id or not status:
+        return {"ok": False, "error": "task_id and status required"}
+    if status not in valid:
+        return {"ok": False, "error": f"status must be one of: {valid}"}
+    try:
+        # Try UUID match first, then TASK-N match inside task JSON
+        rows = sb_get("task_queue", f"select=id,task,status&id=eq.{task_id}&limit=1", svc=True) or []
+        if not rows:
+            # Fall back to searching task JSON for task_id field
+            all_rows = sb_get("task_queue", f"select=id,task,status&limit=200", svc=True) or []
+            rows = [r for r in all_rows if f'"task_id": "{task_id}"' in r.get("task", "")]
+        if not rows:
+            return {"ok": False, "error": f"task not found: {task_id}"}
+        row_id = rows[0]["id"]
+        data = {"status": status}
+        if result:
+            data["result"] = result
+        ok = sb_patch("task_queue", f"id=eq.{row_id}", data)
+        return {"ok": ok, "task_id": task_id, "row_id": row_id, "status": status}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def t_task_add(title: str, description: str = "", priority: str = "5",
+               subtasks: str = "", blocked_by: str = "") -> dict:
+    """Add a new task to task_queue with proper schema. source=mcp_session set automatically."""
+    if not title:
+        return {"ok": False, "error": "title required"}
+    try:
+        pri = int(priority) if priority else 5
+    except Exception:
+        pri = 5
+    task_json = json.dumps({
+        "title": title,
+        "description": description,
+        **({"subtasks": subtasks} if subtasks else {}),
+        **({"blocked_by": blocked_by} if blocked_by else {}),
+    })
+    try:
+        ok = sb_post("task_queue", {
+            "task": task_json,
+            "status": "pending",
+            "priority": pri,
+            "source": "mcp_session",
+        })
+        return {"ok": ok, "title": title, "priority": pri}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def t_kb_update(domain: str, topic: str, instruction: str = "",
+                content: str = "", confidence: str = "medium") -> dict:
+    """Upsert a KB entry on domain+topic. Updates if exists, inserts if new. Prevents duplicates.
+    Use instead of add_knowledge when the rule may already exist."""
+    if not domain or not topic:
+        return {"ok": False, "error": "domain and topic required"}
+    if not instruction and not content:
+        return {"ok": False, "error": "at least one of instruction or content required"}
+    try:
+        ok = sb_upsert("knowledge_base", {
+            "domain": domain, "topic": topic,
+            "instruction": instruction or None,
+            "content": content or "",
+            "confidence": confidence,
+            "source": "mcp_session",
+        }, "domain,topic")
+        return {"ok": ok, "domain": domain, "topic": topic, "action": "upserted"}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def t_mistakes_since(hours: str = "24") -> dict:
+    """Return mistakes logged in the last N hours. Use at session_end to see only this session's errors."""
+    try:
+        h = int(hours) if hours else 24
+        rows = sb_get("mistakes",
+            f"select=domain,context,what_failed,correct_approach,severity,root_cause,how_to_avoid"
+            f"&created_at=gte.now()-interval.{h}.hours&order=created_at.desc&limit=50",
+            svc=True) or []
+        return {"ok": True, "hours": h, "count": len(rows), "mistakes": rows}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
 # -- Tool registry ------------------------------------------------------------
 TOOLS = {
     "get_state":              {"fn": t_state,                  "perm": "READ",    "args": [],
