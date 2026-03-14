@@ -117,6 +117,7 @@ Task history (Tasks 1–11 registered 2026-03-14):
 
 | Date | Summary | Key Actions |
 |---|---|------|
+| 2026-03-14 | TASK-13 A→G complete. Full core_tools.py overhaul: A.2+A.3 p | session_start, read CORE AGI skill, 13.A.2 t_project_get array fix (+18 more) |
 | 2026-03-14 | TASK-12 complete. Patched _extract_real_signal() in core_tra | session_start|read core_train.py functions via core_py_fn|audited _extract_real_signal _run_simulation_batch _ingest_public_sources background_researcher|confirmed 12.A/12.B/12.D already implemented|patched _extract_real_signal via patch_file (4 patches, old_str/new_str keys)|deploy_and_wait success commit 0ff78fb53699|changelog_add logged|queried task_queue by source=core_v6_registry to find TASK-12 UUID|sb_patch status=done with correct UUID after catching typo|session_end |
 | 2026-03-14 | Session ended early. Caught and logged mistake: used PowerSh | log_mistake PowerShell syntax check, sb_insert TASK-12 into task_queue with full subtask spec |
 | 2026-03-14 | Researched and documented Groq/llama-3.3 hard limits: knowle | researched Groq/llama-3.3 hard limits and capabilities, web_search confirmed knowledge cutoff December 2023 and no internet access, set_simulation with explicit 3-angle evolution engine instruction (+1 more) |
