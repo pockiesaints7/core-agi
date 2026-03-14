@@ -710,6 +710,18 @@ def t_multi_patch(path: str, patches: str, message: str, repo: str = "") -> dict
                 applied.append({"index": i, "old_str": old[:60]})
         if not applied:
             return {"ok": False, "error": "No patches applied", "skipped": skipped, "skipped_details": skipped}
+        if path.endswith(".py"):
+            import py_compile, tempfile as _tmpf
+            with _tmpf.NamedTemporaryFile(mode="w", suffix=".py", delete=False, encoding="utf-8") as tf:
+                tf.write(content); tmp = tf.name
+            try:
+                py_compile.compile(tmp, doraise=True)
+            except py_compile.PyCompileError as e:
+                import os; os.unlink(tmp)
+                return {"ok": False, "error": f"Syntax error (patch not pushed): {e}"}
+            finally:
+                import os
+                if os.path.exists(tmp): os.unlink(tmp)
         ok = gh_write(path, content, message, repo)
         if not ok:
             return {"ok": False, "error": "gh_write returned False"}
