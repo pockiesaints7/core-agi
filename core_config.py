@@ -114,6 +114,18 @@ def sb_upsert(t, d, on_conflict):
     return r.is_success
 
 def sb_delete(t, m):
+    """Delete rows matching filter m from table t. m must be a non-empty PostgREST filter string.
+    Safety: refuses to run if m is empty -- never allows unfiltered full-table delete."""
+    if not m or not str(m).strip():
+        print(f"[SB DELETE] BLOCKED: empty filter on {t} -- full-table delete not allowed")
+        return False
+    if not L.sbw(): return False
+    r = httpx.delete(f"{SUPABASE_URL}/rest/v1/{t}?{m}", headers=_sbh(True), timeout=15)
+    if not r.is_success:
+        print(f"[SB DELETE] {t} failed: {r.status_code} {r.text[:200]}")
+    return r.is_success
+
+def sb_delete(t, m):
     """DELETE rows matching filter string m from table t.
     m must be a non-empty PostgREST filter string e.g. 'id=eq.123'.
     Returns False immediately if m is empty -- never allows full-table delete."""
