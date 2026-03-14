@@ -1073,8 +1073,8 @@ def extract_signals(task: str) -> dict:
 
 def t_ask(question: str, domain: str = ""):
     if not question: return {"ok": False, "error": "question required"}
-    kb_results = t_search_kb(question, domain=domain, limit=5)
-    kb_context = "\n\n".join([f"[KB: {r.get('topic','')}]\n{str(r.get('content',''))[:300]}" for r in kb_results]) if kb_results else ""
+    kb_results = t_search_kb(question, domain=domain, limit=10)
+    kb_context = "\n\n".join([f"[KB: {r.get('topic','')}]\n{str(r.get('instruction') or r.get('content',''))[:600]}" for r in kb_results]) if kb_results else ""
     mistakes = t_get_mistakes(domain=domain or "general", limit=3)
     mistake_context = "\n".join([f"- Avoid: {m.get('what_failed','')} -> {m.get('correct_approach','')[:100]}" for m in mistakes]) if mistakes else ""
     system = ("You are CORE, a personal AGI assistant with accumulated knowledge from many sessions. "
@@ -1083,9 +1083,10 @@ def t_ask(question: str, domain: str = ""):
     if kb_context: user += f"Relevant knowledge:\n{kb_context}\n\n"
     if mistake_context: user += f"Known pitfalls to avoid:\n{mistake_context}\n\n"
     user += "Answer:"
+    model = GROQ_MODEL if (len(kb_results) > 3 or len(question) > 200) else GROQ_FAST
     try:
-        answer = groq_chat(system, user, model=GROQ_FAST, max_tokens=512)
-        return {"ok": True, "answer": answer, "kb_hits": len(kb_results), "question": question}
+        answer = groq_chat(system, user, model=model, max_tokens=512)
+        return {"ok": True, "answer": answer, "kb_hits": len(kb_results), "model": model, "question": question}
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
