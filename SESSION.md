@@ -1,7 +1,7 @@
 # CORE SESSION MASTER
 > Last updated: 2026-03-14 | Owner: REINVAGNAR | Version: CORE v6.0
 
-## Current Step: TASK-12 — Improve background_researcher. Must open fresh Claude Desktop session. Use patch_file MCP tool. See TASK-12 subtasks in task_queue for exact implementation plan.
+## Current Step: TASK-13 — Full Tools Evolution. Start at 13.A (critical crashes). Execute in order: A→B→C→D→E→F→G→H→I. patch_file for all .py changes. Note: 13.A.1 (notify_owner) NOT needed — alias confirmed at core_tools.py line 33. Start at 13.A.2 (project_get array crash).
 > Stored in Supabase. Query at session start:
 > `sb_query table=task_queue filters=source=eq.core_v6_registry&status=eq.pending&order=priority.desc`
 
@@ -116,6 +116,7 @@ Task history (Tasks 1–11 registered 2026-03-14):
 
 | Date | Summary | Key Actions |
 |---|---|------|
+| 2026-03-14 | TASK-12 complete. Patched _extract_real_signal() in core_tra | session_start|read core_train.py functions via core_py_fn|audited _extract_real_signal _run_simulation_batch _ingest_public_sources background_researcher|confirmed 12.A/12.B/12.D already implemented|patched _extract_real_signal via patch_file (4 patches, old_str/new_str keys)|deploy_and_wait success commit 0ff78fb53699|changelog_add logged|queried task_queue by source=core_v6_registry to find TASK-12 UUID|sb_patch status=done with correct UUID after catching typo|session_end |
 | 2026-03-14 | Session ended early. Caught and logged mistake: used PowerSh | log_mistake PowerShell syntax check, sb_insert TASK-12 into task_queue with full subtask spec |
 | 2026-03-14 | Researched and documented Groq/llama-3.3 hard limits: knowle | researched Groq/llama-3.3 hard limits and capabilities, web_search confirmed knowledge cutoff December 2023 and no internet access, set_simulation with explicit 3-angle evolution engine instruction (+1 more) |
 | 2026-03-14 | CORE whole-system documentation of task management architect | add_knowledge x3 (SESSION.md scope, task lifecycle, task_queue schema) (+6 more) |
