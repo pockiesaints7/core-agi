@@ -1,7 +1,7 @@
 # CORE SESSION MASTER
 > Last updated: 2026-03-14 | Owner: REINVAGNAR | Version: CORE v6.0
 
-## Current Step: TASK-13.H — Validation. validate_syntax, build_status, functional tests, tool count update in system_map. All of 13.A→G complete this session. Next session starts at 13.H.1.
+## Current Step: TASK-13.H — Validation next session. Also TASK-15 queued: SESSION.md slim to bootstrap-only (remove Section 6 task registry + Section 7 session log + checkbox-ticking code).
 > Stored in Supabase. Query at session start:
 > `sb_query table=task_queue filters=source=eq.core_v6_registry&status=eq.pending&order=priority.desc`
 
@@ -118,6 +118,7 @@ Task history (Tasks 1–11 registered 2026-03-14):
 
 | Date | Summary | Key Actions |
 |---|---|------|
+| 2026-03-14 | Post-session cleanup. Owner caught that SESSION.md contains  | identified SESSION.md scope drift, added 2 KB entries on SESSION.md purpose and anti-patterns, queued TASK-15 SESSION.md cleanup in task_queue (+1 more) |
 | 2026-03-14 | TASK-13 A→G complete. Full core_tools.py overhaul: A.2+A.3 p | session_start, read CORE AGI skill, 13.A.2 t_project_get array fix (+18 more) |
 | 2026-03-14 | TASK-12 complete. Patched _extract_real_signal() in core_tra | session_start|read core_train.py functions via core_py_fn|audited _extract_real_signal _run_simulation_batch _ingest_public_sources background_researcher|confirmed 12.A/12.B/12.D already implemented|patched _extract_real_signal via patch_file (4 patches, old_str/new_str keys)|deploy_and_wait success commit 0ff78fb53699|changelog_add logged|queried task_queue by source=core_v6_registry to find TASK-12 UUID|sb_patch status=done with correct UUID after catching typo|session_end |
 | 2026-03-14 | Session ended early. Caught and logged mistake: used PowerSh | log_mistake PowerShell syntax check, sb_insert TASK-12 into task_queue with full subtask spec |
