@@ -1032,54 +1032,6 @@ def extract_signals(task: str) -> dict:
             "emotion": emotion, "stakes": stakes, "archetype": archetype_map.get(intent, "A3")}
 
 
-def t_route(task: str, execute: bool = False):
-    """DEPRECATED: Use t_ask() instead."""
-    if not task: return {"ok": False, "error": "task required"}
-    sig = extract_signals(task)
-    complexity = 3
-    if sig["expertise"] <= 2:  complexity += 1
-    if sig["emotion"] in ("urgent", "frustrated"): complexity += 1
-    if sig["stakes"] == "critical": complexity += 2
-    if sig["stakes"] == "high":     complexity += 1
-    if sig["expertise"] >= 5:  complexity -= 1
-    if sig["stakes"] == "low": complexity -= 1
-    complexity = max(1, min(12, complexity))
-    tone_map = {
-        "urgent":     "Be concise and direct. Lead with the answer immediately.",
-        "frustrated": "Acknowledge the difficulty briefly, then provide the fix directly.",
-        "vulnerable": "Be warm and supportive. Slow down. Acknowledge before solving.",
-        "casual":     "Match casual energy. Keep it natural and brief.",
-        "neutral":    "Be clear and structured.",
-    }
-    expertise_map = {
-        1: "Explain everything simply. Use analogies. Avoid jargon.",
-        2: "Define non-obvious terms. Provide step-by-step guidance.",
-        3: "Assume basic familiarity. Provide context where needed.",
-        4: "Skip basics. Use domain vocabulary. Be precise.",
-        5: "Expert-to-expert. Dense, precise, no hand-holding.",
-    }
-    disclaimer = ""
-    if sig["domain"] in ("legal","medical","finance") and sig["expertise"] <= 2:
-        disclaimer = "Add a brief note to verify with a professional for consequential decisions."
-    system_prompt = (
-        f"You are CORE, a personal AGI. "
-        f"{tone_map.get(sig['emotion'], tone_map['neutral'])} "
-        f"{expertise_map.get(sig['expertise'], expertise_map[3])} "
-        f"Domain context: {sig['domain']}. Stakes level: {sig['stakes']}. {disclaimer} "
-        "Be genuinely helpful."
-    )
-    routing_info = {"signals": sig, "complexity": complexity,
-                    "system_prompt_preview": system_prompt[:120] + "...", "archetype": sig["archetype"]}
-    if not execute:
-        return {"ok": True, "routing": routing_info}
-    try:
-        model = GROQ_FAST if complexity <= 4 else GROQ_MODEL
-        response = groq_chat(system_prompt, task, model=model)
-        sb_post("task_queue", {"task": task[:300], "status": "completed", "priority": 5, "error": None, "chat_id": ""})
-        return {"ok": True, "routing": routing_info, "response": response, "model_used": model}
-    except Exception as e:
-        return {"ok": False, "routing": routing_info, "error": str(e)}
-
 
 def t_ask(question: str, domain: str = ""):
     if not question: return {"ok": False, "error": "question required"}
