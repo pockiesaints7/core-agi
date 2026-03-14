@@ -2147,7 +2147,18 @@ TOOLS = {
 
 # -- MCP JSON-RPC handler ------------------------------------------------------
 def _mcp_tool_schema(name, tool):
-    props = {a: {"type": "string", "description": a} for a in tool["args"]}
+    # Params that should be typed as array (not string) in MCP schema
+    _ARRAY_PARAMS = {"patches", "project_ids", "ids", "actions", "files", "edits"}
+    props = {}
+    for a in tool["args"]:
+        if a in _ARRAY_PARAMS:
+            props[a] = {
+                "type": "array",
+                "description": a,
+                "items": {"type": "object"}
+            }
+        else:
+            props[a] = {"type": "string", "description": a}
     return {"name": name, "description": tool.get("desc", name),
             "inputSchema": {"type": "object", "properties": props}}
 
