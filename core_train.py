@@ -768,9 +768,32 @@ def _run_simulation_batch() -> bool:
         kb_domains = list({r.get("domain", "general") for r in kb_sample})
         kb_topics_sample = [r.get("topic", "") for r in kb_sample[:10]]
 
+        # Enrich: KB total count
+        try:
+            kb_count_r = httpx.get(
+                f"{SUPABASE_URL}/rest/v1/knowledge_base?select=id&limit=1",
+                headers=_sbh_count_svc(), timeout=8)
+            kb_total = int(kb_count_r.headers.get("content-range", "*/0").split("/")[-1])
+        except Exception:
+            kb_total = len(kb_sample)
+
+        # Enrich: recently applied evolutions (last 5)
+        try:
+            recent_evos = sb_get("evolution_queue",
+                "select=change_type,change_summary&status=eq.applied&order=id.desc&limit=5",
+                svc=True)
+            evos_text = "\n".join(
+                f"  [{r.get('change_type','?')}] {r.get('change_summary','')[:100]}"
+                for r in recent_evos
+            ) if recent_evos else "None yet."
+        except Exception:
+            evos_text = "Unavailable."
+
         # Build runtime context -- injected into both custom and default prompts
         runtime_context = (
             f"CORE MCP tools ({len(tool_list)}): {', '.join(tool_list[:20])}\n"
+            f"KB total entries: {kb_total}\n"
+            f"Recently applied evolutions:\n{evos_text}\n"
             f"Known failure modes:\n{failure_modes}\n"
             f"KB domains: {', '.join(kb_domains)}\n"
             f"Sample KB topics: {', '.join(kb_topics_sample)}"
