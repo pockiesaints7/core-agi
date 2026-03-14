@@ -2055,6 +2055,50 @@ def t_sb_upsert(table: str, data, on_conflict: str) -> dict:
     return {"ok": ok, "table": table, "on_conflict": on_conflict, "fields": list(data.keys())}
 
 
+def t_sb_delete(table: str, filters: str, confirm: str = "") -> dict:
+    """Delete rows from a Supabase table matching filters.
+    filters: PostgREST filter string e.g. 'id=eq.abc123'. REQUIRED -- rejected if empty.
+    confirm: pass the literal string 'DELETE' to execute. Any other value runs a dry-run
+             showing rows that WOULD be deleted without touching anything.
+    PROTECTED tables (cannot delete from): sessions, mistakes, hot_reflections,
+    cold_reflections, pattern_frequency, changelog, evolution_queue.
+    ALLOWED tables: knowledge_base, task_queue, project_context, script_templates,
+    system_map, projects.
+    Always dry-run first to see what will be affected."""
+    _PROTECTED = {
+        "sessions", "mistakes", "hot_reflections", "cold_reflections",
+        "pattern_frequency", "changelog", "evolution_queue"
+    }
+    _ALLOWED = {
+        "knowledge_base", "task_queue", "project_context",
+        "script_templates", "system_map", "projects"
+    }
+    if not filters or not str(filters).strip():
+        return {"ok": False, "error": "BLOCKED: filters required -- cannot delete from entire table"}
+    if table in _PROTECTED:
+        return {"ok": False, "error": f"BLOCKED: {table} is a protected audit table -- deletes not allowed"}
+    if table not in _ALLOWED:
+        return {"ok": False, "error": f"BLOCKED: {table} not in allowed list. Allowed: {sorted(_ALLOWED)}"}
+    # Dry-run: preview rows that would be deleted
+    if str(confirm).strip() != "DELETE":
+        try:
+            preview = sb_get(table, f"{filters}&limit=10", svc=True)
+            return {
+                "ok": True,
+                "dry_run": True,
+                "table": table,
+                "filters": filters,
+                "would_delete_preview": preview,
+                "row_count_estimate": len(preview),
+                "message": "Dry run -- pass confirm='DELETE' to execute"
+            }
+        except Exception as e:
+            return {"ok": False, "error": f"dry-run preview failed: {e}"}
+    # Execute delete
+    ok = sb_delete(table, filters.strip())
+    return {"ok": ok, "table": table, "filters": filters, "deleted": ok}
+
+
 # -- Tool registry ------------------------------------------------------------
 TOOLS = {
     "get_state":              {"fn": t_state,                  "perm": "READ",    "args": [],
@@ -2190,6 +2234,8 @@ TOOLS = {
                                "desc": "Update rows in a Supabase table. filters=PostgREST filter string (e.g. id=eq.abc123) REQUIRED -- rejected if empty. data=JSON fields to update e.g. {\"status\": \"done\"}. Returns updated_fields list. Use for: updating task status, marking flags, changing any field. Never call without filters."},
     "sb_upsert":              {"fn": t_sb_upsert,              "perm": "WRITE",   "args": ["table", "data", "on_conflict"],
                                "desc": "Insert a row or update it if already exists. on_conflict=column(s) defining uniqueness (e.g. domain,topic for knowledge_base -- project_id for projects -- name for script_templates). Use instead of sb_insert when you want to avoid duplicates or update an existing entry. data=full row as JSON."},
+    "sb_delete":              {"fn": t_sb_delete,              "perm": "WRITE",   "args": ["table", "filters", "confirm"],
+                               "desc": "Delete rows from a Supabase table. filters=PostgREST filter string REQUIRED. confirm=DELETE (literal string) to execute -- omit for dry run showing rows that would be deleted. PROTECTED tables (sessions, mistakes, hot_reflections, cold_reflections, pattern_frequency, changelog, evolution_queue) cannot be deleted from. ALLOWED: knowledge_base, task_queue, project_context, script_templates, system_map, projects. Always dry-run first."},
 }
 
 
