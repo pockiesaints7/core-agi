@@ -1,7 +1,7 @@
 # CORE SESSION MASTER
 > Last updated: 2026-03-14 | Owner: REINVAGNAR | Version: CORE v6.0
 
-## Current Step: TASK-9.C: Session Quality Scoring. 9.C.1 create session_quality table. 9.C.2 patch session_end to compute+insert. 9.C.3 get_quality_trend tool. 9.C.4 stats() integration.
+## Current Step: TASK-21: Persistent Evolution Engine. Start with 21.A (build t_add_evolution_rule) then 21.B (move skill file to GitHub). This is priority 9 -- highest in queue.
 > Stored in Supabase. Query at session start:
 > `sb_query table=task_queue filters=source=eq.core_v6_registry&status=eq.pending&order=priority.desc`
 
@@ -118,6 +118,7 @@ Task history (Tasks 1–11 registered 2026-03-14):
 
 | Date | Summary | Key Actions |
 |---|---|------|
+| 2026-03-14 | Owner identified the most fundamental AGI design flaw: CORE  | {'action': 'task_add TASK-21: Persistent Evolution Engine -- priority 9, full subtask detail, context for future sessions'}, {'action': 'add_knowledge: AGI Rule #1 -- evolution must write to persistent storage, not chat promises'}, {'action': 'skill file updated with TASK-21 context (Layer 1 Rule 28 synthesize_evolutions, patch SOP Rules 22+23)'} |
 | 2026-03-14 | Corrective session. Two mistakes caught by owner: (1) skippe | {'action': 'log_mistake: skipped TOOLS dict patch after refactor'}, {'action': 'log_mistake: violated read-before-patch SOP -- assumed indentation'}, {'action': 'gh_read_lines lines 2414-2416 -- read exact TOOLS entry before patching'} (+3 more) |
 | 2026-03-14 | Two architectural changes this session. TASK-17: auto-apply  | {'action': 'patch core_train.py: TASK-17 auto-apply gate in run_cold_processor'}, {'action': 'patch core_tools.py: synthesize_evolutions stripped to pure data fetcher'}, {'action': 'changelog_add x2'} (+2 more) |
 | 2026-03-14 | Rewrote synthesize_evolutions from a context-assembler-for-C | {'action': 'rewrote t_synthesize_evolutions: Groq acts as architect server-side, reads 5 signal sources, generates 3-8 structured JSON tasks, inserts into task_queue source=core_v6_registry, marks evolutions synthesized, sends Telegram notify'}, {'action': 'updated TOOLS dict desc for synthesize_evolutions: perm READ->WRITE, desc reflects new behavior'}, {'action': 'changelog_add'} |
