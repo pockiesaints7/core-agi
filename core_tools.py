@@ -673,6 +673,35 @@ def t_session_start() -> dict:
             smap = t_system_map_scan(trigger="session_start")
         except Exception as e:
             smap = {"ok": False, "error": f"system_map scan failed: {e}"}
+        # --- 16.E: Drift summary per layer ---
+        drift = {"tools": 0, "brain_tables": 0, "executor_files": 0, "skeleton_docs": 0}
+        try:
+            wiring = smap.get("wiring", {})
+            # Tools: live TOOLS dict vs registered active tool entries
+            registered_tools = sum(
+                1 for r in wiring.get("executor", [])
+                if r.get("type") == "tool" and r.get("name") in TOOLS
+            )
+            drift["tools"] = max(0, len(TOOLS) - registered_tools)
+            # Brain tables: count active brain table entries
+            registered_brain = sum(
+                1 for r in wiring.get("brain", [])
+                if r.get("type") == "table"
+            )
+            # We don't know live table count here (needs mgmt API) -- show registered count
+            drift["brain_tables"] = registered_brain  # informational, not a gap count
+            # Executor files: count registered .py files
+            drift["executor_files"] = sum(
+                1 for r in wiring.get("executor", [])
+                if r.get("type") == "file"
+            )
+            # Skeleton docs: count registered skeleton file entries
+            drift["skeleton_docs"] = sum(
+                1 for r in wiring.get("skeleton", [])
+                if r.get("type") == "file"
+            )
+        except Exception:
+            pass
         return {
             "ok": True,
             "health": health.get("overall", "unknown"),
@@ -687,6 +716,7 @@ def t_session_start() -> dict:
             "unprocessed_hot": training.get("unprocessed_hot", 0),
             "pending_evo_count": training.get("pending_evolutions", 0),
             "live_tool_count": len(TOOLS),
+            "system_map_drift": drift,
             "system_map": smap,
         }
     except Exception as e:
