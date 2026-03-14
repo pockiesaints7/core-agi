@@ -566,7 +566,7 @@ def t_session_start() -> dict:
             "last_session": state.get("last_session", ""),
             "last_session_ts": state.get("last_session_ts", ""),
             "pending_tasks": state.get("pending_tasks", []),
-            "step": state.get("session_md", "")[:300],
+            "step": state.get("session_md", ""),
             "recent_mistakes": mistakes[:5] if isinstance(mistakes, list) else [],
             "pending_evolutions": evolutions[:5] if isinstance(evolutions, list) else [],
             "unprocessed_hot": training.get("unprocessed_hot", 0),
