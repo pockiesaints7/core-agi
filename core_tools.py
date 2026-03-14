@@ -1727,7 +1727,7 @@ def t_project_prepare(project_ids: str = "") -> dict:
                 "context_md": context_md,
                 "consumed": False,
             })
-            _notify(f"Project ready: {name}. Open Claude Desktop to activate.", level="info")
+            notify(f"Project ready: {name}. Open Claude Desktop to activate.")
             prepared.append(pid)
         return {"ok": True, "prepared": prepared, "count": len(prepared)}
     except Exception as e:
