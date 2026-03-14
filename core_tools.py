@@ -2154,7 +2154,7 @@ TOOLS = {
 # -- MCP JSON-RPC handler ------------------------------------------------------
 def _mcp_tool_schema(name, tool):
     # Params that should be typed as array (not string) in MCP schema
-    _ARRAY_PARAMS = {"patches", "project_ids", "ids", "actions", "files", "edits"}
+    _ARRAY_PARAMS = {"patches", "project_ids", "ids", "files", "edits"}
     props = {}
     for a in tool["args"]:
         if a in _ARRAY_PARAMS:
