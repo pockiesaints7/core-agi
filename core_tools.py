@@ -2425,7 +2425,7 @@ def t_get_quality_trend(days: str = "7") -> dict:
         rows = sb_get(
             "hot_reflections",
             f"select=quality_score,created_at,domain,source&quality_score=not.is.null"
-            f"&source=eq.real&created_at=gte.{cutoff}&order=created_at.asc",
+            f"&quality_score=lte.1.0&source=eq.real&created_at=gte.{cutoff}&order=created_at.asc",
             svc=True
         ) or []
         if not rows:
