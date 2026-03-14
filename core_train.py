@@ -661,6 +661,26 @@ def _extract_real_signal() -> bool:
             print("[RESEARCH/REAL] No new sessions or mistakes since last processed - skipping")
             return False
 
+        # Enrich: KB total count
+        try:
+            kb_count_r = httpx.get(
+                f"{SUPABASE_URL}/rest/v1/knowledge_base?select=id&limit=1",
+                headers=_sbh_count_svc(), timeout=8)
+            kb_total = int(kb_count_r.headers.get("content-range", "*/0").split("/")[-1])
+        except Exception:
+            kb_total = 0
+
+        # Enrich: recent changelog entries
+        try:
+            changelog_rows = sb_get("changelog",
+                "select=summary,category&order=id.desc&limit=5", svc=True)
+            changelog_text = "\n".join(
+                f"  [{r.get('category','?')}] {r.get('summary','')[:120]}"
+                for r in changelog_rows
+            ) if changelog_rows else "None yet."
+        except Exception:
+            changelog_text = "Unavailable."
+
         sessions_text = "\n".join([
             f"- [{r.get('interface','?')}] {r.get('summary','')[:200]}"
             for r in sessions
@@ -671,19 +691,22 @@ def _extract_real_signal() -> bool:
             for r in mistakes
         ]) or "No mistakes yet."
 
-        system = """You are CORE's pattern extraction engine. Analyze real activity logs.
+        system = """You are CORE's pattern extraction engine. Analyze real activity logs and output BEHAVIORAL DIRECTIVES not observations.
+Patterns must be actionable rules: what CORE should DO differently, not just what happened.
 Output MUST be valid JSON:
 {
   "domain": "code|db|bot|mcp|training|kb|general",
-  "patterns": ["pattern1", "pattern2"],
-  "gaps": "1-2 sentences",
-  "summary": "1 sentence"
+  "patterns": ["CORE should X when Y", "Always Z before W"],
+  "gaps": "1-2 sentences describing what CORE is missing",
+  "summary": "1 sentence behavioral directive"
 }
 Output ONLY valid JSON, no preamble."""
 
-        user = (f"RECENT SESSIONS (since last processed, {len(sessions)} entries):\n{sessions_text}\n\n"
+        user = (f"KB total entries: {kb_total}\n"
+                f"Recent changelog:\n{changelog_text}\n\n"
+                f"RECENT SESSIONS (since last processed, {len(sessions)} entries):\n{sessions_text}\n\n"
                 f"RECENT MISTAKES (since last processed, {len(mistakes)} entries):\n{mistakes_text}\n\n"
-                f"Extract patterns from this recent activity only.")
+                f"Extract behavioral directives from this recent activity. Focus on what CORE should do differently.")
 
         raw = groq_chat(system, user, model=GROQ_MODEL, max_tokens=800)
         raw = raw.strip()
@@ -697,7 +720,7 @@ Output ONLY valid JSON, no preamble."""
             return False
 
         ok = sb_post("hot_reflections", {
-            "task_summary": f"Real signal extraction (since last processed) - {len(sessions)} sessions, {len(mistakes)} mistakes",
+            "task_summary": f"Real signal extraction (since last processed) - {len(sessions)} sessions, {len(mistakes)} mistakes, kb={kb_total}",
             "domain": result.get("domain", "general"),
             "new_patterns": patterns,
             "gaps_identified": result.get("gaps", ""),
