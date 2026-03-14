@@ -121,10 +121,14 @@ def t_update_state(key, value, reason):
                               "actions": [f"{key}={str(value)[:100]} - {reason}"], "interface": "mcp"})
     return {"ok": ok, "key": key}
 
-def t_add_knowledge(domain, topic, content, tags="", confidence="medium"):
+def t_add_knowledge(domain, topic, instruction="", content="", tags="", confidence="medium"):
+    """Add knowledge entry. instruction = behavioral directive for CORE (primary). content = supporting detail. At least one required."""
+    if not instruction and not content:
+        return {"ok": False, "error": "At least one of instruction or content is required"}
     tags_list = [t.strip() for t in tags.split(",")] if tags else []
-    ok = sb_post("knowledge_base", {"domain": domain, "topic": topic, "content": content,
-                                    "confidence": confidence, "tags": tags_list, "source": "mcp_session"})
+    ok = sb_post("knowledge_base", {"domain": domain, "topic": topic, "instruction": instruction or None,
+                                    "content": content or "", "confidence": confidence,
+                                    "tags": tags_list, "source": "mcp_session"})
     return {"ok": ok, "topic": topic}
 
 def t_set_simulation(instruction: str) -> dict:
