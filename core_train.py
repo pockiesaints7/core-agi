@@ -176,7 +176,9 @@ def auto_hot_reflection(session_data: dict):
                     seen.add(p.lower())
             if quality_score is None:
                 quality_score = float(parsed.get("quality") or 0.7)
-            gaps_identified = parsed.get("gaps") or None
+            _gaps_raw = parsed.get("gaps") or None
+            # gaps_identified is text[] in DB -- must be list or null, never bare string
+            gaps_identified = [_gaps_raw] if _gaps_raw and isinstance(_gaps_raw, str) else _gaps_raw
             print(f"[HOT] Groq extracted {len(groq_patterns)} patterns, merged total={len(new_patterns)}, quality={quality_score}")
         except Exception as e:
             print(f"[HOT] Pattern extraction failed (non-fatal): {e}")
