@@ -2017,6 +2017,25 @@ def t_append_to_file(path: str, content_to_append: str, message: str, repo: str 
         return {"ok": False, "error": str(e)}
 
 
+# -- Supabase write layer (TASK-14) ------------------------------------------
+def t_sb_patch(table: str, filters: str, data) -> dict:
+    """Update rows in a Supabase table matching filters.
+    filters: PostgREST filter string e.g. 'id=eq.abc123'. REQUIRED.
+    data: JSON string or dict of fields to update e.g. '{"status": "done"}'.
+    Never call without filters -- full-table updates are blocked."""
+    if not filters or not filters.strip():
+        return {"ok": False, "error": "BLOCKED: filters required -- cannot update entire table"}
+    if isinstance(data, str):
+        try:
+            data = json.loads(data)
+        except Exception as e:
+            return {"ok": False, "error": f"data must be valid JSON: {e}"}
+    if not isinstance(data, dict) or not data:
+        return {"ok": False, "error": "data must be a non-empty JSON object"}
+    ok = sb_patch(table, filters.strip(), data)
+    return {"ok": ok, "table": table, "filters": filters, "updated_fields": list(data.keys())}
+
+
 # -- Tool registry ------------------------------------------------------------
 TOOLS = {
     "get_state":              {"fn": t_state,                  "perm": "READ",    "args": [],
