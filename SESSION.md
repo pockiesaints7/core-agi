@@ -1,7 +1,7 @@
 # CORE SESSION MASTER
 > Last updated: 2026-03-14 | Owner: REINVAGNAR | Version: CORE v6.0
 
-## Current Step: Task 10.A ✅ deployed. Next: Task 10.B (Project Indexer) OR Task 4 (Binance). Task 10.C and 10.D queued after.
+## Current Step: Task 10.A ✅. Indexer running PID 736 (equinix-jk1-2). CORE_AGI_SKILL.md updated with Document & File Map. Next: verify indexer completed, then Task 10.B (project_search test) or Task 10.C (session_end auto-step).
 
 ## last_good_commit: 2026-03-14 (post Task 7 — all 50 tools verified green)
 > If Railway goes down: use `github:get_file_contents` to read this SHA, restore via `github:push_files`. Do NOT use core-agi: tools when Railway is confirmed down — they all fail simultaneously.
@@ -231,6 +231,7 @@ Current Step in SESSION.md is often stale across sessions — it said "Task 3 in
 
 | Date | Summary | Key Actions |
 |---|---|------|
+| 2026-03-14 | Updated CORE_AGI_SKILL.md with full Document & File Map sect | session_start|read SKILL.md|read source files (core_tools.py, core_config.py, core_train.py)|synthesize skill graph diagram|study all .md files on local PC + GitHub|update CORE_AGI_SKILL.md with full Document & File Map|add_knowledge credentials vault location|session_end |
 | 2026-03-14 | Task 10.A complete — Unicode pre-flight guard deployed to t_ | session_start|project_list (Task 3.4 already done)|gh_search_replace x3 failed Unicode|github:get_file_contents+create_or_update_file operating_context.json v2.5|log_mistake em-dash encoding|synthesize_evolutions → Task 10 blueprint|SESSION.md updated (Task 3 ticked, Task 10 added)|core_py_fn t_gh_search_replace|core_py_fn t_multi_patch|multi_patch Unicode pre-flight both functions|build_status pending|add_knowledge Unicode Safety Rule|changelog_add v6.0.1 |
 | 2026-03-14 | Task 3 ✅ complete. operating_context.json v2.5 pushed. Mistake logged (em-dash Unicode). Task 10 synthesize blueprint written. | session_start|project_list (3.4 already done)|gh_search_replace (failed Unicode)|github:get_file_contents+create_or_update_file operating_context.json v2.5|log_mistake em-dash encoding|synthesize_evolutions|SESSION.md updated Task 10 + Task 3 ticked |
 | 2026-03-13 | Task 3 foundation complete. Built 9 project MCP tools (proje | session_start|read PROJECT_MODE_DESIGN.md full|checked mistakes domain=infrastructure|multi_patch 9 project tools into core_tools.py|multi_patch /project handler into core_main.py|core_py_validate — core_main.py clean, core_tools.py false positives confirmed pre-existing|build_status — both commits green|webhooks GET /state to verify deploy|PROJECTS.md created locally|multi_patch operating_context.json v2.4 (3/4 applied)|add_knowledge x2|changelog_add |
