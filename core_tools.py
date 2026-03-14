@@ -2503,3 +2503,83 @@ def handle_jsonrpc(body: dict, session_id: str = "") -> dict:
         except Exception as e:
             return err(-32603, f"Tool error: {e}")
     return err(-32601, f"Unknown method: {method}")
+
+
+# -- brain layer reconciliation ------------------------------------------------
+
+def _reconcile_brain_tables(rows: list, inserted: list, tombstoned: list) -> None:
+    """Auto-sync brain layer: diff live Supabase tables vs system_map brain entries.
+    Uses management API POST /v1/projects/{ref}/database/query with SUPABASE_PAT.
+    PAT is stored in knowledge_base (domain=system.config, topic=supabase_pat).
+    Inserts new tables, tombstones dropped tables. Skips already-tombstoned entries.
+    Called from t_system_map_scan(trigger='session_end') only.
+    """
+    try:
+        # Fetch PAT from KB (never hardcoded in source)
+        pat_rows = sb_get(
+            "knowledge_base",
+            "select=content&domain=eq.system.config&topic=eq.supabase_pat&limit=1",
+            svc=True
+        )
+        if not pat_rows or not pat_rows[0].get("content"):
+            print("[SMAP] brain reconcile skipped: supabase_pat not found in KB")
+            return
+        pat = pat_rows[0]["content"].strip()
+        ref = SUPABASE_REF
+
+        # Query live tables from management API
+        mgmt_resp = httpx.post(
+            f"https://api.supabase.com/v1/projects/{ref}/database/query",
+            headers={"Authorization": f"Bearer {pat}", "Content-Type": "application/json"},
+            json={"query": "SELECT table_name FROM information_schema.tables WHERE table_schema='public' ORDER BY table_name"},
+            timeout=15
+        )
+        mgmt_resp.raise_for_status()
+        live_tables = {row["table_name"] for row in mgmt_resp.json()}
+
+        # Get registered brain table entries (active only)
+        registered_brain = {
+            row["name"]: row
+            for row in rows
+            if row.get("layer") == "brain"
+            and row.get("item_type") == "table"
+            and row.get("status") != "tombstone"
+        }
+        registered_names = set(registered_brain.keys())
+
+        # Insert tables present in DB but missing from system_map
+        missing = live_tables - registered_names
+        for tname in sorted(missing):
+            try:
+                sb_post_critical("system_map", {
+                    "layer": "brain",
+                    "component": "supabase",
+                    "item_type": "table",
+                    "name": tname,
+                    "role": f"Supabase table: {tname}",
+                    "responsibility": "auto-registered by brain reconciliation",
+                    "status": "active",
+                    "updated_by": "session_end_auto",
+                    "last_updated": datetime.utcnow().isoformat(),
+                })
+                inserted.append(f"brain:{tname}")
+            except Exception as _ie:
+                print(f"[SMAP] brain insert {tname} failed: {_ie}")
+
+        # Tombstone tables in system_map that no longer exist in DB
+        removed = registered_names - live_tables
+        for tname in sorted(removed):
+            try:
+                row_id = registered_brain[tname]["id"]
+                sb_patch("system_map", f"id=eq.{row_id}", {
+                    "status": "tombstone",
+                    "notes": "auto-tombstoned by brain reconciliation: table not found in DB",
+                    "last_updated": datetime.utcnow().isoformat(),
+                    "updated_by": "session_end_auto",
+                })
+                tombstoned.append(f"brain:{tname}")
+            except Exception as _te:
+                print(f"[SMAP] brain tombstone {tname} failed: {_te}")
+
+    except Exception as e:
+        print(f"[SMAP] _reconcile_brain_tables error: {e}")
