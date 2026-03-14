@@ -1,7 +1,7 @@
 # CORE SESSION MASTER
 > Last updated: 2026-03-14 | Owner: REINVAGNAR | Version: CORE v6.0
 
-## Current Step: TASK-9: Architect Blueprint v1 — highest priority unblocked task. Start with 9.C (Session Quality Scoring) — lowest effort, immediate value. 9.C.1: create session_quality Supabase table. 9.C.2: patch session_end to compute+insert quality row.
+## Current Step: TASK-9.C: Session Quality Scoring. 9.C.1 create session_quality Supabase table, 9.C.2 patch session_end to compute+insert quality row, 9.C.3 get_quality_trend tool, 9.C.4 stats() includes quality trend.
 > Stored in Supabase. Query at session start:
 > `sb_query table=task_queue filters=source=eq.core_v6_registry&status=eq.pending&order=priority.desc`
 
@@ -118,6 +118,7 @@ Task history (Tasks 1–11 registered 2026-03-14):
 
 | Date | Summary | Key Actions |
 |---|---|------|
+| 2026-03-14 | Quick fix: every session_end was triggering an unnecessary R | {'action': 'diagnosed root cause: session_end gh_write SESSION.md had no [skip ci] -- every session close triggered Railway redeploy'}, {'action': 'patched core_tools.py via GitHub API (PowerShell): added [skip ci] to SESSION.md commit message'}, {'action': 'changelog_add: fix skip ci'} |
 | 2026-03-14 | TASK-16 fully complete. All 6 subtasks done: 16.A brain tabl | {'action': 'verified 16.B _reconcile_executor_files() already deployed and working'}, {'action': 'verified 16.C _reconcile_skeleton_docs() already deployed and working'}, {'action': 'confirmed 16.A/B/C all wired in t_system_map_scan at lines 622-629'} (+3 more) |
 | 2026-03-14 | Two owner directives executed. (1) Taught CORE skill file lo | {'action': 'kb_update domain=system.config topic=skill_file_location -- skill file path + upload protocol'}, {'action': 'kb_update domain=system.zapier topic=tool_priority_and_connections -- Zapier rank 1, active connections, config URL'}, {'action': 'kb_update domain=system.config topic=tool_namespace_priority -- full 7-rank priority table'} (+3 more) |
 | 2026-03-14 | Two major fixes this session. (1) TASK-16.A complete: _recon | {'action': 'patched core_tools.py: replace deploy_and_wait 120s polling loop with thin build_status wrapper'}, {'action': 'patched SESSION.md: updated deploy SOP rule'}, {'action': 'kb_update domain=core_agi.deploy topic=deploy_sop with new SOP'} (+8 more) |
