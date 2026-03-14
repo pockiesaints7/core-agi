@@ -2131,8 +2131,6 @@ TOOLS = {
                                "desc": "Read specific line range from GitHub file."},
     "write_file":             {"fn": t_write_file,             "perm": "EXECUTE", "args": ["path", "content", "message", "repo"],
                                "desc": "Write NEW file to GitHub repo. BLOCKED for core_main.py (use multi_patch instead)."},
-    "route":                  {"fn": t_route,                  "perm": "EXECUTE", "args": ["task", "execute"],
-                               "desc": "DEPRECATED — use ask tool instead."},
     "ask":                    {"fn": t_ask,                    "perm": "READ",    "args": ["question", "domain"],
                                "desc": "Ask CORE anything."},
     "stats":                  {"fn": t_stats,                  "perm": "READ",    "args": [],
