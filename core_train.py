@@ -768,7 +768,7 @@ Output ONLY valid JSON, no preamble."""
             "new_patterns": patterns,
             "gaps_identified": result.get("gaps", ""),
             "reflection_text": result.get("summary", ""),
-            "processed_by_cold": False,
+            "processed_by_cold": 0,
             "source": "real",
             "quality_score": None,
         })
@@ -908,7 +908,7 @@ Output ONLY valid JSON, no preamble."""
             "new_patterns": patterns,
             "gaps_identified": result.get("gaps", ""),
             "reflection_text": result.get("summary", ""),
-            "processed_by_cold": False,
+            "processed_by_cold": 0,
             "source": "simulation",
             "quality_score": None,
         })
