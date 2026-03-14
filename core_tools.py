@@ -1547,33 +1547,37 @@ def t_deploy_status() -> dict:
 
 
 def t_build_status() -> dict:
+    """Check last 3 commits build state. Uses _gh_commit_status() per SHA — same source as deploy_status.
+    Capped at 3 commits with 8s per-request timeout and overall 30s deadline to prevent hangs."""
     try:
         h = _ghh()
         now = datetime.utcnow()
-        r = httpx.get(f"https://api.github.com/repos/{GITHUB_REPO}/commits?per_page=5", headers=h, timeout=10)
+        deadline = time.time() + 30
+        r = httpx.get(f"https://api.github.com/repos/{GITHUB_REPO}/commits?per_page=3", headers=h, timeout=8)
         r.raise_for_status()
         commits = r.json()
         deploys = []
         for commit in commits:
+            if time.time() > deadline:
+                break
             sha = commit["sha"]
             msg = commit.get("commit", {}).get("message", "")[:60]
-            sr = httpx.get(f"https://api.github.com/repos/{GITHUB_REPO}/commits/{sha}/statuses", headers=h, timeout=10)
-            statuses = sr.json() if sr.status_code == 200 else []
-            railway = [s for s in statuses if "railway" in s.get("context","").lower() or "railway" in s.get("description","").lower()]
-            st = railway[0] if railway else (statuses[0] if statuses else {})
-            updated = st.get("updated_at", "")
-            time_since = ""
-            if updated:
-                try:
-                    dt = datetime.strptime(updated, "%Y-%m-%dT%H:%M:%SZ")
-                    delta = now - dt
-                    mins = int(delta.total_seconds() // 60)
-                    time_since = f"{mins}m ago" if mins < 60 else f"{mins//60}h{mins%60}m ago"
-                except: pass
-            deploys.append({"commit_sha": sha[:12], "commit_msg": msg,
-                            "state": st.get("state", "no status"),
-                            "description": st.get("description", ""),
-                            "updated_at": updated, "time_since": time_since})
+            try:
+                st = _gh_commit_status(sha)
+                updated = st.get("updated_at", "")
+                time_since = ""
+                if updated:
+                    try:
+                        dt = datetime.strptime(updated, "%Y-%m-%dT%H:%M:%SZ")
+                        mins = int((now - dt).total_seconds() // 60)
+                        time_since = f"{mins}m ago" if mins < 60 else f"{mins//60}h{mins%60}m ago"
+                    except: pass
+                deploys.append({"commit_sha": sha[:12], "commit_msg": msg,
+                                "state": st.get("state", "no status"),
+                                "description": st.get("description", ""),
+                                "updated_at": updated, "time_since": time_since})
+            except Exception:
+                deploys.append({"commit_sha": sha[:12], "commit_msg": msg, "state": "error fetching status"})
         latest = deploys[0] if deploys else {}
         return {"ok": True, "latest": latest, "recent": deploys,
                 "summary": f"Latest: {latest.get('state','?')} — {latest.get('commit_msg','?')}"}
