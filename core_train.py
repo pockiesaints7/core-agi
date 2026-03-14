@@ -622,85 +622,9 @@ def _backlog_to_markdown() -> str:
 
 # -- KB Mining -----------------------------------------------------------------
 def run_kb_mining(max_batches: int = 50, force: bool = False) -> dict:
-    """Mine KB in batches to populate backlog."""
-    try:
-        counts = get_system_counts()
-        kb_count = counts.get("knowledge_base", 0)
-        backlog_count = int(httpx.get(
-            f"{SUPABASE_URL}/rest/v1/backlog?select=id&limit=1",
-            headers=_sbh_count_svc(), timeout=10
-        ).headers.get("content-range", "*/0").split("/")[-1])
-
-        if not force and backlog_count >= kb_count / KB_MINE_RATIO_THRESHOLD:
-            msg = f"[KB MINE] Skipped - backlog ({backlog_count}) sufficient vs KB ({kb_count})."
-            print(msg)
-            return {"ok": True, "skipped": True, "reason": msg}
-
-        notify(f"KB Mining started\nScanning {kb_count} KB entries in batches of {KB_MINE_BATCH_SIZE}")
-        print(f"[KB MINE] Starting. kb={kb_count} backlog={backlog_count} max_batches={max_batches}")
-
-        total_new = 0
-        offset = 0
-        batches_done = 0
-        system = """You are CORE's KB mining engine. Identify gaps and improvements from KB entries.
-Output MUST be a JSON array of 3-5 items:
-[{"priority": 1-5, "type": "new_tool|logic_improvement|new_kb|telegram_command|performance|missing_data",
- "title": "short title", "description": "actionable description", "effort": "low|medium|high", "impact": "low|medium|high"}]
-Output ONLY valid JSON array, no preamble."""
-
-        while batches_done < max_batches:
-            kb_batch = sb_get("knowledge_base",
-                              f"select=domain,topic,content&order=id.asc&limit={KB_MINE_BATCH_SIZE}&offset={offset}",
-                              svc=True)
-            if not kb_batch:
-                break
-
-            batch_text = "\n".join([
-                f"[{r.get('domain','?')}] {r.get('topic','?')}: {str(r.get('content',''))[:150]}"
-                for r in kb_batch
-            ])
-            domains_in_batch = list({r.get("domain","general") for r in kb_batch})
-
-            user = (f"KB batch ({len(kb_batch)} entries, domains: {', '.join(domains_in_batch)}):\n\n"
-                    f"{batch_text}\n\nWhat gaps does CORE need to address?")
-
-            try:
-                raw = groq_chat(system, user, model=GROQ_FAST, max_tokens=600)
-                raw = raw.strip()
-                if raw.startswith("```"): raw = raw.split("```")[1]
-                if raw.startswith("json"): raw = raw[4:]
-                items = json.loads(raw.strip())
-                if isinstance(items, list):
-                    for item in items:
-                        if not item.get("domain"):
-                            item["domain"] = domains_in_batch[0] if domains_in_batch else "general"
-                        item["discovered_at"] = datetime.utcnow().isoformat()
-                        item["status"] = "pending"
-                    new = _backlog_add(items)
-                    total_new += len(new)
-                    print(f"[KB MINE] Batch {batches_done+1}: offset={offset} new_items={len(new)}")
-            except Exception as e:
-                print(f"[KB MINE] Batch {batches_done+1} error: {e}")
-
-            offset += KB_MINE_BATCH_SIZE
-            batches_done += 1
-            if len(kb_batch) < KB_MINE_BATCH_SIZE:
-                break
-            time.sleep(3)
-
-        final_count = int(httpx.get(
-            f"{SUPABASE_URL}/rest/v1/backlog?select=id&limit=1",
-            headers=_sbh_count_svc(), timeout=10
-        ).headers.get("content-range", "*/0").split("/")[-1])
-
-        notify(f"KB Mining complete\nBatches: {batches_done}\nNew items: {total_new}\nTotal backlog: {final_count}")
-        print(f"[KB MINE] Done. batches={batches_done} new_items={total_new} total_backlog={final_count}")
-        return {"ok": True, "batches_scanned": batches_done, "new_items": total_new,
-                "total_backlog": final_count, "kb_count": kb_count}
-
-    except Exception as e:
-        print(f"[KB MINE] error: {e}")
-        return {"ok": False, "error": str(e)}
+    """DEPRECATED 2026-03-14 - backlog table dropped. KB mining replaced by cold processor pipeline."""
+    print("[KB MINE] deprecated - backlog table dropped, no-op")
+    return {"ok": False, "deprecated": True, "reason": "backlog table dropped - use evolution_queue pipeline instead"}
 
 
 # -- Real signal + simulation --------------------------------------------------
@@ -897,18 +821,6 @@ def background_researcher():
                 except Exception as _ae:
                     print(f"[RESEARCH] auto-apply error: {_ae}")
 
-                try:
-                    counts = get_system_counts()
-                    kb_count = counts.get("knowledge_base", 0)
-                    backlog_count = int(httpx.get(
-                        f"{SUPABASE_URL}/rest/v1/backlog?select=id&limit=1",
-                        headers=_sbh_count_svc(), timeout=10
-                    ).headers.get("content-range", "*/0").split("/")[-1])
-                    if backlog_count < kb_count / KB_MINE_RATIO_THRESHOLD:
-                        print("[RESEARCH] Backlog underpopulated - triggering KB mining")
-                        run_kb_mining(max_batches=5)
-                except Exception as _me:
-                    print(f"[RESEARCH] kb_mine auto-trigger error: {_me}")
 
         except Exception as e:
             print(f"[RESEARCH] loop error: {e}")
