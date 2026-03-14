@@ -1784,8 +1784,12 @@ def t_project_update_index(project_id: str = "", last_indexed: str = "") -> dict
 def t_project_prepare(project_ids: str = "") -> dict:
     """Railway-side: assemble context for project(s) and store in project_context for Desktop to consume."""
     try:
+        def _extract_id(p):
+            if isinstance(p, dict):
+                return str(p.get("id") or p.get("project_id") or next(iter(p.values()), "")).strip()
+            return str(p).strip()
         if isinstance(project_ids, list):
-            ids = [str(p).strip() for p in project_ids if str(p).strip()]
+            ids = [_extract_id(p) for p in project_ids if _extract_id(p)]
         else:
             ids = [p.strip() for p in str(project_ids).split(",") if p.strip()]
         if not ids:
