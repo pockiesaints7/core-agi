@@ -195,8 +195,19 @@ def t_log_mistake(context, what_failed, fix, domain="general", root_cause="", ho
                               "how_to_avoid": how_to_avoid or fix, "severity": severity, "tags": []})
     return {"ok": ok}
 
-def t_read_file(path, repo=""):
-    try: return {"ok": True, "content": gh_read(path, repo or GITHUB_REPO)[:5000]}
+def t_read_file(path, repo="", start_line="", end_line=""):
+    """Read a GitHub file. Optional start_line/end_line for range. Cap 8000 chars with truncated flag. Use gh_read_lines for large files."""
+    try:
+        raw = gh_read(path, repo or GITHUB_REPO)
+        lines = raw.splitlines(keepends=True)
+        total = len(lines)
+        if start_line or end_line:
+            s = max(0, int(start_line) - 1) if start_line else 0
+            e = int(end_line) if end_line else total
+            lines = lines[s:e]
+            raw = "".join(lines)
+        truncated = len(raw) > 8000
+        return {"ok": True, "content": raw[:8000], "total_line_count": total, "truncated": truncated}
     except Exception as e: return {"ok": False, "error": str(e)}
 
 def t_write_file(path, content, message, repo=""):
