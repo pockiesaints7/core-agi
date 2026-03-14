@@ -2540,3 +2540,138 @@ def _reconcile_brain_tables(rows: list, inserted: list, tombstoned: list) -> Non
 
     except Exception as e:
         print(f"[SMAP] _reconcile_brain_tables error: {e}")
+
+
+# -- executor source file reconciliation ---------------------------------------
+
+def _reconcile_executor_files(rows: list, inserted: list, tombstoned: list) -> None:
+    """Auto-sync executor layer: diff live .py files in GitHub repo root vs
+    system_map executor file entries. Inserts new files, tombstones removed ones.
+    Uses GitHub API list repo contents -- no GITHUB_PAT scope issues.
+    Called from t_system_map_scan(trigger='session_end') only.
+    """
+    try:
+        h = _ghh()
+        r = httpx.get(
+            f"https://api.github.com/repos/{GITHUB_REPO}/contents/",
+            headers=h, timeout=10
+        )
+        r.raise_for_status()
+        live_py = {
+            item["name"] for item in r.json()
+            if item.get("type") == "file" and item["name"].endswith(".py")
+        }
+
+        registered_files = {
+            row["name"]: row
+            for row in rows
+            if row.get("layer") == "executor"
+            and row.get("item_type") == "file"
+            and row.get("status") != "tombstone"
+        }
+        registered_names = set(registered_files.keys())
+
+        # Insert .py files present in repo but missing from system_map
+        missing = live_py - registered_names
+        for fname in sorted(missing):
+            try:
+                sb_post_critical("system_map", {
+                    "layer": "executor",
+                    "component": "railway",
+                    "item_type": "file",
+                    "name": fname,
+                    "role": f"Source file: {fname}",
+                    "responsibility": "auto-registered by executor file reconciliation",
+                    "status": "active",
+                    "updated_by": "session_end_auto",
+                    "last_updated": datetime.utcnow().isoformat(),
+                })
+                inserted.append(f"executor:{fname}")
+            except Exception as _ie:
+                print(f"[SMAP] executor insert {fname} failed: {_ie}")
+
+        # Tombstone files in system_map that no longer exist in repo
+        removed = registered_names - live_py
+        for fname in sorted(removed):
+            try:
+                row_id = registered_files[fname]["id"]
+                sb_patch("system_map", f"id=eq.{row_id}", {
+                    "status": "tombstone",
+                    "notes": "auto-tombstoned by executor reconciliation: file not found in repo root",
+                    "last_updated": datetime.utcnow().isoformat(),
+                    "updated_by": "session_end_auto",
+                })
+                tombstoned.append(f"executor:{fname}")
+            except Exception as _te:
+                print(f"[SMAP] executor tombstone {fname} failed: {_te}")
+
+    except Exception as e:
+        print(f"[SMAP] _reconcile_executor_files error: {e}")
+
+
+# -- skeleton doc reconciliation -----------------------------------------------
+
+def _reconcile_skeleton_docs(rows: list, inserted: list, tombstoned: list) -> None:
+    """Auto-sync skeleton layer: diff live .md and .json files in GitHub repo root
+    vs system_map skeleton file entries. Inserts new docs, tombstones removed ones.
+    Called from t_system_map_scan(trigger='session_end') only.
+    """
+    try:
+        h = _ghh()
+        r = httpx.get(
+            f"https://api.github.com/repos/{GITHUB_REPO}/contents/",
+            headers=h, timeout=10
+        )
+        r.raise_for_status()
+        live_docs = {
+            item["name"] for item in r.json()
+            if item.get("type") == "file"
+            and (item["name"].endswith(".md") or item["name"].endswith(".json")
+                 or item["name"].endswith(".txt"))
+        }
+
+        registered_docs = {
+            row["name"]: row
+            for row in rows
+            if row.get("layer") == "skeleton"
+            and row.get("item_type") == "file"
+            and row.get("status") != "tombstone"
+        }
+        registered_names = set(registered_docs.keys())
+
+        # Insert docs present in repo but missing from system_map
+        missing = live_docs - registered_names
+        for dname in sorted(missing):
+            try:
+                sb_post_critical("system_map", {
+                    "layer": "skeleton",
+                    "component": "github",
+                    "item_type": "file",
+                    "name": dname,
+                    "role": f"Repository file: {dname}",
+                    "responsibility": "auto-registered by skeleton doc reconciliation",
+                    "status": "active",
+                    "updated_by": "session_end_auto",
+                    "last_updated": datetime.utcnow().isoformat(),
+                })
+                inserted.append(f"skeleton:{dname}")
+            except Exception as _ie:
+                print(f"[SMAP] skeleton insert {dname} failed: {_ie}")
+
+        # Tombstone docs in system_map that no longer exist in repo
+        removed = registered_names - live_docs
+        for dname in sorted(removed):
+            try:
+                row_id = registered_docs[dname]["id"]
+                sb_patch("system_map", f"id=eq.{row_id}", {
+                    "status": "tombstone",
+                    "notes": "auto-tombstoned by skeleton reconciliation: file not found in repo root",
+                    "last_updated": datetime.utcnow().isoformat(),
+                    "updated_by": "session_end_auto",
+                })
+                tombstoned.append(f"skeleton:{dname}")
+            except Exception as _te:
+                print(f"[SMAP] skeleton tombstone {dname} failed: {_te}")
+
+    except Exception as e:
+        print(f"[SMAP] _reconcile_skeleton_docs error: {e}")
