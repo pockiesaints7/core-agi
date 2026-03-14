@@ -248,6 +248,18 @@ Current Step in SESSION.md is often stale across sessions — it said "Task 3 in
 
 ---
 
+### TASK 11 — Patch Tooling Safety Layer ✅ (2026-03-14)
+> Problem: patching .py files via multi_patch had no syntax check — one bad f-string or indentation error crashes Railway and blocks all MCP tools. Large file patches also burned 30-50% of context budget on file I/O.
+
+- [x] 11.1 `patch_file` — server-side fetch + apply patches + py_compile guard + push. Blocks deploy on syntax error. Replaces multi_patch for all .py files.
+- [x] 11.2 `validate_syntax` — read-only py_compile check on any live .py file. Returns ok/error + exact error line. Use before any uncertain deploy.
+- [x] 11.3 `append_to_file` — append content to a file server-side with py_compile guard. No full-file context pull. Use for adding new t_* functions.
+- [x] 11.4 KB entries written (domain=core_agi.code_patching, 3 entries, confidence=proven)
+- [x] 11.5 CORE_AGI_SKILL_V4.md updated (Section 11 + hard rules 21-23)
+- [x] 11.6 skills/SKILL.md trimmed to stable bootstrap only
+
+---
+
 ## 7. SESSION LOG
 
 | Date | Summary | Key Actions |
