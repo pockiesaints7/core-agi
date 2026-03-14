@@ -75,6 +75,7 @@ When user says "activate autonomous mode":
 | Editing source from claude.ai | `POST /patch` ONLY |
 | `processed_by_cold` | Use `eq.0` / `eq.1` (integer), NOT `eq.true` / `eq.false` |
 | Structural change | Update CORE_SELF.md FIRST, then operating_context.json, then KB |
+| Deploy pattern | ALWAYS: `redeploy()` → `sleep 30s` → `deploy_and_wait(reason='sha:COMMIT')`. NEVER call deploy_and_wait alone — it no longer triggers redeploy. deploy_and_wait is poll-only. |
 | Session end | Always call `session_end` — logs session + hot_reflection in one call |
 | Task done | Update status in task_queue via `sb_query` patch or `update task_queue set status=done` |
 | evolution_queue | Only `knowledge`, `code`, `config` change_types allowed — never `backlog` |
