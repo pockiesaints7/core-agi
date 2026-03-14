@@ -1937,22 +1937,19 @@ def t_validate_syntax(path: str, repo: str = "") -> dict:
     Returns ok=True/False, error line number and message if syntax error found.
     Use before any deploy to catch issues without pushing."""
     try:
-        import subprocess, tempfile as _tmpfile
+        import py_compile, tempfile as _tmpfile
         if not path.endswith(".py"):
             return {"ok": True, "skipped": True, "reason": "Not a .py file"}
         content = gh_read(path, repo or GITHUB_REPO)
-        with _tmpfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as tf:
+        with _tmpfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False, encoding="utf-8") as tf:
             tf.write(content)
             tf_path = tf.name
         try:
-            r = subprocess.run(
-                ["python3", "-m", "py_compile", tf_path],
-                capture_output=True, text=True, timeout=15
-            )
-            if r.returncode == 0:
-                return {"ok": True, "path": path, "lines": len(content.splitlines()),
-                        "size_kb": round(len(content.encode()) / 1024, 1), "message": "Syntax OK"}
-            err_msg = r.stderr.strip().replace(tf_path, path)
+            py_compile.compile(tf_path, doraise=True)
+            return {"ok": True, "path": path, "lines": len(content.splitlines()),
+                    "size_kb": round(len(content.encode()) / 1024, 1), "message": "Syntax OK"}
+        except py_compile.PyCompileError as e:
+            err_msg = str(e).replace(tf_path, path)
             return {"ok": False, "path": path, "syntax_error": err_msg}
         finally:
             try:
