@@ -122,6 +122,69 @@ def t_add_knowledge(domain, topic, content, tags="", confidence="medium"):
                                     "confidence": confidence, "tags": tags_list, "source": "mcp_session"})
     return {"ok": ok, "topic": topic}
 
+def t_set_simulation(instruction: str) -> dict:
+    """Set a custom simulation task for the background researcher.
+    CORE crafts the Groq prompts from your instruction and stores them.
+    The background researcher loops on this every 60 min until you change it.
+    Call with empty instruction to reset to default 1M user simulation.
+    """
+    try:
+        instruction = (instruction or "").strip()
+        if not instruction:
+            # Clear custom simulation -- reset to default
+            ok = sb_post("sessions", {
+                "summary": "[state_update] simulation_task: null",
+                "actions": ["simulation_task cleared -- reset to default 1M user simulation"],
+                "interface": "mcp"
+            })
+            notify("Simulation reset to default (1M user population simulation)")
+            return {"ok": ok, "cleared": True, "message": "Reset to default simulation"}
+
+        # Craft system prompt
+        system_prompt = (
+            "You are CORE's simulation engine. Your job is to simulate the scenario described below "
+            "and extract actionable patterns that CORE should learn from. "
+            "Output MUST be valid JSON: "
+            '{"domain": "code|db|bot|mcp|training|kb|general", '
+            '"patterns": ["pattern1", "pattern2", "pattern3"], '
+            '"gaps": "1-2 sentences on gaps found", '
+            '"summary": "1 sentence summary"} '
+            "Output ONLY valid JSON, no preamble."
+        )
+
+        # Craft user prompt -- dynamic context injected at runtime by _run_simulation_batch
+        user_prompt_template = (
+            f"Simulation scenario: {instruction}
+
+"
+            "CORE context (injected at runtime):
+"
+            "{{RUNTIME_CONTEXT}}
+
+"
+            f"Run this simulation. Extract patterns CORE should learn from. "
+            f"Focus specifically on: {instruction}"
+        )
+
+        task = {
+            "instruction": instruction,
+            "system_prompt": system_prompt,
+            "user_prompt_template": user_prompt_template,
+            "set_at": __import__('datetime').datetime.utcnow().isoformat(),
+        }
+
+        ok = sb_post("sessions", {
+            "summary": f"[state_update] simulation_task: {json.dumps(task)}",
+            "actions": [f"simulation_task set: {instruction[:200]}"],
+            "interface": "mcp"
+        })
+        if ok:
+            notify(f"Simulation task set\nScenario: {instruction[:200]}\nBackground researcher will use this every 60 min.")
+        return {"ok": ok, "instruction": instruction, "message": "Simulation task stored. Background researcher will pick it up on next cycle."}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
 def t_log_mistake(context, what_failed, fix, domain="general", root_cause="", how_to_avoid="", severity="medium"):
     ok = sb_post("mistakes", {"domain": domain, "context": context, "what_failed": what_failed,
                               "correct_approach": fix, "root_cause": root_cause or what_failed,
@@ -1840,6 +1903,8 @@ TOOLS = {
                                "desc": "List evolutions. status=pending|synthesized|applied|rejected (default: pending). Use synthesized to see items Claude has already read via synthesize_evolutions."},
     "update_state":           {"fn": t_update_state,           "perm": "WRITE",   "args": ["key", "value", "reason"],
                                "desc": "Write state update to sessions table"},
+    "set_simulation":         {"fn": t_set_simulation,         "perm": "WRITE",   "args": ["instruction"],
+                               "desc": "Set a custom simulation scenario for the background researcher. CORE crafts the Groq prompt and loops it every 60 min. Empty instruction resets to default."},
     "add_knowledge":          {"fn": t_add_knowledge,          "perm": "WRITE",   "args": ["domain", "topic", "content", "tags", "confidence"],
                                "desc": "Add entry to knowledge base."},
     "log_mistake":            {"fn": t_log_mistake,            "perm": "WRITE",   "args": ["context", "what_failed", "fix", "domain", "root_cause", "how_to_avoid", "severity"],
