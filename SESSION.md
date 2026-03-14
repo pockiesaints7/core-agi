@@ -3,6 +3,27 @@
 
 ## Current Step: TASK 8 -- Improve CORE patching tools to eliminate token waste and Railway crash risk on large file edits.
 
+### TASK 8 -- Patch Tooling Improvement
+**Problem:** Patching large .py files (core_tools.py, core_train.py) currently requires:
+fetch full file (103KB+ tokens) + edit in memory + push = massive token burn per patch.
+Multi-line f-strings and Unicode cause silent failures or Railway crash loops.
+No syntax validation before push = preventable crashes.
+
+**Goal:** New or improved tools that let CORE patch large files efficiently:
+- Without fetching the full file into context
+- With syntax validation before push
+- Without manual Python patch scripts written each session
+
+**Proposed solutions to design and implement:**
+- [ ] 8.1 `patch_file` tool: takes path + list of {old_str, new_str} patches, fetches file on Railway server-side, applies patches, runs py_compile, pushes -- never sends file content to Claude context
+- [ ] 8.2 `validate_syntax` tool: py_compile check on any GitHub file server-side, returns ok/error before any push
+- [ ] 8.3 `append_to_file` tool: appends a new function/block to end of a GitHub file without fetching full content -- for adding new tools to core_tools.py
+- [ ] 8.4 Update patching KB rules to reflect new tools once built
+
+**Why this is important:** Every large patch session wastes 30-50% of context budget just on file I/O.
+A Railway crash from a syntax error blocks all MCP tools until hotfixed.
+These tools make patching safe, cheap, and session-limit-friendly.
+
 ## last_good_commit: 2026-03-14 (post Task 7 — all 50 tools verified green)
 > If Railway goes down: use `github:get_file_contents` to read this SHA, restore via `github:push_files`. Do NOT use core-agi: tools when Railway is confirmed down — they all fail simultaneously.
 
