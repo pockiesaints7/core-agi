@@ -954,14 +954,19 @@ def background_researcher():
                 except Exception as _ae:
                     print(f"[RESEARCH] auto-apply error: {_ae}")
 
-                # Telegram cycle summary every cycle
+                # Telegram cycle summary — only when something happened
                 try:
-                    src_status = f"public_src={'ok' if public_content else 'skip'}"
-                    cycle_msg = (
-                        f"[CORE] Researcher cycle #{_cycle_count} complete\n"
-                        f"real={real_ok} sim={sim_ok} auto_applied={auto_applied} {src_status}"
-                    )
-                    notify(cycle_msg)
+                    if real_ok or sim_ok or auto_applied:
+                        parts = []
+                        if real_ok:
+                            parts.append("new patterns extracted")
+                        if sim_ok:
+                            parts.append("simulation complete")
+                        if auto_applied:
+                            parts.append(f"{auto_applied} evolutions auto-applied")
+                        if public_content:
+                            parts.append("public sources ingested")
+                        notify(f"[CORE] Researcher cycle #{_cycle_count}\n" + " | ".join(parts))
                 except Exception:
                     pass  # never block loop on notify failure
 
