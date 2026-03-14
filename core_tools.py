@@ -835,10 +835,14 @@ def t_multi_patch(path: str, patches: str, message: str, repo: str = "") -> dict
 
 def t_session_end(summary: str, actions: str, domain: str = "general",
                   patterns: str = "", quality: str = "0.8",
-                  completed_tasks: str = "", new_step: str = "") -> dict:
+                  completed_tasks: str = "", new_step: str = "",
+                  skill_file_updated: str = "false",
+                  force_close: str = "false") -> dict:
     """One-call session close.
     completed_tasks: pipe-separated task IDs to tick in SESSION.md e.g. '7.1|7.2|7.3'
     new_step: if set, replaces the Current Step line in SESSION.md.
+    skill_file_updated: TASK-21.B gate. Pass 'true' after writing new rules to local skill file.
+    force_close: pass 'true' to bypass skill_file_updated gate (owner explicit override).
     Always: logs session to Supabase, appends row to SESSION.md log table, runs Groq hot_reflection."""
     from core_train import auto_hot_reflection
     try:
@@ -851,6 +855,27 @@ def t_session_end(summary: str, actions: str, domain: str = "general",
             q = float(quality)
         except:
             q = 0.8
+
+        # TASK-21.B: skill_file_updated gate
+        # If patterns were noted this session but skill file was not confirmed written,
+        # block session_end and return a warning unless force_close=true.
+        _has_patterns = bool(patterns.strip())
+        _skill_ok = str(skill_file_updated).strip().lower() in ("true", "1", "yes")
+        _force = str(force_close).strip().lower() in ("true", "1", "yes")
+        if _has_patterns and not _skill_ok and not _force:
+            return {
+                "ok": False,
+                "blocked": True,
+                "reason": "skill_file_not_updated",
+                "warning": (
+                    "New patterns detected but skill_file_updated=false. "
+                    "Write new rules to C:\\Users\\rnvgg\\.claude-skills\\CORE_AGI_SKILL_V4.md "
+                    "Section 12 via Windows-MCP:FileSystem or Desktop Commander:edit_block. "
+                    "Then call session_end with skill_file_updated=true. "
+                    "To skip: pass force_close=true."
+                ),
+                "patterns_noted": patterns,
+            }
 
         # 1. Log session to Supabase
         session_created_at = datetime.utcnow().isoformat()
@@ -941,6 +966,7 @@ def t_session_end(summary: str, actions: str, domain: str = "general",
             "session_md_updated": session_md_updated,
             "system_map_scan": smap_scan,
             "actions_count": len(actions_list),
+            "skill_file_updated": _skill_ok,
         }
     except Exception as e:
         return {"ok": False, "error": str(e)}
