@@ -936,8 +936,10 @@ def t_diff(path: str, sha_a: str, sha_b: str = "main") -> dict:
 
 
 def t_deploy_and_wait(reason: str = "", timeout: str = "120") -> dict:
-    """Trigger redeploy + poll _gh_commit_status() until success/failure.
-    Polls the latest HEAD commit status — same source as deploy_status, proven reliable."""
+    """Trigger redeploy + poll until success. Two-track:
+    Track 1: _gh_commit_status() state == success AND sha matches (fast path, ~30s).
+    Track 2: if no Railway status posts after 60s, poll /health directly (always works).
+    """
     try:
         t_secs = int(timeout) if timeout else 120
         deploy_result = t_redeploy(reason)
@@ -947,26 +949,39 @@ def t_deploy_and_wait(reason: str = "", timeout: str = "120") -> dict:
         start = time.time()
         deadline = start + t_secs
         poll_count = 0
-        # Brief initial pause — let Railway pick up the new commit
-        time.sleep(10)
+        health_fallback_after = start + 60  # switch to health polling if no GH status by 60s
+        time.sleep(12)  # initial pause — Railway picks up commit
         while time.time() < deadline:
             poll_count += 1
+            elapsed = round(time.time() - start)
+            # Track 1: GitHub commit status (fast when Railway posts it)
             try:
                 st = _gh_commit_status()
+                sha = st.get("sha", "")[:12]
                 state = st.get("state", "")
-                sha_match = st.get("sha", "")[:12] == commit_sha_short
-                if sha_match and state == "success":
-                    elapsed = round(time.time() - start)
+                if sha == commit_sha_short and state == "success":
                     notify_owner(f"Deploy SUCCESS — {commit_sha_short} live in {elapsed}s")
                     return {"ok": True, "state": "success", "commit": commit_sha_short,
                             "description": st.get("description", ""), "polls": poll_count,
-                            "elapsed_s": elapsed}
-                if sha_match and state == "failure":
+                            "elapsed_s": elapsed, "track": "github_status"}
+                if sha == commit_sha_short and state == "failure":
                     notify_owner(f"Deploy FAILED — {commit_sha_short}")
                     return {"ok": False, "state": "failure", "commit": commit_sha_short,
                             "description": st.get("description", ""), "polls": poll_count}
             except Exception:
-                pass  # transient GitHub API error — keep polling
+                pass
+            # Track 2: fallback — poll /health directly after 60s
+            if time.time() > health_fallback_after:
+                try:
+                    r = httpx.get("https://core-agi-production.up.railway.app/health",
+                                  timeout=8)
+                    if r.status_code == 200:
+                        notify_owner(f"Deploy SUCCESS (health) — {commit_sha_short} live in {elapsed}s")
+                        return {"ok": True, "state": "success", "commit": commit_sha_short,
+                                "description": "health check passed", "polls": poll_count,
+                                "elapsed_s": elapsed, "track": "health_fallback"}
+                except Exception:
+                    pass
             time.sleep(8)
         notify_owner(f"Deploy TIMEOUT — {commit_sha_short} after {t_secs}s")
         return {"ok": False, "state": "timeout", "commit": commit_sha_short,
