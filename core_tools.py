@@ -63,19 +63,27 @@ def get_current_step() -> str:
 
 
 # -- MCP tool implementations -------------------------------------------------
-def t_state():
+def t_state(include_operating_context: str = "false"):
+    """Read full system state. operating_context.json is NOT loaded by default (slow GitHub read).
+    Pass include_operating_context=true to load it explicitly."""
     session = get_latest_session()
     counts  = get_system_counts()
     pending = sb_get("task_queue", "select=id,task,status&status=eq.pending&limit=5")
-    try:    operating_context = json.loads(gh_read("operating_context.json"))
-    except Exception as e: operating_context = {"error": f"failed to load: {e}"}
-    try:    session_md = gh_read("SESSION.md")[:2000]
+    load_oc = str(include_operating_context).strip().lower() in ("true", "1", "yes")
+    if load_oc:
+        try:    operating_context = json.loads(gh_read("operating_context.json"))
+        except Exception as e: operating_context = {"error": f"failed to load: {e}"}
+    else:
+        operating_context = None
+    try:    session_md = gh_read("SESSION.md")[:5000]
     except Exception as e: session_md = f"SESSION.md unavailable: {e}"
     return {"last_session": session.get("summary", "No sessions yet."),
             "last_actions": session.get("actions", []),
             "last_session_ts": session.get("created_at", ""),
             "counts": counts, "pending_tasks": pending,
-            "operating_context": operating_context, "session_md": session_md}
+            "operating_context": operating_context,
+            "operating_context_included": load_oc,
+            "session_md": session_md}
 
 def t_health():
     from core_config import GROQ_API_KEY, TELEGRAM_TOKEN
