@@ -94,13 +94,26 @@ def auto_hot_reflection(session_data: dict):
             actions_str = ", ".join(str(a) for a in actions[:20])
             seed_hint = f"Caller already identified: {seed_patterns}\n" if seed_patterns else ""
 
-            # --- Enrich: pull session-scoped context from 4 tables ---
-            # Use session created_at as lower bound so Groq only sees THIS session's data.
-            # Fallback: if no created_at in session_data, use 2 hours ago to avoid empty results.
-            session_ts = session_data.get("created_at") or \
-                (datetime.utcnow() - timedelta(hours=2)).isoformat()
-            # Ensure timestamp has no trailing Z or timezone offset that PostgREST rejects
-            session_ts = session_ts.replace("Z", "").split("+")[0]
+            # --- Enrich: pull ALL data since last hot_reflection (the anchor) ---
+            # Anchor = timestamp of the PREVIOUS hot_reflection row.
+            # Groq sees the full delta: mistakes, KB, tasks, changelogs -- everything
+            # since the last scan, not just the current second.
+            # Fallback chain: last hot_reflection -> session created_at -> 24h ago.
+            anchor_ts = None
+            try:
+                prev = sb_get("hot_reflections",
+                    "select=created_at&order=created_at.desc&limit=1",
+                    svc=True)
+                if prev and prev[0].get("created_at"):
+                    anchor_ts = prev[0]["created_at"]
+            except Exception:
+                pass
+            if not anchor_ts:
+                anchor_ts = session_data.get("created_at") or ""
+            if not anchor_ts:
+                anchor_ts = (datetime.utcnow() - timedelta(hours=24)).isoformat()
+            # Strip timezone suffix so PostgREST accepts the timestamp
+            session_ts = anchor_ts.replace("Z", "").split("+")[0]
 
             enrichment = ""
             try:
