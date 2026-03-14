@@ -622,6 +622,12 @@ def t_system_map_scan(trigger: str = "manual") -> dict:
             # --- 16.A: Auto-reconcile brain layer (Supabase tables) ---
             _reconcile_brain_tables(rows, inserted_tools, tombstoned_tools)
 
+            # --- 16.B: Auto-reconcile executor layer (.py source files) ---
+            _reconcile_executor_files(rows, inserted_tools, tombstoned_tools)
+
+            # --- 16.C: Auto-reconcile skeleton layer (.md/.json/.txt docs) ---
+            _reconcile_skeleton_docs(rows, inserted_tools, tombstoned_tools)
+
         wiring = {}
         for row in rows:
             layer = row["layer"]
