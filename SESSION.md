@@ -1,7 +1,7 @@
 # CORE SESSION MASTER
 > Last updated: 2026-03-14 | Owner: REINVAGNAR | Version: CORE v6.0
 
-## Current Step: TASK-15: SESSION.md slim — remove dead Section 6 and Section 7. Then TASK-10.B: Project Indexer.
+## Current Step: TASK-10.B: Project Indexer — t_project_index(project_id) in core_tools.py
 > Stored in Supabase. Query at session start:
 > `sb_query table=task_queue filters=source=eq.core_v6_registry&status=eq.pending&order=priority.desc`
 
@@ -118,6 +118,7 @@ Task history (Tasks 1–11 registered 2026-03-14):
 
 | Date | Summary | Key Actions |
 |---|---|------|
+| 2026-03-14 | Session focused on Layer 3 S-END-5 system_map reconciliation | session_start, S-START-2 tool count verified: 71 live = 71 Telegram, task_queue statuses audited and corrected by UUID (+2 more) |
 | 2026-03-14 | Fixed all 4 Telegram notification issues: (1) evolution coun | read core_main.py boot notification, diagnosed 4 issues: evo count wrong, task count wrong, unprocessed reflections noise, cold processor config noise, researcher cycle always-notifying with raw bools, patched get_system_counts in core_main.py — evo by status, task pending only (+7 more) |
 | 2026-03-14 | TASK-13.H validation complete. validate_syntax: PASS (false  | validate_syntax, build_status check, get_mistakes full fields test (+9 more) |
 | 2026-03-14 | Post-session cleanup. Owner caught that SESSION.md contains  | identified SESSION.md scope drift, added 2 KB entries on SESSION.md purpose and anti-patterns, queued TASK-15 SESSION.md cleanup in task_queue (+1 more) |
