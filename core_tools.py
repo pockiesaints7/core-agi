@@ -1100,18 +1100,6 @@ def t_ask(question: str, domain: str = ""):
         return {"ok": False, "error": str(e)}
 
 
-def t_reflect(task_summary: str, domain: str = "general", patterns: list = None,
-              quality: float = None, notes: str = ""):
-    ok = sb_post("hot_reflections", {
-        "task_summary": task_summary[:300], "domain": domain,
-        "verify_rate": 0.0, "mistake_consult_rate": 0.0,
-        "new_patterns": patterns or [], "new_mistakes": [],
-        "quality_score": quality, "gaps_identified": None,
-        "reflection_text": notes or f"Logged via t_reflect. Domain: {domain}.",
-        "processed_by_cold": False,
-    })
-    return {"ok": ok, "domain": domain, "patterns_count": len(patterns or [])}
-
 
 def t_stats():
     try:
