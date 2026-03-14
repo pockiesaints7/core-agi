@@ -1,7 +1,7 @@
 # CORE SESSION MASTER
 > Last updated: 2026-03-14 | Owner: REINVAGNAR | Version: CORE v6.0
 
-## Current Step: Task 3 ✅ COMPLETE. Next: Task 4 (Binance/Crypto) OR Task 9/10 execution. Task 6 stamp locked until Tasks 4+5 done.
+## Current Step: Task 10.A ✅ deployed. Next: Task 10.B (Project Indexer) OR Task 4 (Binance). Task 10.C and 10.D queued after.
 
 ## last_good_commit: 2026-03-14 (post Task 7 — all 50 tools verified green)
 > If Railway goes down: use `github:get_file_contents` to read this SHA, restore via `github:push_files`. Do NOT use core-agi: tools when Railway is confirmed down — they all fail simultaneously.
@@ -199,10 +199,10 @@ Update all version strings → "CORE v6.0" across active modules.
 
 #### 10.A — File Edit Safety Layer [architecture | impact: HIGH | effort: LOW]
 The gh_search_replace / multi_patch failure on Unicode files is a recurring silent killer (this session: 4 failed tool calls, forced full-file push). Add a pre-flight Unicode detector in `t_gh_search_replace` and `t_multi_patch`: if the file contains non-ASCII characters, return a warning immediately with the recommendation to use `github:get_file_contents + github:create_or_update_file`. Zero code complexity, eliminates an entire class of silent failures permanently.
-- [ ] 10.A.1 Patch `t_gh_search_replace()` in core_tools.py: after fetching file, scan for non-ASCII chars → if found and old_str contains non-ASCII, return `{"ok": false, "error": "unicode_file — use get_file_contents + create_or_update_file instead", "hint": "file contains non-ASCII characters"}`
-- [ ] 10.A.2 Same patch for `t_multi_patch()`
-- [ ] 10.A.3 Add rule to ACTIVE RULES table in SESSION.md (done this session ✓)
-- [ ] 10.A.4 Add KB entry: "CORE File Edit — Unicode Safety Rule"
+- [x] 10.A.1 Patch `t_gh_search_replace()` in core_tools.py: after fetching file, scan for non-ASCII chars → if found and old_str contains non-ASCII, return `{"ok": false, "error": "unicode_file — use get_file_contents + create_or_update_file instead", "hint": "file contains non-ASCII characters"}`
+- [x] 10.A.2 Same patch for `t_multi_patch()`
+- [x] 10.A.3 Add rule to ACTIVE RULES table in SESSION.md (done this session ✓)
+- [x] 10.A.4 Add KB entry: "CORE File Edit — Unicode Safety Rule"
 
 #### 10.B — Project Indexer [new_tool | impact: HIGH | effort: MED]
 Equinix JK1-2 is registered but `last_indexed` is null and `project_context` table is empty — the project system built in Task 3 has never actually run. Build `project_index` tool: reads all files in `folder_path`, chunks content, writes KB entries tagged with `project_id`, updates `last_indexed`. This is the missing bridge between "project registered" and "CORE can answer questions about it."
@@ -231,6 +231,7 @@ Current Step in SESSION.md is often stale across sessions — it said "Task 3 in
 
 | Date | Summary | Key Actions |
 |---|---|------|
+| 2026-03-14 | Task 10.A complete — Unicode pre-flight guard deployed to t_ | session_start|project_list (Task 3.4 already done)|gh_search_replace x3 failed Unicode|github:get_file_contents+create_or_update_file operating_context.json v2.5|log_mistake em-dash encoding|synthesize_evolutions → Task 10 blueprint|SESSION.md updated (Task 3 ticked, Task 10 added)|core_py_fn t_gh_search_replace|core_py_fn t_multi_patch|multi_patch Unicode pre-flight both functions|build_status pending|add_knowledge Unicode Safety Rule|changelog_add v6.0.1 |
 | 2026-03-14 | Task 3 ✅ complete. operating_context.json v2.5 pushed. Mistake logged (em-dash Unicode). Task 10 synthesize blueprint written. | session_start|project_list (3.4 already done)|gh_search_replace (failed Unicode)|github:get_file_contents+create_or_update_file operating_context.json v2.5|log_mistake em-dash encoding|synthesize_evolutions|SESSION.md updated Task 10 + Task 3 ticked |
 | 2026-03-13 | Task 3 foundation complete. Built 9 project MCP tools (proje | session_start|read PROJECT_MODE_DESIGN.md full|checked mistakes domain=infrastructure|multi_patch 9 project tools into core_tools.py|multi_patch /project handler into core_main.py|core_py_validate — core_main.py clean, core_tools.py false positives confirmed pre-existing|build_status — both commits green|webhooks GET /state to verify deploy|PROJECTS.md created locally|multi_patch operating_context.json v2.4 (3/4 applied)|add_knowledge x2|changelog_add |
 | 2026-03-13 | Completed Zapier full skill enumeration and documentation. D | read ZAPIER_MCP.md|tool_search x6 for all Zapier domains|discovered 8 Gemini tools undetected in Task 5.3|built ZAPIER_SKILL_GRAPH.md (71 tools, 15 compound skills)|added tool priority system to CORE_AGI_SKILL.md|saved both locally to C:\Users\rnvgg\.claude-skills\|pushed ZAPIER_SKILL_GRAPH.md to docs/ in repo|add_knowledge tool priority system|changelog_add |
