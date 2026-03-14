@@ -1,7 +1,7 @@
 # CORE SESSION MASTER
 > Last updated: 2026-03-14 | Owner: REINVAGNAR | Version: CORE v6.0
 
-## Current Step
+## Current Step: TASK 9 — Architect Blueprint. Query task_queue source=core_v6_registry status=pending for full detail. Recommended start: 9.C (Session Quality Scoring) — lowest effort, immediate signal value.
 > Stored in Supabase. Query at session start:
 > `sb_query table=task_queue filters=source=eq.core_v6_registry&status=eq.pending&order=priority.desc`
 
@@ -116,6 +116,7 @@ Task history (Tasks 1–11 registered 2026-03-14):
 
 | Date | Summary | Key Actions |
 |---|---|------|
+| 2026-03-14 | SESSION.md task registry migrated to Supabase task_queue. Al | sb_bulk_insert 11 tasks into task_queue, SESSION.md rewritten to SOP-only, changelog logged (+1 more) |
 | 2026-03-14 | SESSION.md refactored — task registry moved to Supabase task_queue | sb_bulk_insert 11 tasks, SESSION.md slimmed to SOP-only, session_end |
 | 2026-03-14 | Task 11 complete. patch_file, validate_syntax, append_to_file live | patch_file+validate_syntax+append_to_file added to core_tools.py, KB entries, skill files updated |
 | 2026-03-14 | Task 8 complete. synthesize_evolutions live-tested | synthesize_evolutions called, Task 9 blueprint produced, CORE_SELF.md updated |
