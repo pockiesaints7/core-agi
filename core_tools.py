@@ -211,16 +211,29 @@ def t_read_file(path, repo="", start_line="", end_line=""):
     except Exception as e: return {"ok": False, "error": str(e)}
 
 def t_write_file(path, content, message, repo=""):
-    """Write file to GitHub repo — FULL OVERWRITE. Use for NEW files only.
-    GUARD: blocked for core_main.py — use gh_search_replace or multi_patch for surgical edits."""
-    if (repo or GITHUB_REPO) == GITHUB_REPO and path.strip().lstrip("/") == "core_main.py":
+    """Write file to GitHub repo - FULL OVERWRITE. Use for NEW files only.
+    GUARD: blocked for core_main.py and core_tools.py - use patch_file or gh_search_replace for surgical edits."""
+    blocked = {"core_main.py", "core_tools.py"}
+    clean_path = path.strip().lstrip("/")
+    if (repo or GITHUB_REPO) == GITHUB_REPO and clean_path in blocked:
         return {
             "ok": False,
-            "error": "BLOCKED: write_file cannot overwrite core_main.py (full overwrite = corruption risk). "
-                     "Use multi_patch or gh_search_replace for surgical edits."
+            "error": f"BLOCKED: write_file cannot overwrite {clean_path} (full overwrite = corruption risk). "
+                     "Use patch_file or gh_search_replace for surgical edits."
         }
+    if clean_path.endswith(".py"):
+        import tempfile, py_compile, os
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False, encoding='utf-8') as f:
+            f.write(content); tmp = f.name
+        try:
+            py_compile.compile(tmp, doraise=True)
+        except py_compile.PyCompileError as e:
+            os.unlink(tmp)
+            return {"ok": False, "error": f"Syntax error: {e}"}
+        finally:
+            if os.path.exists(tmp): os.unlink(tmp)
     ok = gh_write(path, content, message, repo or GITHUB_REPO)
-    if ok: notify(f"MCP write: `{path}`")
+    if ok: notify(f"MCP write: `{clean_path}`")
     return {"ok": ok, "path": path}
 
 def t_notify(message, level="info"):
