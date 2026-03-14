@@ -154,14 +154,9 @@ def t_set_simulation(instruction: str) -> dict:
 
         # Craft user prompt -- dynamic context injected at runtime by _run_simulation_batch
         user_prompt_template = (
-            f"Simulation scenario: {instruction}
-
-"
-            "CORE context (injected at runtime):
-"
-            "{{RUNTIME_CONTEXT}}
-
-"
+            f"Simulation scenario: {instruction}\n\n"
+            "CORE context (injected at runtime):\n"
+            "{{RUNTIME_CONTEXT}}\n\n"
             f"Run this simulation. Extract patterns CORE should learn from. "
             f"Focus specifically on: {instruction}"
         )
