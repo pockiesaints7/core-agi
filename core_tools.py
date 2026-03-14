@@ -619,6 +619,9 @@ def t_system_map_scan(trigger: str = "manual") -> dict:
                 except Exception as _te:
                     print(f"[SMAP] tombstone {tool_name} failed: {_te}")
 
+            # --- 16.A: Auto-reconcile brain layer (Supabase tables) ---
+            _reconcile_brain_tables(rows, inserted_tools, tombstoned_tools)
+
         wiring = {}
         for row in rows:
             layer = row["layer"]
