@@ -1887,23 +1887,20 @@ def t_project_consume(project_id: str = "") -> dict:
 
 # -- synthesize_evolutions ----------------------------------------------------
 def t_synthesize_evolutions() -> dict:
-    """Groq acts as CORE's unconstrained architect.
+    """Pure signal fetcher for Claude Desktop architect synthesis.
 
-    Gathers all accumulated signals:
-      - Pending evolution_queue entries
-      - Top pattern_frequency (top 40 by frequency)
-      - Recent cold_reflection themes (last 10)
-      - Hot reflection gaps (last 20)
-      - Open task_queue items (to avoid duplicating existing tasks)
+    Groq's job ends at cold_processor (pattern clustering + queuing evolutions).
+    Claude (in Desktop chat) is the architect -- NOT Groq.
 
-    Groq reads everything as an architect thinking 6 months ahead.
-    Outputs structured JSON tasks. Each task is inserted into task_queue
-    (source=core_v6_registry) -- NOT SESSION.md.
+    This tool collects all accumulated signals and returns them to Claude.
+    Claude then:
+      - Reads all signals directly in the chat
+      - Thinks 6 months ahead as unconstrained architect
+      - Calls task_add for each new task
+      - Registers tasks into task_queue (source=core_v6_registry)
 
-    After inserting tasks:
-      - Marks processed evolutions as status=synthesized
-      - Sends Telegram notify with task titles
-      - Returns task count + titles + synthesis summary
+    No Groq call. No auto task insertion. No Telegram notify.
+    The blueprint and task_add calls are 100% Claude's responsibility.
     """
     try:
         # 1. All pending evolutions
@@ -1931,128 +1928,57 @@ def t_synthesize_evolutions() -> dict:
             "select=task&status=eq.pending&source=eq.core_v6_registry&order=id.desc&limit=20",
             svc=True) or []
 
-        # --- Build context for Groq ---
-        evo_text = "\n".join([
-            f"  (conf={e.get('confidence','?')}) [{e.get('impact','?')}] {e.get('pattern_key','')[:120]}: {e.get('change_summary','')[:180]}"
-            for e in evolutions[:50]
-        ]) or "  None pending."
-
-        pattern_text = "\n".join([
-            f"  [{p.get('domain','?')}] {p.get('frequency','?')}x -- {p.get('pattern_key','')[:130]}"
-            for p in patterns
-        ]) or "  None."
-
-        cold_text = "\n".join([
-            f"  {c.get('created_at','?')[:10]}: {c.get('summary_text','')[:220]}"
-            for c in cold
-        ]) or "  None."
-
-        gaps_text = "\n".join([
-            f"  [{g.get('domain','?')}] {str(g.get('gaps_identified',''))[:160]}"
-            for g in gaps
-        ]) or "  None."
-
-        open_task_titles = "\n".join([
-            f"  - {str(t.get('task',''))[:120]}"
-            for t in open_tasks
-        ]) or "  None."
-
-        prompt = (
-            "You are CORE's unconstrained architect.\n"
-            "CORE is a recursive self-improving AGI running on Railway + Supabase + GitHub.\n"
-            "You have read all accumulated signals below. Your job: think 6 months ahead.\n"
-            "Invent what CORE does not know it needs yet. No limits. No obvious patches.\n"
-            "Reimagine. Invent. Architect.\n\n"
-            f"PENDING EVOLUTIONS ({len(evolutions)}):\n{evo_text}\n\n"
-            f"TOP RECURRING PATTERNS (top 40 by frequency):\n{pattern_text}\n\n"
-            f"COLD REFLECTION THEMES (last 10 runs):\n{cold_text}\n\n"
-            f"IDENTIFIED GAPS (hot reflections):\n{gaps_text}\n\n"
-            f"ALREADY OPEN TASKS (do not duplicate):\n{open_task_titles}\n\n"
-            "Output a JSON array of 3-8 new engineering tasks. Each task:\n"
-            "{\n"
-            '  "task_id": "ARCH-N",\n'
-            '  "title": "short title",\n'
-            '  "category": "new_tool|new_table|architecture|logic_change|wild",\n'
-            '  "impact": "HIGH|MED|LOW",\n'
-            '  "effort": "HIGH|MED|LOW",\n'
-            '  "description": "what and why -- be specific, name exact functions/tables affected",\n'
-            '  "subtasks": ["step 1", "step 2", "step 3"],\n'
-            '  "priority": 7\n'
-            "}\n\n"
-            "Rules:\n"
-            "- No duplicates with open tasks above\n"
-            "- Subtasks must be concrete and executable\n"
-            "- Think beyond obvious fixes -- propose new capabilities\n"
-            "- Respond ONLY with valid JSON array, no preamble, no markdown fences"
-        )
-
-        raw = groq_chat(prompt, model=GROQ_MODEL, max_tokens=3000)
-        raw = raw.strip().lstrip("```json").lstrip("```").rstrip("```").strip()
-
-        # Parse Groq output
-        tasks_json = json.loads(raw)
-        if not isinstance(tasks_json, list):
-            tasks_json = [tasks_json]
-
-        # Insert each task into task_queue
-        inserted_tasks = []
-        for t in tasks_json:
-            try:
-                task_id = t.get("task_id", "ARCH-?")
-                title = t.get("title", "Untitled")
-                task_payload = json.dumps({
-                    "task_id": task_id,
-                    "title": title,
-                    "category": t.get("category", "architecture"),
-                    "impact": t.get("impact", "MED"),
-                    "effort": t.get("effort", "MED"),
-                    "description": t.get("description", ""),
-                    "subtasks": t.get("subtasks", []),
-                })
-                sb_post_critical("task_queue", {
-                    "task": task_payload,
-                    "status": "pending",
-                    "priority": int(t.get("priority", 7)),
-                    "source": "core_v6_registry",
-                })
-                inserted_tasks.append(f"{task_id}: {title}")
-            except Exception as _te:
-                print(f"[SYNTH] task insert failed: {_te}")
-
-        # Mark evolutions as synthesized
-        synthesized_ids = []
-        for e in evolutions:
-            eid = e.get("id")
-            if eid:
-                try:
-                    sb_patch("evolution_queue", f"id=eq.{eid}", {"status": "synthesized"})
-                    synthesized_ids.append(eid)
-                except Exception:
-                    pass
-
-        # Telegram notify
-        task_list = "\n".join(f"  - {t}" for t in inserted_tasks)
-        notify(
-            f"Architect synthesis complete.\n"
-            f"{len(inserted_tasks)} new tasks queued in task_queue:\n{task_list}\n"
-            f"{len(synthesized_ids)} evolutions marked synthesized."
-        )
-
+        # Return all raw signals to Claude Desktop.
+        # Claude reads, reasons as architect, calls task_add directly.
         return {
             "ok": True,
-            "tasks_created": len(inserted_tasks),
-            "task_titles": inserted_tasks,
-            "synthesized_evolutions": len(synthesized_ids),
-            "signals_read": {
+            "instruction": "YOU are the architect. Read all signals. Think 6 months ahead. Call task_add for each new task. Do NOT duplicate open_tasks. Subtasks must be concrete and executable.",
+            "signals": {
+                "pending_evolutions": [
+                    {
+                        "id": e.get("id"),
+                        "confidence": e.get("confidence"),
+                        "change_type": e.get("change_type"),
+                        "domain": e.get("impact"),
+                        "pattern_key": e.get("pattern_key", "")[:200],
+                        "summary": e.get("change_summary", "")[:300],
+                    } for e in evolutions[:50]
+                ],
+                "top_patterns": [
+                    {
+                        "pattern": p.get("pattern_key", "")[:200],
+                        "frequency": p.get("frequency"),
+                        "domain": p.get("domain"),
+                    } for p in patterns
+                ],
+                "cold_reflection_themes": [
+                    {
+                        "date": c.get("created_at", "")[:10],
+                        "summary": c.get("summary_text", "")[:300],
+                        "patterns_found": c.get("patterns_found"),
+                        "evolutions_queued": c.get("evolutions_queued"),
+                    } for c in cold
+                ],
+                "hot_gaps": [
+                    {
+                        "domain": g.get("domain"),
+                        "quality": g.get("quality_score"),
+                        "gaps": g.get("gaps_identified"),
+                    } for g in gaps
+                ],
+                "open_tasks": [
+                    str(t.get("task", ""))[:150] for t in open_tasks
+                ],
+            },
+            "counts": {
                 "evolutions": len(evolutions),
                 "patterns": len(patterns),
                 "cold_reflections": len(cold),
                 "gaps": len(gaps),
+                "open_tasks": len(open_tasks),
             },
         }
 
-    except json.JSONDecodeError as je:
-        return {"ok": False, "error": f"Groq JSON parse failed: {je}", "raw": raw[:500] if 'raw' in dir() else ""}
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
