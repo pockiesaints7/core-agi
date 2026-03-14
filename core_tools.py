@@ -2183,8 +2183,6 @@ TOOLS = {
                                "desc": "DEPRECATED — use ask tool instead."},
     "ask":                    {"fn": t_ask,                    "perm": "READ",    "args": ["question", "domain"],
                                "desc": "Ask CORE anything."},
-    "reflect":                {"fn": t_reflect,                "perm": "WRITE",   "args": ["task_summary", "domain", "patterns", "quality", "notes"],
-                               "desc": "Log a hot reflection."},
     "stats":                  {"fn": t_stats,                  "perm": "READ",    "args": [],
                                "desc": "Analytics: domain distribution, top patterns, mistake frequency."},
     "search_mistakes":        {"fn": t_search_mistakes,        "perm": "READ",    "args": ["query", "domain", "limit"],
