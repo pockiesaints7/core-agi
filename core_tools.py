@@ -547,8 +547,11 @@ def t_system_map_scan(trigger: str = "manual") -> dict:
             return {"ok": False, "error": "system_map query failed", "rows": []}
 
         updates = []
+        inserted_tools = []
+        tombstoned_tools = []
         if trigger == "session_end":
             live_tool_count = len(TOOLS)
+            # --- Update volatile key_facts (tool_count on core_tools.py row) ---
             for row in rows:
                 if not row.get("is_volatile"):
                     continue
@@ -566,6 +569,55 @@ def t_system_map_scan(trigger: str = "manual") -> dict:
                         "updated_by": "session_end"
                     })
                     updates.append({"name": row["name"], "updated_fields": list(new_kf.keys())})
+
+            # --- Auto-reconcile tool entries: insert missing, tombstone removed ---
+            # Uses TOOLS dict directly at runtime -- works regardless of how many
+            # source files exist or how CORE evolves. No file scanning. No patterns.
+            live_tool_names = set(TOOLS.keys())
+            registered = {
+                row["name"]: row
+                for row in rows
+                if row.get("component") == "railway"
+                and row.get("item_type") == "tool"
+                and row.get("status") != "tombstone"
+            }
+            registered_names = set(registered.keys())
+
+            # Insert tools that exist in TOOLS but not in system_map
+            missing = live_tool_names - registered_names
+            for tool_name in sorted(missing):
+                try:
+                    desc = TOOLS[tool_name].get("desc", "")
+                    role = desc if desc else f"MCP tool: {tool_name}"
+                    sb_post_critical("system_map", {
+                        "layer": "executor",
+                        "component": "railway",
+                        "item_type": "tool",
+                        "name": tool_name,
+                        "role": role,
+                        "responsibility": "auto-registered by session_end reconciliation",
+                        "status": "active",
+                        "updated_by": "session_end_auto",
+                        "last_updated": datetime.utcnow().isoformat(),
+                    })
+                    inserted_tools.append(tool_name)
+                except Exception as _ie:
+                    print(f"[SMAP] insert {tool_name} failed: {_ie}")
+
+            # Tombstone tools in system_map that are no longer in TOOLS
+            removed = registered_names - live_tool_names
+            for tool_name in sorted(removed):
+                try:
+                    row_id = registered[tool_name]["id"]
+                    sb_patch("system_map", f"id=eq.{row_id}", {
+                        "status": "tombstone",
+                        "notes": "auto-tombstoned by session_end: not in TOOLS dict",
+                        "last_updated": datetime.utcnow().isoformat(),
+                        "updated_by": "session_end_auto",
+                    })
+                    tombstoned_tools.append(tool_name)
+                except Exception as _te:
+                    print(f"[SMAP] tombstone {tool_name} failed: {_te}")
 
         wiring = {}
         for row in rows:
