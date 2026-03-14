@@ -638,6 +638,8 @@ def t_system_map_scan(trigger: str = "manual") -> dict:
             "total_components": len(rows),
             "updates_applied": len(updates),
             "updates": updates,
+            "inserted_tools": inserted_tools,
+            "tombstoned_tools": tombstoned_tools,
             "wiring": wiring,
         }
     except Exception as e:
