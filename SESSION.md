@@ -1,7 +1,7 @@
 # CORE SESSION MASTER
 > Last updated: 2026-03-14 | Owner: REINVAGNAR | Version: CORE v6.0
 
-## Current Step: TASK-13 — Full Tools Evolution. Start at 13.A (critical crashes). Execute in order: A→B→C→D→E→F→G→H→I. patch_file for all .py changes. Note: 13.A.1 (notify_owner) NOT needed — alias confirmed at core_tools.py line 33. Start at 13.A.2 (project_get array crash).
+## Current Step: TASK-13.H — Validation. validate_syntax, build_status, functional tests, tool count update in system_map. All of 13.A→G complete this session. Next session starts at 13.H.1.
 > Stored in Supabase. Query at session start:
 > `sb_query table=task_queue filters=source=eq.core_v6_registry&status=eq.pending&order=priority.desc`
 
