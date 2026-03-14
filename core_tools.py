@@ -1368,10 +1368,11 @@ def t_redeploy(reason: str = "") -> dict:
         return {"ok": False, "error": str(e)}
 
 
-def t_logs(limit: str = "50", keyword: str = "") -> dict:
-    """Fetch recent deploy log from GitHub commit history."""
+def t_logs(limit: str = "10", keyword: str = "") -> dict:
+    """Fetch recent deploy history from GitHub commit log. NOTE: this is commit history, not Railway stdout.
+    For live process logs, check Railway dashboard. Default limit lowered to 10 to reduce N+1 API calls."""
     try:
-        lim = min(int(limit) if limit else 50, 50)
+        lim = min(int(limit) if limit else 10, 50)
         h = _ghh()
         r = httpx.get(f"https://api.github.com/repos/{GITHUB_REPO}/commits?per_page={lim}", headers=h, timeout=10)
         r.raise_for_status()
