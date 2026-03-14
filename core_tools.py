@@ -1481,7 +1481,6 @@ def t_bulk_apply(executor_override: str = "claude_desktop", dry_run: bool = Fals
                 if ok:
                     sb_patch("evolution_queue", f"id=eq.{eid}",
                              {"status": "applied", "applied_at": datetime.utcnow().isoformat()})
-                    sb_patch("backlog", f"title=eq.{title}", {"status": "done"})
                 results.append({"id": eid, "title": title, "ok": ok, "note": note})
             else:
                 r = apply_evolution(eid)
