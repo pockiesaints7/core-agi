@@ -1792,10 +1792,15 @@ def t_project_prepare(project_ids: str = "") -> dict:
                 continue
             name = proj_rows[0].get("name", pid)
             kb = sb_get("knowledge_base",
-                f"select=topic,content&domain=eq.project%3A{pid}&order=updated_at.desc&limit=30",
+                f"select=topic,instruction,content&domain=eq.project%3A{pid}&order=updated_at.desc&limit=30",
                 svc=True) or []
             context_md = f"# Project Context: {name}\n\n"
-            context_md += "\n\n".join([f"### {r['topic']}\n{r['content']}" for r in kb])
+            context_md += "\n\n".join([
+                f"### {r['topic']}\n" +
+                (f"**Directive:** {r['instruction']}\n" if r.get('instruction') else "") +
+                r.get('content', '')
+                for r in kb
+            ])
             sb_post_critical("project_context", {
                 "project_id": pid,
                 "prepared_by": "railway",
