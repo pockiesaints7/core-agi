@@ -291,9 +291,10 @@ def t_bulk_reject_evolutions(change_type: str = "", ids: str = "", reason: str =
 def t_check_evolutions(limit: int = 20) -> dict:
     """Groq-powered evolution brief."""
     try:
+        lim = int(limit) if limit else 20
         evolutions = sb_get("evolution_queue",
             f"select=id,change_type,change_summary,confidence,source,recommendation,pattern_key,created_at"
-            f"&status=eq.pending&id=gt.1&order=confidence.desc&limit={limit}",
+            f"&status=eq.pending&id=gt.1&order=confidence.desc&limit={lim}",
             svc=True)
         mistakes = sb_get("mistakes",
             "select=domain,context,what_failed,correct_approach,root_cause,how_to_avoid,severity"
