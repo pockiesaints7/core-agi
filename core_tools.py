@@ -499,6 +499,70 @@ def t_core_py_fn(fn_name: str, file: str = "core_tools.py") -> dict:
         return {"ok": False, "error": str(e)}
 
 
+def t_system_map_scan(trigger: str = "manual") -> dict:
+    """Scan system_map table and detect drift vs live state.
+    Called at session_start (trigger=session_start) and session_end (trigger=session_end).
+    At session_start: read-only snapshot — returns full wiring for Claude context.
+    At session_end: read-write — updates tool_count, last_updated for volatile rows.
+    """
+    try:
+        rows = sb_get("system_map", "select=id,layer,component,item_type,name,role,responsibility,key_facts,is_volatile,status&order=layer,component,name", svc=True)
+        if not isinstance(rows, list):
+            return {"ok": False, "error": "system_map query failed", "rows": []}
+
+        updates = []
+        if trigger == "session_end":
+            # Live facts to sync back into system_map
+            live_tool_count = len(TOOLS)
+            live_tables = [r["name"] for r in rows if r["component"] == "supabase" and r["item_type"] == "table"]
+
+            for row in rows:
+                if not row.get("is_volatile"):
+                    continue
+                kf = row.get("key_facts") or {}
+                new_kf = dict(kf)
+                changed = False
+
+                # Update tool_count on core_tools.py row
+                if row["name"] == "core_tools.py" and row["component"] == "railway":
+                    if kf.get("tool_count") != live_tool_count:
+                        new_kf["tool_count"] = live_tool_count
+                        changed = True
+
+                if changed:
+                    sb_patch("system_map", row["id"], {
+                        "key_facts": new_kf,
+                        "last_updated": datetime.utcnow().isoformat(),
+                        "updated_by": "session_end"
+                    })
+                    updates.append({"name": row["name"], "changed": list(new_kf.keys())})
+
+        # Build compact wiring summary for Claude context
+        wiring = {}
+        for row in rows:
+            layer = row["layer"]
+            if layer not in wiring:
+                wiring[layer] = []
+            wiring[layer].append({
+                "component": row["component"],
+                "type": row["item_type"],
+                "name": row["name"],
+                "role": row["role"],
+                "responsibility": row["responsibility"],
+            })
+
+        return {
+            "ok": True,
+            "trigger": trigger,
+            "total_components": len(rows),
+            "updates_applied": len(updates),
+            "updates": updates,
+            "wiring": wiring,
+        }
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
 def t_session_start() -> dict:
     """One-call session bootstrap."""
     try:
@@ -513,6 +577,11 @@ def t_session_start() -> dict:
         except Exception:
             evolutions = []
         training = t_training_status()
+        # Scan system_map on session start — read-only snapshot
+        try:
+            smap = t_system_map_scan(trigger="session_start")
+        except Exception:
+            smap = {"ok": False, "error": "system_map scan failed"}
         return {
             "ok": True,
             "health": health.get("overall", "unknown"),
@@ -526,6 +595,7 @@ def t_session_start() -> dict:
             "pending_evolutions": evolutions[:5] if isinstance(evolutions, list) else [],
             "unprocessed_hot": training.get("unprocessed_hot", 0),
             "pending_evo_count": training.get("pending_evolutions", 0),
+            "system_map": smap,
         }
     except Exception as e:
         return {"ok": False, "error": str(e)}
