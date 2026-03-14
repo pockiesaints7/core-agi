@@ -2223,3 +2223,22 @@ def handle_jsonrpc(body: dict, session_id: str = "") -> dict:
         except Exception as e:
             return err(-32603, f"Tool error: {e}")
     return err(-32601, f"Unknown method: {method}")
+
+
+def t_sb_upsert(table: str, data, on_conflict: str) -> dict:
+    """Insert a row or update it if it already exists (upsert).
+    data: JSON string or dict of the full row.
+    on_conflict: column(s) defining uniqueness e.g. 'domain,topic' for knowledge_base,
+                 'project_id' for projects, 'name' for script_templates.
+    Returns ok + action hint (inserted vs updated inferred from response)."""
+    if not on_conflict or not on_conflict.strip():
+        return {"ok": False, "error": "on_conflict required -- specify column(s) e.g. 'domain,topic'"}
+    if isinstance(data, str):
+        try:
+            data = json.loads(data)
+        except Exception as e:
+            return {"ok": False, "error": f"data must be valid JSON: {e}"}
+    if not isinstance(data, dict) or not data:
+        return {"ok": False, "error": "data must be a non-empty JSON object"}
+    ok = sb_upsert(table, data, on_conflict.strip())
+    return {"ok": ok, "table": table, "on_conflict": on_conflict, "fields": list(data.keys())}
