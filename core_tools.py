@@ -2134,6 +2134,12 @@ TOOLS = {
                                "desc": "Mark project_context rows as consumed after Claude Desktop has loaded them."},
     "ping_health":            {"fn": t_ping_health,            "perm": "READ",    "args": [],
                                "desc": "Hit live Railway / endpoint."},
+    "patch_file":             {"fn": t_patch_file,            "perm": "EXECUTE", "args": ["path", "patches", "message", "repo", "dry_run"],
+                               "desc": "Server-side patch: fetch from GitHub, apply find-replace patches, py_compile check, push. Safe alternative to multi_patch -- blocks deploy on syntax error."},
+    "validate_syntax":        {"fn": t_validate_syntax,        "perm": "READ",    "args": ["path", "repo"],
+                               "desc": "Fetch a .py file from GitHub and run py_compile server-side. Returns ok/error with line number. Use before any deploy."},
+    "append_to_file":         {"fn": t_append_to_file,         "perm": "EXECUTE", "args": ["path", "content_to_append", "message", "repo"],
+                               "desc": "Append content to a GitHub file server-side. Runs py_compile before push for .py files. Use to add new functions without fetching file into Claude context."},
     "verify_live":            {"fn": t_verify_live,            "perm": "READ",    "args": ["expected_text", "timeout"],
                                "desc": "Poll /state until expected_text appears."},
 }
