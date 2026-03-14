@@ -345,6 +345,12 @@ def t_gh_search_replace(path, old_str, new_str, message, repo="", dry_run="false
     """Surgical find-replace using Contents API (gh_read/gh_write) — 2 HTTP calls, proven stable."""
     try:
         repo = repo or GITHUB_REPO
+        # Unicode pre-flight: warn if old_str contains non-ASCII (em-dashes etc cause silent mismatches)
+        if any(ord(c) > 127 for c in old_str):
+            non_ascii = [f'U+{ord(c):04X}({c})' for c in old_str if ord(c) > 127][:5]
+            return {"ok": False, "error": "unicode_in_old_str",
+                    "hint": f"old_str contains non-ASCII chars: {non_ascii}. Use github:get_file_contents + github:create_or_update_file instead to avoid encoding mismatches.",
+                    "chars": non_ascii}
         file_content = gh_read(path, repo)
         if old_str not in file_content:
             return {"ok": False, "error": f"old_str not found in {path}"}
@@ -522,6 +528,15 @@ def t_multi_patch(path: str, patches: str, message: str, repo: str = "") -> dict
         repo = repo or GITHUB_REPO
         if isinstance(patches, str):
             patches = json.loads(patches)
+        # Unicode pre-flight: warn if any old_str contains non-ASCII
+        for i, patch in enumerate(patches):
+            old = patch.get("old_str", "")
+            if any(ord(c) > 127 for c in old):
+                non_ascii = [f'U+{ord(c):04X}({c})' for c in old if ord(c) > 127][:5]
+                return {"ok": False, "error": "unicode_in_old_str",
+                        "patch_index": i,
+                        "hint": f"patch[{i}] old_str contains non-ASCII chars: {non_ascii}. Use github:get_file_contents + github:create_or_update_file instead.",
+                        "chars": non_ascii}
         content = gh_read(path, repo)
         applied = []
         skipped = []
