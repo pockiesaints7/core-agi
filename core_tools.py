@@ -112,7 +112,7 @@ def t_search_kb(query="", domain="", limit=10):
 def t_get_mistakes(domain="", limit=10):
     try: lim = int(limit) if limit else 10
     except: lim = 10
-    qs = f"select=domain,context,what_failed,correct_approach&order=created_at.desc&limit={lim}"
+    qs = f"select=domain,context,what_failed,correct_approach,severity,root_cause,how_to_avoid&order=created_at.desc&limit={lim}"
     if domain and domain not in ("all", ""): qs += f"&domain=eq.{domain}"
     return sb_get("mistakes", qs, svc=True)
 
