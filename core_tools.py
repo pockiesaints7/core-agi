@@ -1675,8 +1675,12 @@ def t_project_list() -> dict:
 def t_project_get(project_ids: str = "") -> dict:
     """Load full context for one or more projects. project_ids = comma-separated slugs or list."""
     try:
+        def _extract_id(p):
+            if isinstance(p, dict):
+                return str(p.get("id") or p.get("project_id") or next(iter(p.values()), "")).strip()
+            return str(p).strip()
         if isinstance(project_ids, list):
-            ids = [str(p).strip() for p in project_ids if str(p).strip()]
+            ids = [_extract_id(p) for p in project_ids if _extract_id(p)]
         else:
             ids = [p.strip() for p in str(project_ids).split(",") if p.strip()]
         if not ids:
