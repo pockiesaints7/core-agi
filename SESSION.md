@@ -1,7 +1,7 @@
 # CORE SESSION MASTER
 > Last updated: 2026-03-14 | Owner: REINVAGNAR | Version: CORE v6.0
 
-## Current Step: TASK-9.C: Session Quality Scoring. 9.C.1 create session_quality Supabase table. 9.C.2 patch session_end to compute+insert. 9.C.3 get_quality_trend tool. 9.C.4 stats() includes quality trend.
+## Current Step: TASK-9.C: Session Quality Scoring. 9.C.1 create session_quality Supabase table. 9.C.2 patch session_end to compute+insert. 9.C.3 get_quality_trend tool. 9.C.4 stats() includes trend.
 > Stored in Supabase. Query at session start:
 > `sb_query table=task_queue filters=source=eq.core_v6_registry&status=eq.pending&order=priority.desc`
 
@@ -118,6 +118,7 @@ Task history (Tasks 1–11 registered 2026-03-14):
 
 | Date | Summary | Key Actions |
 |---|---|------|
+| 2026-03-14 | Fixed all 3 cold processor bugs that were silently killing t | {'action': 'diagnosed 3 cold processor bugs: pattern fragmentation, auto_applied permanent block, 200-char key truncation'}, {'action': 'appended _groq_cluster_patterns() to core_train.py -- semantic deduplication before counting'}, {'action': 'patched run_cold_processor: wired clustering, raised key truncation to 500, added milestone re-queuing at freq 10/25/50/100'} (+3 more) |
 | 2026-03-14 | Code audit found 1 confirmed active bug in auto_hot_reflecti | {'action': 'audited auto_hot_reflection payload against actual DB column schema for all fields'}, {'action': 'found gaps_identified text[] type mismatch -- Groq string silently coerced to null by PostgREST on every write since launch'}, {'action': 'patched core_train.py: wrap gaps_identified string in list before sb_post'} (+1 more) |
 | 2026-03-14 | Retroactively applied what Groq would have produced if the e | {'action': 'backfilled hot_reflections 111-124 with Groq-simulated enriched patterns -- 4-5 patterns per session replacing the 1-3 seed-only patterns that existed due to the anchor bug'}, {'action': 'cold processor run registered: 3 evolutions queued (ids 298-300), cold_reflections row id=85 written, pattern_frequency upserted for 3 patterns'}, {'action': 'all 14 hot_reflections marked processed_by_cold=1 correctly'} |
 | 2026-03-14 | Critical training pipeline fix. auto_hot_reflection was enri | {'action': 'diagnosed enrichment anchor bug: session_ts was set to session_end call time, all 4 enrichment queries returned empty every session'}, {'action': 'patched core_train.py: anchor now fetches last hot_reflection created_at from DB -- full delta since last scan'}, {'action': 'fallback chain: last hot_reflection -> session created_at -> 24h ago'} (+1 more) |
