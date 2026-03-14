@@ -641,18 +641,18 @@ def on_start():
     threading.Thread(target=background_researcher, daemon=True).start()
     counts = get_system_counts()
     step = get_current_step()
-    evos  = counts.get('evolution_queue', 0)
-    tasks = counts.get('task_queue', 0)
-    hots  = counts.get('hot_reflections', 0)
-    evo_line   = f"Evolutions pending: {evos}" if evos > 0 else "No pending evolutions"
-    task_line  = f"Tasks queued: {tasks}" if tasks > 0 else "Task queue clear"
+    evo_pending  = counts.get('evolution_pending', 0)
+    evo_applied  = counts.get('evolution_applied', 0)
+    evo_rejected = counts.get('evolution_rejected', 0)
+    tasks_pending = counts.get('task_queue_pending', 0)
+    evo_line  = f"Evolutions — pending: {evo_pending} | applied: {evo_applied} | rejected: {evo_rejected}"
+    task_line = f"Tasks pending: {tasks_pending}" if tasks_pending > 0 else "No pending tasks"
     notify(
         f"*CORE Online*\n{step}\n"
         f"KB: {counts.get('knowledge_base',0)} | Mistakes: {counts.get('mistakes',0)} | Sessions: {counts.get('sessions',0)}\n"
         f"MCP: {len(TOOLS)} tools\n"
-        f"{evo_line} | {task_line}\n"
-        f"Unprocessed reflections: {hots}\n"
-        f"Cold processor: auto-triggers on KB growth (+{COLD_KB_GROWTH_THRESHOLD} entries)"
+        f"{evo_line}\n"
+        f"{task_line}"
     )
     print(f"[CORE] v6.0 online :{PORT} - {step}")
 
