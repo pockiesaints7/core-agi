@@ -71,13 +71,11 @@ def get_latest_session():
 
 def get_system_counts():
     counts = {}
+    # Core brain tables — total counts
     table_filters = {
-        "knowledge_base":  "",
-        "mistakes":        "",
-        "sessions":        "",
-        "task_queue":      "",
-        "hot_reflections": "&processed_by_cold=eq.0",
-        "evolution_queue": "&status=eq.pending",
+        "knowledge_base": "",
+        "mistakes":       "",
+        "sessions":       "",
     }
     for t, extra in table_filters.items():
         try:
@@ -89,6 +87,27 @@ def get_system_counts():
             counts[t] = int(cr.split("/")[-1]) if "/" in cr else 0
         except:
             counts[t] = -1
+    # task_queue — pending only
+    try:
+        r = httpx.get(
+            f"{SUPABASE_URL}/rest/v1/task_queue?select=id&limit=1&status=eq.pending",
+            headers=_sbh_count_svc(), timeout=10
+        )
+        cr = r.headers.get("content-range", "*/0")
+        counts["task_queue_pending"] = int(cr.split("/")[-1]) if "/" in cr else 0
+    except:
+        counts["task_queue_pending"] = -1
+    # evolution_queue — counts by status
+    for status in ("pending", "applied", "rejected"):
+        try:
+            r = httpx.get(
+                f"{SUPABASE_URL}/rest/v1/evolution_queue?select=id&limit=1&status=eq.{status}",
+                headers=_sbh_count_svc(), timeout=10
+            )
+            cr = r.headers.get("content-range", "*/0")
+            counts[f"evolution_{status}"] = int(cr.split("/")[-1]) if "/" in cr else 0
+        except:
+            counts[f"evolution_{status}"] = -1
     return counts
 
 
