@@ -1,7 +1,7 @@
 # CORE SESSION MASTER
 > Last updated: 2026-03-14 | Owner: REINVAGNAR | Version: CORE v6.0
 
-## Current Step: TASK-21: Persistent Evolution Engine. Start with 21.A (build t_add_evolution_rule -- writes to KB + SESSION.md + local PC skill file). Then 21.B (push skill file to GitHub to eliminate manual upload).
+## Current Step: TASK-21: Persistent Evolution Engine. Start with 21.A (build t_add_evolution_rule in core_tools.py). Priority 9 -- highest in queue.
 > Stored in Supabase. Query at session start:
 > `sb_query table=task_queue filters=source=eq.core_v6_registry&status=eq.pending&order=priority.desc`
 
@@ -118,6 +118,7 @@ Task history (Tasks 1–11 registered 2026-03-14):
 
 | Date | Summary | Key Actions |
 |---|---|------|
+| 2026-03-14 | Owner corrected a critical mistake from the previous session | {'action': 'deleted wrong TASK-21 (GitHub canonical reference)'}, {'action': 're-inserted TASK-21 corrected: skill file LOCAL PC ONLY, NEVER GitHub, intentional owner control'}, {'action': 'sb_patch KB id=6418: updated instruction to enforce local-PC-only, remove GitHub canonical language'} (+1 more) |
 | 2026-03-14 | Corrective session. Owner caught that TASK-21 description an | {'action': 'found wrong file path in TASK-21 description -- said GitHub skills/CORE_AGI_SKILL_V4.md but file is local PC only'}, {'action': 'sb_patch task_queue: fixed TASK-21 description with correct file locations and FILE LOCATION FACTS section'}, {'action': 'log_mistake: writing wrong file path into task description'} (+1 more) |
 | 2026-03-14 | Owner identified the most fundamental AGI design flaw: CORE  | {'action': 'task_add TASK-21: Persistent Evolution Engine -- priority 9, full subtask detail, context for future sessions'}, {'action': 'add_knowledge: AGI Rule #1 -- evolution must write to persistent storage, not chat promises'}, {'action': 'skill file updated with TASK-21 context (Layer 1 Rule 28 synthesize_evolutions, patch SOP Rules 22+23)'} |
 | 2026-03-14 | Corrective session. Two mistakes caught by owner: (1) skippe | {'action': 'log_mistake: skipped TOOLS dict patch after refactor'}, {'action': 'log_mistake: violated read-before-patch SOP -- assumed indentation'}, {'action': 'gh_read_lines lines 2414-2416 -- read exact TOOLS entry before patching'} (+3 more) |
