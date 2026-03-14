@@ -936,54 +936,55 @@ def t_diff(path: str, sha_a: str, sha_b: str = "main") -> dict:
 
 
 def t_deploy_and_wait(reason: str = "", timeout: str = "120") -> dict:
-    """Trigger redeploy + poll until success. Two-track:
-    Track 1: _gh_commit_status() state == success AND sha matches (fast path, ~30s).
-    Track 2: if no Railway status posts after 60s, poll /health directly (always works).
+    """Poll for deploy completion — does NOT trigger redeploy.
+    USAGE: call redeploy() first (gets commit SHA), then call deploy_and_wait(reason='sha:COMMIT_SHA').
+    WHY SEPARATE: redeploy kills the running container mid-poll. Polling must run on the new container.
+    Pass commit SHA as reason='sha:XXXXXXXXXXXX' for exact match detection.
+    Track 1: GitHub commit status + SHA match (~30s when Railway posts it).
+    Track 2: /health fallback after 60s — always resolves regardless of Railway->GitHub status.
     """
     try:
         t_secs = int(timeout) if timeout else 120
-        deploy_result = t_redeploy(reason)
-        if not deploy_result.get("ok"):
-            return {"ok": False, "error": f"redeploy failed: {deploy_result.get('error')}"}
-        commit_sha_short = deploy_result.get("commit", "")
+        commit_sha_short = ""
+        if reason and reason.startswith("sha:"):
+            commit_sha_short = reason.split()[0][4:][:12]
         start = time.time()
         deadline = start + t_secs
         poll_count = 0
-        health_fallback_after = start + 60  # switch to health polling if no GH status by 60s
-        time.sleep(12)  # initial pause — Railway picks up commit
+        health_fallback_after = start + 60
         while time.time() < deadline:
             poll_count += 1
             elapsed = round(time.time() - start)
-            # Track 1: GitHub commit status (fast when Railway posts it)
+            # Track 1: GitHub commit status
             try:
                 st = _gh_commit_status()
                 sha = st.get("sha", "")[:12]
                 state = st.get("state", "")
-                if sha == commit_sha_short and state == "success":
-                    notify_owner(f"Deploy SUCCESS — {commit_sha_short} live in {elapsed}s")
-                    return {"ok": True, "state": "success", "commit": commit_sha_short,
+                sha_ok = (sha == commit_sha_short) if commit_sha_short else (state == "success")
+                if sha_ok and state == "success":
+                    notify_owner(f"Deploy SUCCESS — {sha} live in {elapsed}s")
+                    return {"ok": True, "state": "success", "commit": sha,
                             "description": st.get("description", ""), "polls": poll_count,
                             "elapsed_s": elapsed, "track": "github_status"}
-                if sha == commit_sha_short and state == "failure":
-                    notify_owner(f"Deploy FAILED — {commit_sha_short}")
-                    return {"ok": False, "state": "failure", "commit": commit_sha_short,
+                if sha_ok and state == "failure":
+                    notify_owner(f"Deploy FAILED — {sha}")
+                    return {"ok": False, "state": "failure", "commit": sha,
                             "description": st.get("description", ""), "polls": poll_count}
             except Exception:
                 pass
-            # Track 2: fallback — poll /health directly after 60s
+            # Track 2: /health fallback after 60s
             if time.time() > health_fallback_after:
                 try:
-                    r = httpx.get("https://core-agi-production.up.railway.app/health",
-                                  timeout=8)
+                    r = httpx.get("https://core-agi-production.up.railway.app/health", timeout=8)
                     if r.status_code == 200:
-                        notify_owner(f"Deploy SUCCESS (health) — {commit_sha_short} live in {elapsed}s")
-                        return {"ok": True, "state": "success", "commit": commit_sha_short,
+                        notify_owner(f"Deploy SUCCESS (health) — {commit_sha_short or 'unknown'} live in {elapsed}s")
+                        return {"ok": True, "state": "success", "commit": commit_sha_short or "unknown",
                                 "description": "health check passed", "polls": poll_count,
                                 "elapsed_s": elapsed, "track": "health_fallback"}
                 except Exception:
                     pass
             time.sleep(8)
-        notify_owner(f"Deploy TIMEOUT — {commit_sha_short} after {t_secs}s")
+        notify_owner(f"Deploy TIMEOUT after {t_secs}s")
         return {"ok": False, "state": "timeout", "commit": commit_sha_short,
                 "polls": poll_count, "timeout_s": t_secs}
     except Exception as e:
