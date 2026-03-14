@@ -988,3 +988,67 @@ def background_researcher():
         except Exception as e:
             print(f"[RESEARCH] loop error: {e}")
         time.sleep(60)
+
+
+# -- Pattern semantic clustering -----------------------------------------------
+
+def _groq_cluster_patterns(batch_counts: "Counter", batch_domain: dict, batch_sources: dict) -> tuple:
+    """Ask Groq to cluster semantically identical/near-identical patterns into canonical keys.
+    Returns new (batch_counts, batch_domain, batch_sources) with fragmented keys merged.
+    Falls back to original dicts on any failure -- clustering is non-blocking.
+
+    This fixes the core fragmentation bug: same concept expressed with different wording
+    creates separate keys that never accumulate past the threshold. Groq reads all raw
+    pattern keys and returns a mapping of raw_key -> canonical_key. Keys that are already
+    unique/distinct are mapped to themselves.
+    """
+    if len(batch_counts) <= 1:
+        return batch_counts, batch_domain, batch_sources
+    try:
+        raw_keys = list(batch_counts.keys())
+        keys_text = "\n".join(f"  {i+1}. {k[:180]}" for i, k in enumerate(raw_keys))
+        prompt = (
+            "You are CORE's pattern deduplicator.\n"
+            "Below is a list of behavioral patterns extracted from recent sessions.\n"
+            "Many express the SAME rule with different wording.\n\n"
+            f"Patterns:\n{keys_text}\n\n"
+            "Task: Group semantically identical or near-identical patterns together.\n"
+            "For each group, choose the BEST canonical form (most specific, most actionable).\n"
+            "Return ONLY valid JSON -- a flat object mapping each original pattern number "
+            "to its canonical pattern string. All patterns must appear. "
+            "Patterns that are truly unique map to themselves.\n"
+            "Example: {\"1\": \"canonical text\", \"2\": \"canonical text\", \"3\": \"different rule\"}\n"
+            "No preamble. No markdown. Pure JSON only."
+        )
+        raw = groq_chat(prompt, model=GROQ_MODEL, max_tokens=2000)
+        raw = raw.strip().lstrip("```json").lstrip("```").rstrip("```").strip()
+        mapping_by_num = json.loads(raw)  # {"1": "canonical", "2": "canonical", ...}
+
+        # Build raw_key -> canonical_key map
+        key_map: dict = {}
+        for i, raw_key in enumerate(raw_keys):
+            canonical = mapping_by_num.get(str(i + 1), raw_key).strip()
+            if not canonical or len(canonical) < 5:
+                canonical = raw_key  # fallback to original if Groq returns garbage
+            key_map[raw_key] = canonical[:500]  # raised from 200 to 500
+
+        # Rebuild counts/domain/sources with canonical keys
+        new_counts: Counter = Counter()
+        new_domain: dict = {}
+        new_sources: dict = {}
+        for raw_key, count in batch_counts.items():
+            canonical = key_map.get(raw_key, raw_key)
+            new_counts[canonical] += count
+            # Domain: keep most specific (first seen wins, same as before)
+            new_domain.setdefault(canonical, batch_domain.get(raw_key, "general"))
+            # Sources: union of all source sets that merged into this canonical
+            existing_src = new_sources.get(canonical, set())
+            new_sources[canonical] = existing_src | batch_sources.get(raw_key, {"real"})
+
+        merged_count = len(batch_counts) - len(new_counts)
+        print(f"[COLD] Clustering: {len(batch_counts)} raw -> {len(new_counts)} canonical ({merged_count} merged)")
+        return new_counts, new_domain, new_sources
+
+    except Exception as e:
+        print(f"[COLD] Clustering failed (non-fatal, using raw keys): {e}")
+        return batch_counts, batch_domain, batch_sources
