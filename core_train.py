@@ -35,6 +35,8 @@ _last_cold_run: float = 0.0
 _last_cold_kb_count: int = 0
 _last_research_run: float = 0.0
 _IMPROVEMENT_INTERVAL = 3600  # 60 min
+_last_public_source_run: float = 0.0
+_PUBLIC_SOURCE_INTERVAL = 21600  # 6 hours
 
 # Source confidence multipliers (Phase 3)
 _SRC_CONF = {"real": 1.0, "simulation": 0.7, "both": 1.3}
