@@ -1667,18 +1667,16 @@ def t_project_get(project_ids: str = "") -> dict:
 
 
 def t_project_search(project_id: str = "", query: str = "") -> dict:
-    """Search KB entries for a specific project."""
+    """Search KB entries for a specific project. Server-side ilike on topic+content."""
     try:
         if not project_id or not query:
             return {"ok": False, "error": "project_id and query required"}
         domain = f"project:{project_id}"
+        enc_q = query.replace("%", "%25")
         rows = sb_get("knowledge_base",
-            f"select=topic,content,confidence&domain=eq.{domain}&limit=10",
+            f"select=topic,content,confidence&domain=eq.{domain}&or=(topic.ilike.*{enc_q}*,content.ilike.*{enc_q}*)&limit=30",
             svc=True) or []
-        # Simple text filter client-side
-        q = query.lower()
-        hits = [r for r in rows if q in r.get("topic", "").lower() or q in r.get("content", "").lower()]
-        return {"ok": True, "project_id": project_id, "query": query, "hits": hits, "count": len(hits)}
+        return {"ok": True, "project_id": project_id, "query": query, "hits": rows, "count": len(rows)}
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
