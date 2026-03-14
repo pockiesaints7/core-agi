@@ -921,7 +921,7 @@ def t_session_end(summary: str, actions: str, domain: str = "general",
 
             if content != original:
                 gh_write("SESSION.md", content,
-                         f"chore(session): auto-update SESSION.md — {date_str} close")
+                         f"chore(session): auto-update SESSION.md — {date_str} close [skip ci]")
                 session_md_updated = True
 
         except Exception as e:
