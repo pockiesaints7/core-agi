@@ -1261,12 +1261,8 @@ def t_run_template(name: str, params: str = "") -> dict:
 
 
 def t_mine_kb(max_batches: str = "50", force: str = "false") -> dict:
-    try:
-        mb = int(max_batches) if max_batches else 50
-        f = str(force).lower() in ("true", "1", "yes")
-    except Exception:
-        mb = 50; f = False
-    return run_kb_mining(max_batches=mb, force=f)
+    """DEPRECATED 2026-03-14 - backlog table dropped. KB mining replaced by cold processor pipeline."""
+    return {"ok": False, "deprecated": True, "reason": "backlog table dropped - use evolution_queue pipeline instead"}
 
 
 def t_redeploy(reason: str = "") -> dict:
@@ -1332,34 +1328,13 @@ def t_logs(limit: str = "50", keyword: str = "") -> dict:
 
 
 def t_get_backlog(status: str = "pending", limit: int = 20, min_priority: int = 1, type: str = ""):
-    try:
-        lim = int(limit) if limit else 20
-        min_p = int(min_priority) if min_priority else 1
-        qs = f"select=*&status=eq.{status}&order=priority.desc&limit={lim}"
-        if min_p > 1:
-            qs += f"&priority=gte.{min_p}"
-        if type and type.strip():
-            qs += f"&type=eq.{type.strip()}"
-        items = sb_get("backlog", qs, svc=True)
-        total = int(httpx.get(
-            f"{SUPABASE_URL}/rest/v1/backlog?select=id&limit=1",
-            headers=_sbh_count_svc(), timeout=10
-        ).headers.get("content-range", "*/0").split("/")[-1])
-        return {"ok": True, "total": total, "filtered": len(items),
-                "type_filter": type or "all", "items": items}
-    except Exception as e:
-        return {"ok": False, "error": str(e), "items": []}
+    """DEPRECATED 2026-03-14 - backlog table dropped. Use task_queue instead."""
+    return {"ok": False, "deprecated": True, "reason": "backlog table dropped - use task_queue instead"}
 
 
 def t_backlog_update(title: str, status: str, result: str = ""):
-    """Update backlog item status. When status=done, result is required."""
-    if status == "done" and not result.strip():
-        return {"ok": False, "error": "result is required when status=done — describe what was built"}
-    patch_data = {"status": status}
-    if result.strip():
-        patch_data["result"] = result.strip()
-    ok = sb_patch("backlog", f"title=eq.{title}", patch_data)
-    return {"ok": ok, "title": title, "new_status": status}
+    """DEPRECATED 2026-03-14 - backlog table dropped. Use task_queue instead."""
+    return {"ok": False, "deprecated": True, "reason": "backlog table dropped - use task_queue instead"}
 
 
 def t_changelog_add(version: str = "", component: str = "", summary: str = "",
@@ -1899,18 +1874,12 @@ TOOLS = {
                                "desc": "Analytics: domain distribution, top patterns, mistake frequency."},
     "search_mistakes":        {"fn": t_search_mistakes,        "perm": "READ",    "args": ["query", "domain", "limit"],
                                "desc": "Semantic mistake search."},
-    "get_backlog":            {"fn": t_get_backlog,            "perm": "READ",    "args": ["status", "limit", "min_priority", "type"],
-                               "desc": "Get improvement backlog from Supabase."},
-    "backlog_update":         {"fn": t_backlog_update,         "perm": "WRITE",   "args": ["title", "status", "result"],
-                               "desc": "Update backlog item status. result required when status=done."},
     "changelog_add":          {"fn": t_changelog_add,          "perm": "WRITE",   "args": ["version", "component", "summary", "before", "after", "change_type"],
                                "desc": "Log a completed change to the changelog table + Telegram notify."},
     "bulk_apply":             {"fn": t_bulk_apply,             "perm": "WRITE",   "args": ["executor_override", "dry_run"],
                                "desc": "Apply ALL pending evolution_queue items."},
     "repopulate":             {"fn": _repopulate_evolution_queue, "perm": "WRITE", "args": [],
                                "desc": "Re-push all P3+ backlog items to evolution_queue."},
-    "mine_kb":                {"fn": t_mine_kb,                "perm": "WRITE",   "args": ["max_batches", "force"],
-                               "desc": "Mine KB entries in batches to generate backlog items."},
     "list_templates":         {"fn": t_list_templates,         "perm": "READ",    "args": ["limit"],
                                "desc": "List reusable script templates."},
     "run_template":           {"fn": t_run_template,           "perm": "EXECUTE", "args": ["name", "params"],
