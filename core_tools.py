@@ -677,6 +677,7 @@ def t_session_start() -> dict:
             "pending_evolutions": evolutions[:5] if isinstance(evolutions, list) else [],
             "unprocessed_hot": training.get("unprocessed_hot", 0),
             "pending_evo_count": training.get("pending_evolutions", 0),
+            "live_tool_count": len(TOOLS),
             "system_map": smap,
         }
     except Exception as e:
