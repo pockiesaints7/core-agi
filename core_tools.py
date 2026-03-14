@@ -99,9 +99,14 @@ def t_constitution():
     return {"constitution": txt, "immutable": True}
 
 def t_search_kb(query="", domain="", limit=10):
-    qs = f"select=domain,topic,content,confidence&limit={limit}"
-    if domain: qs += f"&domain=eq.{domain}"
-    if query:  qs += f"&content=ilike.*{query.split()[0]}*"
+    """Search knowledge_base. Multi-word queries search content, topic, and instruction fields."""
+    lim = int(limit) if limit else 10
+    qs = f"select=domain,topic,instruction,content,confidence&limit={lim}"
+    if domain and domain not in ("all", ""):
+        qs += f"&domain=eq.{domain}"
+    if query:
+        q = query.strip().replace("'", "").replace('"', "")
+        qs += f"&or=(content.ilike.*{q}*,topic.ilike.*{q}*,instruction.ilike.*{q}*)"
     return sb_get("knowledge_base", qs)
 
 def t_get_mistakes(domain="", limit=10):
