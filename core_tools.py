@@ -728,7 +728,11 @@ def t_session_end(summary: str, actions: str, domain: str = "general",
     Always: logs session to Supabase, appends row to SESSION.md log table, runs Groq hot_reflection."""
     from core_train import auto_hot_reflection
     try:
-        actions_list = [a.strip() for a in actions.split(",") if a.strip()]
+        if isinstance(actions, list):
+            actions_list = [str(a).strip() for a in actions if str(a).strip()]
+        else:
+            sep = "|" if "|" in str(actions) else ","
+            actions_list = [a.strip() for a in str(actions).split(sep) if a.strip()]
         try:
             q = float(quality)
         except:
