@@ -2304,6 +2304,91 @@ def t_mistakes_since(hours: str = "24") -> dict:
         return {"ok": False, "error": str(e)}
 
 
+# -- TASK-21: Persistent Evolution Engine ------------------------------------
+def t_add_evolution_rule(
+    rule: str,
+    domain: str,
+    category: str = "hard_rule",
+    source: str = "session_correction",
+) -> dict:
+    """Write a new behavioral rule to ALL server-side persistence layers atomically.
+
+    RULE #1 FOR AGI: evolution = data in storage, not chat promises.
+    This tool writes to:
+      1. knowledge_base (instruction field, confidence=proven, tags=[evolution_rule])
+      2. SESSION.md Active Rules table (gh_search_replace append)
+
+    NOTE: Cannot write to local skill file (C:\\Users\\rnvgg\\.claude-skills\\CORE_AGI_SKILL_V4.md)
+    because this runs on Railway. That write is Claude Desktop's job via Windows-MCP:FileSystem.
+    This tool returns a reminder. session_end gate (TASK-21.B) enforces it.
+
+    category: hard_rule | sop | architectural_decision | correction
+    source: session_correction | owner_directive | cold_processor
+    """
+    try:
+        if not rule or not domain:
+            return {"ok": False, "error": "rule and domain are required"}
+
+        persisted_to = []
+
+        # 1 -- Write to knowledge_base
+        kb_ok = sb_upsert("knowledge_base", {
+            "domain": domain,
+            "topic": f"evolution_rule: {rule[:80]}",
+            "instruction": rule,
+            "content": f"category={category} source={source}. Established via add_evolution_rule. Persists across all sessions.",
+            "confidence": "proven",
+            "source": "evolution_rule",
+            "tags": ["evolution_rule", "persistent", category],
+        }, "domain,topic")
+        if kb_ok:
+            persisted_to.append("knowledge_base")
+
+        # 2 -- Write to SESSION.md Active Rules table
+        try:
+            session_md = gh_read("SESSION.md")
+            # Find the Active Rules table and append a new row
+            rule_short = rule[:120].replace("|", "-").replace("\n", " ")
+            new_row = f"| `{category}` | {rule_short} |"
+            if "| Rule | Detail |" in session_md:
+                # Append after the last rule row in the table
+                old_anchor = "| `deploy_and_wait is DEPRECATED`"
+                if old_anchor not in session_md:
+                    # Generic append: find table end and insert
+                    session_md_updated = session_md.replace(
+                        "\n\n## ",
+                        f"\n{new_row}\n\n## ",
+                        1
+                    )
+                else:
+                    session_md_updated = session_md  # fallback: no change
+            else:
+                session_md_updated = session_md  # table not found, skip
+
+            if session_md_updated != session_md:
+                gh_write("SESSION.md", session_md_updated,
+                         f"evolution_rule: {rule[:60]} [skip ci]")
+                persisted_to.append("session_md")
+        except Exception as _se:
+            print(f"[EVO_RULE] SESSION.md write failed: {_se}")
+
+        return {
+            "ok": True,
+            "persisted_to": persisted_to,
+            "rule": rule[:120],
+            "domain": domain,
+            "category": category,
+            "reminder": (
+                "IMPORTANT: Now write this rule to the LOCAL SKILL FILE: "
+                "C:\\Users\\rnvgg\\\.claude-skills\\CORE_AGI_SKILL_V4.md "
+                "Section 12 via Windows-MCP:FileSystem or Desktop Commander:edit_block. "
+                "Then call session_end."
+            ),
+        }
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
 # -- Tool registry ------------------------------------------------------------
 TOOLS = {
     "get_state":              {"fn": t_state,                  "perm": "READ",    "args": [],
