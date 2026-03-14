@@ -23,7 +23,7 @@ from core_config import (
     GITHUB_REPO, GROQ_FAST, GROQ_MODEL, KB_MINE_BATCH_SIZE, KB_MINE_RATIO_THRESHOLD,
     COLD_HOT_THRESHOLD, COLD_KB_GROWTH_THRESHOLD, PATTERN_EVO_THRESHOLD,
     KNOWLEDGE_AUTO_CONFIDENCE, MCP_PROTOCOL_VERSION, SUPABASE_URL,
-    L, groq_chat, sb_get, sb_post, sb_post_critical, sb_patch, sb_upsert, sb_delete, sb_delete,
+    L, groq_chat, sb_get, sb_post, sb_post_critical, sb_patch, sb_upsert, sb_delete,
 )
 from core_config import _sbh, _sbh_count_svc
 from core_github import _ghh, _gh_blob_read, _gh_blob_write, gh_read, gh_write, notify
@@ -2167,6 +2167,8 @@ TOOLS = {
                                "desc": "Append content to a GitHub file server-side. Runs py_compile before push for .py files. Use to add new functions without fetching file into Claude context."},
     "verify_live":            {"fn": t_verify_live,            "perm": "READ",    "args": ["expected_text", "timeout"],
                                "desc": "Poll /state until expected_text appears."},
+    "sb_patch":               {"fn": t_sb_patch,               "perm": "WRITE",   "args": ["table", "filters", "data"],
+                               "desc": "Update rows in a Supabase table. filters=PostgREST filter string (e.g. id=eq.abc123) REQUIRED -- rejected if empty. data=JSON fields to update e.g. {\"status\": \"done\"}. Returns updated_fields list. Use for: updating task status, marking flags, changing any field. Never call without filters."},
 }
 
 
