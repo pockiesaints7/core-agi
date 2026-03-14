@@ -76,7 +76,7 @@ When user says "activate autonomous mode":
 | `processed_by_cold` | Use `eq.0` / `eq.1` (integer), NOT `eq.true` / `eq.false` |
 | Structural change | Update CORE_SELF.md FIRST, then operating_context.json, then KB |
 | Task status | Before session_end: ALWAYS update active task status in task_queue via sb_patch — in_progress if partial, done if complete. SESSION.md current step is secondary. task_queue is source of truth. |
-| Deploy pattern | ALWAYS: `redeploy()` → `sleep 30s` → `deploy_and_wait(reason='sha:COMMIT')`. NEVER call deploy_and_wait alone — it no longer triggers redeploy. deploy_and_wait is poll-only. |
+| Deploy pattern | `patch_file` pushes code -> Railway auto-deploys. Wait 35s -> `build_status()` to confirm. Manual redeploy (no code change): `redeploy()` -> 35s -> `build_status()`. NEVER use `deploy_and_wait` -- deprecated, was a broken polling loop. |
 | Session end | Always call `session_end` — logs session + hot_reflection in one call |
 | Task done | Update status in task_queue via `sb_query` patch or `update task_queue set status=done` |
 | evolution_queue | Only `knowledge`, `code`, `config` change_types allowed — never `backlog` |
