@@ -720,8 +720,32 @@ Output ONLY valid JSON, no preamble."""
         return False
 
 
+def _get_simulation_task() -> dict:
+    """Read the current custom simulation task from sessions state.
+    Returns the task dict if set, or None if using default.
+    """
+    try:
+        rows = sb_get("sessions",
+            "select=summary&summary=like.*simulation_task*&order=created_at.desc&limit=5",
+            svc=True)
+        for row in rows:
+            summary = row.get("summary", "")
+            if "[state_update] simulation_task:" not in summary:
+                continue
+            raw_val = summary.split("[state_update] simulation_task:")[-1].strip()
+            if raw_val.lower() == "null":
+                return None  # explicitly cleared
+            task = json.loads(raw_val)
+            if task and task.get("instruction"):
+                return task
+    except Exception as e:
+        print(f"[SIM] _get_simulation_task error: {e}")
+    return None
+
+
 def _run_simulation_batch() -> bool:
-    """Track B - grounded simulation of 1M user population."""
+    """Track B - simulation. Uses custom task if set via set_simulation tool,
+    falls back to default 1M user population simulation."""
     try:
         try:
             from core_tools import TOOLS
@@ -742,7 +766,28 @@ def _run_simulation_batch() -> bool:
         kb_domains = list({r.get("domain", "general") for r in kb_sample})
         kb_topics_sample = [r.get("topic", "") for r in kb_sample[:10]]
 
-        system = """You are simulating 1,000,000 users of CORE - a personal AGI orchestration system.
+        # Build runtime context -- injected into both custom and default prompts
+        runtime_context = (
+            f"CORE MCP tools ({len(tool_list)}): {', '.join(tool_list[:20])}\n"
+            f"Known failure modes:\n{failure_modes}\n"
+            f"KB domains: {', '.join(kb_domains)}\n"
+            f"Sample KB topics: {', '.join(kb_topics_sample)}"
+        )
+
+        # Check for custom simulation task
+        task = _get_simulation_task()
+
+        if task:
+            # Custom simulation -- use owner-defined scenario
+            instruction = task.get("instruction", "")
+            system = task.get("system_prompt", "")
+            user_template = task.get("user_prompt_template", "")
+            user = user_template.replace("{{RUNTIME_CONTEXT}}", runtime_context)
+            task_summary = f"Custom simulation: {instruction[:150]}"
+            print(f"[RESEARCH/SIM] Running custom simulation: {instruction[:80]}")
+        else:
+            # Default -- hardcoded 1M user population simulation
+            system = """You are simulating 1,000,000 users of CORE - a personal AGI orchestration system.
 Output MUST be valid JSON:
 {
   "domain": "code|db|bot|mcp|training|kb|general",
@@ -751,12 +796,9 @@ Output MUST be valid JSON:
   "summary": "1 sentence"
 }
 Output ONLY valid JSON, no preamble."""
-
-        user = (f"CORE's MCP tools ({len(tool_list)}): {', '.join(tool_list)}\n\n"
-                f"Known failure modes:\n{failure_modes}\n\n"
-                f"KB domains: {', '.join(kb_domains)}\n"
-                f"Sample KB topics: {', '.join(kb_topics_sample)}\n\n"
-                f"Simulate 1,000,000 users. What patterns emerge?")
+            user = (f"{runtime_context}\n\nSimulate 1,000,000 users. What patterns emerge?")
+            task_summary = "Simulated 1M user population batch"
+            print("[RESEARCH/SIM] Running default 1M user simulation")
 
         raw = groq_chat(system, user, model=GROQ_MODEL, max_tokens=900)
         raw = raw.strip()
@@ -770,7 +812,7 @@ Output ONLY valid JSON, no preamble."""
             return False
 
         ok = sb_post("hot_reflections", {
-            "task_summary": "Simulated 1M user population batch",
+            "task_summary": task_summary,
             "domain": result.get("domain", "general"),
             "new_patterns": patterns,
             "gaps_identified": result.get("gaps", ""),
