@@ -1,7 +1,7 @@
 # CORE SESSION MASTER
 > Last updated: 2026-03-14 | Owner: REINVAGNAR | Version: CORE v6.0
 
-## Current Step: TASK 9 pending. Next architectural improvement: wire public source fetching into background_researcher (_ingest_public_source function). Also: TASK 9.C (Session Quality Scoring) is lowest effort next item.
+## Current Step: TASK-12 — Improve background_researcher. Must open fresh Claude Desktop session. Use patch_file MCP tool. See TASK-12 subtasks in task_queue for exact implementation plan.
 > Stored in Supabase. Query at session start:
 > `sb_query table=task_queue filters=source=eq.core_v6_registry&status=eq.pending&order=priority.desc`
 
@@ -116,6 +116,7 @@ Task history (Tasks 1–11 registered 2026-03-14):
 
 | Date | Summary | Key Actions |
 |---|---|------|
+| 2026-03-14 | Session ended early. Caught and logged mistake: used PowerSh | log_mistake PowerShell syntax check, sb_insert TASK-12 into task_queue with full subtask spec |
 | 2026-03-14 | Researched and documented Groq/llama-3.3 hard limits: knowle | researched Groq/llama-3.3 hard limits and capabilities, web_search confirmed knowledge cutoff December 2023 and no internet access, set_simulation with explicit 3-angle evolution engine instruction (+1 more) |
 | 2026-03-14 | CORE whole-system documentation of task management architect | add_knowledge x3 (SESSION.md scope, task lifecycle, task_queue schema) (+6 more) |
 | 2026-03-14 | SESSION.md task registry migrated to Supabase task_queue. Al | sb_bulk_insert 11 tasks into task_queue, SESSION.md rewritten to SOP-only, changelog logged (+1 more) |
