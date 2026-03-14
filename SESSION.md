@@ -1,7 +1,7 @@
 # CORE SESSION MASTER
 > Last updated: 2026-03-14 | Owner: REINVAGNAR | Version: CORE v6.0
 
-## Current Step: TASK 8 -- Improve CORE patching tools to eliminate token waste and Railway crash risk on large file edits.
+## Current Step: TASK 8 -- Improve CORE patching tools. Start with 8.1 patch_file (server-side patch + py_compile + push), then 8.2 validate_syntax, then 8.3 append_to_file.
 
 ### TASK 8 -- Patch Tooling Improvement
 **Problem:** Patching large .py files (core_tools.py, core_train.py) currently requires:
@@ -252,6 +252,7 @@ Current Step in SESSION.md is often stale across sessions — it said "Task 3 in
 
 | Date | Summary | Key Actions |
 |---|---|------|
+| 2026-03-14 | Task 8 registered in SESSION.md: improve CORE patching tools | 1. Registered Task 8 in SESSION.md -- patch tooling improvement. 2. Updated Current Step to Task 8. 3. Cleaned up tmp files from this session. |
 | 2026-03-14 | Three main deliverables this session. (1) Root cause found f | 1. Found root cause of add_knowledge failures: wrong confidence values. 2. Logged mistake + KB rule for confidence mapping. 3. Seeded 8 default KB entries (electrical_eng x2, core_agi x2, agentic x2 (+2 more) |
 | 2026-03-14 | Three-task cleanup session. (1) system_map cleanup: tombston | 1. Tombstoned CORE_AGI_SKILL_v2.md in system_map, registered V4. 2. Registered 6 untracked local files in system_map. 3. Deleted AGI-MASTERPROMPT.md + STEPS_tmp.md locally and tombstoned in system_map. 4. Patched core_tools.py: stubbed t_mine_kb/t_get_backlog/t_backlog_update, removed from TOOLS registry (-1530 chars). 5. Patched core_train.py: stubbed run_kb_mining (+4 more) |
 | 2026-03-14 | Session started to end previous session properly and start f | Called session_end to properly close the session and set context for next task. |
