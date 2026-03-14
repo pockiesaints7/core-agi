@@ -2266,7 +2266,7 @@ TOOLS = {
     "list_evolutions":        {"fn": t_list_evolutions,        "perm": "READ",    "args": ["status"],
                                "desc": "List evolutions. status=pending|synthesized|applied|rejected (default: pending). Use synthesized to see items Claude has already read via synthesize_evolutions."},
     "update_state":           {"fn": t_update_state,           "perm": "WRITE",   "args": ["key", "value", "reason"],
-                               "desc": "Write state update to sessions table"},
+                               "desc": "Write a key-value state update to sessions table. Use get_state_key to read it back. Useful for persisting simulation settings or mid-session flags across tool calls."},
     "set_simulation":         {"fn": t_set_simulation,         "perm": "WRITE",   "args": ["instruction"],
                                "desc": "Set a custom simulation scenario for the background researcher. CORE crafts the Groq prompt and loops it every 60 min. Empty instruction resets to default."},
     "add_knowledge":          {"fn": t_add_knowledge,          "perm": "WRITE",   "args": ["domain", "topic", "instruction", "content", "tags", "confidence"],
