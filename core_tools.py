@@ -1876,6 +1876,141 @@ def t_synthesize_evolutions() -> dict:
         return {"ok": False, "error": str(e)}
 
 
+
+# -- Task 8: Server-side patching tools ---------------------------------------
+
+def t_patch_file(path: str, patches: str, message: str, repo: str = "", dry_run: str = "false") -> dict:
+    """Server-side patch: fetch file from GitHub, apply find-replace patches,
+    run py_compile if .py, then push. Prevents syntax errors from crashing Railway.
+    patches: JSON array of {old_str, new_str} objects (same format as multi_patch).
+    dry_run: true = show diff but do not push."""
+    try:
+        import subprocess, tempfile as _tmpfile
+        repo = repo or GITHUB_REPO
+        if isinstance(patches, str):
+            patches = json.loads(patches)
+        content = gh_read(path, repo)
+        applied = []
+        skipped = []
+        for i, patch in enumerate(patches):
+            old = patch.get("old_str", "")
+            new = patch.get("new_str", "")
+            count = content.count(old)
+            if count == 0:
+                skipped.append({"index": i, "reason": "not found", "old_str": old[:60]})
+            elif count > 1:
+                skipped.append({"index": i, "reason": f"ambiguous ({count}x)", "old_str": old[:60]})
+            else:
+                content = content.replace(old, new, 1)
+                applied.append({"index": i, "old_str": old[:60]})
+        if not applied:
+            return {"ok": False, "error": "No patches applied", "skipped": skipped}
+        # Syntax check for .py files
+        syntax_ok = True
+        syntax_error = ""
+        if path.endswith(".py"):
+            with _tmpfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as tf:
+                tf.write(content)
+                tf_path = tf.name
+            try:
+                r = subprocess.run(
+                    ["python3", "-m", "py_compile", tf_path],
+                    capture_output=True, text=True, timeout=15
+                )
+                if r.returncode != 0:
+                    syntax_ok = False
+                    syntax_error = r.stderr.strip().replace(tf_path, path)
+            finally:
+                try:
+                    os.unlink(tf_path)
+                except Exception:
+                    pass
+            if not syntax_ok:
+                return {"ok": False, "error": f"Syntax error - NOT pushed: {syntax_error}",
+                        "applied": len(applied), "skipped": len(skipped)}
+        if str(dry_run).lower() == "true":
+            return {"ok": True, "dry_run": True, "path": path,
+                    "applied": len(applied), "skipped": len(skipped),
+                    "syntax_ok": syntax_ok, "details": applied, "skipped_details": skipped}
+        ok = gh_write(path, content, message, repo)
+        if not ok:
+            return {"ok": False, "error": "gh_write returned False"}
+        return {"ok": True, "dry_run": False, "path": path,
+                "applied": len(applied), "skipped": len(skipped),
+                "syntax_ok": syntax_ok, "details": applied, "skipped_details": skipped}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def t_validate_syntax(path: str, repo: str = "") -> dict:
+    """Fetch a .py file from GitHub and run py_compile on it server-side.
+    Returns ok=True/False, error line number and message if syntax error found.
+    Use before any deploy to catch issues without pushing."""
+    try:
+        import subprocess, tempfile as _tmpfile
+        if not path.endswith(".py"):
+            return {"ok": True, "skipped": True, "reason": "Not a .py file"}
+        content = gh_read(path, repo or GITHUB_REPO)
+        with _tmpfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as tf:
+            tf.write(content)
+            tf_path = tf.name
+        try:
+            r = subprocess.run(
+                ["python3", "-m", "py_compile", tf_path],
+                capture_output=True, text=True, timeout=15
+            )
+            if r.returncode == 0:
+                return {"ok": True, "path": path, "lines": len(content.splitlines()),
+                        "size_kb": round(len(content.encode()) / 1024, 1), "message": "Syntax OK"}
+            err_msg = r.stderr.strip().replace(tf_path, path)
+            return {"ok": False, "path": path, "syntax_error": err_msg}
+        finally:
+            try:
+                os.unlink(tf_path)
+            except Exception:
+                pass
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def t_append_to_file(path: str, content_to_append: str, message: str, repo: str = "") -> dict:
+    """Fetch a file from GitHub, append content, run py_compile if .py, push.
+    Designed for adding new functions without fetching the whole file into Claude context.
+    content_to_append: the text to append (must include leading newlines as needed)."""
+    try:
+        import subprocess, tempfile as _tmpfile
+        repo = repo or GITHUB_REPO
+        existing = gh_read(path, repo)
+        new_content = existing + content_to_append
+        # Syntax check for .py files
+        if path.endswith(".py"):
+            with _tmpfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as tf:
+                tf.write(new_content)
+                tf_path = tf.name
+            try:
+                r = subprocess.run(
+                    ["python3", "-m", "py_compile", tf_path],
+                    capture_output=True, text=True, timeout=15
+                )
+                if r.returncode != 0:
+                    err_msg = r.stderr.strip().replace(tf_path, path)
+                    return {"ok": False, "error": f"Syntax error - NOT pushed: {err_msg}"}
+            finally:
+                try:
+                    os.unlink(tf_path)
+                except Exception:
+                    pass
+        ok = gh_write(path, new_content, message, repo)
+        if not ok:
+            return {"ok": False, "error": "gh_write returned False"}
+        return {"ok": True, "path": path,
+                "original_lines": len(existing.splitlines()),
+                "appended_lines": len(content_to_append.splitlines()),
+                "total_lines": len(new_content.splitlines())}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
 # -- Tool registry ------------------------------------------------------------
 TOOLS = {
     "get_state":              {"fn": t_state,                  "perm": "READ",    "args": [],
