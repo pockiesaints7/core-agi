@@ -928,39 +928,38 @@ def t_diff(path: str, sha_a: str, sha_b: str = "main") -> dict:
 
 
 def t_deploy_and_wait(reason: str = "", timeout: str = "120") -> dict:
-    """Trigger redeploy + poll until success/failure."""
+    """Trigger redeploy + poll _gh_commit_status() until success/failure.
+    Polls the latest HEAD commit status — same source as deploy_status, proven reliable."""
     try:
         t_secs = int(timeout) if timeout else 120
         deploy_result = t_redeploy(reason)
         if not deploy_result.get("ok"):
             return {"ok": False, "error": f"redeploy failed: {deploy_result.get('error')}"}
         commit_sha_short = deploy_result.get("commit", "")
-        h = _ghh()
-        ref = httpx.get(f"https://api.github.com/repos/{GITHUB_REPO}/git/ref/heads/main", headers=h, timeout=10)
-        ref.raise_for_status()
-        full_sha = ref.json()["object"]["sha"]
-        deadline = time.time() + t_secs
+        start = time.time()
+        deadline = start + t_secs
         poll_count = 0
+        # Brief initial pause — let Railway pick up the new commit
+        time.sleep(10)
         while time.time() < deadline:
-            time.sleep(8)
             poll_count += 1
-            sr = httpx.get(f"https://api.github.com/repos/{GITHUB_REPO}/commits/{full_sha}/statuses",
-                           headers=h, timeout=10)
-            statuses = sr.json() if sr.status_code == 200 else []
-            railway = [s for s in statuses if "railway" in s.get("context","").lower()
-                       or "railway" in s.get("description","").lower()]
-            st = railway[0] if railway else {}
-            state = st.get("state", "")
-            if state == "success":
-                elapsed = round(time.time() - (deadline - t_secs))
-                notify_owner(f"Deploy SUCCESS — {commit_sha_short} live in {elapsed}s")
-                return {"ok": True, "state": "success", "commit": commit_sha_short,
-                        "description": st.get("description",""), "polls": poll_count,
-                        "elapsed_s": elapsed}
-            if state == "failure":
-                notify_owner(f"Deploy FAILED — {commit_sha_short}")
-                return {"ok": False, "state": "failure", "commit": commit_sha_short,
-                        "description": st.get("description",""), "polls": poll_count}
+            try:
+                st = _gh_commit_status()
+                state = st.get("state", "")
+                sha_match = st.get("sha", "")[:12] == commit_sha_short
+                if sha_match and state == "success":
+                    elapsed = round(time.time() - start)
+                    notify_owner(f"Deploy SUCCESS — {commit_sha_short} live in {elapsed}s")
+                    return {"ok": True, "state": "success", "commit": commit_sha_short,
+                            "description": st.get("description", ""), "polls": poll_count,
+                            "elapsed_s": elapsed}
+                if sha_match and state == "failure":
+                    notify_owner(f"Deploy FAILED — {commit_sha_short}")
+                    return {"ok": False, "state": "failure", "commit": commit_sha_short,
+                            "description": st.get("description", ""), "polls": poll_count}
+            except Exception:
+                pass  # transient GitHub API error — keep polling
+            time.sleep(8)
         notify_owner(f"Deploy TIMEOUT — {commit_sha_short} after {t_secs}s")
         return {"ok": False, "state": "timeout", "commit": commit_sha_short,
                 "polls": poll_count, "timeout_s": t_secs}
