@@ -24,6 +24,8 @@ TELEGRAM_CHAT  = os.environ["TELEGRAM_CHAT_ID"]
 GITHUB_PAT     = os.environ["GITHUB_PAT"]
 GITHUB_REPO    = os.environ.get("GITHUB_USERNAME", "pockiesaints7") + "/core-agi"
 MCP_SECRET     = os.environ["MCP_SECRET"]
+SUPABASE_PAT   = os.environ.get("SUPABASE_PAT", "")  # Management API PAT for DB introspection
+SUPABASE_REF   = "qbfaplqiakwjvrtwpbmr"  # Project ref
 PORT           = int(os.environ.get("PORT", 8080))
 SESSION_TTL_H  = 8
 
