@@ -212,10 +212,20 @@ def t_notify(message, level="info"):
     icons = {"info": "i", "warn": "!", "alert": "ALERT", "ok": "OK"}
     return {"ok": notify(f"{icons.get(level, '>')} CORE\n{message}")}
 
-def t_sb_query(table, filters="", limit=20):
+def t_sb_query(table, filters="", limit=20, order="", select="*"):
+    """Raw Supabase read. Use dedicated tools first (search_kb, get_mistakes etc) -- this is the escape hatch.
+    filters: PostgREST filter string e.g. 'status=eq.pending'.
+    order: sort column e.g. 'created_at.desc'.
+    select: columns to return e.g. 'id,status,task' (default *)."""
     try: lim = int(limit) if limit else 20
     except: lim = 20
-    qs = f"{filters}&limit={lim}" if filters else f"limit={lim}"
+    sel = select.strip() if select and select.strip() else "*"
+    qs = f"select={sel}"
+    if filters and filters.strip():
+        qs += f"&{filters.strip()}"
+    if order and order.strip():
+        qs += f"&order={order.strip()}"
+    qs += f"&limit={lim}"
     return sb_get(table, qs, svc=True)
 
 def t_sb_insert(table, data):
@@ -2115,8 +2125,8 @@ TOOLS = {
                                "desc": "Get recorded mistakes."},
     "read_file":              {"fn": t_read_file,              "perm": "READ",    "args": ["path", "repo"],
                                "desc": "Read file from GitHub repo."},
-    "sb_query":               {"fn": t_sb_query,               "perm": "READ",    "args": ["table", "filters", "limit"],
-                               "desc": "Query Supabase table."},
+    "sb_query":               {"fn": t_sb_query,               "perm": "READ",    "args": ["table", "filters", "limit", "order", "select"],
+                               "desc": "Raw Supabase query. table=table name. filters=PostgREST filter string (e.g. status=eq.pending). limit=row count (default 20). order=sort column (e.g. created_at.desc). select=columns (default *). Use dedicated tools first (search_kb, get_mistakes etc) -- this is the escape hatch for queries those tools cannot handle."},
     "list_evolutions":        {"fn": t_list_evolutions,        "perm": "READ",    "args": ["status"],
                                "desc": "List evolutions. status=pending|synthesized|applied|rejected (default: pending). Use synthesized to see items Claude has already read via synthesize_evolutions."},
     "update_state":           {"fn": t_update_state,           "perm": "WRITE",   "args": ["key", "value", "reason"],
