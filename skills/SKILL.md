@@ -54,11 +54,32 @@ Never begin a session by reciting static information from this file. The system 
 - Check `get_mistakes` in the relevant domain before any remote write operation.
 - Never pass `repo` arg to `read_file` or `write_file` — default is already correct.
 - Never use `query_string` in `sb_query` — use `filters` instead.
-- Never use `write_file` to edit an existing file — it fully overwrites. Use `gh_search_replace` or `multi_patch` for edits, or `POST /patch` from claude.ai.
+- **Never use `multi_patch` on `.py` files** — use `patch_file` instead (has py_compile guard).
+- Never use `write_file` to edit an existing file — it fully overwrites. Use `patch_file`, `gh_search_replace`, or `multi_patch` for edits.
 - Always read back after every write to confirm.
 - Always update SESSION.md at end of session if anything changed.
 - Always update CORE_SELF.md first on any structural change, then propagate to operating_context.json, KB, SESSION.md, changelog.
 - End every Claude Desktop session with `session_end`.
+
+---
+
+## Code Patching Tool Selection (Task 8, 2026-03-14)
+
+Three server-side patching tools are available. All run on Railway — file content never enters Claude's context.
+
+| Situation | Tool | Why |
+|---|---|---|
+| Edit existing code in a `.py` file | `patch_file` | Runs `py_compile` before push — blocks crash loops |
+| Add new functions to end of a `.py` file | `append_to_file` | No full-file context cost, py_compile guarded |
+| Check if a live `.py` file has syntax issues | `validate_syntax` | Read-only, returns exact error line |
+| Edit non-.py files (md, json, txt) | `gh_search_replace` or `multi_patch` | No compile needed |
+| Unicode/em-dash in old_str | `github:get_file_contents` + `github:create_or_update_file` | Bypasses Railway entirely |
+
+**patch_file** — patches format is JSON array `[{"old_str": "...", "new_str": "..."}]`, same as `multi_patch`. Add `dry_run="true"` to preview without pushing. Returns `{"ok": false, "error": "Syntax error - NOT pushed: ..."}` on syntax failure.
+
+**validate_syntax** — returns `{"ok": true, "message": "Syntax OK"}` or `{"ok": false, "syntax_error": "file.py:N: SyntaxError: ..."}`. Use before any deploy if the file state is uncertain.
+
+**append_to_file** — `content_to_append` must include leading newlines. After appending a new `t_*` function, still need a separate `patch_file` call to add the TOOLS dict entry.
 
 ---
 
