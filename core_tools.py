@@ -1105,8 +1105,8 @@ def t_search_mistakes(query: str = "", domain: str = "", limit: int = 10):
         qs = f"select=domain,context,what_failed,correct_approach,root_cause,severity&order=created_at.desc&limit={lim}"
         if domain and domain not in ("all", ""): qs += f"&domain=eq.{domain}"
         if query:
-            word = query.split()[0]
-            qs += f"&what_failed=ilike.*{word}*"
+            q = query.strip().replace("'", "").replace('"', "")
+            qs += f"&or=(what_failed.ilike.*{q}*,context.ilike.*{q}*,correct_approach.ilike.*{q}*)"
         results = sb_get("mistakes", qs, svc=True)
         return {"ok": True, "count": len(results), "mistakes": results}
     except Exception as e:
