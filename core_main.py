@@ -512,25 +512,59 @@ def list_tools():
 
 @app.get("/debug/sim")
 def debug_sim():
-    """Run simulation and return raw Groq output for diagnosis."""
+    """Patch _run_simulation_batch to expose the raw Groq response + actual failure point."""
     import traceback, json as _json
+    from core_config import groq_chat, GROQ_MODEL, sb_get, SUPABASE_URL, _sbh_count_svc
+    import httpx as _hx
+    diag = {}
     try:
-        from core_config import groq_chat, GROQ_MODEL, SUPABASE_URL, sb_get, _sbh_count_svc
-        import httpx as _httpx
-        mistakes = sb_get("mistakes", "select=domain,what_failed&order=id.desc&limit=5", svc=True)
-        failure_modes = "\n".join([f"- [{r.get('domain')}] {r.get('what_failed','')[:80]}" for r in mistakes]) or "None."
-        system = """You are simulating 1,000,000 users of CORE - a personal AGI orchestration system.
-Output MUST be valid JSON: {"domain": "code|db|bot|mcp|training|kb|general", "patterns": ["pattern1", "pattern2"], "gaps": "1-2 sentences", "summary": "1 sentence"}
-Output ONLY valid JSON, no preamble."""
-        user = f"Known failure modes:\n{failure_modes}\n\nSimulate 1,000,000 users. What patterns emerge?"
-        raw = groq_chat(system, user, model=GROQ_MODEL, max_tokens=900)
+        from core_tools import TOOLS
+        tool_list = list(TOOLS.keys())
+    except Exception:
+        tool_list = []
+    try:
+        mistakes = sb_get("mistakes", "select=domain,what_failed&order=id.desc&limit=10", svc=True)
+        kb_sample = sb_get("knowledge_base", "select=domain,topic&order=id.desc&limit=20", svc=True)
+        failure_modes = "\n".join([f"- [{r.get('domain','?')}] {r.get('what_failed','')[:120]}" for r in mistakes]) or "None recorded yet."
+        kb_domains = list({r.get("domain", "general") for r in kb_sample})
+        kb_topics_sample = [r.get("topic", "") for r in kb_sample[:10]]
         try:
-            parsed = _json.loads(raw.strip().lstrip("```json").lstrip("```").strip())
-        except Exception as pe:
-            parsed = None
-        return {"raw": raw[:2000], "parsed": parsed, "patterns_count": len((parsed or {}).get("patterns", []))}
+            kc = _hx.get(f"{SUPABASE_URL}/rest/v1/knowledge_base?select=id&limit=1", headers=_sbh_count_svc(), timeout=8)
+            kb_total = int(kc.headers.get("content-range", "*/0").split("/")[-1])
+        except Exception as ke:
+            kb_total = len(kb_sample)
+            diag["kb_count_err"] = str(ke)
+        runtime_context = (f"CORE MCP tools ({len(tool_list)}): {', '.join(tool_list[:20])}\n"
+            f"KB total entries: {kb_total}\nKB domains: {', '.join(kb_domains)}\n"
+            f"Known failure modes:\n{failure_modes}\nSample KB topics: {', '.join(kb_topics_sample)}")
+        system = """You are simulating 1,000,000 users of CORE - a personal AGI orchestration system.
+Output MUST be valid JSON:\n{\n  \"domain\": \"code|db|bot|mcp|training|kb|general\",\n  \"patterns\": [\"pattern1\", \"pattern2\"],\n  \"gaps\": \"1-2 sentences\",\n  \"summary\": \"1 sentence\"\n}\nOutput ONLY valid JSON, no preamble."""
+        user = f"{runtime_context}\n\nSimulate 1,000,000 users. What patterns emerge?"
+        diag["prompt_len"] = len(user)
+        raw = groq_chat(system, user, model=GROQ_MODEL, max_tokens=900)
+        diag["raw"] = raw[:1000]
+        raw2 = raw.strip()
+        if raw2.startswith("```"): raw2 = raw2.split("```")[1]
+        if raw2.startswith("json"): raw2 = raw2[4:]
+        diag["raw_after_strip"] = raw2[:500]
+        result = _json.loads(raw2.strip())
+        diag["parsed_ok"] = True
+        diag["patterns"] = result.get("patterns", [])
+        from core_config import sb_post
+        post_ok = sb_post("hot_reflections", {
+            "task_summary": "debug sim test",
+            "domain": result.get("domain", "general"),
+            "new_patterns": result.get("patterns", []),
+            "gaps_identified": [result.get("gaps")] if result.get("gaps") else None,
+            "reflection_text": result.get("summary", ""),
+            "processed_by_cold": 0, "source": "simulation",
+            "quality_score": 0.6,
+        })
+        diag["sb_post_ok"] = post_ok
     except Exception as e:
-        return {"ok": False, "error": str(e), "trace": traceback.format_exc()}
+        diag["error"] = str(e)
+        diag["trace"] = traceback.format_exc()
+    return diag
 
 
 @app.get("/debug/real")
