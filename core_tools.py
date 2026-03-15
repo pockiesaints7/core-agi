@@ -2905,33 +2905,8 @@ def t_add_evolution_rule(
         if kb_ok:
             persisted_to.append("knowledge_base")
 
-        # 2 -- Write to SESSION.md Active Rules table
-        try:
-            session_md = gh_read("SESSION.md")
-            # Find the Active Rules table and append a new row
-            rule_short = rule[:120].replace("|", "-").replace("\n", " ")
-            new_row = f"| `{category}` | {rule_short} |"
-            if "| Rule | Detail |" in session_md:
-                # Append after the last rule row in the table
-                old_anchor = "| `deploy_and_wait is DEPRECATED`"
-                if old_anchor not in session_md:
-                    # Generic append: find table end and insert
-                    session_md_updated = session_md.replace(
-                        "\n\n## ",
-                        f"\n{new_row}\n\n## ",
-                        1
-                    )
-                else:
-                    session_md_updated = session_md  # fallback: no change
-            else:
-                session_md_updated = session_md  # table not found, skip
-
-            if session_md_updated != session_md:
-                gh_write("SESSION.md", session_md_updated,
-                         f"evolution_rule: {rule[:60]} [skip ci]")
-                persisted_to.append("session_md")
-        except Exception as _se:
-            print(f"[EVO_RULE] SESSION.md write failed: {_se}")
+        # NOTE: SESSION.md is static (never auto-written). KB is the sole persistence layer.
+        # SESSION.md edits are manual-only when active rules or protocol changes.
 
         return {
             "ok": True,
