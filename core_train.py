@@ -399,7 +399,7 @@ def _groq_kb_content(pattern_key: str, domain: str, frequency: int, src_key: str
 def run_cold_processor():
     try:
         hots = sb_get("hot_reflections",
-                      "select=id,domain,new_patterns,new_mistakes,quality_score,source,task_summary&processed_by_cold=eq.0&id=gt.1&quality_score=gte.0.5&order=created_at.asc",
+                      "select=id,domain,new_patterns,new_mistakes,quality_score,source,task_summary,gaps_identified&processed_by_cold=eq.0&id=gt.1&quality_score=gte.0.5&order=created_at.asc",
                       svc=True)
         # TASK-25.B: quality gate -- hots below 0.5 are skipped (low signal, simulation noise)
         skipped_low_quality = sb_get("hot_reflections",
