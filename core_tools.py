@@ -912,59 +912,9 @@ def t_session_end(summary: str, actions: str, domain: str = "general",
         })
         reflection_id = "logged" if r_ok else "failed"
 
-        # 3. Auto-update SESSION.md
+        # SESSION.md is static -- tasks live in Supabase, session log in sessions table.
+        # No writes to SESSION.md: eliminates spurious Railway redeploys on every session close.
         session_md_updated = False
-        try:
-            content = gh_read("SESSION.md")
-            original = content
-
-            # 3a. Tick completed_tasks checkboxes
-            if completed_tasks.strip():
-                for task_id in completed_tasks.split("|"):
-                    task_id = task_id.strip()
-                    if not task_id:
-                        continue
-                    content = content.replace(
-                        f"- [ ] {task_id} ",
-                        f"- [x] {task_id} "
-                    ).replace(
-                        f"- [ ] {task_id}.",
-                        f"- [x] {task_id}."
-                    ).replace(
-                        f"- [ ] {task_id}\n",
-                        f"- [x] {task_id}\n"
-                    )
-
-            # 3b. Update Current Step if provided
-            if new_step.strip():
-                lines = content.splitlines()
-                for i, line in enumerate(lines):
-                    if line.startswith("## Current Step"):
-                        lines[i] = f"## Current Step: {new_step.strip()}"
-                        break
-                content = "\n".join(lines)
-
-            # 3c. Append row to SESSION LOG table
-            date_str = datetime.utcnow().strftime("%Y-%m-%d")
-            actions_short = ", ".join(actions_list[:3])
-            if len(actions_list) > 3:
-                actions_short += f" (+{len(actions_list)-3} more)"
-            new_row = f"| {date_str} | {summary[:60]} | {actions_short} |"
-            lines = content.splitlines()
-            for i, line in enumerate(lines):
-                if line.startswith("| Date |") or line.startswith("| date |"):
-                    sep_line = i + 1
-                    lines.insert(sep_line + 1, new_row)
-                    break
-            content = "\n".join(lines)
-
-            if content != original:
-                gh_write("SESSION.md", content,
-                         f"chore(session): auto-update SESSION.md — {date_str} close [skip ci]")
-                session_md_updated = True
-
-        except Exception as e:
-            print(f"[SESSION_END] SESSION.md update failed: {e}")
 
         # 5. Scan system_map - detect drift, update volatile rows
         smap_scan = {"ok": False, "error": "skipped"}
