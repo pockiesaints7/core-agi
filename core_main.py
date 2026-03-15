@@ -225,7 +225,7 @@ _sse_sessions: dict = {}
 @app.get("/")
 def root():
     counts = get_system_counts()
-    step = get_current_step()
+    step = get_resume_task()
     try:
         backlog_count = int(httpx.get(
             f"{SUPABASE_URL}/rest/v1/backlog?select=id&limit=1",
