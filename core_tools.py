@@ -3397,6 +3397,8 @@ TOOLS = {
                                "desc": "Add or update a KB entry for a project. domain=project:{project_id}."},
     "project_update_index":   {"fn": t_project_update_index,   "perm": "WRITE",   "args": ["project_id", "last_indexed"],
                                "desc": "Update last_indexed timestamp for a project in Supabase."},
+    "project_index":          {"fn": t_project_index,          "perm": "WRITE",   "args": ["project_id", "topic", "content", "notify"],
+                               "desc": "Index content into a project KB. Writes topic+content chunk to domain=project:{id} and updates last_indexed. If no content, timestamp-only ping. notify=true sends Telegram."},
     "read_image_content":     {"fn": t_read_image_content,     "perm": "READ",    "args": ["content_b64", "mime_type", "project_id", "topic", "prompt", "file_name"],
                                "desc": "Extract text/data from image (JPG/PNG) using Claude vision (claude-haiku). content_b64=base64 image bytes. If project_id+topic provided, auto-saves to project KB. Returns extracted_text."},
     "read_pdf_content":       {"fn": t_read_pdf_content,       "perm": "READ",    "args": ["content_b64", "project_id", "topic", "file_name", "max_chars"],
