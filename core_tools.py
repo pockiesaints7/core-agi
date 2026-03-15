@@ -3257,7 +3257,41 @@ def t_get_quality_trend(days: str = "7") -> dict:
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
-
+def t_project_index(project_id: str = "", topic: str = "", content: str = "", notify: str = "true") -> dict:
+    """Index content into a project's KB. Writes one KB chunk (topic+content) to domain=project:{id},
+    then updates last_indexed timestamp on the projects table.
+    Use to push document extracts, notes, or field data into a project's knowledge base from Claude.ai.
+    If content is empty, only refreshes the last_indexed timestamp (ping-mode).
+    topic: short label for this chunk (e.g. 'RMU commissioning checklist' or 'daily report 2026-03-16').
+    notify=true sends Telegram confirmation."""
+    try:
+        if not project_id:
+            return {"ok": False, "error": "project_id required"}
+        results = {}
+        # Write KB chunk if content provided
+        if content and topic:
+            ok = sb_upsert("knowledge_base",
+                {"domain": f"project:{project_id}", "topic": topic, "content": content, "confidence": "high"},
+                on_conflict="domain,topic")
+            results["kb_written"] = bool(ok)
+            results["domain"] = f"project:{project_id}"
+            results["topic"] = topic
+        else:
+            results["kb_written"] = False
+            results["note"] = "no content/topic provided -- timestamp-only update"
+        # Always update last_indexed
+        ts = datetime.utcnow().isoformat()
+        sb_patch("projects", f"project_id=eq.{project_id}", {"last_indexed": ts})
+        results["last_indexed"] = ts
+        results["project_id"] = project_id
+        # Telegram notify
+        if str(notify).lower() in ("true", "1", "yes"):
+            msg = f"[PROJECT] {project_id} indexed\ntopic: {topic or '(timestamp only)'}\nts: {ts}"
+            notify_tg(msg)
+        return {"ok": True, **results}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+      
 # -- Tool registry ------------------------------------------------------------
 TOOLS = {
     "get_state":              {"fn": t_state,                  "perm": "READ",    "args": [],
@@ -3690,40 +3724,4 @@ def _reconcile_skeleton_docs(rows: list, inserted: list, tombstoned: list) -> No
 
     except Exception as e:
         print(f"[SMAP] _reconcile_skeleton_docs error: {e}")
-
-
-def t_project_index(project_id: str = "", topic: str = "", content: str = "", notify: str = "true") -> dict:
-    """Index content into a project's KB. Writes one KB chunk (topic+content) to domain=project:{id},
-    then updates last_indexed timestamp on the projects table.
-    Use to push document extracts, notes, or field data into a project's knowledge base from Claude.ai.
-    If content is empty, only refreshes the last_indexed timestamp (ping-mode).
-    topic: short label for this chunk (e.g. 'RMU commissioning checklist' or 'daily report 2026-03-16').
-    notify=true sends Telegram confirmation."""
-    try:
-        if not project_id:
-            return {"ok": False, "error": "project_id required"}
-        results = {}
-        # Write KB chunk if content provided
-        if content and topic:
-            ok = sb_upsert("knowledge_base",
-                {"domain": f"project:{project_id}", "topic": topic, "content": content, "confidence": "high"},
-                on_conflict="domain,topic")
-            results["kb_written"] = bool(ok)
-            results["domain"] = f"project:{project_id}"
-            results["topic"] = topic
-        else:
-            results["kb_written"] = False
-            results["note"] = "no content/topic provided -- timestamp-only update"
-        # Always update last_indexed
-        ts = datetime.utcnow().isoformat()
-        sb_patch("projects", f"project_id=eq.{project_id}", {"last_indexed": ts})
-        results["last_indexed"] = ts
-        results["project_id"] = project_id
-        # Telegram notify
-        if str(notify).lower() in ("true", "1", "yes"):
-            msg = f"[PROJECT] {project_id} indexed\ntopic: {topic or '(timestamp only)'}\nts: {ts}"
-            notify_tg(msg)
-        return {"ok": True, **results}
-    except Exception as e:
-        return {"ok": False, "error": str(e)}
 
