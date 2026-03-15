@@ -163,23 +163,25 @@ def t_set_simulation(instruction: str) -> dict:
 
         # Craft system prompt
         system_prompt = (
-            "You are CORE's simulation engine. Your job is to simulate the scenario described below "
-            "and extract actionable patterns that CORE should learn from. "
+            "You are a senior researcher at an AGI self-improvement lab. "
+            "Your job is to analyze CORE's live runtime context and extract high-signal patterns "
+            "that will improve CORE's behavior, reasoning, and architecture. "
+            "Be specific, grounded in the context provided, and adversarial where needed. "
             "Output MUST be valid JSON: "
             '{"domain": "code|db|bot|mcp|training|kb|general", '
             '"patterns": ["pattern1", "pattern2", "pattern3"], '
-            '"gaps": "1-2 sentences on gaps found", '
-            '"summary": "1 sentence summary"} '
+            '"gaps": "1-2 sentences on what CORE is structurally missing", '
+            '"summary": "1 sentence research finding"} '
             "Output ONLY valid JSON, no preamble."
         )
 
         # Craft user prompt -- dynamic context injected at runtime by _run_simulation_batch
+        # NOTE: instruction appears once only -- no redundant suffix
         user_prompt_template = (
-            f"Simulation scenario: {instruction}\n\n"
-            "CORE context (injected at runtime):\n"
+            f"{instruction}\n\n"
+            "CORE live context (use this as your research data):\n"
             "{{RUNTIME_CONTEXT}}\n\n"
-            f"Run this simulation. Extract patterns CORE should learn from. "
-            f"Focus specifically on: {instruction}"
+            "Run your research. Output only valid JSON."
         )
 
         task = {
