@@ -325,14 +325,15 @@ def run_cold_processor():
                 new_freq = existing["frequency"] + batch_count
                 sb_upsert("pattern_frequency",
                           {"id": existing["id"], "pattern_key": key, "frequency": new_freq,
-                           "domain": domain, "description": key[:500], "last_seen": now_ts},
+                           "domain": domain, "description": key[:500], "last_seen": now_ts,
+                           "stale": False},
                           on_conflict="id")
                 total_freq = new_freq
             else:
                 sb_upsert("pattern_frequency",
                           {"pattern_key": key, "frequency": batch_count,
                            "domain": domain, "description": key[:500], "auto_applied": False,
-                           "last_seen": now_ts},
+                           "last_seen": now_ts, "stale": False},
                           on_conflict="pattern_key")
                 total_freq = batch_count
 
