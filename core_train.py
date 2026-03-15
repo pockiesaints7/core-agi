@@ -189,7 +189,7 @@ def auto_hot_reflection(session_data: dict):
             "new_patterns": new_patterns, "new_mistakes": [],
             "quality_score": quality_score, "gaps_identified": gaps_identified,
             "reflection_text": f"Auto-generated from {interface} session. Actions: {total}. Patterns: {len(new_patterns)}.",
-            "processed_by_cold": False,
+            "processed_by_cold": 0,
         })
         print(f"[HOT] ok={ok} domain={domain}")
         return ok
