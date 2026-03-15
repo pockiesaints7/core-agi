@@ -718,6 +718,7 @@ def t_session_start() -> dict:
             "live_tool_count": len(TOOLS),
             "system_map_drift": drift,
             "system_map": smap,
+            "stale_pattern_count": _get_stale_pattern_count(),
         }
     except Exception as e:
         return {"ok": False, "error": str(e)}
