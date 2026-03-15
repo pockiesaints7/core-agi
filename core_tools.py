@@ -870,13 +870,14 @@ def t_session_end(summary: str, actions: str, domain: str = "general",
     Always: logs session to Supabase, runs Groq hot_reflection, scans system_map. SESSION.md is static."""
     from core_train import auto_hot_reflection
     try:
+        session_start_at = datetime.utcnow()  # anchor: start of close call, used for duration
         if isinstance(actions, list):
             actions_list = [str(a).strip() for a in actions if str(a).strip()]
         else:
-            sep = "|" if "|" in str(actions) else ","
-            actions_list = [a.strip() for a in str(actions).split(sep) if a.strip()]
+            # pipe-only split -- commas appear naturally inside action descriptions
+            actions_list = [a.strip() for a in str(actions).split("|") if a.strip()]
         try:
-            q = float(quality)
+            q = min(1.0, max(0.0, float(quality)))  # clamp to valid range 0.0-1.0
         except:
             q = 0.8
 
@@ -902,7 +903,7 @@ def t_session_end(summary: str, actions: str, domain: str = "general",
             }
 
         # 1. Log session to Supabase
-        session_created_at = datetime.utcnow().isoformat()
+        session_created_at = session_start_at.isoformat()
         session_ok = sb_post("sessions", {
             "summary": summary,
             "actions": actions_list,
@@ -910,6 +911,9 @@ def t_session_end(summary: str, actions: str, domain: str = "general",
         })
 
         # 2. Always run Groq-powered hot reflection
+        # Pass session_created_at as anchor -- auto_hot_reflection uses last hot_reflection
+        # timestamp as the enrichment window lower bound, not this value directly.
+        # But we pass it as fallback in case no prior hot_reflection exists.
         caller_patterns = [p.strip() for p in patterns.split("|") if p.strip()]
         r_ok = auto_hot_reflection({
             "summary": summary,
@@ -924,7 +928,7 @@ def t_session_end(summary: str, actions: str, domain: str = "general",
 
         # 3. SESSION.md is static -- tasks live in Supabase, session log in sessions table.
         # No writes to SESSION.md: eliminates spurious Railway redeploys on every session close.
-        session_md_updated = False
+        duration_seconds = int((datetime.utcnow() - session_start_at).total_seconds())
 
         # 4. Scan system_map - detect drift, update volatile rows
         smap_scan = {"ok": False, "error": "skipped"}
@@ -959,9 +963,10 @@ def t_session_end(summary: str, actions: str, domain: str = "general",
             "ok": session_ok,
             "session_logged": session_ok,
             "reflection_logged": reflection_id,
-            "session_md_updated": session_md_updated,
+            "training_ok": r_ok,
             "system_map_scan": smap_scan,
             "actions_count": len(actions_list),
+            "duration_seconds": duration_seconds,
             "skill_file_updated": _skill_ok,
         }
         if not r_ok:
