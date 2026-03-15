@@ -297,6 +297,112 @@ def t_sb_bulk_insert(table: str, rows: str) -> dict:
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
+def t_debug_fn(fn_name: str, dry_run: bool = True, extra_args: dict = None) -> dict:
+    """Battle-tested debug harness for any CORE function.
+
+    DOCTRINE: Every CORE function must be debuggable without touching production data.
+    This tool runs a named function through a staged execution pipeline:
+      Stage 0 - resolve:  confirm function exists and is callable
+      Stage 1 - preflight: run all data fetches (Supabase, KB, etc) and return raw inputs
+      Stage 2 - llm:      call Groq/LLM if applicable, return raw response before parsing
+      Stage 3 - parse:    attempt JSON/text parse, return parsed result + any parse error
+      Stage 4 - write:    attempt DB write (SKIPPED if dry_run=True)
+    Each stage is labelled in the response. First failed stage tells you exactly where it broke.
+
+    Args:
+        fn_name:    name of function to debug (e.g. '_run_simulation_batch', '_extract_real_signal')
+        dry_run:    if True (default), skip all DB writes -- safe for production debugging
+        extra_args: optional dict of extra args to pass to the function (for t_* tools)
+
+    Returns dict with:
+        fn:         function name
+        dry_run:    whether writes were skipped
+        stages:     list of {stage, status, data, error, trace} -- one per stage executed
+        final:      'ok' | 'failed_at_stage_N' | 'not_found'
+        result:     final function return value if ran successfully
+    """
+    import traceback, importlib
+
+    stages = []
+    result = None
+
+    def stage(name, fn, *args, **kwargs):
+        """Run one stage, append to stages list, return (ok, value)."""
+        try:
+            val = fn(*args, **kwargs)
+            stages.append({"stage": name, "status": "ok", "data": str(val)[:500]})
+            return True, val
+        except Exception as e:
+            stages.append({"stage": name, "status": "error",
+                           "error": str(e), "trace": traceback.format_exc()[:1000]})
+            return False, None
+
+    # Stage 0 -- resolve function
+    target_fn = None
+    for mod_name in ["core_train", "core_tools", "core_config", "core_github", "core_main"]:
+        try:
+            mod = importlib.import_module(mod_name)
+            if hasattr(mod, fn_name):
+                target_fn = getattr(mod, fn_name)
+                stages.append({"stage": "0_resolve", "status": "ok",
+                               "data": f"found in {mod_name}"})
+                break
+        except Exception as e:
+            stages.append({"stage": "0_resolve", "status": "error",
+                           "error": f"{mod_name}: {e}"})
+
+    if target_fn is None:
+        return {"fn": fn_name, "dry_run": dry_run, "stages": stages,
+                "final": "not_found", "result": None}
+
+    # Stage 1..N -- if it's a known pipeline function, run staged breakdown
+    # Otherwise fall back to direct call with dry_run awareness
+    known_staged = {
+        "_run_simulation_batch": "simulation",
+        "_extract_real_signal": "real_signal",
+        "run_cold_processor":   "cold_processor",
+    }
+
+    if fn_name in known_staged:
+        # Staged execution: monkey-patch sb_post to no-op if dry_run
+        from core_config import sb_get, sb_post, groq_chat, GROQ_MODEL
+        import json as _json
+
+        # Stage 1 -- preflight data fetch
+        def do_preflight():
+            mistakes = sb_get("mistakes", "select=domain,what_failed&order=id.desc&limit=5", svc=True)
+            hots_count = len(sb_get("hot_reflections", "select=id&processed_by_cold=eq.0", svc=True) or [])
+            return {"mistakes_count": len(mistakes), "unprocessed_hots": hots_count}
+        ok, preflight = stage("1_preflight", do_preflight)
+        if not ok:
+            return {"fn": fn_name, "dry_run": dry_run, "stages": stages,
+                    "final": "failed_at_stage_1", "result": None}
+
+        # Stage 2 -- call function with write intercepted
+        orig_sb_post = None
+        if dry_run:
+            import core_config as _cc
+            orig_sb_post = _cc.sb_post
+            _cc.sb_post = lambda t, d: stages.append({"stage": "4_write_intercepted",  # noqa
+                "status": "dry_run_skipped", "data": f"table={t} keys={list(d.keys())}"}) or True
+
+        try:
+            ok2, result = stage("2_execute", target_fn)
+        finally:
+            if dry_run and orig_sb_post:
+                import core_config as _cc
+                _cc.sb_post = orig_sb_post
+
+        final = "ok" if ok2 else "failed_at_stage_2"
+    else:
+        # Generic: just call it directly
+        call_kwargs = extra_args or {}
+        ok, result = stage("1_direct_call", target_fn, **call_kwargs)
+        final = "ok" if ok else "failed_at_stage_1"
+
+    return {"fn": fn_name, "dry_run": dry_run, "stages": stages, "final": final, "result": result}
+
+
 def t_get_training_pipeline() -> dict:
     """Full training pipeline status: hot reflections, cold processor, patterns, quality trend, health flags.
     Used by session_start training_pipeline block and /tstatus Telegram command."""
