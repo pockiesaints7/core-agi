@@ -725,7 +725,7 @@ def on_start():
         task_line = f"Tasks: unavailable ({e})"
     evo_line = f"Evolutions — pending: {evo_pending} | applied: {evo_applied} | rejected: {evo_rejected}"
     notify(
-        f"*CORE Online*\n{resume}\n"
+        f"<b>CORE Online</b>\n{resume}\n"
         f"KB: {counts.get('knowledge_base',0)} | Mistakes: {counts.get('mistakes',0)} | Sessions: {counts.get('sessions',0)}\n"
         f"MCP: {len(TOOLS)} tools\n"
         f"{evo_line}\n"
