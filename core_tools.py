@@ -1230,6 +1230,18 @@ def t_session_end(summary: str = "", actions: str = "", domain: str = "general",
         _has_patterns = bool(patterns.strip())
         _skill_ok = str(skill_file_updated).strip().lower() in ("true", "1", "yes")
         _force = str(force_close).strip().lower() in ("true", "1", "yes")
+        # AUDIT: force_close must be owner-invoked only -- log any use for traceability
+        if _force:
+            try:
+                sb_post("knowledge_base", {
+                    "domain": "core_agi.audit",
+                    "topic": f"force_close_used_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}",
+                    "instruction": "force_close audit record",
+                    "content": f"force_close=true was passed to session_end. patterns={patterns[:200] if patterns else 'none'}. skill_file_updated={skill_file_updated}. If CORE self-authorized this, it is a behaviour violation.",
+                    "confidence": 0.5,
+                })
+            except Exception:
+                pass
         if _has_patterns and not _skill_ok and not _force:
             return {
                 "ok": False,
@@ -1237,10 +1249,10 @@ def t_session_end(summary: str = "", actions: str = "", domain: str = "general",
                 "reason": "skill_file_not_updated",
                 "warning": (
                     "New patterns detected but skill_file_updated=false. "
-                    "Write new rules to C:\\Users\\rnvgg\\.claude-skills\\CORE_AGI_SKILL_V4.md "
-                    "Section 12 via Windows-MCP:FileSystem or Desktop Commander:edit_block. "
+                    "Write new rules to the active skill file (query KB domain=core_agi.identity topic=active_skill_filename for current path). "
+                    "Use Desktop Commander:edit_block to append to the SESSION CLOSE CHECKLIST section. "
                     "Then call session_end with skill_file_updated=true. "
-                    "To skip: pass force_close=true."
+                    "To skip: owner must explicitly request force_close=true -- CORE must never self-authorize this bypass."
                 ),
                 "patterns_noted": patterns,
             }
