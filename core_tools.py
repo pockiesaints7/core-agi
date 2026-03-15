@@ -855,10 +855,14 @@ def t_multi_patch(path: str, patches: str, message: str, repo: str = "") -> dict
 def t_session_end(summary: str, actions: str, domain: str = "general",
                   patterns: str = "", quality: str = "0.8",
                   skill_file_updated: str = "false",
-                  force_close: str = "false") -> dict:
+                  force_close: str = "false",
+                  active_task_ids: str = "") -> dict:
     """One-call session close.
     skill_file_updated: TASK-21.B gate. Pass 'true' after writing new rules to local skill file.
     force_close: pass 'true' to bypass skill_file_updated gate (owner explicit override).
+    active_task_ids: pipe-separated UUIDs of tasks touched this session (e.g. 'uuid1|uuid2').
+      session_end checks their status and warns if any are still pending/in_progress.
+      Non-blocking -- warning only, Claude decides whether to patch or leave as-is.
     Always: logs session to Supabase, runs Groq hot_reflection, scans system_map. SESSION.md is static."""
     from core_train import auto_hot_reflection
     try:
