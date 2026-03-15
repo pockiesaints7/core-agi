@@ -669,11 +669,15 @@ def _get_stale_pattern_count() -> int:
 
 
 def t_session_start() -> dict:
-    """One-call session bootstrap - includes system_map snapshot."""
+    """One-call session bootstrap - includes system_map snapshot.
+    Returns in_progress_tasks separately from pending_tasks so Claude immediately
+    knows if a task was left partially done last session.
+    recent_mistakes: last 10 across all domains, ordered by recency.
+    Use get_mistakes(domain=X) for domain-specific lookup before any write."""
     try:
         state = t_state()
         health = t_health()
-        mistakes = t_get_mistakes(domain="", limit=5)
+        mistakes = t_get_mistakes(domain="", limit=10)
         try:
             evolutions = sb_get("evolution_queue",
                 "select=id,change_summary,change_type,confidence&status=eq.pending&order=confidence.desc&limit=5")
