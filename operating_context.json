@@ -60,7 +60,7 @@
     "check_mistakes_before_write": true,
     "always_readback_after_write": true,
     "schema_check_before_insert": "ALWAYS search KB 'CORE DB Schema [table]' OR sb_query limit=1 before first insert to any table in a new session",
-    "session_end": "ALWAYS update SESSION.md if step/state changed"
+    "session_end": "ALWAYS call session_end — SESSION.md no longer updated by it. task_queue is source of truth."
   },
 
   "active_tables": {
