@@ -732,7 +732,7 @@ def t_session_start() -> dict:
             "in_progress_tasks": [t for t in state.get("pending_tasks", []) if t.get("status") == "in_progress"],
             "pending_tasks": [t for t in state.get("pending_tasks", []) if t.get("status") == "pending"],
             "resume_task": next((t for t in state.get("pending_tasks", []) if t.get("status") == "in_progress"), None),
-            "step": state.get("session_md", ""),
+            "session_md": state.get("session_md", ""),  # full SESSION.md content for claude.ai bootstrap
             "recent_mistakes": mistakes if isinstance(mistakes, list) else [],
             "pending_evolutions": evolutions[:5] if isinstance(evolutions, list) else [],
             "unprocessed_hot": training.get("unprocessed_hot", 0),
@@ -2496,7 +2496,7 @@ def t_get_quality_trend(days: str = "7") -> dict:
 # -- Tool registry ------------------------------------------------------------
 TOOLS = {
     "get_state":              {"fn": t_state,                  "perm": "READ",    "args": [],
-                               "desc": "Get current CORE state: last session, counts, pending tasks, operating_context, session_md"},
+                               "desc": "Get current CORE state: last session, counts, in_progress+pending tasks. session_md=full SESSION.md content (static bootstrap doc). Pass include_operating_context=true to also load operating_context.json."},
     "get_system_health":      {"fn": t_health,                 "perm": "READ",    "args": [],
                                "desc": "Check health of all components: Supabase, Groq, Telegram, GitHub"},
     "get_constitution":       {"fn": t_constitution,           "perm": "READ",    "args": [],
@@ -2595,7 +2595,7 @@ TOOLS = {
                                "desc": "Pre-deploy syntax checker for core_tools.py and core_main.py."},
     "system_map_scan":        {"fn": t_system_map_scan, "perm": "READ", "args": ["trigger"], "desc": "Scan system_map table. trigger=session_start|session_end|manual"},
     "session_start":          {"fn": t_session_start,          "perm": "READ",    "args": [],
-                               "desc": "One-call session bootstrap. Returns: health, counts, in_progress_tasks (resume these first), pending_tasks, recent_mistakes (last 10 all domains), stale_pattern_count, system_map. Use get_mistakes(domain=X) for domain-specific lookup before any write."},
+                               "desc": "One-call session bootstrap. Returns: health, counts, resume_task (highest priority in_progress -- start here), in_progress_tasks, pending_tasks, recent_mistakes (last 10 all domains), stale_pattern_count, session_md (full SESSION.md static doc for claude.ai bootstrap), system_map. Use get_mistakes(domain=X) for domain-specific lookup before any write."},
     "session_end":            {"fn": t_session_end,            "perm": "WRITE",   "args": ["summary", "actions", "domain", "patterns", "quality", "skill_file_updated", "force_close", "active_task_ids"],
                                "desc": "One-call session close. BEFORE calling: (1) log_mistake for every error, (2) add_knowledge for every new insight, (3) changelog_add for every deploy, (4) update task statuses in task_queue. active_task_ids=pipe-separated UUIDs of tasks touched -- session_end warns if any still pending/in_progress. TASK-21.B gate: if patterns non-empty, write rules to C:\\Users\\rnvgg\\.claude-skills\\CORE_AGI_SKILL_V4.md then pass skill_file_updated=true. force_close=true bypasses gate. Returns reflection_warning if hot reflection failed, task_status_warnings if tasks left open."},
     "core_py_rollback":       {"fn": t_core_py_rollback,       "perm": "EXECUTE", "args": ["commit_sha"],
