@@ -634,6 +634,8 @@ def t_system_map_scan(trigger: str = "manual") -> dict:
 
         wiring = {}
         for row in rows:
+            if row.get("status") == "tombstone":
+                continue  # exclude tombstoned components from live wiring snapshot
             layer = row["layer"]
             if layer not in wiring:
                 wiring[layer] = []
