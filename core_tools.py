@@ -3314,11 +3314,11 @@ def _predict_failure(operation: str = "", context: str = "", domain: str = "") -
         search_query = " ".join(query_parts)
 
         # Search mistakes table
-        filters = f"what_failed=ilike.%{operation}%"
+        qs = f"what_failed=ilike.%25{operation}%25&order=created_at.desc&limit=5"
         if domain:
-            filters += f"&domain=eq.{domain}"
+            qs += f"&domain=eq.{domain}"
 
-        rows = sb_get("mistakes", filters=filters, limit=5, order="created_at.desc")
+        rows = sb_get("mistakes", qs)
         if not rows:
             # Fallback: broader search via groq_chat if no direct matches
             return {"predicted": False, "warnings": [], "top_mistake": None, "confidence": 0.0,
