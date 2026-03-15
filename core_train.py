@@ -353,7 +353,7 @@ def run_cold_processor():
             # ALLOWED_EVO_TYPES: cold processor only emits knowledge/code/config — never backlog
             # auto_applied fix: re-queue at milestone frequencies (10, 25, 50) so high-frequency
             # patterns get re-evaluated as KB entries, not permanently silenced after first queue.
-            _milestones = {10, 25, 50, 100}
+            _milestones = {10, 25, 50, 100, 200, 500}
             _already_applied = (existing or {}).get("auto_applied", False)
             _at_milestone = total_freq in _milestones
             _should_queue = total_freq >= PATTERN_EVO_THRESHOLD and (
