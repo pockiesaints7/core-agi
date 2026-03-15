@@ -542,7 +542,6 @@ def handle_msg(msg):
             f"*Commands:*\n"
             f"/status \u2014 health + system\n"
             f"/tstatus \u2014 training pipeline detail\n"
-            f"/backlog [min_priority] \u2014 improvement backlog\n"
             f"/project [list|id] \u2014 project context",
             cid
         )
@@ -637,7 +636,7 @@ def handle_msg(msg):
                 notify(f"Could not prepare: {ids}. Check project IDs with /project list.", cid)
 
     else:
-        notify("Commands: /status | /tstatus | /backlog | /project. Full interface \u2192 Claude Desktop.", cid)
+        notify("Commands: /status | /tstatus | /project. Full interface \u2192 Claude Desktop.", cid)
 
 
 # ---------------------------------------------------------------------------
