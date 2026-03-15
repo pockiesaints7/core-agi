@@ -510,6 +510,30 @@ def list_tools():
     return {n: {"perm": t["perm"], "args": t["args"]} for n, t in TOOLS.items()}
 
 
+@app.get("/debug/sim")
+def debug_sim():
+    """Run simulation batch synchronously and return full result for diagnosis."""
+    import traceback
+    try:
+        from core_train import _run_simulation_batch
+        ok = _run_simulation_batch()
+        return {"ok": ok, "error": None}
+    except Exception as e:
+        return {"ok": False, "error": str(e), "trace": traceback.format_exc()}
+
+
+@app.get("/debug/real")
+def debug_real():
+    """Run real signal extraction synchronously and return full result for diagnosis."""
+    import traceback
+    try:
+        from core_train import _extract_real_signal
+        ok = _extract_real_signal()
+        return {"ok": ok, "error": None}
+    except Exception as e:
+        return {"ok": False, "error": str(e), "trace": traceback.format_exc()}
+
+
 @app.post("/webhook")
 async def webhook(req: Request):
     try:
