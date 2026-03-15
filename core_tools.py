@@ -823,7 +823,7 @@ def t_session_start() -> dict:
                 evolutions = []
         except Exception:
             evolutions = []
-        training = t_training_status()
+        training = t_get_training_pipeline()
         try:
             smap = t_system_map_scan(trigger="session_start")
         except Exception as e:
