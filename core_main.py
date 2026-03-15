@@ -650,24 +650,58 @@ def on_start():
     set_webhook()
     threading.Thread(target=queue_poller, daemon=True).start()
     threading.Thread(target=cold_processor_loop, daemon=True).start()
-    threading.Thread(target=self_sync_check, daemon=True).start()
+    # self_sync_check disabled -- CORE_SELF.md is tombstoned, superseded by system_map
     threading.Thread(target=background_researcher, daemon=True).start()
     counts = get_system_counts()
-    step = get_current_step()
+    resume = get_resume_task()
     evo_pending  = counts.get('evolution_pending', 0)
     evo_applied  = counts.get('evolution_applied', 0)
     evo_rejected = counts.get('evolution_rejected', 0)
-    tasks_pending = counts.get('task_queue_pending', 0)
-    evo_line  = f"Evolutions — pending: {evo_pending} | applied: {evo_applied} | rejected: {evo_rejected}"
-    task_line = f"Tasks pending: {tasks_pending}" if tasks_pending > 0 else "No pending tasks"
+    # Show in_progress tasks brief
+    try:
+        in_progress = sb_get(
+            "task_queue",
+            "select=task,priority,status&source=in.(core_v6_registry,mcp_session)"
+            "&status=eq.in_progress&order=priority.desc&limit=3"
+        ) or []
+        if in_progress:
+            lines = []
+            for t in in_progress:
+                raw = t.get("task", "")
+                try:
+                    parsed = json.loads(raw) if isinstance(raw, str) else raw
+                    title = parsed.get("title") or str(parsed)[:60]
+                except Exception:
+                    title = str(raw)[:60]
+                lines.append(f"  ▶ {title} (P{t.get('priority','?')})")
+            task_line = "In progress:\n" + "\n".join(lines)
+        else:
+            pending = sb_get(
+                "task_queue",
+                "select=task,priority&source=in.(core_v6_registry,mcp_session)"
+                "&status=eq.pending&order=priority.desc&limit=1"
+            ) or []
+            if pending:
+                raw = pending[0].get("task", "")
+                try:
+                    parsed = json.loads(raw) if isinstance(raw, str) else raw
+                    title = parsed.get("title") or str(parsed)[:60]
+                except Exception:
+                    title = str(raw)[:60]
+                task_line = f"Next up: {title}"
+            else:
+                task_line = "No active tasks"
+    except Exception as e:
+        task_line = f"Tasks: unavailable ({e})"
+    evo_line = f"Evolutions — pending: {evo_pending} | applied: {evo_applied} | rejected: {evo_rejected}"
     notify(
-        f"*CORE Online*\n{step}\n"
+        f"*CORE Online*\n{resume}\n"
         f"KB: {counts.get('knowledge_base',0)} | Mistakes: {counts.get('mistakes',0)} | Sessions: {counts.get('sessions',0)}\n"
         f"MCP: {len(TOOLS)} tools\n"
         f"{evo_line}\n"
         f"{task_line}"
     )
-    print(f"[CORE] v6.0 online :{PORT} - {step}")
+    print(f"[CORE] v6.0 online :{PORT} - {resume}")
 
 
 if __name__ == "__main__":
