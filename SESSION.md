@@ -1,12 +1,8 @@
 # CORE SESSION MASTER
-> Last updated: 2026-03-14 | Owner: REINVAGNAR | Version: CORE v6.0
+> Last updated: 2026-03-15 | Owner: REINVAGNAR | Version: CORE v6.0
 
-## Current Step: TASK-10: 10.B Project Indexer, 10.C Stale Session Step Auto-Updater, 10.D CORE Mistake Predictor. 10.A already done.
-> Stored in Supabase. Query at session start:
-> `sb_query table=task_queue filters=source=eq.core_v6_registry&status=eq.pending&order=priority.desc`
-
-## last_good_commit: 2026-03-14 (post Task 11 — patch_file, validate_syntax, append_to_file live)
-> If Railway goes down: use `github:get_file_contents` to read this SHA, restore via `github:push_files`. Do NOT use core-agi: tools when Railway is confirmed down — they all fail simultaneously.
+## last_good_commit: 2026-03-15 (post SESSION.md write removal refactor)
+> If Railway goes down: use `github:get_file_contents` to read SESSION.md, restore via `github:push_files`. Do NOT use core-agi: tools when Railway is confirmed down — they all fail simultaneously.
 
 ---
 
