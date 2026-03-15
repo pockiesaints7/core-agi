@@ -849,15 +849,12 @@ def t_multi_patch(path: str, patches: str, message: str, repo: str = "") -> dict
 
 def t_session_end(summary: str, actions: str, domain: str = "general",
                   patterns: str = "", quality: str = "0.8",
-                  completed_tasks: str = "", new_step: str = "",
                   skill_file_updated: str = "false",
                   force_close: str = "false") -> dict:
     """One-call session close.
-    completed_tasks: pipe-separated task IDs to tick in SESSION.md e.g. '7.1|7.2|7.3'
-    new_step: if set, replaces the Current Step line in SESSION.md.
     skill_file_updated: TASK-21.B gate. Pass 'true' after writing new rules to local skill file.
     force_close: pass 'true' to bypass skill_file_updated gate (owner explicit override).
-    Always: logs session to Supabase, appends row to SESSION.md log table, runs Groq hot_reflection."""
+    Always: logs session to Supabase, runs Groq hot_reflection, scans system_map. SESSION.md is static."""
     from core_train import auto_hot_reflection
     try:
         if isinstance(actions, list):
