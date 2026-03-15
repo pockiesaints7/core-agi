@@ -21,7 +21,7 @@ def notify(msg, cid=None):
     try:
         r = httpx.post(
             f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
-            data={"chat_id": cid or TELEGRAM_CHAT, "text": msg[:4000], "parse_mode": "Markdown"},
+            data={"chat_id": cid or TELEGRAM_CHAT, "text": msg[:4000], "parse_mode": "HTML"},
             timeout=10,
         )
         if not r.is_success:
