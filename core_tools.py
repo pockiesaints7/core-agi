@@ -297,24 +297,159 @@ def t_sb_bulk_insert(table: str, rows: str) -> dict:
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
-def t_training_status():
+def t_get_training_pipeline() -> dict:
+    """Full training pipeline status: hot reflections, cold processor, patterns, quality trend, health flags.
+    Used by session_start training_pipeline block and /tstatus Telegram command."""
     try:
-        unprocessed = sb_get("hot_reflections", "select=id&processed_by_cold=eq.0&id=gt.1", svc=True)
-        pending_evo = sb_get("evolution_queue", "select=id,change_type,change_summary,confidence&status=eq.pending&id=gt.1", svc=True)
-        try:
-            backlog_pending = int(httpx.get(
-                f"{SUPABASE_URL}/rest/v1/backlog?select=id&status=eq.pending&limit=1",
-                headers=_sbh_count_svc(), timeout=10
-            ).headers.get("content-range", "*/0").split("/")[-1])
-        except Exception:
-            backlog_pending = -1
-        return {"status": f"Training pipeline ACTIVE - {get_current_step()}",
-                "unprocessed_hot": len(unprocessed), "pending_evolutions": len(pending_evo),
-                "backlog_pending": backlog_pending,
-                "evolutions": pending_evo[:5], "cold_threshold": COLD_HOT_THRESHOLD,
-                "kb_growth_threshold": COLD_KB_GROWTH_THRESHOLD,
-                "kb_mine_ratio_threshold": KB_MINE_RATIO_THRESHOLD,
-                "pattern_threshold": PATTERN_EVO_THRESHOLD, "auto_apply_conf": KNOWLEDGE_AUTO_CONFIDENCE}
+        now = datetime.utcnow()
+        health_flags = []
+
+        # --- Hot reflections ---
+        all_hots = sb_get("hot_reflections",
+            "select=id,created_at,source,domain,quality_score,processed_by_cold"
+            "&order=created_at.desc&limit=5", svc=True) or []
+        unprocessed = [h for h in all_hots if not h.get("processed_by_cold")]
+        last_real = next((h for h in all_hots if h.get("source") == "real"), None)
+        last_sim  = next((h for h in all_hots if h.get("source") == "simulation"), None)
+
+        # Total counts
+        total_hots_rows = sb_get("hot_reflections", "select=id&order=id.desc&limit=1", svc=True) or []
+        total_hots = total_hots_rows[0]["id"] if total_hots_rows else 0
+        total_sim  = len(sb_get("hot_reflections", "select=id&source=eq.simulation", svc=True) or [])
+
+        # Simulation health flag
+        if total_sim == 0:
+            health_flags.append("simulation_dead")
+
+        # --- Cold processor ---
+        cold_rows = sb_get("cold_reflections",
+            "select=id,created_at,hot_count,patterns_found,evolutions_queued,auto_applied,summary_text"
+            "&order=created_at.desc&limit=5", svc=True) or []
+        last_cold = cold_rows[0] if cold_rows else None
+        total_cold_runs = len(cold_rows)  # approximate from recent 5
+
+        cold_mins_ago = None
+        if last_cold and last_cold.get("created_at"):
+            try:
+                ts = datetime.fromisoformat(last_cold["created_at"].replace("Z","").split("+")[0])
+                cold_mins_ago = int((now - ts).total_seconds() / 60)
+            except Exception:
+                pass
+
+        # Cold stale flag: hasn't run in 3+ hours and there are unprocessed hots
+        if cold_mins_ago is not None and cold_mins_ago > 180 and len(unprocessed) > 0:
+            health_flags.append(f"cold_stale_{cold_mins_ago}min")
+
+        # Unprocessed backlog flag
+        unprocessed_count = len(sb_get("hot_reflections",
+            "select=id&processed_by_cold=eq.0", svc=True) or [])
+        if unprocessed_count >= COLD_HOT_THRESHOLD:
+            health_flags.append(f"unprocessed_backlog_{unprocessed_count}_threshold_{COLD_HOT_THRESHOLD}")
+
+        # Zero patterns in last 5 cold runs
+        if cold_rows and all(r.get("patterns_found", 0) == 0 for r in cold_rows[:5]):
+            health_flags.append("zero_patterns_last_5_runs")
+
+        # --- Patterns ---
+        active_patterns = sb_get("pattern_frequency",
+            "select=pattern_key,domain,frequency,auto_applied,last_seen"
+            "&stale=eq.false&frequency=gte.2&order=frequency.desc&limit=1", svc=True) or []
+        all_active = sb_get("pattern_frequency", "select=id&stale=eq.false", svc=True) or []
+        stale_count = len(sb_get("pattern_frequency", "select=id&stale=eq.true", svc=True) or [])
+        top_pattern = active_patterns[0] if active_patterns else None
+
+        # --- Evolution queue ---
+        pending_evo = sb_get("evolution_queue",
+            "select=id&status=eq.pending", svc=True) or []
+        applied_evo = sb_get("evolution_queue",
+            "select=id&status=eq.applied&order=id.desc&limit=1", svc=True) or []
+
+        # --- Quality trend (last 7d) ---
+        cutoff = (now - timedelta(days=7)).isoformat()
+        quality_rows = sb_get("hot_reflections",
+            f"select=quality_score,created_at&source=eq.real&quality_score=not.is.null"
+            f"&quality_score=lte.1.0&created_at=gte.{cutoff}&order=created_at.asc", svc=True) or []
+        quality_avg = round(sum(r["quality_score"] for r in quality_rows) / len(quality_rows), 3) if quality_rows else None
+        # Trend: compare first half vs second half
+        quality_trend = "no_data"
+        if len(quality_rows) >= 4:
+            mid = len(quality_rows) // 2
+            first = sum(r["quality_score"] for r in quality_rows[:mid]) / mid
+            second = sum(r["quality_score"] for r in quality_rows[mid:]) / len(quality_rows[mid:])
+            quality_trend = "improving" if second - first > 0.03 else ("declining" if first - second > 0.03 else "stable")
+            if quality_trend == "declining":
+                health_flags.append("quality_declining")
+
+        return {
+            "hot": {
+                "total": total_hots,
+                "unprocessed": unprocessed_count,
+                "total_simulation": total_sim,
+                "simulation_ok": total_sim > 0,
+                "last_real": {
+                    "id": last_real["id"], "ts": last_real["created_at"][:16],
+                    "domain": last_real["domain"], "quality": last_real["quality_score"]
+                } if last_real else None,
+                "last_simulation": {
+                    "id": last_sim["id"], "ts": last_sim["created_at"][:16],
+                    "domain": last_sim["domain"], "quality": last_sim["quality_score"]
+                } if last_sim else None,
+            },
+            "cold": {
+                "last_run_ts": last_cold["created_at"][:16] if last_cold else None,
+                "last_run_mins_ago": cold_mins_ago,
+                "threshold": COLD_HOT_THRESHOLD,
+                "last_hot_count": last_cold["hot_count"] if last_cold else 0,
+                "last_patterns_found": last_cold["patterns_found"] if last_cold else 0,
+                "last_evolutions_queued": last_cold["evolutions_queued"] if last_cold else 0,
+                "last_auto_applied": last_cold["auto_applied"] if last_cold else 0,
+                "recent_5_summaries": [r.get("summary_text","")[:80] for r in cold_rows[:5]],
+            },
+            "patterns": {
+                "active_count": len(all_active),
+                "stale_count": stale_count,
+                "top": {
+                    "key": top_pattern["pattern_key"][:80],
+                    "domain": top_pattern["domain"],
+                    "freq": top_pattern["frequency"],
+                } if top_pattern else None,
+            },
+            "evolutions": {
+                "pending": len(pending_evo),
+                "applied": int(sb_get("evolution_queue", "select=id&status=eq.applied&order=id.desc&limit=1",
+                    svc=True)[0]["id"]) if applied_evo else 0,
+            },
+            "quality": {
+                "7d_avg": quality_avg,
+                "trend": quality_trend,
+                "sample_count": len(quality_rows),
+            },
+            "health_flags": health_flags,
+            "pipeline_ok": len(health_flags) == 0,
+        }
+    except Exception as e:
+        return {"ok": False, "error": str(e), "health_flags": ["pipeline_error"]}
+
+
+def t_training_status():
+    """Legacy wrapper -- use t_get_training_pipeline() for full status."""
+    try:
+        tp = t_get_training_pipeline()
+        unprocessed_count = tp.get("hot", {}).get("unprocessed", 0)
+        pending_evo_rows = sb_get("evolution_queue",
+            "select=id,change_type,change_summary,confidence&status=eq.pending&id=gt.1", svc=True) or []
+        return {
+            "status": "Training pipeline ACTIVE",
+            "unprocessed_hot": unprocessed_count,
+            "pending_evolutions": len(pending_evo_rows),
+            "backlog_pending": -1,
+            "evolutions": pending_evo_rows[:5],
+            "cold_threshold": COLD_HOT_THRESHOLD,
+            "kb_growth_threshold": COLD_KB_GROWTH_THRESHOLD,
+            "kb_mine_ratio_threshold": KB_MINE_RATIO_THRESHOLD,
+            "pattern_threshold": PATTERN_EVO_THRESHOLD,
+            "auto_apply_conf": KNOWLEDGE_AUTO_CONFIDENCE,
+        }
     except Exception as e:
         return {"status": "error", "error": str(e)}
 
