@@ -211,6 +211,95 @@ def auto_hot_reflection(session_data: dict):
         return False
 
 
+# -- Gaps reconciliation -------------------------------------------------------
+def _reconcile_gaps(hots: list) -> int:
+    """TASK-19: Wire gaps_identified from hot_reflections into evolution_queue.
+    Extracts all gaps from the current batch, deduplicates via Groq,
+    and inserts unique actionable gaps as evolution_queue entries.
+    Returns count of gaps inserted.
+    """
+    try:
+        # 1. Flatten all gaps from batch
+        raw_gaps = []
+        for h in hots:
+            gaps = h.get("gaps_identified") or []
+            if isinstance(gaps, str):
+                try:
+                    gaps = json.loads(gaps)
+                except Exception:
+                    gaps = [gaps]
+            domain = h.get("domain", "general")
+            for g in gaps:
+                if g and isinstance(g, str) and len(g) > 10:
+                    raw_gaps.append({"gap": g.strip()[:400], "domain": domain})
+
+        if not raw_gaps:
+            return 0
+
+        # 2. Deduplicate and priority-score via Groq
+        gaps_text = "\n".join(f"  [{i+1}] [{g['domain']}] {g['gap']}" for i, g in enumerate(raw_gaps))
+        prompt = (
+            f"You are CORE's gap reconciliation engine.\n"
+            f"Below are {len(raw_gaps)} gaps identified from recent hot reflections.\n\n"
+            f"{gaps_text}\n\n"
+            f"Respond with ONLY a JSON array of unique, actionable gaps (no duplicates, no vague items).\n"
+            f"Each item: {{\"gap\": \"concise gap description\", \"domain\": \"domain\", \"priority\": 1-5}}\n"
+            f"Priority 5=critical architecture gap, 1=minor improvement. Max 10 items. No preamble."
+        )
+        raw = groq_chat(
+            system="You are CORE's gap reconciliation engine. Respond only with valid JSON array. No preamble.",
+            user=prompt, model=GROQ_MODEL, max_tokens=600,
+        )
+        try:
+            deduped = json.loads(raw.strip())
+            if not isinstance(deduped, list):
+                raise ValueError("not a list")
+        except Exception:
+            # Fallback: use raw gaps deduplicated by string equality
+            seen = set()
+            deduped = []
+            for g in raw_gaps:
+                if g["gap"] not in seen:
+                    seen.add(g["gap"])
+                    deduped.append({"gap": g["gap"], "domain": g["domain"], "priority": 2})
+            deduped = deduped[:10]
+
+        # 3. Insert unique gaps into evolution_queue
+        inserted = 0
+        for item in deduped:
+            gap_text = item.get("gap", "")[:400]
+            domain = item.get("domain", "general")
+            priority = int(item.get("priority", 2))
+            if not gap_text:
+                continue
+            # Skip if already exists in evolution_queue (pattern_key match)
+            existing = sb_get("evolution_queue",
+                f"select=id&pattern_key=ilike.%25{gap_text[:60].replace(' ', '%25')}%25&status=in.(pending,applied)&limit=1",
+                svc=True)
+            if existing:
+                continue
+            confidence = round(min(0.3 + priority * 0.1, 0.8), 2)
+            ok = sb_post_critical("evolution_queue", {
+                "change_type":    "code",
+                "change_summary": f"[GAP] {gap_text}",
+                "pattern_key":    f"gap:{gap_text[:200]}",
+                "confidence":     confidence,
+                "status":         "pending",
+                "source":         "real",
+                "impact":         domain,
+                "recommendation": f"Gap identified in hot_reflections (priority={priority}). Requires architectural review.",
+            })
+            if ok:
+                inserted += 1
+                print(f"[COLD] Gap queued: [{domain}] {gap_text[:80]}")
+
+        print(f"[COLD] _reconcile_gaps: raw={len(raw_gaps)} deduped={len(deduped)} inserted={inserted}")
+        return inserted
+    except Exception as e:
+        print(f"[COLD] _reconcile_gaps error (non-fatal): {e}")
+        return 0
+
+
 # -- Cold processor ------------------------------------------------------------
 def _groq_synthesize_cold(hots: list, batch_counts: Counter, batch_domain: dict) -> str:
     """Ask Groq to synthesize a meaningful cold reflection summary from the batch.
@@ -424,6 +513,10 @@ def run_cold_processor():
                             if result.get("ok"):
                                 auto_applied_count += 1
                                 print(f"[COLD] Auto-applied evolution #{new_evo[0]['id']}: {key[:80]}")
+
+        # TASK-19: Wire gaps_identified into evolution_queue
+        gaps_inserted = _reconcile_gaps(hots)
+        evolutions_queued += gaps_inserted
 
         # Groq synthesizes a meaningful cold reflection summary
         groq_summary = _groq_synthesize_cold(hots, batch_counts, batch_domain)
