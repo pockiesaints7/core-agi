@@ -537,9 +537,9 @@ def handle_msg(msg):
         counts = get_system_counts()
         resume = get_resume_task()
         notify(
-            f"*CORE v6.0*\n{resume}\n"
+            f"<b>CORE v6.0</b>\n{resume}\n"
             f"Knowledge: {counts.get('knowledge_base',0)} | Sessions: {counts.get('sessions',0)}\n\n"
-            f"*Commands:*\n"
+            f"<b>Commands:</b>\n"
             f"/status \u2014 health + system\n"
             f"/tstatus \u2014 training pipeline detail\n"
             f"/project [list|id] \u2014 project context",
@@ -552,7 +552,7 @@ def handle_msg(msg):
         counts = get_system_counts()
         resume = get_resume_task()
         notify(
-            f"*Status*\n{resume}\n"
+            f"<b>Status</b>\n{resume}\n"
             f"Supabase: {h['components'].get('supabase')} | Groq: {h['components'].get('groq')}\n"
             f"Telegram: {h['components'].get('telegram')} | GitHub: {h['components'].get('github')}\n\n"
             f"KB: {counts.get('knowledge_base',0)} | Sessions: {counts.get('sessions',0)} | Mistakes: {counts.get('mistakes',0)}\n"
@@ -605,7 +605,7 @@ def handle_msg(msg):
             health_line = "\u2705 Pipeline healthy"
 
         notify(
-            f"*Training Pipeline Status*\n\n"
+            f"<b>Training Pipeline Status</b>\n\n"
             f"{hot_line}\n{real_line}\n{sim_line}\n\n"
             f"{cold_line}\n{thresh_line}\n\n"
             f"{pat_line}\n{top_line}\n\n"
