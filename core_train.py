@@ -80,8 +80,21 @@ def auto_hot_reflection(session_data: dict):
         verify_rate  = round(sum(1 for a in actions if any(k in str(a).lower() for k in ["verify","readback","confirm"])) / total, 2)
         mistake_rate = round(sum(1 for a in actions if any(k in str(a).lower() for k in ["mistake","error","fix","wrong"])) / total, 2)
         domain = "general"
-        for kw, d in [("supabase","db"),("github","code"),("telegram","bot"),("mcp","mcp"),("training","training"),("knowledge","kb")]:
-            if kw in summary.lower(): domain = d; break
+        _summary_lower = summary.lower()
+        _domain_map = [
+            (["supabase", "sb_query", "sb_patch", "sb_insert", "database", "table"], "db"),
+            (["github", "patch_file", "gh_search", "gh_read", "commit", "deploy", "railway"], "code"),
+            (["telegram", "notify", "bot"], "bot"),
+            (["mcp", "tool", "tools dict", "session_start", "session_end"], "mcp"),
+            (["training", "cold processor", "hot_reflection", "evolution", "pattern"], "training"),
+            (["knowledge", "kb", "add_knowledge", "search_kb"], "kb"),
+            (["architecture", "refactor", "skill file", "session_md", "system_map"], "core_agi.architecture"),
+            (["patching", "patch", "old_str", "new_str"], "core_agi.patching"),
+        ]
+        for keywords, d in _domain_map:
+            if any(kw in _summary_lower for kw in keywords):
+                domain = d
+                break
         if len(summary.strip()) < 50 and total <= 2:
             print(f"[HOT] Skipped trivial session: summary_len={len(summary)} actions={total}")
             return False
