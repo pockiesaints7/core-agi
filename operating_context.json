@@ -14,7 +14,7 @@
     "ai_model": "Groq llama-3.3-70b-versatile (primary), llama-3.1-8b-instant (fast)",
     "database": "Supabase (PostgreSQL via PostgREST)",
     "state_files": {
-      "SESSION.md": "Dynamic: active tables, step status, next action — update every session",
+      "SESSION.md": "Static: claude.ai bootstrap pointer, autonomous mode protocol, active rules. No longer auto-written by session_end.",
       "operating_context.json": "Static: tool rules, full schema, tombstone tables — update only on structural change",
       "CORE_SELF.md": "Living self-knowledge — what CORE is, what it can do, how it works"
     },
