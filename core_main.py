@@ -529,6 +529,9 @@ def handle_msg(msg):
     text = msg.get("text", "").strip()
     if not text:
         return
+    # Strip bot username suffix from commands (e.g. /status@reinvagnarbot -> /status)
+    if text.startswith("/") and "@" in text:
+        text = text.split("@")[0]
 
     if text == "/start":
         counts = get_system_counts()
@@ -612,32 +615,6 @@ def handle_msg(msg):
             f"{health_line}",
             cid
         )
-
-    elif text.startswith("/backlog"):
-        from core_tools import t_get_backlog
-        parts = text.split(None, 1)
-        min_p = 1
-        try:
-            min_p = int(parts[1]) if len(parts) > 1 else 1
-        except:
-            pass
-        result = t_get_backlog(status="pending", limit=10, min_priority=min_p)
-        total = result.get("total", 0)
-        items = result.get("items", [])
-        if items:
-            lines = []
-            for item in items[:8]:
-                p = item.get("priority", 1)
-                star = "HIGH" if p >= 4 else ("MED" if p == 3 else "LOW")
-                lines.append(f"[{star}] P{p} [{item.get('type','?')[:10]}] *{item.get('title','')[:50]}*")
-                lines.append(f"  {item.get('description','')[:80]}")
-            notify(
-                f"*Backlog* ({result['filtered']} pending / {total} total)\n\n" +
-                "\n".join(lines),
-                cid
-            )
-        else:
-            notify(f"Backlog empty (total: {total}). Researcher runs every 60 min.", cid)
 
     elif text.startswith("/project"):
         from core_tools import t_project_list, t_project_prepare
