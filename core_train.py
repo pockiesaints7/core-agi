@@ -733,7 +733,7 @@ def _extract_real_signal() -> bool:
     try:
         # Read last_real_signal_ts from state (stored in sessions table as [state_update])
         state_rows = sb_get("sessions",
-            "select=summary&summary=like.*last_real_signal_ts*&order=created_at.desc&limit=1",
+            "select=summary&summary=like.*last_real_signal_ts:*&order=created_at.desc&limit=1",
             svc=True)
         if state_rows and state_rows[0].get("summary"):
             raw = state_rows[0]["summary"].split("last_real_signal_ts:")[-1].strip().split()[0]
