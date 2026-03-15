@@ -1,7 +1,6 @@
 # CORE SESSION MASTER
 > Last updated: 2026-03-15 | Owner: REINVAGNAR | Version: CORE v6.0
 > This file is static — no longer auto-written by session_end.
-| `hard_rule` | At boot, NEVER declare any tool available or unavailable based on interface name (claude.ai vs Desktop). Tool availabili |
 
 ## last_good_commit: 2026-03-15 (post SESSION.md write removal refactor)
 > Railway recovery: use `github:get_file_contents` to read this file, restore via `github:push_files`.
