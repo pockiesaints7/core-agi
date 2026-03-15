@@ -2772,7 +2772,7 @@ TOOLS = {
     "set_simulation":         {"fn": t_set_simulation,         "perm": "WRITE",   "args": ["instruction"],
                                "desc": "Set a custom simulation scenario for the background researcher. CORE crafts the Groq prompt and loops it every 60 min. Empty instruction resets to default."},
     "add_knowledge":          {"fn": t_add_knowledge,          "perm": "WRITE",   "args": ["domain", "topic", "instruction", "content", "tags", "confidence"],
-                               "desc": "Add entry to knowledge base. instruction=behavioral directive for CORE (primary — what CORE should DO). content=supporting detail (optional). At least one of instruction/content required. Use kb_update instead if the entry may already exist."},
+                               "desc": "Add NEW knowledge that does not yet exist. Returns ok=False if domain+topic already exists -- correct behavior, not an error. Use ONLY for genuinely new knowledge. Use kb_update to overwrite stale or outdated existing knowledge."},
     "log_mistake":            {"fn": t_log_mistake,            "perm": "WRITE",   "args": ["context", "what_failed", "correct_approach", "domain", "root_cause", "how_to_avoid", "severity"],
                                "desc": "Log a mistake so CORE never repeats it. correct_approach=the right way to do it (required). severity=low|medium|high|critical. Always call this when CORE makes an error — it is the primary learning mechanism."},
     "notify_owner":           {"fn": t_notify,                 "perm": "WRITE",   "args": ["message", "level"],
