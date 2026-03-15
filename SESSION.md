@@ -1,5 +1,5 @@
 # CORE SESSION MASTER
-> Last updated: 2026-03-15 | Owner: REINVAGNAR | Version: CORE v6.0
+> Last updated: 2026-03-16 | Owner: REINVAGNAR | Version: CORE v6.0
 > This file is static — no longer auto-written by session_end.
 
 ## last_good_commit: 2026-03-15 (post SESSION.md write removal refactor)
@@ -42,8 +42,8 @@ When user says "activate autonomous mode":
 | Editing source from claude.ai | `POST /patch` ONLY |
 | `processed_by_cold` | Use `eq.0` / `eq.1` (integer), NOT `eq.true` / `eq.false` |
 | Structural change | Update operating_context.json, then KB |
-| Task status | ALWAYS update task_queue via sb_patch before session_end. task_queue is source of truth. |
-| Deploy pattern | `patch_file` → Railway auto-deploys → wait 35s → `build_status()`. Manual redeploy (no code): `redeploy()` → 35s → `build_status()`. NEVER use `deploy_and_wait`. |
+| Task status | ALWAYS update task_queue via `task_update` tool before session_end. task_queue is source of truth. Raw `sb_patch` is fallback only. |
+| Deploy pattern | `patch_file` → Railway auto-deploys → wait 35s → `build_status()`. Manual redeploy (no code): `redeploy()` → 35s → `build_status()`. `deploy_and_wait` is functional but not preferred — use build_status pattern instead. |
 | Session end | Always call `session_end` — logs session + hot_reflection in one call |
 | evolution_queue | Only `knowledge`, `code`, `config` change_types — never `backlog` |
 | Railway recovery | last_good_commit above → restore via github: tools. Never retry core-agi: tools when Railway is down. |
