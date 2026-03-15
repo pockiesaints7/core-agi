@@ -713,13 +713,30 @@ def _patch_find(content: str, old_str: str):
         return s.expandtabs(tabsize)
 
     def _find_in(c: str, o: str, orig_content: str, note: str):
-        """Try to find o in c, map match back to position in orig_content."""
+        """Try to find o in c. Returns the ORIGINAL (unnormalized) text block that
+        corresponds to the match, so the replacement operates on actual file bytes.
+        Uses line-count anchoring: find match position in normalized string, count
+        newlines before it to get start line, then extract that many lines from original.
+        """
         cnt = c.count(o)
-        if cnt > 0:
-            pos = c.find(o)
+        if cnt <= 0:
+            return None
+        pos = c.find(o)
+        # Count how many newlines precede the match in the normalized string
+        start_line_idx = c[:pos].count('\n')
+        match_line_count = o.count('\n') + 1
+        # Extract the same line range from the original content
+        orig_lines = orig_content.splitlines(keepends=True)
+        end_line_idx = start_line_idx + match_line_count
+        if end_line_idx > len(orig_lines):
+            # Fallback: position-based slice (best effort)
             actual = orig_content[pos:pos + len(o)]
-            return True, cnt, actual, note
-        return None
+        else:
+            actual = ''.join(orig_lines[start_line_idx:end_line_idx])
+            # Strip trailing newline if original o didn't end with newline
+            if not o.endswith('\n') and actual.endswith('\n'):
+                actual = actual[:-1]
+        return True, cnt, actual, note
 
     # Tier 1: exact
     count = content.count(old_str)
