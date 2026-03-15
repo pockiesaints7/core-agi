@@ -929,7 +929,28 @@ def t_session_end(summary: str, actions: str, domain: str = "general",
         except Exception as e:
             smap_scan = {"ok": False, "error": str(e)}
 
-        # Build return -- surface reflection failure as explicit warning
+        # 5. Task status check -- warn if active tasks still open at close
+        task_warnings = []
+        if active_task_ids and active_task_ids.strip():
+            ids = [i.strip() for i in active_task_ids.split("|") if i.strip()]
+            for tid in ids:
+                try:
+                    rows = sb_get("task_queue",
+                        f"select=id,task,status&id=eq.{tid}&limit=1", svc=True)
+                    if rows and isinstance(rows, list) and rows[0]:
+                        row = rows[0]
+                        if row.get("status") in ("pending", "in_progress"):
+                            task_str = str(row.get("task", ""))[:80]
+                            task_warnings.append({
+                                "id": tid,
+                                "status": row.get("status"),
+                                "task": task_str,
+                                "hint": "Call sb_patch to update status before closing, or pass intentionally."
+                            })
+                except Exception:
+                    pass
+
+        # Build return -- surface reflection failure and task warnings
         result = {
             "ok": session_ok,
             "session_logged": session_ok,
@@ -944,6 +965,8 @@ def t_session_end(summary: str, actions: str, domain: str = "general",
                 "Hot reflection failed to log. Training pipeline will miss this session. "
                 "Check Railway logs for [HOT] error. Common cause: Groq timeout or Supabase 400."
             )
+        if task_warnings:
+            result["task_status_warnings"] = task_warnings
         return result
     except Exception as e:
         return {"ok": False, "error": str(e)}
