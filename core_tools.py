@@ -347,7 +347,7 @@ def t_check_evolutions(limit: int = 20) -> dict:
             "&order=id.desc&limit=10",
             svc=True)
         patterns = sb_get("pattern_frequency",
-            "select=pattern_key,frequency,domain,description&order=frequency.desc&limit=10",
+            "select=pattern_key,frequency,domain,description&stale=eq.false&order=frequency.desc&limit=10",
             svc=True)
         templates = sb_get("script_templates",
             "select=name,description,trigger_pattern&order=use_count.desc&limit=5",
@@ -1181,7 +1181,7 @@ def t_stats():
     try:
         hots = sb_get("hot_reflections", "select=domain,quality_score&limit=200", svc=True)
         domain_counts: Counter = Counter(h.get("domain","general") for h in hots)
-        patterns = sb_get("pattern_frequency", "select=pattern_key,frequency,domain&order=frequency.desc&limit=10", svc=True)
+        patterns = sb_get("pattern_frequency", "select=pattern_key,frequency,domain&stale=eq.false&order=frequency.desc&limit=10", svc=True)
         mistakes = sb_get("mistakes", "select=domain&limit=200", svc=True)
         mistake_counts: Counter = Counter(m.get("domain","general") for m in mistakes)
         scores = [min(1.0, max(0.0, float(h["quality_score"]))) for h in hots if h.get("quality_score") is not None]
@@ -1945,9 +1945,9 @@ def t_synthesize_evolutions() -> dict:
             "select=id,change_type,change_summary,pattern_key,confidence,impact&status=eq.pending&order=confidence.desc",
             svc=True) or []
 
-        # 2. Top patterns by frequency (top 40)
+        # 2. Top patterns by frequency (top 40) -- exclude stale dead patterns
         patterns = sb_get("pattern_frequency",
-            "select=pattern_key,frequency,domain&order=frequency.desc&limit=40",
+            "select=pattern_key,frequency,domain&stale=eq.false&order=frequency.desc&limit=40",
             svc=True) or []
 
         # 3. Recent cold_reflections (last 10)
