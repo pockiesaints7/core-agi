@@ -231,29 +231,47 @@ def _groq_synthesize_cold(hots: list, batch_counts: Counter, batch_domain: dict)
         session_summaries = "\n".join(
             f"  - {h.get('task_summary','')[:150]}" for h in hots[:10]
         )
+        # TASK-25.A: structured JSON schema for reliable Groq output parsing
         prompt = (
             f"You are CORE's cold processor synthesis engine.\n"
             f"You just processed {len(hots)} hot reflections covering {len(batch_counts)} unique patterns.\n\n"
             f"Domain breakdown: {domain_text}\n\n"
             f"Session summaries:\n{session_summaries}\n\n"
             f"Top patterns by frequency:\n{top_text}\n\n"
-            f"Write a 3-5 sentence synthesis of this batch. Cover:\n"
-            f"1. What themes/domains dominated\n"
-            f"2. Most important recurring patterns (name them)\n"
-            f"3. Any gaps or risks identified\n"
-            f"4. Overall system health signal\n"
-            f"Be specific and actionable. No preamble. Plain text only."
+            f"Respond with ONLY a JSON object matching this exact schema (no preamble, no markdown):\n"
+            f"{{\n"
+            f"  \"themes\": \"2-3 sentence summary of dominant themes and domains\",\n"
+            f"  \"top_patterns\": [\"pattern 1\", \"pattern 2\", \"pattern 3\"],\n"
+            f"  \"gaps\": [\"gap or risk 1\", \"gap or risk 2\"],\n"
+            f"  \"health_signal\": \"one sentence system health assessment\",\n"
+            f"  \"summary\": \"3-5 sentence plain text synthesis combining all above\"\n"
+            f"}}\n"
         )
-        synthesis = groq_chat(
-            system="You are CORE's cold processor synthesis engine. Write concise, actionable summaries.",
+        raw = groq_chat(
+            system="You are CORE's cold processor synthesis engine. Respond only with valid JSON. No preamble.",
             user=prompt,
             model=GROQ_MODEL,
-            max_tokens=400,
+            max_tokens=500,
         )
-        synthesis = synthesis.strip()
-        if len(synthesis) > 50:
-            return synthesis
-        return fallback
+        # TASK-25.A: parse structured JSON, fall back to raw text if parse fails
+        try:
+            parsed = json.loads(raw.strip())
+            synthesis = parsed.get("summary", "").strip()
+            if not synthesis:
+                synthesis = parsed.get("themes", "").strip()
+            if len(synthesis) > 50:
+                return synthesis
+            # Fallback: reconstruct from fields
+            parts = [parsed.get("themes", ""), " | ".join(parsed.get("top_patterns", [])[:3])]
+            synthesis = " ".join(p for p in parts if p)
+            return synthesis if len(synthesis) > 20 else fallback
+        except (json.JSONDecodeError, ValueError, AttributeError):
+            # Non-JSON response -- use raw text if long enough
+            print(f"[COLD] synthesis JSON parse failed, using raw text fallback")
+            synthesis = raw.strip()
+            if len(synthesis) > 50:
+                return synthesis
+            return fallback
     except Exception as e:
         print(f"[COLD] synthesis failed (non-fatal): {e}")
         return fallback
@@ -289,8 +307,17 @@ def _groq_kb_content(pattern_key: str, domain: str, frequency: int, src_key: str
 def run_cold_processor():
     try:
         hots = sb_get("hot_reflections",
-                      "select=id,domain,new_patterns,new_mistakes,quality_score,source,task_summary&processed_by_cold=eq.0&id=gt.1&order=created_at.asc",
+                      "select=id,domain,new_patterns,new_mistakes,quality_score,source,task_summary&processed_by_cold=eq.0&id=gt.1&quality_score=gte.0.5&order=created_at.asc",
                       svc=True)
+        # TASK-25.B: quality gate -- hots below 0.5 are skipped (low signal, simulation noise)
+        skipped_low_quality = sb_get("hot_reflections",
+                      "select=id&processed_by_cold=eq.0&id=gt.1&quality_score=lt.0.5",
+                      svc=True)
+        if skipped_low_quality:
+            print(f"[COLD] Skipped {len(skipped_low_quality)} low-quality hots (quality<0.5)")
+            # Mark them processed so they don't accumulate
+            for lq in skipped_low_quality:
+                sb_patch("hot_reflections", f"id=eq.{lq['id']}", {"processed_by_cold": 1})
         if not hots:
             print("[COLD] No unprocessed hot reflections.")
             return {"ok": True, "processed": 0, "evolutions_queued": 0}
