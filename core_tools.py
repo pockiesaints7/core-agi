@@ -798,8 +798,11 @@ def t_gh_read_lines(path, start_line=1, end_line=50, repo=""):
         e = min(total, int(end_line))
         selected = lines[s:e]
         numbered = "\n".join(f"{s+i+1:4d}  {line}" for i, line in enumerate(selected))
+        # raw_lines: exact file bytes for each line, joined by \n -- use this to build old_str for patches.
+        # Never construct old_str from the numbered display (content field) -- line number prefix will corrupt it.
+        raw = "\n".join(selected)
         return {"ok": True, "path": path, "total_lines": total,
-                "showing": f"{s+1}-{s+len(selected)}", "content": numbered}
+                "showing": f"{s+1}-{s+len(selected)}", "content": numbered, "raw": raw}
     except Exception as ex:
         return {"ok": False, "error": str(ex), "path": path}
 
