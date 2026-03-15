@@ -647,10 +647,11 @@ def t_system_map_scan(trigger: str = "manual") -> dict:
                 "responsibility": row["responsibility"],
             })
 
+        active_rows = [r for r in rows if r.get("status") != "tombstone"]
         return {
             "ok": True,
             "trigger": trigger,
-            "total_components": len(rows),
+            "total_components": len(active_rows),
             "updates_applied": len(updates),
             "updates": updates,
             "inserted_tools": inserted_tools,
