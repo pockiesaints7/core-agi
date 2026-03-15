@@ -2877,7 +2877,7 @@ def t_add_evolution_rule(
     RULE #1 FOR AGI: evolution = data in storage, not chat promises.
     This tool writes to:
       1. knowledge_base (instruction field, confidence=proven, tags=[evolution_rule])
-      2. SESSION.md Active Rules table (gh_search_replace append)
+    SESSION.md is static -- never auto-written. KB is the sole server-side persistence layer.
 
     NOTE: Cannot write to local skill file (C:\\Users\\rnvgg\\.claude-skills\\CORE_AGI_SKILL_V4.md)
     because this runs on Railway. That write is Claude Desktop's job via Windows-MCP:FileSystem.
