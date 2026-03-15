@@ -1007,16 +1007,72 @@ def _get_stale_pattern_count() -> int:
         return 0
 
 
+def _get_task_domain(task_json: str = "") -> str:
+    """Detect mistake domain from resume_task JSON keywords.
+    Maps task description + subtask content to the most relevant mistakes domain.
+    Used by t_session_start to inject domain-scoped mistakes at boot."""
+    try:
+        t = task_json.lower()
+        if any(k in t for k in ["patch_file", "core_tools", "core_train", "gh_search_replace", "multi_patch", "old_str"]):
+            return "core_agi.patching"
+        if any(k in t for k in ["cold_processor", "hot_reflection", "cold_reflection", "training", "evolution"]):
+            return "core_train"
+        if any(k in t for k in ["railway", "deploy", "build_status", "redeploy", "crash"]):
+            return "core_agi.deploy"
+        if any(k in t for k in ["session_end", "session_start", "skill_file", "session_close"]):
+            return "core_agi.session"
+        if any(k in t for k in ["zapier", "gmail", "calendar", "google"]):
+            return "zapier"
+        if any(k in t for k in ["project", "jk1-2", "lsei", "equinix", "rmu", "mltx"]):
+            return "project"
+        return "core_agi"
+    except Exception:
+        return "core_agi"
+
+
 def t_session_start() -> dict:
     """One-call session bootstrap - includes system_map snapshot.
     Returns in_progress_tasks separately from pending_tasks so Claude immediately
     knows if a task was left partially done last session.
-    recent_mistakes: last 10 across all domains, ordered by recency.
-    Use get_mistakes(domain=X) for domain-specific lookup before any write."""
+    domain_mistakes: top 5 scoped to resume_task domain (backfilled with global if <3 results).
+    top_patterns: top 3 patterns by frequency from pattern_frequency.
+    quality_alert: non-null if trend=declining or 7d_avg<0.75.
+    Use get_mistakes(domain=X) for deeper domain-specific lookup."""
     try:
         state = t_state()
         health = t_health()
-        mistakes = t_get_mistakes(domain="", limit=10)
+        # --- 25.B: Domain-scoped mistake injection ---
+        pending_tasks_all = state.get("pending_tasks", [])
+        resume_task_obj = next((t for t in pending_tasks_all if t.get("status") == "in_progress"), None)
+        resume_task_json = resume_task_obj.get("task", "") if resume_task_obj else ""
+        detected_domain = _get_task_domain(resume_task_json)
+        try:
+            domain_mistakes_raw = sb_get("mistakes",
+                f"select=domain,context,what_failed,correct_approach,severity,root_cause,how_to_avoid&id=gt.1&domain=like.{detected_domain}%&order=severity.desc,created_at.desc&limit=5",
+                svc=True) or []
+        except Exception:
+            domain_mistakes_raw = []
+        # Backfill: if domain-scoped returns <3, supplement with global recent (deduplicated)
+        if len(domain_mistakes_raw) < 3:
+            try:
+                global_mistakes = sb_get("mistakes",
+                    "select=domain,context,what_failed,correct_approach,severity,root_cause,how_to_avoid&id=gt.1&order=created_at.desc&limit=10",
+                    svc=True) or []
+                seen = {m.get("context", "")[:80] for m in domain_mistakes_raw}
+                for m in global_mistakes:
+                    if m.get("context", "")[:80] not in seen and len(domain_mistakes_raw) < 5:
+                        domain_mistakes_raw.append(m)
+                        seen.add(m.get("context", "")[:80])
+            except Exception:
+                pass
+        # --- 25.C: Top pattern injection ---
+        try:
+            top_pattern_rows = sb_get("pattern_frequency",
+                "select=pattern_key,domain,frequency&id=gt.1&order=frequency.desc&limit=3",
+                svc=True) or []
+            top_patterns = [{"pattern": r.get("pattern_key", "")[:120], "domain": r.get("domain", ""), "freq": r.get("frequency", 0)} for r in top_pattern_rows]
+        except Exception:
+            top_patterns = []
         try:
             evolutions = sb_get("evolution_queue",
                 "select=id,change_summary,change_type,confidence&status=eq.pending&order=confidence.desc&limit=5")
@@ -1025,6 +1081,14 @@ def t_session_start() -> dict:
         except Exception:
             evolutions = []
         training = t_get_training_pipeline()
+        # --- 25.D: Quality alert surface ---
+        quality_alert = None
+        try:
+            q = training.get("quality", {})
+            if q.get("trend") == "declining" or (q.get("7d_avg") or 1.0) < 0.75:
+                quality_alert = {"trend": q.get("trend"), "7d_avg": q.get("7d_avg"), "note": "Review recent sessions -- session quality declining"}
+        except Exception:
+            pass
         try:
             smap = t_system_map_scan(trigger="session_start")
         except Exception as e:
@@ -1065,11 +1129,14 @@ def t_session_start() -> dict:
             "counts": state.get("counts", {}),
             "last_session": state.get("last_session", ""),
             "last_session_ts": state.get("last_session_ts", ""),
-            "in_progress_tasks": [t for t in state.get("pending_tasks", []) if t.get("status") == "in_progress"],
-            "pending_tasks": [t for t in state.get("pending_tasks", []) if t.get("status") == "pending"],
-            "resume_task": next((t for t in state.get("pending_tasks", []) if t.get("status") == "in_progress"), None),
+            "in_progress_tasks": [t for t in pending_tasks_all if t.get("status") == "in_progress"],
+            "pending_tasks": [t for t in pending_tasks_all if t.get("status") == "pending"],
+            "resume_task": resume_task_obj,
             "session_md": state.get("session_md", ""),  # full SESSION.md content for claude.ai bootstrap
-            "recent_mistakes": mistakes if isinstance(mistakes, list) else [],
+            "domain_mistakes": domain_mistakes_raw,
+            "domain": detected_domain,
+            "top_patterns": top_patterns,
+            "quality_alert": quality_alert,
             "pending_evolutions": evolutions[:5] if isinstance(evolutions, list) else [],
             "training_pipeline": training,
             "live_tool_count": len(TOOLS),
