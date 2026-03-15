@@ -696,17 +696,47 @@ def t_reject_evolution(evolution_id, reason=""):
     except: return {"ok": False, "error": "evolution_id must be a number"}
     return reject_evolution(eid, reason)
 
+def _patch_find(content: str, old_str: str):
+    """Find old_str in content. Returns (found, count, matched_str).
+    Falls back to whitespace-normalized match. Returns char-level diff hint on near-miss."""
+    # Exact match
+    count = content.count(old_str)
+    if count > 0:
+        return True, count, old_str, None
+    # Normalize line endings and try again
+    norm_content = content.replace('\r\n', '\n').replace('\r', '\n')
+    norm_old = old_str.replace('\r\n', '\n').replace('\r', '\n')
+    count2 = norm_content.count(norm_old)
+    if count2 > 0:
+        # Find actual string in original content for replacement
+        # Locate position in normalized, map back
+        pos = norm_content.find(norm_old)
+        actual = content[pos:pos + len(norm_old)]
+        return True, count2, actual, "line_ending_normalized"
+    # Near-miss: find closest line in file to first line of old_str
+    first_line = norm_old.strip().splitlines()[0].strip() if norm_old.strip() else ""
+    hint = None
+    if first_line and len(first_line) > 10:
+        for line in norm_content.splitlines():
+            if first_line[:30] in line or line.strip()[:30] in first_line:
+                diff = list(difflib.ndiff([first_line], [line.strip()]))
+                hint = "near_miss: " + "".join(diff)[:300]
+                break
+    return False, 0, old_str, hint
+
+
 def t_gh_search_replace(path, old_str, new_str, message, repo="", dry_run="false"):
-    """Surgical find-replace using Contents API (gh_read/gh_write) — 2 HTTP calls, proven stable."""
+    """Surgical find-replace using Blobs API (atomic commit, no SHA conflict, no size limit)."""
     try:
         repo = repo or GITHUB_REPO
-        file_content = gh_read(path, repo)
-        if old_str not in file_content:
-            return {"ok": False, "error": f"old_str not found in {path}"}
-        count = file_content.count(old_str)
+        file_content = _gh_blob_read(path, repo)
+        found, count, matched, hint = _patch_find(file_content, old_str)
+        if not found:
+            return {"ok": False, "error": f"old_str not found in {path}",
+                    "hint": hint or "check whitespace/indentation"}
         if count > 1:
             return {"ok": False, "error": f"old_str found {count}x - be more specific"}
-        new_content = file_content.replace(old_str, new_str, 1)
+        new_content = file_content.replace(matched, new_str, 1)
         if str(dry_run).lower() == "true":
             diff = list(difflib.unified_diff(
                 file_content.splitlines(keepends=True),
@@ -715,10 +745,9 @@ def t_gh_search_replace(path, old_str, new_str, message, repo="", dry_run="false
             ))
             return {"ok": True, "dry_run": True, "path": path,
                     "would_replace": old_str[:80], "diff": "".join(diff)[:3000]}
-        ok = gh_write(path, new_content, message, repo)
-        if not ok:
-            return {"ok": False, "error": "gh_write returned False"}
-        return {"ok": True, "dry_run": False, "path": path, "replaced": old_str[:80]}
+        commit_sha = _gh_blob_write(path, new_content, message, repo)
+        return {"ok": True, "dry_run": False, "path": path,
+                "replaced": old_str[:80], "commit": commit_sha[:12] if commit_sha else None}
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
@@ -1053,27 +1082,31 @@ def t_search_in_file(path: str, pattern: str, repo: str = "",
 
 
 def t_multi_patch(path: str, patches: str, message: str, repo: str = "") -> dict:
-    """Apply multiple find-replace patches via Contents API (gh_read/gh_write) — 2 HTTP calls, proven stable."""
+    """Apply multiple find-replace patches via Blobs API (atomic commit, no SHA conflict, no size limit).
+    Uses whitespace-normalized fallback matching + char-level diff hint on failure."""
     try:
         repo = repo or GITHUB_REPO
         if isinstance(patches, str):
             patches = json.loads(patches)
-        content = gh_read(path, repo)
+        content = _gh_blob_read(path, repo)
         applied = []
         skipped = []
         for i, patch in enumerate(patches):
             old = patch.get("old_str", "")
             new = patch.get("new_str", "")
-            count = content.count(old)
-            if count == 0:
-                skipped.append({"index": i, "reason": "not found", "old_str": old[:60]})
+            found, count, matched, hint = _patch_find(content, old)
+            if not found:
+                skipped.append({"index": i, "reason": "not found",
+                                 "old_str": old[:80], "hint": hint})
             elif count > 1:
-                skipped.append({"index": i, "reason": f"ambiguous ({count}x)", "old_str": old[:60]})
+                skipped.append({"index": i, "reason": f"ambiguous ({count}x)", "old_str": old[:80]})
             else:
-                content = content.replace(old, new, 1)
-                applied.append({"index": i, "old_str": old[:60]})
+                content = content.replace(matched, new, 1)
+                applied.append({"index": i, "old_str": old[:80],
+                                 "note": hint or "exact_match"})
         if not applied:
-            return {"ok": False, "error": "No patches applied", "skipped": skipped, "skipped_details": skipped}
+            return {"ok": False, "error": "No patches applied",
+                    "skipped": skipped, "skipped_details": skipped}
         if path.endswith(".py"):
             import py_compile, tempfile as _tmpf
             with _tmpf.NamedTemporaryFile(mode="w", suffix=".py", delete=False, encoding="utf-8") as tf:
@@ -1086,11 +1119,10 @@ def t_multi_patch(path: str, patches: str, message: str, repo: str = "") -> dict
             finally:
                 import os
                 if os.path.exists(tmp): os.unlink(tmp)
-        ok = gh_write(path, content, message, repo)
-        if not ok:
-            return {"ok": False, "error": "gh_write returned False"}
+        commit_sha = _gh_blob_write(path, content, message, repo)
         return {"ok": True, "path": path, "applied": len(applied), "skipped": len(skipped),
-                "details": applied, "skipped_details": skipped}
+                "details": applied, "skipped_details": skipped,
+                "commit": commit_sha[:12] if commit_sha else None}
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
