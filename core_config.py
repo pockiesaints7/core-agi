@@ -68,9 +68,9 @@ class RateLimiter:
         self.calls[key].append(now)
         return True
 
-    def tg(self):       return self._ok("tg",  3600, self.c.get("telegram_messages_per_hour", 30))
+    def tg(self):       return True  # no limit -- loop timer is the throttle
     def gh(self):       return self._ok("gh",  3600, self.c.get("github_pushes_per_hour", 20))
-    def sbw(self):      return self._ok("sbw", 3600, self.c.get("supabase_writes_per_hour", 500))
+    def sbw(self):      return True  # no limit -- loop timer is the throttle
     def mcp(self, sid): return self._ok(f"mcp:{sid}", 60, self.c.get("mcp_tool_calls_per_minute", 30))
 
 L = RateLimiter()
