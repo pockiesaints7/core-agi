@@ -128,12 +128,12 @@ def t_get_mistakes(domain="", limit=10):
     if domain and domain not in ("all", ""): qs += f"&domain=eq.{domain}"
     return sb_get("mistakes", qs, svc=True)
 
-def t_update_state(key, value, reason):
+def t_update_state(key="", value="", reason=""):
     ok = sb_post("sessions", {"summary": f"[state_update] {key}: {str(value)[:200]}",
                               "actions": [f"{key}={str(value)[:100]} - {reason}"], "interface": "mcp"})
     return {"ok": ok, "key": key}
 
-def t_add_knowledge(domain, topic, instruction="", content="", tags="", confidence="medium"):
+def t_add_knowledge(domain="", topic="", instruction="", content="", tags="", confidence="medium"):
     """Add knowledge entry. instruction = behavioral directive for CORE (primary). content = supporting detail. At least one required."""
     if not instruction and not content:
         return {"ok": False, "error": "At least one of instruction or content is required"}
@@ -201,7 +201,7 @@ def t_set_simulation(instruction: str) -> dict:
         return {"ok": False, "error": str(e)}
 
 
-def t_log_mistake(context, what_failed, correct_approach, domain="general", root_cause="", how_to_avoid="", severity="medium"):
+def t_log_mistake(context="", what_failed="", correct_approach="", domain="general", root_cause="", how_to_avoid="", severity="medium"):
     ok = sb_post("mistakes", {"domain": domain, "context": context, "what_failed": what_failed,
                               "correct_approach": correct_approach, "root_cause": root_cause or what_failed,
                               "how_to_avoid": how_to_avoid or correct_approach, "severity": severity, "tags": []})
@@ -222,7 +222,7 @@ def t_read_file(path, repo="", start_line="", end_line=""):
         return {"ok": True, "content": raw[:8000], "total_line_count": total, "truncated": truncated}
     except Exception as e: return {"ok": False, "error": str(e)}
 
-def t_write_file(path, content, message, repo=""):
+def t_write_file(path="", content="", message="", repo=""):
     """Write file to GitHub repo - FULL OVERWRITE. Use for NEW files only.
     GUARD: blocked for core_main.py and core_tools.py - use patch_file or gh_search_replace for surgical edits."""
     blocked = {"core_main.py", "core_tools.py"}
@@ -268,7 +268,7 @@ def t_sb_query(table, filters="", limit=20, order="", select="*"):
     qs += f"&limit={lim}"
     return sb_get(table, qs, svc=True)
 
-def t_sb_insert(table, data):
+def t_sb_insert(table="", data=""):
     if isinstance(data, str):
         try: data = json.loads(data)
         except Exception as e: return {"ok": False, "error": f"data must be valid JSON: {e}"}
@@ -691,7 +691,7 @@ def t_approve_evolution(evolution_id):
     except: return {"ok": False, "error": "evolution_id must be a number"}
     return apply_evolution(eid)
 
-def t_reject_evolution(evolution_id, reason=""):
+def t_reject_evolution(evolution_id="", reason=""):
     try: eid = int(evolution_id)
     except: return {"ok": False, "error": "evolution_id must be a number"}
     return reject_evolution(eid, reason)
@@ -725,7 +725,7 @@ def _patch_find(content: str, old_str: str):
     return False, 0, old_str, hint
 
 
-def t_gh_search_replace(path, old_str, new_str, message, repo="", dry_run="false"):
+def t_gh_search_replace(path="", old_str="", new_str="", message="", repo="", dry_run="false"):
     """Surgical find-replace using Blobs API (atomic commit, no SHA conflict, no size limit)."""
     try:
         repo = repo or GITHUB_REPO
@@ -1289,7 +1289,7 @@ def t_core_py_rollback(commit_sha: str, file: str = "core_main.py") -> dict:
         return {"ok": False, "error": str(e)}
 
 
-def t_diff(path: str, sha_a: str, sha_b: str = "main") -> dict:
+def t_diff(path: str = "", sha_a: str = "", sha_b: str = "main") -> dict:
     """Compare a file between two commits and return a unified diff."""
     try:
         h = _ghh()
@@ -2681,7 +2681,7 @@ def t_append_to_file(path: str, content_to_append: str, message: str, repo: str 
 
 
 # -- Supabase write layer (TASK-14) ------------------------------------------
-def t_sb_patch(table: str, filters: str, data) -> dict:
+def t_sb_patch(table: str = "", filters: str = "", data="") -> dict:
     """Update rows in a Supabase table matching filters.
     filters: PostgREST filter string e.g. 'id=eq.abc123'. REQUIRED.
     data: JSON string or dict of fields to update e.g. '{"status": "done"}'.
@@ -2699,7 +2699,7 @@ def t_sb_patch(table: str, filters: str, data) -> dict:
     return {"ok": ok, "table": table, "filters": filters, "updated_fields": list(data.keys())}
 
 
-def t_sb_upsert(table: str, data, on_conflict: str) -> dict:
+def t_sb_upsert(table: str = "", data="", on_conflict: str = "") -> dict:
     """Insert a row or update it if it already exists (upsert).
     data: JSON string or dict of the full row.
     on_conflict: column(s) defining uniqueness e.g. 'domain,topic' for knowledge_base,
@@ -2782,7 +2782,7 @@ def t_get_state_key(key: str) -> dict:
         return {"ok": False, "error": str(e)}
 
 
-def t_task_update(task_id: str, status: str, result: str = "") -> dict:
+def t_task_update(task_id: str = "", status: str = "", result: str = "") -> dict:
     """Update a task_queue row status. task_id = UUID or TASK-N string. status = pending/in_progress/done/failed."""
     valid = {"pending", "in_progress", "done", "failed"}
     if not task_id or not status:
@@ -2817,7 +2817,7 @@ def t_task_update(task_id: str, status: str, result: str = "") -> dict:
         return {"ok": False, "error": str(e)}
 
 
-def t_task_add(title: str, description: str = "", priority: str = "5",
+def t_task_add(title: str = "", description: str = "", priority: str = "5",
                subtasks: str = "", blocked_by: str = "") -> dict:
     """Add a new task to task_queue with proper schema. source=mcp_session set automatically."""
     if not title:
