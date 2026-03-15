@@ -512,12 +512,23 @@ def list_tools():
 
 @app.get("/debug/sim")
 def debug_sim():
-    """Run simulation batch synchronously and return full result for diagnosis."""
-    import traceback
+    """Run simulation and return raw Groq output for diagnosis."""
+    import traceback, json as _json
     try:
-        from core_train import _run_simulation_batch
-        ok = _run_simulation_batch()
-        return {"ok": ok, "error": None}
+        from core_config import groq_chat, GROQ_MODEL, SUPABASE_URL, sb_get, _sbh_count_svc
+        import httpx as _httpx
+        mistakes = sb_get("mistakes", "select=domain,what_failed&order=id.desc&limit=5", svc=True)
+        failure_modes = "\n".join([f"- [{r.get('domain')}] {r.get('what_failed','')[:80]}" for r in mistakes]) or "None."
+        system = """You are simulating 1,000,000 users of CORE - a personal AGI orchestration system.
+Output MUST be valid JSON: {"domain": "code|db|bot|mcp|training|kb|general", "patterns": ["pattern1", "pattern2"], "gaps": "1-2 sentences", "summary": "1 sentence"}
+Output ONLY valid JSON, no preamble."""
+        user = f"Known failure modes:\n{failure_modes}\n\nSimulate 1,000,000 users. What patterns emerge?"
+        raw = groq_chat(system, user, model=GROQ_MODEL, max_tokens=900)
+        try:
+            parsed = _json.loads(raw.strip().lstrip("```json").lstrip("```").strip())
+        except Exception as pe:
+            parsed = None
+        return {"raw": raw[:2000], "parsed": parsed, "patterns_count": len((parsed or {}).get("patterns", []))}
     except Exception as e:
         return {"ok": False, "error": str(e), "trace": traceback.format_exc()}
 
