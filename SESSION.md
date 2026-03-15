@@ -1,7 +1,7 @@
 # CORE SESSION MASTER
 > Last updated: 2026-03-14 | Owner: REINVAGNAR | Version: CORE v6.0
 
-## Current Step: TASK-10: Architect Blueprint v2. Query task_queue for next pending priority task after TASK-9.D.
+## Current Step: TASK-10: Architect Blueprint v2. Query task_queue for full task definition first.
 > Stored in Supabase. Query at session start:
 > `sb_query table=task_queue filters=source=eq.core_v6_registry&status=eq.pending&order=priority.desc`
 
@@ -118,6 +118,7 @@ Task history (Tasks 1–11 registered 2026-03-14):
 
 | Date | Summary | Key Actions |
 |---|---|------|
+| 2026-03-15 | Post-TASK-9.D schema audit. Found and fixed 4 bugs: stale ne | {'action': 'audited all pattern_frequency reads and writes across core_tools.py and core_train.py'}, {'action': 'found 4 bugs: stale never reset on re-appearance; 3 read queries missing stale=eq.false filter'}, {'action': 'patch core_train.py: added stale=False to both upsert paths'} (+4 more) |
 | 2026-03-15 | TASK-9.D Dead Pattern Pruner complete. 4 subtasks: (1) last_ | {'action': 'patched cold processor: last_seen updated on every pattern upsert (both existing and new)'}, {'action': 'added _check_stale_patterns() to core_train.py + wired into cold_processor_loop with 24h gate'}, {'action': 'added stale boolean column to pattern_frequency via Supabase management API DDL'} (+4 more) |
 | 2026-03-15 | TASK-9.C Session Quality Scoring complete. Confirmed researc | {'action': 'verified researcher fix working -- hot_reflections id=138 source=real generated 2 min after deploy'}, {'action': 'implemented t_get_quality_trend(days) -- daily avg, trend direction, best/worst day'}, {'action': 'wired quality_trend_7d into t_stats() return'} (+5 more) |
 | 2026-03-14 | Investigated simulation mode producing zero entries. Root ca | {'action': 'investigated simulation mode -- zero entries ever generated'}, {'action': 'root cause: processed_by_cold=False (bool) not 0 (int) -- both background researcher insert points'}, {'action': 'patch_file core_train.py: fixed both _run_simulation_batch and _extract_real_signal'} (+4 more) |
