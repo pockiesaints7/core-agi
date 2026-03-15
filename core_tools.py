@@ -2081,7 +2081,7 @@ def _railway_latest_deployment() -> dict:
     q = """
     query($serviceId: String!) {
         deployments(input: { serviceId: $serviceId }) {
-            edges { node { id status createdAt meta { serviceId commitMessage commitSha } } }
+            edges { node { id status createdAt environmentId staticUrl meta { commitHash commitMessage commitAuthor } } }
         }
     }"""
     data = _railway_gql(q, {"serviceId": _RAILWAY_SERVICE})
