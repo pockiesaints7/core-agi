@@ -2303,20 +2303,20 @@ def t_patch_file(path: str, patches: str, message: str, repo: str = "", dry_run:
         repo = repo or GITHUB_REPO
         if isinstance(patches, str):
             patches = json.loads(patches)
-        content = gh_read(path, repo)
+        content = _gh_blob_read(path, repo)
         applied = []
         skipped = []
         for i, patch in enumerate(patches):
             old = patch.get("old_str", "")
             new = patch.get("new_str", "")
-            count = content.count(old)
-            if count == 0:
-                skipped.append({"index": i, "reason": "not found", "old_str": old[:60]})
+            found, count, matched, hint = _patch_find(content, old)
+            if not found:
+                skipped.append({"index": i, "reason": "not found", "old_str": old[:80], "hint": hint})
             elif count > 1:
-                skipped.append({"index": i, "reason": f"ambiguous ({count}x)", "old_str": old[:60]})
+                skipped.append({"index": i, "reason": f"ambiguous ({count}x)", "old_str": old[:80]})
             else:
-                content = content.replace(old, new, 1)
-                applied.append({"index": i, "old_str": old[:60]})
+                content = content.replace(matched, new, 1)
+                applied.append({"index": i, "old_str": old[:80], "note": hint or "exact_match"})
         if not applied:
             return {"ok": False, "error": "No patches applied", "skipped": skipped}
         # Syntax check for .py files
@@ -2346,12 +2346,11 @@ def t_patch_file(path: str, patches: str, message: str, repo: str = "", dry_run:
             return {"ok": True, "dry_run": True, "path": path,
                     "applied": len(applied), "skipped": len(skipped),
                     "syntax_ok": syntax_ok, "details": applied, "skipped_details": skipped}
-        ok = gh_write(path, content, message, repo)
-        if not ok:
-            return {"ok": False, "error": "gh_write returned False"}
+        commit_sha = _gh_blob_write(path, content, message, repo)
         return {"ok": True, "dry_run": False, "path": path,
                 "applied": len(applied), "skipped": len(skipped),
-                "syntax_ok": syntax_ok, "details": applied, "skipped_details": skipped}
+                "syntax_ok": syntax_ok, "details": applied, "skipped_details": skipped,
+                "commit": commit_sha[:12] if commit_sha else None}
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
@@ -2364,7 +2363,7 @@ def t_validate_syntax(path: str, repo: str = "") -> dict:
         import py_compile, tempfile as _tmpfile
         if not path.endswith(".py"):
             return {"ok": True, "skipped": True, "reason": "Not a .py file"}
-        content = gh_read(path, repo or GITHUB_REPO)
+        content = _gh_blob_read(path, repo or GITHUB_REPO)
         with _tmpfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False, encoding="utf-8") as tf:
             tf.write(content)
             tf_path = tf.name
@@ -2391,7 +2390,7 @@ def t_append_to_file(path: str, content_to_append: str, message: str, repo: str 
     try:
         import subprocess, tempfile as _tmpfile
         repo = repo or GITHUB_REPO
-        existing = gh_read(path, repo)
+        existing = _gh_blob_read(path, repo)
         new_content = existing + content_to_append
         # Syntax check for .py files
         if path.endswith(".py"):
@@ -2411,13 +2410,12 @@ def t_append_to_file(path: str, content_to_append: str, message: str, repo: str 
                     os.unlink(tf_path)
                 except Exception:
                     pass
-        ok = gh_write(path, new_content, message, repo)
-        if not ok:
-            return {"ok": False, "error": "gh_write returned False"}
+        commit_sha = _gh_blob_write(path, new_content, message, repo)
         return {"ok": True, "path": path,
                 "original_lines": len(existing.splitlines()),
                 "appended_lines": len(content_to_append.splitlines()),
-                "total_lines": len(new_content.splitlines())}
+                "total_lines": len(new_content.splitlines()),
+                "commit": commit_sha[:12] if commit_sha else None}
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
