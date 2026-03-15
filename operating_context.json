@@ -16,7 +16,7 @@
     "state_files": {
       "SESSION.md": "Static: claude.ai bootstrap pointer, autonomous mode protocol, active rules. No longer auto-written by session_end.",
       "operating_context.json": "Static: tool rules, full schema, tombstone tables — update only on structural change",
-      "CORE_SELF.md": "Living self-knowledge — what CORE is, what it can do, how it works"
+      "CORE_SELF.md": "DELETED — superseded by system_map Supabase table + operating_context.json. Do not reference."
     },
     "key_endpoints": {
       "GET /": "Health check + current step",
