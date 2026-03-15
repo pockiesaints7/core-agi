@@ -870,12 +870,10 @@ def t_session_start() -> dict:
             "session_md": state.get("session_md", ""),  # full SESSION.md content for claude.ai bootstrap
             "recent_mistakes": mistakes if isinstance(mistakes, list) else [],
             "pending_evolutions": evolutions[:5] if isinstance(evolutions, list) else [],
-            "unprocessed_hot": training.get("unprocessed_hot", 0),
-            "pending_evo_count": training.get("pending_evolutions", 0),
+            "training_pipeline": training,
             "live_tool_count": len(TOOLS),
             "system_map_drift": drift,
             "system_map": smap,
-            "stale_pattern_count": _get_stale_pattern_count(),
         }
     except Exception as e:
         return {"ok": False, "error": str(e)}
