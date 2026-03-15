@@ -91,16 +91,23 @@ def t_state(include_operating_context: str = "false"):
 
 def t_health():
     from core_config import GROQ_API_KEY, TELEGRAM_TOKEN
+    from concurrent.futures import ThreadPoolExecutor, as_completed
     h = {"ts": datetime.utcnow().isoformat(), "components": {}}
-    for name, fn in [
-        ("supabase", lambda: sb_get("sessions", "select=id&limit=1")),
-        ("groq",     lambda: httpx.get("https://api.groq.com/openai/v1/models",
-                             headers={"Authorization": f"Bearer {GROQ_API_KEY}"}, timeout=5).raise_for_status()),
-        ("telegram", lambda: httpx.get(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getMe", timeout=5).raise_for_status()),
-        ("github",   lambda: gh_read("README.md")),
-    ]:
-        try: fn(); h["components"][name] = "ok"
-        except Exception as e: h["components"][name] = f"error:{e}"
+    checks = {
+        "supabase": lambda: sb_get("sessions", "select=id&limit=1"),
+        "groq":     lambda: httpx.get("https://api.groq.com/openai/v1/models",
+                             headers={"Authorization": f"Bearer {GROQ_API_KEY}"}, timeout=5).raise_for_status(),
+        "telegram": lambda: httpx.get(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getMe", timeout=5).raise_for_status(),
+        "github":   lambda: gh_read("README.md"),
+    }
+    def _run(name, fn):
+        try: fn(); return name, "ok"
+        except Exception as e: return name, f"error:{e}"
+    with ThreadPoolExecutor(max_workers=4) as ex:
+        futures = {ex.submit(_run, name, fn): name for name, fn in checks.items()}
+        for f in as_completed(futures):
+            name, result = f.result()
+            h["components"][name] = result
     h["overall"] = "ok" if all(v == "ok" for v in h["components"].values()) else "degraded"
     return h
 
