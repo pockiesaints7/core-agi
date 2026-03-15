@@ -2690,16 +2690,36 @@ def t_synthesize_evolutions() -> dict:
             "select=gaps_identified,domain,quality_score&gaps_identified=not.is.null&order=id.desc&limit=20",
             svc=True) or []
 
-        # 5. Open task_queue items (avoid duplicating)
-        open_tasks = sb_get("task_queue",
-            "select=task&status=eq.pending&source=eq.core_v6_registry&order=id.desc&limit=20",
+        # 5. Open task_queue items -- pending AND in_progress (full context for Q1+Q3 pre-flight checks)
+        open_tasks_pending = sb_get("task_queue",
+            "select=task,status&status=eq.pending&order=priority.desc&limit=20",
             svc=True) or []
+        open_tasks_inprog = sb_get("task_queue",
+            "select=task,status&status=eq.in_progress&order=priority.desc&limit=10",
+            svc=True) or []
+        open_tasks = open_tasks_pending + open_tasks_inprog
 
         # Return all raw signals to Claude Desktop.
-        # Claude reads, reasons as architect, calls task_add directly.
+        # Claude reads, reasons as architect, applies pre-flight, calls task_add directly.
         return {
             "ok": True,
-            "instruction": "YOU are the architect. Read all signals. Think 6 months ahead. Call task_add for each new task. Do NOT duplicate open_tasks. Subtasks must be concrete and executable.",
+            "instruction": (
+                "YOU are the architect. Read all signals below. Think 6 months ahead. "
+                "Before calling task_add for ANY task, run ALL 5 pre-flight checks:\n"
+                "Q1 DUPLICATE CHECK: Does this task already exist in open_tasks (pending or in_progress)? "
+                "If yes -> SKIP, do not add.\n"
+                "Q2 SIGNAL FRESHNESS: Is the driving signal (evolution created_at or pattern) recent? "
+                "If the signal is >30 days old with no recent activity -> flag as stale, do not add standalone task.\n"
+                "Q3 REDUNDANCY CHECK: Does this task overlap >50% with an in_progress task? "
+                "If yes -> merge as a subtask of that task, do not create new standalone task.\n"
+                "Q4 REAL IMPACT CHECK: Is this task a real architectural/behavioral change, or cosmetic? "
+                "Cosmetic tasks (renaming, minor doc updates, formatting) -> batch into a housekeeping task, not standalone.\n"
+                "Q5 ACTIONABILITY CHECK: Is this task specific enough to execute now? "
+                "Vague tasks ('improve reasoning', 'make CORE smarter') -> log as KB gap entry instead, not a task.\n"
+                "OUTCOME MAP: pass all 5 -> call task_add | exists -> skip | stale -> skip | "
+                "redundant -> merge as subtask | cosmetic -> batch | vague -> add_knowledge gap instead.\n"
+                "Subtasks must be concrete, verifiable, and executable. No hallucinated tool names."
+            ),
             "signals": {
                 "pending_evolutions": [
                     {
@@ -2734,7 +2754,8 @@ def t_synthesize_evolutions() -> dict:
                     } for g in gaps
                 ],
                 "open_tasks": [
-                    str(t.get("task", ""))[:150] for t in open_tasks
+                    {"status": t.get("status"), "task": str(t.get("task", ""))[:200]}
+                    for t in open_tasks
                 ],
             },
             "counts": {
@@ -2742,7 +2763,8 @@ def t_synthesize_evolutions() -> dict:
                 "patterns": len(patterns),
                 "cold_reflections": len(cold),
                 "gaps": len(gaps),
-                "open_tasks": len(open_tasks),
+                "open_tasks_pending": len(open_tasks_pending),
+                "open_tasks_inprog": len(open_tasks_inprog),
             },
         }
 
