@@ -571,9 +571,40 @@ def bulk_reject_evolutions(change_type: str = "", ids: list = None, reason: str 
         return {"ok": False, "error": str(e)}
 
 
+# -- TASK-9.D: Dead Pattern Pruner -------------------------------------------
+_last_stale_check: float = 0.0
+_STALE_CHECK_INTERVAL = 86400  # 24h
+_STALE_DAYS = 30
+
+def _check_stale_patterns() -> int:
+    """Mark patterns not seen in 30+ days as stale=true.
+    Returns count of newly staled patterns."""
+    try:
+        cutoff = (datetime.utcnow() - timedelta(days=_STALE_DAYS)).isoformat()
+        stale_rows = sb_get(
+            "pattern_frequency",
+            f"select=id,pattern_key&last_seen=lt.{cutoff}&auto_applied=eq.true",
+            svc=True
+        ) or []
+        count = 0
+        for row in stale_rows:
+            try:
+                sb_patch("pattern_frequency", f"id=eq.{row['id']}",
+                         {"stale": True})
+                count += 1
+            except Exception as _e:
+                print(f"[STALE] patch error for id={row['id']}: {_e}")
+        if count:
+            print(f"[STALE] Marked {count} patterns as stale (not seen in {_STALE_DAYS}d)")
+        return count
+    except Exception as e:
+        print(f"[STALE] _check_stale_patterns error: {e}")
+        return 0
+
+
 # -- Cold processor loop -------------------------------------------------------
 def cold_processor_loop():
-    global _last_cold_run, _last_cold_kb_count
+    global _last_cold_run, _last_cold_kb_count, _last_stale_check
     print("[COLD] Background loop started")
     while True:
         try:
@@ -613,6 +644,10 @@ def cold_processor_loop():
                 conf = float(evo.get("confidence") or 0)
                 if conf >= KNOWLEDGE_AUTO_CONFIDENCE:
                     apply_evolution(evo["id"])
+            # TASK-9.D: stale pattern check once per 24h
+            if time.time() - _last_stale_check >= _STALE_CHECK_INTERVAL:
+                _check_stale_patterns()
+                _last_stale_check = time.time()
         except Exception as e:
             print(f"[COLD] loop error: {e}")
         time.sleep(1800)
