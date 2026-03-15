@@ -1336,13 +1336,188 @@ def t_diff(path: str, sha_a: str, sha_b: str = "main") -> dict:
 
 
 def t_deploy_and_wait(reason: str = "", timeout: str = "120") -> dict:
-    """DEPRECATED POLLING LOOP — replaced by build_status.
-    Railway auto-deploys on every GitHub push — no polling loop needed.
-    New SOP: patch_file (pushes code) → sleep 35s → build_status().
-    This tool now just calls build_status() and returns immediately.
-    Kept in TOOLS to avoid breaking any references.
+    """Real-time Railway deployment poller via GraphQL.
+    Polls Railway directly every 3s until status is SUCCESS|FAILED|CRASHED|REMOVED.
+    Returns as soon as deployment reaches a terminal state.
+    timeout: max seconds to wait (default 120). Returns partial result on timeout.
     """
-    return t_build_status()
+    try:
+        max_secs = min(int(timeout) if timeout else 120, 300)
+        deadline = time.time() + max_secs
+        poll_interval = 3
+        attempts = 0
+        terminal = {"SUCCESS", "FAILED", "CRASHED", "REMOVED"}
+        last_status = None
+        deploy_id = None
+
+        while time.time() < deadline:
+            attempts += 1
+            try:
+                node = _railway_latest_deployment()
+                if not node:
+                    time.sleep(poll_interval)
+                    continue
+                status = node.get("status", "UNKNOWN")
+                deploy_id = node.get("id", "")[:12]
+                meta = node.get("meta", {}) or {}
+                commit_msg = (meta.get("commitMessage") or "")[:60]
+                last_status = status
+                print(f"[DEPLOY_WAIT] attempt={attempts} status={status} deploy={deploy_id} commit={commit_msg[:40]}")
+                if status in terminal:
+                    elapsed = round(time.time() - (deadline - max_secs), 1)
+                    return {
+                        "ok": status == "SUCCESS",
+                        "status": status,
+                        "deploy_id": deploy_id,
+                        "commit_msg": commit_msg,
+                        "attempts": attempts,
+                        "elapsed_s": elapsed,
+                        "source": "railway_graphql_live",
+                    }
+            except Exception as pe:
+                print(f"[DEPLOY_WAIT] poll error: {pe}")
+            time.sleep(poll_interval)
+
+        # Timeout
+        return {
+            "ok": False,
+            "status": last_status or "TIMEOUT",
+            "deploy_id": deploy_id,
+            "attempts": attempts,
+            "elapsed_s": max_secs,
+            "error": f"Timed out after {max_secs}s waiting for terminal state",
+            "source": "railway_graphql_live",
+        }
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def t_railway_logs_live(lines: str = "50", keyword: str = "") -> dict:
+    """Fetch live Railway deployment stdout logs via GraphQL.
+    Returns actual print() output from the running container -- not just commit history.
+    lines: number of log lines to return (default 50, max 500).
+    keyword: optional filter string (case-insensitive).
+    """
+    try:
+        node = _railway_latest_deployment()
+        if not node:
+            return {"ok": False, "error": "No deployments found"}
+        deploy_id = node["id"]
+        limit = min(int(lines) if lines else 50, 500)
+        q = """
+        query($deploymentId: String!, $limit: Int) {
+            deploymentLogs(deploymentId: $deploymentId, limit: $limit) {
+                message
+                timestamp
+            }
+        }"""
+        data = _railway_gql(q, {"deploymentId": deploy_id, "limit": limit})
+        logs = data.get("deploymentLogs", []) or []
+        kw = keyword.strip().lower() if keyword else ""
+        if kw:
+            logs = [l for l in logs if kw in l.get("message", "").lower()]
+        formatted = []
+        for l in logs:
+            ts = l.get("timestamp", "")[:19].replace("T", " ")
+            msg = l.get("message", "")
+            formatted.append(f"{ts} {msg}")
+        return {
+            "ok": True,
+            "deploy_id": deploy_id[:12],
+            "deploy_status": node.get("status"),
+            "total": len(formatted),
+            "keyword": kw or None,
+            "logs": formatted,
+        }
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def t_railway_env_get(key: str = "") -> dict:
+    """Read Railway environment variables via GraphQL.
+    key: specific var name to read (returns just that value). Empty = return all vars.
+    """
+    try:
+        q = """
+        query($serviceId: String!, $environmentId: String!) {
+            variables(serviceId: $serviceId, environmentId: $environmentId)
+        }"""
+        data = _railway_gql(q, {"serviceId": _RAILWAY_SERVICE, "environmentId": _RAILWAY_ENV})
+        vars_obj = data.get("variables") or {}
+        if isinstance(vars_obj, dict):
+            all_vars = vars_obj
+        else:
+            all_vars = {}
+        if key:
+            val = all_vars.get(key)
+            return {"ok": True, "key": key, "value": val, "found": val is not None}
+        # Return all var names (not values -- security)
+        return {"ok": True, "count": len(all_vars), "keys": sorted(all_vars.keys())}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def t_railway_env_set(key: str, value: str) -> dict:
+    """Write a Railway environment variable via GraphQL variableUpsert.
+    Triggers a redeploy automatically after setting.
+    key: env var name (e.g. GROQ_API_KEY). value: new value.
+    """
+    try:
+        if not key or not value:
+            return {"ok": False, "error": "key and value are required"}
+        q = """
+        mutation($input: VariableUpsertInput!) {
+            variableUpsert(input: $input)
+        }"""
+        inp = {
+            "projectId": _RAILWAY_PROJECT,
+            "serviceId": _RAILWAY_SERVICE,
+            "environmentId": _RAILWAY_ENV,
+            "name": key,
+            "value": value,
+        }
+        data = _railway_gql(q, {"input": inp})
+        success = data.get("variableUpsert", False)
+        if success:
+            notify(f"Railway env var set: <b>{key}</b> updated. Redeploy required to take effect.")
+        return {"ok": success, "key": key, "note": "Redeploy required for changes to take effect"}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def t_railway_service_info() -> dict:
+    """Full Railway service snapshot: status, latest deployment, env var keys, project info."""
+    try:
+        # Service + project
+        q = """
+        query($serviceId: String!, $envId: String!) {
+            service(id: $serviceId) {
+                id name projectId
+            }
+            serviceInstance(serviceId: $serviceId, environmentId: $envId) {
+                id startCommand region
+            }
+        }"""
+        data = _railway_gql(q, {"serviceId": _RAILWAY_SERVICE, "envId": _RAILWAY_ENV})
+        svc = data.get("service", {})
+        inst = data.get("serviceInstance", {})
+        # Latest deployment
+        node = _railway_latest_deployment()
+        meta = (node.get("meta") or {}) if node else {}
+        return {
+            "ok": True,
+            "service": {"id": svc.get("id","")[:12], "name": svc.get("name"), "project_id": svc.get("projectId","")[:12]},
+            "instance": {"region": inst.get("region"), "start_cmd": inst.get("startCommand")},
+            "latest_deploy": {
+                "id": (node.get("id") or "")[:12],
+                "status": node.get("status"),
+                "commit": (meta.get("commitMessage") or "")[:60],
+                "sha": (meta.get("commitSha") or "")[:12],
+            } if node else None,
+            "ids": {"project": _RAILWAY_PROJECT, "service": _RAILWAY_SERVICE, "env": _RAILWAY_ENV},
+        }
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
 
 
 def t_ping_health() -> dict:
@@ -1880,6 +2055,39 @@ def t_bulk_apply(executor_override: str = "claude_desktop", dry_run: bool = Fals
         return {"ok": False, "error": str(e)}
 
 
+# -- Railway GraphQL constants (correct IDs discovered 2026-03-15) --------
+_RAILWAY_TOKEN   = os.environ.get("RAILWAY_TOKEN", "")
+_RAILWAY_GQL     = "https://backboard.railway.app/graphql/v2"
+_RAILWAY_PROJECT = "b6ead639-5fa2-4637-b8a5-d403ce6dac82"
+_RAILWAY_SERVICE = "5c43b876-47ca-4125-834d-92c268d89b33"
+_RAILWAY_ENV     = "002425ee-b1a3-4ec2-b668-f24ae5e12411"
+
+def _railway_gql(query: str, variables: dict = None) -> dict:
+    """Execute a Railway GraphQL query. Returns response data dict."""
+    tok = _RAILWAY_TOKEN or os.environ.get("RAILWAY_TOKEN", "")
+    headers = {"Authorization": f"Bearer {tok}", "Content-Type": "application/json"}
+    body = {"query": query}
+    if variables:
+        body["variables"] = variables
+    r = httpx.post(_RAILWAY_GQL, headers=headers, json=body, timeout=15)
+    r.raise_for_status()
+    data = r.json()
+    if "errors" in data:
+        raise Exception(data["errors"][0]["message"])
+    return data.get("data", {})
+
+def _railway_latest_deployment() -> dict:
+    """Get the latest deployment for the CORE service."""
+    q = """
+    query($serviceId: String!) {
+        deployments(input: { serviceId: $serviceId }) {
+            edges { node { id status createdAt meta { serviceId commitMessage commitSha } } }
+        }
+    }"""
+    data = _railway_gql(q, {"serviceId": _RAILWAY_SERVICE})
+    edges = data.get("deployments", {}).get("edges", [])
+    return edges[0]["node"] if edges else {}
+
 def _gh_commit_status(sha: str = "") -> dict:
     try:
         h = _ghh()
@@ -1919,40 +2127,78 @@ def t_deploy_status() -> dict:
 
 
 def t_build_status() -> dict:
-    """Check last 3 commits build state. Uses _gh_commit_status() per SHA — same source as deploy_status.
-    Capped at 3 commits with 8s per-request timeout and overall 30s deadline to prevent hangs."""
+    """Real-time deploy status via Railway GraphQL (direct) + GitHub commit history.
+    Railway GraphQL gives live status: BUILDING | DEPLOYING | SUCCESS | FAILED | CRASHED.
+    Falls back to GitHub commit statuses if Railway token unavailable."""
     try:
-        h = _ghh()
         now = datetime.utcnow()
-        deadline = time.time() + 30
-        r = httpx.get(f"https://api.github.com/repos/{GITHUB_REPO}/commits?per_page=3", headers=h, timeout=8)
-        r.raise_for_status()
-        commits = r.json()
-        deploys = []
-        for commit in commits:
-            if time.time() > deadline:
-                break
-            sha = commit["sha"]
-            msg = commit.get("commit", {}).get("message", "")[:60]
-            try:
-                st = _gh_commit_status(sha)
-                updated = st.get("updated_at", "")
+        # Primary: Railway GraphQL (real-time, no lag)
+        railway_deploy = None
+        railway_error = None
+        try:
+            node = _railway_latest_deployment()
+            if node:
+                created = node.get("createdAt", "")
                 time_since = ""
-                if updated:
+                if created:
                     try:
-                        dt = datetime.strptime(updated, "%Y-%m-%dT%H:%M:%SZ")
+                        dt = datetime.fromisoformat(created.replace("Z", "+00:00")).replace(tzinfo=None)
                         mins = int((now - dt).total_seconds() // 60)
                         time_since = f"{mins}m ago" if mins < 60 else f"{mins//60}h{mins%60}m ago"
                     except: pass
-                deploys.append({"commit_sha": sha[:12], "commit_msg": msg,
-                                "state": st.get("state", "no status"),
-                                "description": st.get("description", ""),
-                                "updated_at": updated, "time_since": time_since})
-            except Exception:
-                deploys.append({"commit_sha": sha[:12], "commit_msg": msg, "state": "error fetching status"})
-        latest = deploys[0] if deploys else {}
-        return {"ok": True, "latest": latest, "recent": deploys,
-                "summary": f"Latest: {latest.get('state','?')} — {latest.get('commit_msg','?')}"}
+                meta = node.get("meta", {}) or {}
+                railway_deploy = {
+                    "deploy_id": node.get("id", "")[:12],
+                    "status": node.get("status", "UNKNOWN"),  # BUILDING|DEPLOYING|SUCCESS|FAILED|CRASHED
+                    "commit_sha": (meta.get("commitSha") or "")[:12],
+                    "commit_msg": (meta.get("commitMessage") or "")[:80],
+                    "created_at": created[:19] if created else "",
+                    "time_since": time_since,
+                    "source": "railway_graphql",
+                }
+        except Exception as re:
+            railway_error = str(re)
+
+        # Secondary: last 3 GitHub commits with Railway status callbacks
+        h = _ghh()
+        gh_r = httpx.get(f"https://api.github.com/repos/{GITHUB_REPO}/commits?per_page=3", headers=h, timeout=8)
+        gh_r.raise_for_status()
+        recent = []
+        for commit in gh_r.json():
+            sha = commit["sha"]
+            msg = commit.get("commit", {}).get("message", "")[:60]
+            ts = commit.get("commit", {}).get("committer", {}).get("date", "")
+            sr = httpx.get(f"https://api.github.com/repos/{GITHUB_REPO}/commits/{sha}/statuses",
+                           headers=h, timeout=8)
+            statuses = sr.json() if sr.status_code == 200 else []
+            rw = [s for s in statuses if "railway" in s.get("context","").lower()
+                  or "railway" in s.get("description","").lower()]
+            st = rw[0] if rw else {}
+            time_since = ""
+            if ts:
+                try:
+                    dt = datetime.strptime(ts, "%Y-%m-%dT%H:%M:%SZ")
+                    mins = int((now - dt).total_seconds() // 60)
+                    time_since = f"{mins}m ago" if mins < 60 else f"{mins//60}h{mins%60}m ago"
+                except: pass
+            recent.append({"commit_sha": sha[:12], "commit_msg": msg,
+                           "state": st.get("state", "no_status"),
+                           "description": st.get("description", ""),
+                           "updated_at": st.get("updated_at", ""), "time_since": time_since})
+
+        latest_gh = recent[0] if recent else {}
+        # Prefer Railway GraphQL for latest status, fall back to GitHub
+        latest = railway_deploy or latest_gh
+        state = (railway_deploy or {}).get("status") or latest_gh.get("state", "?")
+        msg = (railway_deploy or latest_gh).get("commit_msg", "?")
+        return {
+            "ok": True,
+            "latest": latest,
+            "railway_live": railway_deploy,
+            "railway_error": railway_error,
+            "recent": recent,
+            "summary": f"Latest: {state} — {msg}"
+        }
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
