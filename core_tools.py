@@ -1127,7 +1127,7 @@ def t_multi_patch(path: str, patches: str, message: str, repo: str = "") -> dict
         return {"ok": False, "error": str(e)}
 
 
-def t_session_end(summary: str, actions: str, domain: str = "general",
+def t_session_end(summary: str = "", actions: str = "", domain: str = "general",
                   patterns: str = "", quality: str = "0.8",
                   skill_file_updated: str = "false",
                   force_close: str = "false",
