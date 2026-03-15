@@ -532,30 +532,84 @@ def handle_msg(msg):
 
     if text == "/start":
         counts = get_system_counts()
-        step = get_current_step()
+        resume = get_resume_task()
         notify(
-            f"*CORE v6.0*\n{step}\n"
+            f"*CORE v6.0*\n{resume}\n"
             f"Knowledge: {counts.get('knowledge_base',0)} | Sessions: {counts.get('sessions',0)}\n\n"
             f"*Commands:*\n"
-            f"/status - health + pipeline\n"
-            f"/backlog [min_priority] - improvement backlog",
+            f"/status \u2014 health + system\n"
+            f"/tstatus \u2014 training pipeline detail\n"
+            f"/backlog [min_priority] \u2014 improvement backlog\n"
+            f"/project [list|id] \u2014 project context",
             cid
         )
 
     elif text == "/status":
-        from core_tools import t_health, t_training_status
+        from core_tools import t_health
         h = t_health()
         counts = get_system_counts()
-        ts = t_training_status()
-        step = get_current_step()
+        resume = get_resume_task()
         notify(
-            f"*Status - {step}*\n"
+            f"*Status*\n{resume}\n"
             f"Supabase: {h['components'].get('supabase')} | Groq: {h['components'].get('groq')}\n"
             f"Telegram: {h['components'].get('telegram')} | GitHub: {h['components'].get('github')}\n\n"
-            f"Knowledge: {counts.get('knowledge_base',0)} | Sessions: {counts.get('sessions',0)}\n"
-            f"Hot unprocessed: {ts.get('unprocessed_hot',0)} | Pending evos: {ts.get('pending_evolutions',0)}\n"
-            f"Backlog: {ts.get('backlog_pending','?')} pending\n"
-            f"MCP tools: {len(TOOLS)}",
+            f"KB: {counts.get('knowledge_base',0)} | Sessions: {counts.get('sessions',0)} | Mistakes: {counts.get('mistakes',0)}\n"
+            f"MCP tools: {len(TOOLS)}\n\n"
+            f"Use /tstatus for training pipeline details.",
+            cid
+        )
+
+    elif text == "/tstatus":
+        from core_tools import t_get_training_pipeline
+        tp = t_get_training_pipeline()
+        hot = tp.get("hot", {})
+        cold = tp.get("cold", {})
+        pat = tp.get("patterns", {})
+        evo = tp.get("evolutions", {})
+        qual = tp.get("quality", {})
+        flags = tp.get("health_flags", [])
+        pipeline_ok = tp.get("pipeline_ok", False)
+
+        # Hot section
+        last_real = hot.get("last_real")
+        last_sim  = hot.get("last_simulation")
+        hot_line  = f"Hot: {hot.get('total','?')} total | {hot.get('unprocessed','?')} unprocessed"
+        real_line = f"  Last real: {last_real['ts']} | domain={last_real['domain']} | q={last_real['quality']}" if last_real else "  Last real: none"
+        sim_line  = f"  Simulation: {hot.get('total_simulation',0)} entries" if hot.get("simulation_ok") else "  Simulation: \u26a0\ufe0f DEAD (0 entries)"
+
+        # Cold section
+        cold_ago  = f"{cold.get('last_run_mins_ago','?')}min ago" if cold.get("last_run_mins_ago") is not None else "never"
+        cold_line = f"Cold: last={cold_ago} | hots={cold.get('last_hot_count',0)} | patterns={cold.get('last_patterns_found',0)} | evos={cold.get('last_evolutions_queued',0)}"
+        thresh_line = f"  Threshold: {cold.get('threshold','?')} hots to trigger"
+
+        # Patterns
+        top = pat.get("top")
+        pat_line  = f"Patterns: {pat.get('active_count',0)} active | {pat.get('stale_count',0)} stale"
+        top_line  = f"  Top: \"{top['key'][:60]}\" (freq={top['freq']}, {top['domain']})" if top else "  Top: none"
+
+        # Quality
+        q_avg   = qual.get("7d_avg", "?")
+        q_trend = qual.get("trend", "?")
+        trend_icon = "\u2191" if q_trend == "improving" else ("\u2193" if q_trend == "declining" else "\u2192")
+        qual_line = f"Quality 7d: avg={q_avg} {trend_icon} {q_trend} ({qual.get('sample_count',0)} samples)"
+
+        # Evolution
+        evo_line = f"Evolutions: {evo.get('pending',0)} pending | {evo.get('applied',0)} applied"
+
+        # Health
+        if flags:
+            health_line = "\u26a0\ufe0f Issues: " + " | ".join(flags)
+        else:
+            health_line = "\u2705 Pipeline healthy"
+
+        notify(
+            f"*Training Pipeline Status*\n\n"
+            f"{hot_line}\n{real_line}\n{sim_line}\n\n"
+            f"{cold_line}\n{thresh_line}\n\n"
+            f"{pat_line}\n{top_line}\n\n"
+            f"{qual_line}\n"
+            f"{evo_line}\n\n"
+            f"{health_line}",
             cid
         )
 
