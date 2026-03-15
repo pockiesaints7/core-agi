@@ -178,7 +178,7 @@ def auto_hot_reflection(session_data: dict):
                 f"Respond ONLY as JSON: "
                 f'{{"patterns": ["..."], "quality": 0.8, "gaps": "..or null"}}'
             )
-            raw = groq_chat(prompt, model=GROQ_FAST, max_tokens=500)
+            raw = groq_chat(system="You are CORE's pattern extraction engine. Return only valid JSON.", user=prompt, model=GROQ_FAST, max_tokens=500)
             parsed = json.loads(raw.strip().lstrip("```json").rstrip("```").strip())
             groq_patterns = [p for p in parsed.get("patterns", []) if isinstance(p, str) and len(p) > 5][:5]
             # Merge: seed patterns first, then Groq additions (deduplicated)
@@ -276,7 +276,7 @@ def _groq_kb_content(pattern_key: str, domain: str, frequency: int, src_key: str
             f"4. Any known exceptions\n"
             f"Max 200 words. No markdown headers. Plain paragraphs only."
         )
-        content = groq_chat(prompt, model=GROQ_FAST, max_tokens=350)
+        content = groq_chat(system="You are CORE's knowledge synthesis engine. Write clear actionable KB content.", user=prompt, model=GROQ_FAST, max_tokens=350)
         content = content.strip()
         if len(content) > 30:
             return content
@@ -1122,7 +1122,7 @@ def _groq_cluster_patterns(batch_counts: "Counter", batch_domain: dict, batch_so
             "Example: {\"1\": \"canonical text\", \"2\": \"canonical text\", \"3\": \"different rule\"}\n"
             "No preamble. No markdown. Pure JSON only."
         )
-        raw = groq_chat(prompt, model=GROQ_MODEL, max_tokens=2000)
+        raw = groq_chat(system="You are CORE's pattern clustering engine. Return only valid JSON.", user=prompt, model=GROQ_MODEL, max_tokens=2000)
         raw = raw.strip().lstrip("```json").lstrip("```").rstrip("```").strip()
         mapping_by_num = json.loads(raw)  # {"1": "canonical", "2": "canonical", ...}
 
