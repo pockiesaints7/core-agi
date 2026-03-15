@@ -731,6 +731,7 @@ def t_session_start() -> dict:
             "last_session_ts": state.get("last_session_ts", ""),
             "in_progress_tasks": [t for t in state.get("pending_tasks", []) if t.get("status") == "in_progress"],
             "pending_tasks": [t for t in state.get("pending_tasks", []) if t.get("status") == "pending"],
+            "resume_task": next((t for t in state.get("pending_tasks", []) if t.get("status") == "in_progress"), None),
             "step": state.get("session_md", ""),
             "recent_mistakes": mistakes if isinstance(mistakes, list) else [],
             "pending_evolutions": evolutions[:5] if isinstance(evolutions, list) else [],
