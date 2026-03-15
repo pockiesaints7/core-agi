@@ -660,7 +660,7 @@ def handle_msg(msg):
                 notify(f"Could not prepare: {ids}. Check project IDs with /project list.", cid)
 
     else:
-        notify("Use /status, /backlog, or /project. Full interface → Claude Desktop.", cid)
+        notify("Commands: /status | /tstatus | /backlog | /project. Full interface \u2192 Claude Desktop.", cid)
 
 
 # ---------------------------------------------------------------------------
