@@ -2606,7 +2606,7 @@ TOOLS = {
     "system_map_scan":        {"fn": t_system_map_scan, "perm": "READ", "args": ["trigger"], "desc": "Scan system_map table. trigger=session_start|session_end|manual"},
     "session_start":          {"fn": t_session_start,          "perm": "READ",    "args": [],
                                "desc": "One-call session bootstrap."},
-    "session_end":            {"fn": t_session_end,            "perm": "WRITE",   "args": ["summary", "actions", "domain", "patterns", "quality", "completed_tasks", "new_step", "skill_file_updated", "force_close"],
+    "session_end":            {"fn": t_session_end,            "perm": "WRITE",   "args": ["summary", "actions", "domain", "patterns", "quality", "skill_file_updated", "force_close"],
                                "desc": "One-call session close. BEFORE calling this you MUST: (1) log_mistake for every error, (2) add_knowledge for every new insight, (3) changelog_add for every deploy, (4) update task statuses. TASK-21.B gate: if patterns is non-empty, you MUST also write new rules to C:\\Users\\rnvgg\\.claude-skills\\CORE_AGI_SKILL_V4.md via Windows-MCP:FileSystem, then pass skill_file_updated=true. Gate blocks session_end if patterns present but skill_file_updated=false. Override with force_close=true."},
     "core_py_rollback":       {"fn": t_core_py_rollback,       "perm": "EXECUTE", "args": ["commit_sha"],
                                "desc": "Emergency restore: fetch any CORE file at commit_sha, write back, redeploy. file= param (default: core_main.py)."},
