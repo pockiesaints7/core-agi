@@ -2,7 +2,7 @@
   "groq_calls_per_hour": 200,
   "supabase_writes_per_hour": 500,
   "github_pushes_per_hour": 20,
-  "telegram_messages_per_hour": 30,
+  "telegram_messages_per_hour": 200,
   "railway_deploys_per_day": 10,
   "mcp_tool_calls_per_minute": 30,
   "max_file_size_kb": 500,
