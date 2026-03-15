@@ -1,6 +1,6 @@
 {
   "groq_calls_per_hour": 200,
-  "supabase_writes_per_hour": 500,
+  "supabase_writes_per_hour": 2000,
   "github_pushes_per_hour": 20,
   "telegram_messages_per_hour": 200,
   "railway_deploys_per_day": 10,
