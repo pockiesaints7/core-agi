@@ -1238,6 +1238,25 @@ def t_session_end(summary: str = "", actions: str = "", domain: str = "general",
                 "patterns_noted": patterns,
             }
 
+        # TASK-23.B: tools_updated gate
+        # If a new SOP was established this session affecting a specific tool,
+        # block close until TOOLS dict description is confirmed updated for that tool.
+        _new_sop = str(new_tool_sop).strip()
+        _tools_updated = str(tools_updated).strip()
+        if _new_sop and not _tools_updated and not _force:
+            return {
+                "ok": False,
+                "blocked": True,
+                "reason": "tools_dict_not_updated",
+                "warning": (
+                    f"New SOP established this session affecting tool: '{_new_sop}'. "
+                    "TOOLS dict description must be updated for the affected tool(s) before closing. "
+                    "Patch the TOOLS dict entry in core_tools.py via patch_file, then call session_end "
+                    "with tools_updated='tool_name'. To skip: pass force_close=true."
+                ),
+                "new_tool_sop": _new_sop,
+            }
+
         # 1. Log session to Supabase
         session_created_at = session_start_at.isoformat()
         session_ok = sb_post("sessions", {
