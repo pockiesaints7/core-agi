@@ -2078,16 +2078,29 @@ def _railway_gql(query: str, variables: dict = None) -> dict:
     return data.get("data", {})
 
 def _railway_latest_deployment() -> dict:
-    """Get the latest deployment for the CORE service."""
+    """Get the latest deployment for the CORE service.
+    NOTE: meta is a SCALAR (JSON blob) on Railway -- never select subfields.
+    Access as node['meta']['commitHash'] etc after retrieval.
+    projectId is REQUIRED in input -- serviceId alone returns empty.
+    """
     q = """
-    query($serviceId: String!) {
-        deployments(input: { serviceId: $serviceId }) {
-            edges { node { id status createdAt environmentId staticUrl meta { commitHash commitMessage commitAuthor } } }
+    query($projectId: String!, $serviceId: String!) {
+        deployments(first: 1, input: { projectId: $projectId, serviceId: $serviceId }) {
+            edges { node { id status createdAt environmentId staticUrl meta } }
         }
     }"""
-    data = _railway_gql(q, {"serviceId": _RAILWAY_SERVICE})
+    data = _railway_gql(q, {"projectId": _RAILWAY_PROJECT, "serviceId": _RAILWAY_SERVICE})
     edges = data.get("deployments", {}).get("edges", [])
-    return edges[0]["node"] if edges else {}
+    if not edges:
+        return {}
+    node = edges[0]["node"]
+    # meta is a scalar JSON blob -- unpack it into the node for easy access
+    meta = node.get("meta") or {}
+    if isinstance(meta, dict):
+        node["commitHash"] = (meta.get("commitHash") or "")[:12]
+        node["commitMessage"] = meta.get("commitMessage") or ""
+        node["commitAuthor"] = meta.get("commitAuthor") or ""
+    return node
 
 def _gh_commit_status(sha: str = "") -> dict:
     try:
