@@ -1360,6 +1360,7 @@ def t_deploy_and_wait(reason: str = "", timeout: str = "120") -> dict:
                 status = node.get("status", "UNKNOWN")
                 deploy_id = node.get("id", "")[:12]
                 meta = node.get("meta", {}) or {}
+                commit_sha = (meta.get("commitHash") or "")[:12]
                 commit_msg = (meta.get("commitMessage") or "")[:60]
                 last_status = status
                 print(f"[DEPLOY_WAIT] attempt={attempts} status={status} deploy={deploy_id} commit={commit_msg[:40]}")
