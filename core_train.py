@@ -752,8 +752,20 @@ def _extract_real_signal() -> bool:
             svc=True)
 
         if not sessions and not mistakes:
-            print("[RESEARCH/REAL] No new sessions or mistakes since last processed - skipping")
-            return False
+            # Fallback: always run with last 7 days even if anchor is recent
+            # Prevents pipeline stalling when no activity since last run
+            since_ts = (datetime.utcnow() - timedelta(days=7)).isoformat()
+            print(f"[RESEARCH/REAL] No new data since anchor -- falling back to 7d window: {since_ts}")
+            sessions = sb_get("sessions",
+                f"select=summary,actions,interface&created_at=gte.{since_ts}&order=created_at.desc&limit=20",
+                svc=True)
+            mistakes = sb_get("mistakes",
+                f"select=domain,what_failed,root_cause,how_to_avoid&created_at=gte.{since_ts}&order=id.desc&limit=20",
+                svc=True)
+            if not sessions and not mistakes:
+                print("[RESEARCH/REAL] Still no data in 7d window -- skipping")
+                return False
+            print(f"[RESEARCH/REAL] 7d fallback: {len(sessions)} sessions, {len(mistakes)} mistakes")
 
         # Enrich: KB total count
         try:
@@ -813,15 +825,18 @@ Output ONLY valid JSON, no preamble."""
             print("[RESEARCH/REAL] Groq returned no patterns")
             return False
 
+        _gaps_raw = result.get("gaps") or None
+        _gaps_list = [_gaps_raw] if _gaps_raw and isinstance(_gaps_raw, str) else _gaps_raw
+        _quality = round(min(1.0, max(0.4, 0.5 + len(patterns) * 0.1 + (0.1 if mistakes else 0))), 2)
         ok = sb_post("hot_reflections", {
             "task_summary": f"Real signal extraction (since last processed) - {len(sessions)} sessions, {len(mistakes)} mistakes, kb={kb_total}",
             "domain": result.get("domain", "general"),
             "new_patterns": patterns,
-            "gaps_identified": result.get("gaps", ""),
+            "gaps_identified": _gaps_list,
             "reflection_text": result.get("summary", ""),
             "processed_by_cold": 0,
             "source": "real",
-            "quality_score": None,
+            "quality_score": _quality,
         })
         print(f"[RESEARCH/REAL] ok={ok} patterns={len(patterns)} domain={result.get('domain')}")
         if ok:
@@ -953,15 +968,18 @@ Output ONLY valid JSON, no preamble."""
             print("[RESEARCH/SIM] Groq returned no patterns")
             return False
 
+        _sim_gaps_raw = result.get("gaps") or None
+        _sim_gaps_list = [_sim_gaps_raw] if _sim_gaps_raw and isinstance(_sim_gaps_raw, str) else _sim_gaps_raw
+        _sim_quality = round(min(1.0, max(0.4, 0.5 + len(patterns) * 0.08)), 2)
         ok = sb_post("hot_reflections", {
             "task_summary": task_summary,
             "domain": result.get("domain", "general"),
             "new_patterns": patterns,
-            "gaps_identified": result.get("gaps", ""),
+            "gaps_identified": _sim_gaps_list,
             "reflection_text": result.get("summary", ""),
             "processed_by_cold": 0,
             "source": "simulation",
-            "quality_score": None,
+            "quality_score": _sim_quality,
         })
         print(f"[RESEARCH/SIM] ok={ok} patterns={len(patterns)} domain={result.get('domain')}")
         return ok
