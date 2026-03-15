@@ -246,16 +246,19 @@ def _reconcile_gaps(hots: list) -> int:
             f"Each item: {{\"gap\": \"concise gap description\", \"domain\": \"domain\", \"priority\": 1-5}}\n"
             f"Priority 5=critical architecture gap, 1=minor improvement. Max 10 items. No preamble."
         )
-        raw = groq_chat(
-            system="You are CORE's gap reconciliation engine. Respond only with valid JSON array. No preamble.",
-            user=prompt, model=GROQ_MODEL, max_tokens=600,
-        )
+        deduped = None
         try:
-            deduped = json.loads(raw.strip())
-            if not isinstance(deduped, list):
-                raise ValueError("not a list")
-        except Exception:
-            # Fallback: use raw gaps deduplicated by string equality
+            raw = groq_chat(
+                system="You are CORE's gap reconciliation engine. Respond only with valid JSON array. No preamble.",
+                user=prompt, model=GROQ_MODEL, max_tokens=600,
+            )
+            parsed = json.loads(raw.strip())
+            if isinstance(parsed, list):
+                deduped = parsed
+        except Exception as groq_err:
+            print(f"[COLD] _reconcile_gaps Groq fallback (non-fatal): {groq_err}")
+        if not deduped:
+            # Fallback: raw dedup by string equality -- always runs if Groq unavailable
             seen = set()
             deduped = []
             for g in raw_gaps:
