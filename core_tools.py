@@ -2788,7 +2788,7 @@ TOOLS = {
     "task_add":               {"fn": t_task_add,               "perm": "WRITE",   "args": ["title", "description", "priority", "subtasks", "blocked_by"],
                                "desc": "Add a new task to task_queue with proper schema. Sets source=mcp_session automatically. Use instead of raw sb_insert for new tasks — enforces correct structure."},
     "kb_update":              {"fn": t_kb_update,              "perm": "WRITE",   "args": ["domain", "topic", "instruction", "content", "confidence"],
-                               "desc": "Upsert a KB entry on domain+topic conflict. Updates if exists, inserts if new. Use instead of add_knowledge when the rule may already exist — prevents duplicates."},
+                               "desc": "Update EXISTING stale or outdated KB knowledge. Overwrites entry at domain+topic. Use when a rule has changed or content is wrong. Do NOT use for new knowledge -- use add_knowledge for that. Will also insert if not found (upsert behavior — prevents duplicates."},
     "mistakes_since":         {"fn": t_mistakes_since,         "perm": "READ",    "args": ["hours"],
                                "desc": "Return mistakes logged in the last N hours (default 24). Use at session_end to review only this session's errors, not the rolling last-10."},
     "trigger_cold_processor": {"fn": t_trigger_cold_processor, "perm": "WRITE",   "args": [],
