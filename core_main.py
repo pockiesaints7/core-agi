@@ -38,30 +38,43 @@ from core_tools import TOOLS, handle_jsonrpc
 # ---------------------------------------------------------------------------
 # Shared helpers (used by routes + tools — defined here, imported by core_tools)
 # ---------------------------------------------------------------------------
-_step_cache: dict = {"label": "unknown", "ts": 0.0}
-_STEP_CACHE_TTL = 300
-
-
-def get_current_step() -> str:
-    global _step_cache
-    if time.time() - _step_cache["ts"] < _STEP_CACHE_TTL:
-        return _step_cache["label"]
+def get_resume_task() -> str:
+    """Return title of highest-priority in_progress task from task_queue.
+    Used in Telegram startup message and /state endpoint.
+    SESSION.md no longer tracks current step -- task_queue is source of truth."""
     try:
-        md = gh_read("SESSION.md")
-        for line in md.splitlines():
-            if line.startswith("## Current Step:"):
-                label = line.replace("## Current Step:", "").strip()
-                _step_cache = {"label": label, "ts": time.time()}
-                return label
-        # Fallback: find next incomplete task in registry
-        for line in md.splitlines():
-            if line.strip().startswith("- [ ]"):
-                label = line.strip().lstrip("- [ ]").strip()
-                _step_cache = {"label": label, "ts": time.time()}
-                return label
+        tasks = sb_get(
+            "task_queue",
+            "select=task,priority,status&source=in.(core_v6_registry,mcp_session)"
+            "&status=eq.in_progress&order=priority.desc&limit=1"
+        )
+        if tasks and isinstance(tasks, list) and tasks[0]:
+            raw = tasks[0].get("task", "")
+            try:
+                parsed = json.loads(raw) if isinstance(raw, str) else raw
+                title = parsed.get("title") or parsed.get("task_id") or str(parsed)[:80]
+            except Exception:
+                title = str(raw)[:80]
+            priority = tasks[0].get("priority", "?")
+            return f"Resuming: {title} (P{priority})"
+        # No in_progress tasks -- check for pending
+        pending = sb_get(
+            "task_queue",
+            "select=task,priority&source=in.(core_v6_registry,mcp_session)"
+            "&status=eq.pending&order=priority.desc&limit=1"
+        )
+        if pending and isinstance(pending, list) and pending[0]:
+            raw = pending[0].get("task", "")
+            try:
+                parsed = json.loads(raw) if isinstance(raw, str) else raw
+                title = parsed.get("title") or str(parsed)[:80]
+            except Exception:
+                title = str(raw)[:80]
+            return f"Next: {title}"
+        return "No active tasks"
     except Exception as e:
-        print(f"[STEP] Failed to read SESSION.md: {e}")
-    return _step_cache.get("label") or "check SESSION.md"
+        print(f"[STEP] get_resume_task error: {e}")
+        return "task_queue unavailable"
 
 
 def get_latest_session():
