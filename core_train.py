@@ -320,17 +320,19 @@ def run_cold_processor():
             src_mult = _SRC_CONF.get(src_key, 1.0)
             domain   = batch_domain.get(key, "general")
 
+            now_ts = datetime.utcnow().isoformat()
             if existing:
                 new_freq = existing["frequency"] + batch_count
                 sb_upsert("pattern_frequency",
                           {"id": existing["id"], "pattern_key": key, "frequency": new_freq,
-                           "domain": domain, "description": key[:500]},
+                           "domain": domain, "description": key[:500], "last_seen": now_ts},
                           on_conflict="id")
                 total_freq = new_freq
             else:
                 sb_upsert("pattern_frequency",
                           {"pattern_key": key, "frequency": batch_count,
-                           "domain": domain, "description": key[:500], "auto_applied": False},
+                           "domain": domain, "description": key[:500], "auto_applied": False,
+                           "last_seen": now_ts},
                           on_conflict="pattern_key")
                 total_freq = batch_count
 
