@@ -909,18 +909,19 @@ def t_session_end(summary: str, actions: str, domain: str = "general",
         })
         reflection_id = "logged" if r_ok else "failed"
 
-        # SESSION.md is static -- tasks live in Supabase, session log in sessions table.
+        # 3. SESSION.md is static -- tasks live in Supabase, session log in sessions table.
         # No writes to SESSION.md: eliminates spurious Railway redeploys on every session close.
         session_md_updated = False
 
-        # 5. Scan system_map - detect drift, update volatile rows
+        # 4. Scan system_map - detect drift, update volatile rows
         smap_scan = {"ok": False, "error": "skipped"}
         try:
             smap_scan = t_system_map_scan(trigger="session_end")
         except Exception as e:
             smap_scan = {"ok": False, "error": str(e)}
 
-        return {
+        # Build return -- surface reflection failure as explicit warning
+        result = {
             "ok": session_ok,
             "session_logged": session_ok,
             "reflection_logged": reflection_id,
@@ -929,6 +930,12 @@ def t_session_end(summary: str, actions: str, domain: str = "general",
             "actions_count": len(actions_list),
             "skill_file_updated": _skill_ok,
         }
+        if not r_ok:
+            result["reflection_warning"] = (
+                "Hot reflection failed to log. Training pipeline will miss this session. "
+                "Check Railway logs for [HOT] error. Common cause: Groq timeout or Supabase 400."
+            )
+        return result
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
