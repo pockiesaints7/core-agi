@@ -1440,10 +1440,10 @@ def t_railway_env_get(key: str = "") -> dict:
     """
     try:
         q = """
-        query($serviceId: String!, $environmentId: String!) {
-            variables(serviceId: $serviceId, environmentId: $environmentId)
+        query($projectId: String!, $serviceId: String!, $environmentId: String!) {
+            variables(projectId: $projectId, serviceId: $serviceId, environmentId: $environmentId)
         }"""
-        data = _railway_gql(q, {"serviceId": _RAILWAY_SERVICE, "environmentId": _RAILWAY_ENV})
+        data = _railway_gql(q, {"projectId": _RAILWAY_PROJECT, "serviceId": _RAILWAY_SERVICE, "environmentId": _RAILWAY_ENV})
         vars_obj = data.get("variables") or {}
         if isinstance(vars_obj, dict):
             all_vars = vars_obj
