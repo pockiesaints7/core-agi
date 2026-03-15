@@ -3441,6 +3441,8 @@ TOOLS = {
                                "desc": "Railway-side: assemble KB context for project(s) and store in project_context for Claude Desktop to consume. Sends Telegram notify."},
     "project_consume":        {"fn": t_project_consume,        "perm": "WRITE",   "args": ["project_id"],
                                "desc": "Mark project_context rows as consumed after Claude Desktop has loaded them."},
+    "predict_failure":        {"fn": t_predict_failure,        "perm": "READ",    "args": ["operation", "context", "domain"],
+                               "desc": "TASK-10.D: Pre-flight failure predictor. Searches mistake history for patterns matching the operation. Returns non-blocking warnings before risky writes. operation=what you're about to do (e.g. 'gh_search_replace', 'patch_file', 'sb_insert'). context=optional extra info. domain=optional domain filter."},
     "ping_health":            {"fn": t_ping_health,            "perm": "READ",    "args": [],
                                "desc": "Hit live Railway / endpoint."},
     "patch_file":             {"fn": t_patch_file,            "perm": "EXECUTE", "args": ["path", "patches", "message", "repo", "dry_run"],
