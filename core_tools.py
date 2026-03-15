@@ -68,7 +68,11 @@ def t_state(include_operating_context: str = "false"):
     Pass include_operating_context=true to load it explicitly."""
     session = get_latest_session()
     counts  = get_system_counts()
-    pending = sb_get("task_queue", "select=id,task,status&status=eq.pending&limit=5")
+    # Fetch open tasks from both main registries -- pending OR in_progress, ordered by priority
+    pending = sb_get(
+        "task_queue",
+        "select=id,task,status,priority,source&source=in.(core_v6_registry,mcp_session)&status=in.(pending,in_progress)&order=priority.desc&limit=20"
+    ) or []
     load_oc = str(include_operating_context).strip().lower() in ("true", "1", "yes")
     if load_oc:
         try:    operating_context = json.loads(gh_read("operating_context.json"))
@@ -2262,12 +2266,21 @@ def t_task_update(task_id: str, status: str, result: str = "") -> dict:
     if status not in valid:
         return {"ok": False, "error": f"status must be one of: {valid}"}
     try:
-        # Try UUID match first, then TASK-N match inside task JSON
-        rows = sb_get("task_queue", f"select=id,task,status&id=eq.{task_id}&limit=1", svc=True) or []
+        # Try UUID match first (validate UUID format before querying)
+        import re as _re
+        _is_uuid = bool(_re.match(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', task_id.lower()))
+        rows = []
+        if _is_uuid:
+            rows = sb_get("task_queue", f"select=id,task,status&id=eq.{task_id}&limit=1", svc=True) or []
         if not rows:
-            # Fall back to searching task JSON for task_id field
-            all_rows = sb_get("task_queue", f"select=id,task,status&limit=200", svc=True) or []
-            rows = [r for r in all_rows if f'"task_id": "{task_id}"' in r.get("task", "")]
+            # Fall back: search task JSON for task_id field (handles TASK-N strings)
+            all_rows = sb_get(
+                "task_queue",
+                f"select=id,task,status&source=in.(core_v6_registry,mcp_session)&limit=200",
+                svc=True
+            ) or []
+            rows = [r for r in all_rows if f'"task_id": "{task_id}"' in str(r.get("task", ""))
+                    or f'"title": "{task_id}"' in str(r.get("task", ""))]
         if not rows:
             return {"ok": False, "error": f"task not found: {task_id}"}
         row_id = rows[0]["id"]
