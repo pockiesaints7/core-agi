@@ -244,7 +244,12 @@ def _groq_synthesize_cold(hots: list, batch_counts: Counter, batch_domain: dict)
             f"4. Overall system health signal\n"
             f"Be specific and actionable. No preamble. Plain text only."
         )
-        synthesis = groq_chat(prompt, model=GROQ_MODEL, max_tokens=400)
+        synthesis = groq_chat(
+            system="You are CORE's cold processor synthesis engine. Write concise, actionable summaries.",
+            user=prompt,
+            model=GROQ_MODEL,
+            max_tokens=400,
+        )
         synthesis = synthesis.strip()
         if len(synthesis) > 50:
             return synthesis
