@@ -32,8 +32,8 @@ SESSION_TTL_H  = 8
 MCP_PROTOCOL_VERSION = "2024-11-05"
 
 # Training config
-COLD_HOT_THRESHOLD        = 10
-COLD_TIME_THRESHOLD       = 86400
+COLD_HOT_THRESHOLD        = 5   # lowered from 10 -- faster signal processing
+COLD_TIME_THRESHOLD       = 21600  # 6h -- lowered from 24h for faster cold runs
 COLD_KB_GROWTH_THRESHOLD  = 100
 PATTERN_EVO_THRESHOLD     = 3
 KNOWLEDGE_AUTO_CONFIDENCE = 0.7
