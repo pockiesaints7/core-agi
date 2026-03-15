@@ -655,6 +655,15 @@ def t_system_map_scan(trigger: str = "manual") -> dict:
         return {"ok": False, "error": str(e)}
 
 
+def _get_stale_pattern_count() -> int:
+    """Count patterns with stale=true. Used in session_start to surface dead patterns."""
+    try:
+        rows = sb_get("pattern_frequency", "select=id&stale=eq.true", svc=True) or []
+        return len(rows)
+    except Exception:
+        return 0
+
+
 def t_session_start() -> dict:
     """One-call session bootstrap - includes system_map snapshot."""
     try:
