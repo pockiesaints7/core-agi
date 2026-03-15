@@ -467,7 +467,7 @@ async def mcp_startup(body: Handshake, req: Request):
         raise HTTPException(401, "Invalid secret")
     from core_tools import t_state, t_health, t_constitution
     tok = mcp_new(req.client.host)
-    step = get_current_step()
+    resume = get_resume_task()
     notify(f"MCP Session\nClient: {body.client_id}\nToken: {tok[:8]}...")
     return {
         "session_token": tok,
@@ -476,7 +476,7 @@ async def mcp_startup(body: Handshake, req: Request):
         "health": t_health(),
         "constitution": t_constitution(),
         "tools": list(TOOLS.keys()),
-        "note": f"CORE v6.0 ready. {step}",
+        "note": f"CORE v6.0 ready. {resume}",
     }
 
 
