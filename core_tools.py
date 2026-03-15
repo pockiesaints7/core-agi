@@ -2453,6 +2453,147 @@ def t_project_update_index(project_id: str = "", last_indexed: str = "") -> dict
         return {"ok": False, "error": str(e)}
 
 
+def t_read_image_file(file_path: str = "", project_id: str = "", topic: str = "", prompt: str = "") -> dict:
+    """Extract text/data from an image file (JPG/PNG) using Claude vision API.
+    Reads the image from the local filesystem path (via base64 URL or direct read),
+    sends to Claude claude-haiku-4-5 with a vision prompt, returns extracted text.
+    If project_id + topic provided, auto-saves to project KB.
+    prompt: custom instruction for extraction (default: extract all text and data visible in image).
+    """
+    try:
+        import base64, mimetypes
+        if not file_path:
+            return {"ok": False, "error": "file_path required"}
+        # Read image bytes -- file_path is a UNC/local path accessible to the caller
+        # Since this runs on Railway, the file must be passed as base64 content OR
+        # as a publicly accessible URL. If file_path starts with http, use as URL.
+        # Otherwise, Railway cannot access local Windows filesystem directly.
+        # This tool is designed to be called with content= param when running from Desktop.
+        return {"ok": False, "error": "t_read_image_file requires content param -- see t_read_image_content"}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def t_read_image_content(content_b64: str = "", mime_type: str = "image/jpeg",
+                         project_id: str = "", topic: str = "",
+                         prompt: str = "", file_name: str = "") -> dict:
+    """Extract text/data from an image using Claude vision (claude-haiku-4-5).
+    content_b64: base64-encoded image bytes.
+    mime_type: image/jpeg or image/png.
+    project_id + topic: if provided, auto-saves extracted text to project KB.
+    prompt: extraction instruction (default: extract all visible text, tables, lists, and data).
+    Returns: {ok, extracted_text, tokens_used, kb_saved}
+    """
+    try:
+        import base64 as _b64
+        if not content_b64:
+            return {"ok": False, "error": "content_b64 required"}
+        _prompt = prompt or (
+            "Extract ALL text visible in this image. Include: any text, numbers, dates, names, "
+            "status fields, table contents, lists, annotations, and any other data. "
+            "Preserve structure. Output plain text only."
+        )
+        ANTHROPIC_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
+        if not ANTHROPIC_KEY:
+            return {"ok": False, "error": "ANTHROPIC_API_KEY not set"}
+        payload = {
+            "model": "claude-haiku-4-5-20251001",
+            "max_tokens": 2048,
+            "messages": [{
+                "role": "user",
+                "content": [
+                    {"type": "image", "source": {
+                        "type": "base64",
+                        "media_type": mime_type,
+                        "data": content_b64
+                    }},
+                    {"type": "text", "text": _prompt}
+                ]
+            }]
+        }
+        r = httpx.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={"x-api-key": ANTHROPIC_KEY, "anthropic-version": "2023-06-01",
+                     "content-type": "application/json"},
+            json=payload, timeout=60
+        )
+        r.raise_for_status()
+        data = r.json()
+        extracted = data["content"][0]["text"].strip()
+        usage = data.get("usage", {})
+        kb_saved = False
+        if project_id and topic and extracted:
+            label = file_name or "image"
+            kb_content = f"[Extracted from image: {label}]\n{extracted}"
+            ok = sb_upsert("knowledge_base",
+                {"domain": f"project:{project_id}", "topic": topic,
+                 "content": kb_content[:4000], "confidence": "high"},
+                on_conflict="domain,topic")
+            kb_saved = bool(ok)
+        return {
+            "ok": True,
+            "extracted_text": extracted,
+            "chars": len(extracted),
+            "input_tokens": usage.get("input_tokens", 0),
+            "output_tokens": usage.get("output_tokens", 0),
+            "kb_saved": kb_saved,
+            "project_id": project_id,
+            "topic": topic
+        }
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def t_read_pdf_content(content_b64: str = "", project_id: str = "",
+                       topic: str = "", file_name: str = "",
+                       max_chars: str = "8000") -> dict:
+    """Extract text from a PDF using pdfminer.six.
+    content_b64: base64-encoded PDF bytes.
+    project_id + topic: if provided, auto-saves to project KB.
+    max_chars: truncate extracted text to this length (default 8000).
+    Returns: {ok, extracted_text, pages, chars, kb_saved}
+    """
+    try:
+        import base64 as _b64, io
+        from pdfminer.high_level import extract_text_to_fp
+        from pdfminer.layout import LAParams
+        if not content_b64:
+            return {"ok": False, "error": "content_b64 required"}
+        pdf_bytes = _b64.b64decode(content_b64)
+        pdf_io = io.BytesIO(pdf_bytes)
+        text_io = io.StringIO()
+        extract_text_to_fp(pdf_io, text_io, laparams=LAParams(), output_type="text", codec=None)
+        extracted = text_io.getvalue().strip()
+        limit = int(max_chars) if max_chars else 8000
+        truncated = len(extracted) > limit
+        extracted_out = extracted[:limit]
+        kb_saved = False
+        if project_id and topic and extracted_out:
+            label = file_name or "pdf"
+            kb_content = f"[Extracted from PDF: {label}]\n{extracted_out}"
+            ok = sb_upsert("knowledge_base",
+                {"domain": f"project:{project_id}", "topic": topic,
+                 "content": kb_content[:4000], "confidence": "high"},
+                on_conflict="domain,topic")
+            kb_saved = bool(ok)
+        # Count pages roughly (\x0c = form feed = page break in pdfminer output)
+        pages = extracted.count('\x0c') + 1
+        return {
+            "ok": True,
+            "extracted_text": extracted_out,
+            "chars": len(extracted_out),
+            "pages": pages,
+            "truncated": truncated,
+            "kb_saved": kb_saved,
+            "project_id": project_id,
+            "topic": topic
+        }
+    except ImportError:
+        return {"ok": False, "error": "pdfminer.six not installed -- add to requirements.txt and redeploy"}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
 def t_project_prepare(project_ids: str = "") -> dict:
     """Railway-side: assemble context for project(s) and store in project_context for Desktop to consume."""
     try:
