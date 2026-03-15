@@ -3725,3 +3725,76 @@ def _reconcile_skeleton_docs(rows: list, inserted: list, tombstoned: list) -> No
     except Exception as e:
         print(f"[SMAP] _reconcile_skeleton_docs error: {e}")
 
+
+
+# -- TASK-10.D: CORE Mistake Predictor ----------------------------------------
+
+def _predict_failure(operation: str = "", context: str = "", domain: str = "") -> dict:
+    """Predicts likely failure modes before executing an operation.
+    Searches mistakes table for patterns matching the operation/domain.
+    Returns non-blocking warnings so caller can proceed with caution.
+    operation: short label of what's about to happen (e.g. 'gh_search_replace', 'sb_insert', 'patch_file').
+    context: extra info (e.g. file being edited, table being written to).
+    domain: optional domain filter to narrow mistake search.
+    Returns: {predicted: bool, warnings: list, top_mistake: dict|None, confidence: float}
+    """
+    try:
+        if not operation:
+            return {"predicted": False, "warnings": [], "top_mistake": None, "confidence": 0.0}
+
+        # Build search query from operation + context
+        query_parts = [operation]
+        if context:
+            query_parts.append(context[:100])
+        search_query = " ".join(query_parts)
+
+        # Search mistakes table
+        filters = f"what_failed=ilike.%{operation}%"
+        if domain:
+            filters += f"&domain=eq.{domain}"
+
+        rows = sb_get("mistakes", filters=filters, limit=5, order="created_at.desc")
+        if not rows:
+            # Fallback: broader search via groq_chat if no direct matches
+            return {"predicted": False, "warnings": [], "top_mistake": None, "confidence": 0.0,
+                    "note": f"no known mistakes for operation={operation}"}
+
+        warnings = []
+        for row in rows:
+            if row.get("how_to_avoid"):
+                warnings.append({
+                    "domain": row.get("domain", ""),
+                    "warning": row.get("what_failed", "")[:120],
+                    "avoid": row.get("how_to_avoid", "")[:200],
+                    "severity": row.get("severity", "medium"),
+                })
+
+        top = rows[0] if rows else None
+        confidence = min(0.9, 0.3 + (len(rows) * 0.15))  # more matches = higher confidence
+
+        return {
+            "predicted": len(warnings) > 0,
+            "warnings": warnings,
+            "top_mistake": {
+                "domain": top.get("domain") if top else None,
+                "what_failed": top.get("what_failed", "")[:150] if top else None,
+                "correct_approach": top.get("correct_approach", "")[:200] if top else None,
+            } if top else None,
+            "confidence": round(confidence, 2),
+            "match_count": len(rows),
+        }
+    except Exception as e:
+        return {"predicted": False, "warnings": [], "top_mistake": None, "confidence": 0.0,
+                "error": str(e)}
+
+
+def t_predict_failure(operation: str = "", context: str = "", domain: str = "") -> dict:
+    """MCP wrapper: predict likely failure modes before an operation.
+    Searches mistake history for matching patterns and returns non-blocking warnings.
+    operation: what you're about to do (e.g. 'gh_search_replace', 'patch_file', 'sb_insert').
+    context: optional extra info (file name, table name, content snippet).
+    domain: optional domain to narrow search (e.g. 'core_agi.patching').
+    Use before any risky write operation to get a pre-flight warning.
+    """
+    return _predict_failure(operation=operation, context=context, domain=domain)
+
