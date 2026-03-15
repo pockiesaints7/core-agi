@@ -697,27 +697,64 @@ def t_reject_evolution(evolution_id="", reason=""):
     return reject_evolution(eid, reason)
 
 def _patch_find(content: str, old_str: str):
-    """Find old_str in content. Returns (found, count, matched_str).
-    Falls back to whitespace-normalized match. Returns char-level diff hint on near-miss."""
-    # Exact match
+    """Find old_str in content. Returns (found, count, matched_str, note).
+    Fallback tiers in order:
+      1. Exact match
+      2. Line-ending normalization (\r\n -> \n)
+      3. Trailing-whitespace strip per line (catches editor-added trailing spaces)
+      4. Tab->spaces normalization (catches mixed indent files)
+      5. Combined: trailing-whitespace + tab normalization
+    Returns char-level ndiff hint on near-miss so caller knows exactly what differs.
+    """
+    def _rstrip_lines(s: str) -> str:
+        return '\n'.join(line.rstrip() for line in s.splitlines())
+
+    def _detab(s: str, tabsize: int = 4) -> str:
+        return s.expandtabs(tabsize)
+
+    def _find_in(c: str, o: str, orig_content: str, note: str):
+        """Try to find o in c, map match back to position in orig_content."""
+        cnt = c.count(o)
+        if cnt > 0:
+            pos = c.find(o)
+            actual = orig_content[pos:pos + len(o)]
+            return True, cnt, actual, note
+        return None
+
+    # Tier 1: exact
     count = content.count(old_str)
     if count > 0:
         return True, count, old_str, None
-    # Normalize line endings and try again
-    norm_content = content.replace('\r\n', '\n').replace('\r', '\n')
-    norm_old = old_str.replace('\r\n', '\n').replace('\r', '\n')
-    count2 = norm_content.count(norm_old)
-    if count2 > 0:
-        # Find actual string in original content for replacement
-        # Locate position in normalized, map back
-        pos = norm_content.find(norm_old)
-        actual = content[pos:pos + len(norm_old)]
-        return True, count2, actual, "line_ending_normalized"
-    # Near-miss: find closest line in file to first line of old_str
-    first_line = norm_old.strip().splitlines()[0].strip() if norm_old.strip() else ""
+
+    # Tier 2: line-ending normalization
+    nc = content.replace('\r\n', '\n').replace('\r', '\n')
+    no = old_str.replace('\r\n', '\n').replace('\r', '\n')
+    r = _find_in(nc, no, content, "line_ending_normalized")
+    if r: return r
+
+    # Tier 3: trailing whitespace stripped per line
+    nc3 = _rstrip_lines(nc)
+    no3 = _rstrip_lines(no)
+    r = _find_in(nc3, no3, content, "trailing_whitespace_stripped")
+    if r: return r
+
+    # Tier 4: tab -> spaces (tabsize=4)
+    nc4 = _detab(nc)
+    no4 = _detab(no)
+    r = _find_in(nc4, no4, content, "tabs_expanded")
+    if r: return r
+
+    # Tier 5: combined trailing-whitespace + tab normalization
+    nc5 = _rstrip_lines(_detab(nc))
+    no5 = _rstrip_lines(_detab(no))
+    r = _find_in(nc5, no5, content, "tabs_and_trailing_normalized")
+    if r: return r
+
+    # All tiers failed -- build near-miss hint from first line
+    first_line = no.strip().splitlines()[0].strip() if no.strip() else ""
     hint = None
     if first_line and len(first_line) > 10:
-        for line in norm_content.splitlines():
+        for line in nc.splitlines():
             if first_line[:30] in line or line.strip()[:30] in first_line:
                 diff = list(difflib.ndiff([first_line], [line.strip()]))
                 hint = "near_miss: " + "".join(diff)[:300]
