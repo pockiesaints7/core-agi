@@ -1323,6 +1323,8 @@ def t_session_end(summary: str = "", actions: str = "", domain: str = "general",
             "actions_count": len(actions_list),
             "duration_seconds": duration_seconds,
             "skill_file_updated": _skill_ok,
+            "tools_updated": _tools_updated if _tools_updated else "none",
+            "new_tool_sop": _new_sop if _new_sop else "none",
         }
         if not r_ok:
             result["reflection_warning"] = (
