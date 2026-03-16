@@ -579,6 +579,26 @@ def debug_real():
         return {"ok": False, "error": str(e), "trace": traceback.format_exc()}
 
 
+@app.get("/listen")
+async def listen_mode(req: Request):
+    """LISTEN MODE: stream cold processor + evolution queue signals as NDJSON.
+    Claude calls this once, reads the full stream, synthesizes into tasks at stop signal.
+    Stop signals emitted by listen_stream(): drained | groq_limit | timeout (1h).
+    Auth: X-MCP-Secret header required.
+    """
+    secret = req.headers.get("X-MCP-Secret", "")
+    if secret != MCP_SECRET:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+    from core_train import listen_stream
+
+    def _generate():
+        for chunk in listen_stream():
+            yield chunk
+
+    return StreamingResponse(_generate(), media_type="application/x-ndjson")
+
+
 @app.post("/webhook")
 async def webhook(req: Request):
     try:
