@@ -1277,3 +1277,108 @@ def _groq_cluster_patterns(batch_counts: "Counter", batch_domain: dict, batch_so
     except Exception as e:
         print(f"[COLD] Clustering failed (non-fatal, using raw keys): {e}")
         return batch_counts, batch_domain, batch_sources
+
+
+# -- Listen Mode ---------------------------------------------------------------
+def listen_stream():
+    """Generator: drain cold processor + evolution queue, yield JSON-line chunks.
+    Stop conditions:
+      - 2 consecutive cold runs with 0 new patterns (drained)
+      - Groq 429 / rate limit exception (groq_limit)
+      - 3600s elapsed (timeout)
+    Claude calls GET /listen, reads stream end-to-end, synthesizes at stop signal.
+    """
+    import time as _time
+    deadline = _time.time() + 3600
+    dry_cycles = 0
+    cycle = 0
+
+    while _time.time() < deadline:
+        cycle += 1
+
+        # -- Cold processor run
+        try:
+            result = run_cold_processor()
+            patterns_found = result.get("patterns_found", 0) if isinstance(result, dict) else 0
+            evos_queued    = result.get("evolutions_queued", 0) if isinstance(result, dict) else 0
+            yield json.dumps({
+                "type": "cold_run",
+                "cycle": cycle,
+                "patterns_found": patterns_found,
+                "evolutions_queued": evos_queued,
+                "ts": datetime.utcnow().isoformat(),
+            }) + "\n"
+            if patterns_found == 0:
+                dry_cycles += 1
+            else:
+                dry_cycles = 0
+        except Exception as e:
+            err = str(e)
+            if "429" in err or "rate" in err.lower():
+                yield json.dumps({"type": "stop", "reason": "groq_limit", "cycle": cycle}) + "\n"
+                return
+            yield json.dumps({"type": "cold_error", "error": err[:200], "cycle": cycle}) + "\n"
+
+        # -- Evolution queue snapshot
+        try:
+            evos = sb_get(
+                "evolution_queue",
+                "select=id,change_type,change_summary,confidence,pattern_key,domain"
+                "&status=eq.pending&id=gt.1&order=confidence.desc&limit=50",
+                svc=True
+            ) or []
+            yield json.dumps({
+                "type": "evolutions",
+                "cycle": cycle,
+                "count": len(evos),
+                "items": evos[:20],
+            }) + "\n"
+        except Exception as e:
+            yield json.dumps({"type": "evo_error", "error": str(e)[:200], "cycle": cycle}) + "\n"
+
+        # -- Top patterns snapshot
+        try:
+            pats = sb_get(
+                "pattern_frequency",
+                "select=pattern_key,frequency,domain&stale=eq.false&order=frequency.desc&limit=20",
+                svc=True
+            ) or []
+            yield json.dumps({
+                "type": "patterns",
+                "cycle": cycle,
+                "count": len(pats),
+                "items": pats,
+            }) + "\n"
+        except Exception as e:
+            yield json.dumps({"type": "pat_error", "error": str(e)[:200], "cycle": cycle}) + "\n"
+
+        # -- Hot gaps snapshot
+        try:
+            hot_gaps = sb_get(
+                "hot_reflections",
+                "select=domain,quality_score,gaps_identified"
+                "&processed_by_cold=eq.0&id=gt.1&quality_score=gte.0.5"
+                "&order=created_at.desc&limit=10",
+                svc=True
+            ) or []
+            yield json.dumps({
+                "type": "hot_gaps",
+                "cycle": cycle,
+                "unprocessed": len(hot_gaps),
+                "items": [
+                    {"domain": h.get("domain"), "quality": h.get("quality_score"),
+                     "gaps": h.get("gaps_identified")}
+                    for h in hot_gaps
+                ],
+            }) + "\n"
+        except Exception as e:
+            yield json.dumps({"type": "hot_error", "error": str(e)[:200], "cycle": cycle}) + "\n"
+
+        # -- Drain check: 2 consecutive dry cold runs = nothing left to process
+        if dry_cycles >= 2:
+            yield json.dumps({"type": "stop", "reason": "drained", "cycle": cycle}) + "\n"
+            return
+
+        _time.sleep(60)  # 1 min between cycles
+
+    yield json.dumps({"type": "stop", "reason": "timeout", "cycle": cycle}) + "\n"
