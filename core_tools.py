@@ -570,6 +570,42 @@ def t_training_status():
 
 def t_trigger_cold_processor(): return run_cold_processor()
 
+def t_listen() -> dict:
+    """LISTEN MODE: hit GET /listen stream, buffer all chunks, return full payload.
+    Blocks until CORE emits stop signal (drained|groq_limit|timeout).
+    Claude reads all chunks and synthesizes into tasks + session_end.
+    """
+    try:
+        railway_url = os.environ.get("RAILWAY_PUBLIC_URL", "https://core-agi-production.up.railway.app")
+        mcp_secret  = os.environ.get("MCP_SECRET", "")
+        chunks = []
+        with httpx.stream(
+            "GET", f"{railway_url}/listen",
+            headers={"X-MCP-Secret": mcp_secret},
+            timeout=3700,
+        ) as r:
+            for line in r.iter_lines():
+                line = line.strip()
+                if line:
+                    try:
+                        chunks.append(json.loads(line))
+                    except Exception:
+                        chunks.append({"raw": line})
+        stop = next((c for c in chunks if c.get("type") == "stop"), {})
+        cold_runs = [c for c in chunks if c.get("type") == "cold_run"]
+        total_patterns = sum(c.get("patterns_found", 0) for c in cold_runs)
+        total_evos     = sum(c.get("evolutions_queued", 0) for c in cold_runs)
+        return {
+            "ok": True,
+            "stop_reason": stop.get("reason", "unknown"),
+            "cycles": stop.get("cycle", len(cold_runs)),
+            "total_patterns_found": total_patterns,
+            "total_evolutions_queued": total_evos,
+            "chunks": chunks,
+        }
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
 def t_list_evolutions(status="pending"):
     rows = sb_get("evolution_queue",
                   f"select=id,status,change_type,change_summary,confidence,pattern_key,created_at&status=eq.{status}&id=gt.1&order=created_at.desc&limit=20",
