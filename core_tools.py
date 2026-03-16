@@ -3540,6 +3540,8 @@ TOOLS = {
                                "desc": "Return mistakes logged in the last N hours (default 24). Use at session_end to review only this session's errors, not the rolling last-10."},
     "trigger_cold_processor": {"fn": t_trigger_cold_processor, "perm": "WRITE",   "args": [],
                                "desc": "Manually trigger cold processor."},
+    "listen":                 {"fn": t_listen,                 "perm": "EXECUTE", "args": [],
+                               "desc": "LISTEN MODE: drain cold processor + evolution queue autonomously. Blocks until stop signal (drained|groq_limit|timeout). Returns all signal chunks for Claude to synthesize into tasks."},
     "approve_evolution":      {"fn": t_approve_evolution,      "perm": "WRITE",   "args": ["evolution_id"],
                                "desc": "Approve and apply a pending evolution by ID"},
     "reject_evolution":       {"fn": t_reject_evolution,       "perm": "WRITE",   "args": ["evolution_id", "reason"],
