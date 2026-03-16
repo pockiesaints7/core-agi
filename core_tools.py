@@ -570,6 +570,65 @@ def t_training_status():
 
 def t_trigger_cold_processor(): return run_cold_processor()
 
+
+def t_ingest_knowledge(topic: str, sources: str = "all", max_per_source: int = 20, since_days: int = 7) -> dict:
+    """Trigger knowledge ingestion pipeline for a topic.
+    Fetches from public sources (arxiv, docs, medium, reddit, hackernews, stackoverflow),
+    deduplicates, scores by engagement, extracts AI concepts, writes to kb_sources/kb_articles/kb_concepts,
+    injects hot_reflections for cold processor pickup so CORE evolves from internet knowledge.
+    sources: comma-separated list or 'all'. max_per_source: cap per fetcher. since_days: recency filter.
+    Returns: {topic, sources_used, raw_count, deduped_count, records_inserted, records_updated, concepts_found, hot_reflections_injected}
+    """
+    import asyncio
+    try:
+        from scraper.knowledge import ingest_knowledge
+        from core_train import _ingest_to_hot_reflection
+        from scraper.knowledge.concept_extractor import AI_CONCEPTS
+
+        if sources == "all" or not sources:
+            src_list = ["arxiv", "docs", "medium", "reddit", "hackernews", "stackoverflow"]
+        else:
+            src_list = [s.strip() for s in sources.split(",") if s.strip()]
+
+        print(f"[t_ingest_knowledge] topic={topic} sources={src_list} max={max_per_source}")
+
+        # Run async ingestion pipeline in new event loop
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                import concurrent.futures
+                with concurrent.futures.ThreadPoolExecutor() as pool:
+                    future = pool.submit(asyncio.run, ingest_knowledge(
+                        topic=topic, sources=src_list,
+                        max_per_source=max_per_source, since_days=since_days
+                    ))
+                    summary = future.result(timeout=300)
+            else:
+                summary = loop.run_until_complete(ingest_knowledge(
+                    topic=topic, sources=src_list,
+                    max_per_source=max_per_source, since_days=since_days
+                ))
+        except RuntimeError:
+            summary = asyncio.run(ingest_knowledge(
+                topic=topic, sources=src_list,
+                max_per_source=max_per_source, since_days=since_days
+            ))
+
+        # Inject hot_reflections for cold processor
+        hot_ok = False
+        concepts_found = summary.get("concepts_found", 0)
+        if concepts_found > 0:
+            concepts = list(AI_CONCEPTS.keys())[:concepts_found]
+            avg_eng = summary.get("avg_engagement", 50.0)
+            source_str = ",".join(src_list)
+            hot_ok = _ingest_to_hot_reflection(topic, source_str, concepts, avg_eng)
+
+        return {"ok": True, "hot_reflections_injected": hot_ok, **summary}
+    except Exception as e:
+        print(f"[t_ingest_knowledge] error: {e}")
+        return {"ok": False, "error": str(e)}
+
+
 def t_listen() -> dict:
     """LISTEN MODE: hit GET /listen stream, buffer all chunks, return full payload.
     Blocks until CORE emits stop signal (drained|groq_limit|timeout).
@@ -3540,6 +3599,8 @@ TOOLS = {
                                "desc": "Return mistakes logged in the last N hours (default 24). Use at session_end to review only this session's errors, not the rolling last-10."},
     "trigger_cold_processor": {"fn": t_trigger_cold_processor, "perm": "WRITE",   "args": [],
                                "desc": "Manually trigger cold processor."},
+    "ingest_knowledge":       {"fn": t_ingest_knowledge,       "perm": "EXECUTE", "args": ["topic", "sources", "max_per_source", "since_days"],
+                               "desc": "Trigger knowledge ingestion pipeline. Fetches topic from public sources (arxiv/docs/medium/reddit/hackernews/stackoverflow), scores by engagement, writes to kb_* tables, injects hot_reflections for CORE to evolve. sources=comma-separated or 'all'. max_per_source=cap per fetcher (default 20). since_days=recency filter (default 7)."},
     "listen":                 {"fn": t_listen,                 "perm": "EXECUTE", "args": [],
                                "desc": "LISTEN MODE: drain cold processor + evolution queue autonomously. Blocks until stop signal (drained|groq_limit|timeout). Returns all signal chunks for Claude to synthesize into tasks."},
     "approve_evolution":      {"fn": t_approve_evolution,      "perm": "WRITE",   "args": ["evolution_id"],
