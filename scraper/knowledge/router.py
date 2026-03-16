@@ -12,6 +12,10 @@ async def route(topic: str, sources: list, max_per_source: int, since_days: int)
     Exceptions from individual fetchers are caught and logged — never propagated.
     Returns flattened list of RawSource dicts from all successful fetchers.
     """
+    # Coerce types — MCP dispatcher passes all args as strings
+    max_per_source = int(max_per_source)
+    since_days = int(since_days)
+
     task_map = {
         "arxiv":         lambda: arxiv.fetch(topic, max_per_source, since_days),
         "docs":          lambda: docs.fetch(topic, max_per_source),
