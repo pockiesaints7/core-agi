@@ -211,6 +211,83 @@ def auto_hot_reflection(session_data: dict):
         return False
 
 
+# -- Knowledge ingestion bridge -----------------------------------------------
+def _ingest_to_hot_reflection(topic: str, source_type: str, concept_clusters: list, engagement_avg: float) -> bool:
+    """22.D: Inject knowledge ingestion results as hot_reflections for cold processor pickup.
+    One hot_reflection per concept cluster. domain=knowledge_ingestion.
+    Args:
+        topic: ingest topic string (e.g. 'AI agent reasoning')
+        source_type: comma-joined source types used (e.g. 'arxiv,hackernews')
+        concept_clusters: list of concept name strings found across sources
+        engagement_avg: average engagement_score across all ingested sources (0-100)
+    Returns True if at least one hot_reflection was inserted.
+    """
+    if not concept_clusters:
+        print(f"[INGEST->HOT] No concepts found for topic={topic}, skipping")
+        return False
+
+    inserted = 0
+    # One hot_reflection per concept cluster (matches cold processor clustering logic)
+    for concept in concept_clusters:
+        try:
+            quality_score = round(min(1.0, engagement_avg / 100.0), 3)
+
+            # Synthesize patterns via Groq for this concept
+            new_patterns = []
+            gaps_identified = None
+            try:
+                prompt = (
+                    f"Topic: {topic}\n"
+                    f"Concept: {concept}\n"
+                    f"Sources: {source_type}\n"
+                    f"Avg community engagement score: {engagement_avg:.1f}/100\n\n"
+                    f"Extract 2-4 reusable patterns about '{concept}' that CORE should internalize. "
+                    f"Each pattern = short actionable rule (<120 chars). "
+                    f"Also identify 1 gap or open question about this concept.\n"
+                    f"Respond ONLY as JSON: "
+                    f'{{"patterns": ["..."], "gap": "..or null"}}'
+                )
+                raw = groq_chat(
+                    system="You are CORE's knowledge synthesis engine. Return only valid JSON.",
+                    user=prompt,
+                    model=GROQ_FAST,
+                    max_tokens=400,
+                )
+                parsed = json.loads(raw.strip().lstrip("```json").rstrip("```").strip())
+                new_patterns = [p for p in parsed.get("patterns", []) if isinstance(p, str) and len(p) > 5][:4]
+                gap_raw = parsed.get("gap") or None
+                gaps_identified = [gap_raw] if gap_raw and isinstance(gap_raw, str) else None
+                print(f"[INGEST->HOT] {concept}: {len(new_patterns)} patterns, gap={'yes' if gaps_identified else 'no'}")
+            except Exception as e:
+                print(f"[INGEST->HOT] Groq synthesis failed for {concept} (non-fatal): {e}")
+                new_patterns = [f"Community knowledge on {concept}: avg engagement {engagement_avg:.0f}/100"]
+
+            ok = sb_post("hot_reflections", {
+                "task_summary":          f"Knowledge ingest: {topic} — concept: {concept}",
+                "domain":                "knowledge_ingestion",
+                "verify_rate":           0,
+                "mistake_consult_rate":  0,
+                "new_patterns":          new_patterns,
+                "new_mistakes":          [],
+                "quality_score":         quality_score,
+                "gaps_identified":       gaps_identified,
+                "reflection_text":       f"Ingested from {source_type}. Topic: {topic}. Concept: {concept}. Avg engagement: {engagement_avg:.1f}/100.",
+                "processed_by_cold":     0,
+                "source":                "real",
+            })
+            if ok:
+                inserted += 1
+                print(f"[INGEST->HOT] Inserted hot_reflection for concept={concept}")
+            else:
+                print(f"[INGEST->HOT] sb_post failed for concept={concept}")
+        except Exception as e:
+            print(f"[INGEST->HOT] Error for concept={concept}: {e}")
+            continue
+
+    print(f"[INGEST->HOT] Done: {inserted}/{len(concept_clusters)} hot_reflections inserted")
+    return inserted > 0
+
+
 # -- Gaps reconciliation -------------------------------------------------------
 def _reconcile_gaps(hots: list) -> int:
     """TASK-19: Wire gaps_identified from hot_reflections into evolution_queue.
