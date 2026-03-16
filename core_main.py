@@ -161,6 +161,84 @@ def self_sync_check():
 
 
 # ---------------------------------------------------------------------------
+# Knowledge ingestion endpoints (TASK-22)
+# ---------------------------------------------------------------------------
+class IngestRequest(BaseModel):
+    topic: str
+    sources: list = ["arxiv", "docs", "medium", "reddit", "hackernews", "stackoverflow"]
+    max_per_source: int = 50
+    since_days: int = 7
+    full_refresh: bool = False
+
+
+@app.post("/ingest/knowledge")
+async def ingest_knowledge_endpoint(req: IngestRequest):
+    """Trigger knowledge ingestion pipeline for a topic.
+    Fetches from requested sources, deduplicates, scores, extracts concepts,
+    writes to kb_* tables, injects hot_reflections for cold processor pickup.
+    """
+    try:
+        from scraper.knowledge import ingest_knowledge
+        from core_train import _ingest_to_hot_reflection
+
+        print(f"[INGEST] Starting: topic={req.topic} sources={req.sources} max={req.max_per_source}")
+        summary = await ingest_knowledge(
+            topic=req.topic,
+            sources=req.sources,
+            max_per_source=req.max_per_source,
+            since_days=req.since_days,
+            full_refresh=req.full_refresh,
+        )
+
+        # Inject hot_reflections if concepts were found
+        hot_ok = False
+        if summary.get("concepts_found", 0) > 0:
+            # Re-fetch concept list from the summary
+            from scraper.knowledge.concept_extractor import AI_CONCEPTS
+            concepts = list(AI_CONCEPTS.keys())[:summary["concepts_found"]]
+            avg_eng = summary.get("avg_engagement", 50.0)
+            source_str = ",".join(req.sources)
+            hot_ok = _ingest_to_hot_reflection(req.topic, source_str, concepts, avg_eng)
+
+        return {"ok": True, "hot_reflections_injected": hot_ok, **summary}
+    except Exception as e:
+        print(f"[INGEST] Error: {e}")
+        return JSONResponse(status_code=500, content={"ok": False, "error": str(e)})
+
+
+@app.get("/ingest/status")
+async def ingest_status():
+    """Return ingestion pipeline status: table counts, last run time."""
+    try:
+        counts = {}
+        for table in ("kb_sources", "kb_articles", "kb_concepts"):
+            try:
+                r = httpx.get(
+                    f"{SUPABASE_URL}/rest/v1/{table}?select=id&limit=1",
+                    headers=_sbh_count_svc(), timeout=8
+                )
+                cr = r.headers.get("content-range", "*/0")
+                counts[table] = int(cr.split("/")[-1]) if "/" in cr else 0
+            except:
+                counts[table] = -1
+
+        # Last ingest hot_reflection
+        last_ingest = None
+        try:
+            rows = sb_get("hot_reflections",
+                "select=created_at,task_summary&domain=eq.knowledge_ingestion&order=created_at.desc&limit=1",
+                svc=True)
+            if rows:
+                last_ingest = {"ts": rows[0].get("created_at"), "summary": rows[0].get("task_summary", "")[:100]}
+        except:
+            pass
+
+        return {"ok": True, "table_counts": counts, "last_ingest": last_ingest}
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"ok": False, "error": str(e)})
+
+
+# ---------------------------------------------------------------------------
 # MCP session management
 # ---------------------------------------------------------------------------
 _sessions: dict = {}
