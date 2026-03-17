@@ -13,7 +13,9 @@ Depends on: core_config, core_github
 NOTE: Split architecture is live. core.py has been deleted.
 """
 import json
+import os
 import time
+import threading as _threading
 from collections import Counter
 from datetime import datetime, timedelta
 
@@ -40,6 +42,13 @@ _PUBLIC_SOURCE_INTERVAL = 21600  # 6 hours
 
 # Source confidence multipliers (Phase 3)
 _SRC_CONF = {"real": 1.0, "simulation": 0.7, "both": 1.3}
+
+# ── TASK-4: Binance Price Monitor config ──────────────────────────────────────
+_PRICE_MONITOR_SYMBOLS  = os.getenv("BINANCE_WATCH_SYMBOLS", "BTCUSDT,ETHUSDT,BNBUSDT").split(",")
+_PRICE_ALERT_THRESHOLD  = float(os.getenv("BINANCE_ALERT_THRESHOLD_PCT", "3.0"))
+_PRICE_MONITOR_INTERVAL = int(os.getenv("BINANCE_MONITOR_INTERVAL_S", "60"))
+_price_monitor_last_prices: dict = {}
+_price_monitor_running = False
 
 
 # -- Helpers (imported by core_main for get_system_counts) --------------------
@@ -107,11 +116,6 @@ def auto_hot_reflection(session_data: dict):
             actions_str = ", ".join(str(a) for a in actions[:20])
             seed_hint = f"Caller already identified: {seed_patterns}\n" if seed_patterns else ""
 
-            # --- Enrich: pull ALL data since last hot_reflection (the anchor) ---
-            # Anchor = timestamp of the PREVIOUS hot_reflection row.
-            # Groq sees the full delta: mistakes, KB, tasks, changelogs -- everything
-            # since the last scan, not just the current second.
-            # Fallback chain: last hot_reflection -> session created_at -> 24h ago.
             anchor_ts = None
             try:
                 prev = sb_get("hot_reflections",
@@ -125,7 +129,6 @@ def auto_hot_reflection(session_data: dict):
                 anchor_ts = session_data.get("created_at") or ""
             if not anchor_ts:
                 anchor_ts = (datetime.utcnow() - timedelta(hours=24)).isoformat()
-            # Strip timezone suffix so PostgREST accepts the timestamp
             session_ts = anchor_ts.replace("Z", "").split("+")[0]
 
             enrichment = ""
@@ -164,7 +167,6 @@ def auto_hot_reflection(session_data: dict):
                         f"  [{r.get('change_type','?')}] {r.get('component','?')}: {r.get('title','')[:100]}"
                         for r in changelog_rows)
             except Exception: pass
-            # --- End enrichment ---
 
             prompt = (
                 f"Session summary: {summary[:500]}\n"
@@ -181,7 +183,6 @@ def auto_hot_reflection(session_data: dict):
             raw = groq_chat(system="You are CORE's pattern extraction engine. Return only valid JSON.", user=prompt, model=GROQ_FAST, max_tokens=500)
             parsed = json.loads(raw.strip().lstrip("```json").rstrip("```").strip())
             groq_patterns = [p for p in parsed.get("patterns", []) if isinstance(p, str) and len(p) > 5][:5]
-            # Merge: seed patterns first, then Groq additions (deduplicated)
             seen = set(p.lower() for p in new_patterns)
             for p in groq_patterns:
                 if p.lower() not in seen:
@@ -190,7 +191,6 @@ def auto_hot_reflection(session_data: dict):
             if quality_score is None:
                 quality_score = float(parsed.get("quality") or 0.7)
             _gaps_raw = parsed.get("gaps") or None
-            # gaps_identified is text[] in DB -- must be list or null, never bare string
             gaps_identified = [_gaps_raw] if _gaps_raw and isinstance(_gaps_raw, str) else _gaps_raw
             print(f"[HOT] Groq extracted {len(groq_patterns)} patterns, merged total={len(new_patterns)}, quality={quality_score}")
         except Exception as e:
@@ -213,26 +213,14 @@ def auto_hot_reflection(session_data: dict):
 
 # -- Knowledge ingestion bridge -----------------------------------------------
 def _ingest_to_hot_reflection(topic: str, source_type: str, concept_clusters: list, engagement_avg: float) -> bool:
-    """22.D: Inject knowledge ingestion results as hot_reflections for cold processor pickup.
-    One hot_reflection per concept cluster. domain=knowledge_ingestion.
-    Args:
-        topic: ingest topic string (e.g. 'AI agent reasoning')
-        source_type: comma-joined source types used (e.g. 'arxiv,hackernews')
-        concept_clusters: list of concept name strings found across sources
-        engagement_avg: average engagement_score across all ingested sources (0-100)
-    Returns True if at least one hot_reflection was inserted.
-    """
     if not concept_clusters:
         print(f"[INGEST->HOT] No concepts found for topic={topic}, skipping")
         return False
 
     inserted = 0
-    # One hot_reflection per concept cluster (matches cold processor clustering logic)
     for concept in concept_clusters:
         try:
             quality_score = round(min(1.0, engagement_avg / 100.0), 3)
-
-            # Synthesize patterns via Groq for this concept
             new_patterns = []
             gaps_identified = None
             try:
@@ -249,15 +237,12 @@ def _ingest_to_hot_reflection(topic: str, source_type: str, concept_clusters: li
                 )
                 raw = groq_chat(
                     system="You are CORE's knowledge synthesis engine. Return only valid JSON.",
-                    user=prompt,
-                    model=GROQ_FAST,
-                    max_tokens=400,
+                    user=prompt, model=GROQ_FAST, max_tokens=400,
                 )
                 parsed = json.loads(raw.strip().lstrip("```json").rstrip("```").strip())
                 new_patterns = [p for p in parsed.get("patterns", []) if isinstance(p, str) and len(p) > 5][:4]
                 gap_raw = parsed.get("gap") or None
                 gaps_identified = [gap_raw] if gap_raw and isinstance(gap_raw, str) else None
-                print(f"[INGEST->HOT] {concept}: {len(new_patterns)} patterns, gap={'yes' if gaps_identified else 'no'}")
             except Exception as e:
                 print(f"[INGEST->HOT] Groq synthesis failed for {concept} (non-fatal): {e}")
                 new_patterns = [f"Community knowledge on {concept}: avg engagement {engagement_avg:.0f}/100"]
@@ -277,9 +262,6 @@ def _ingest_to_hot_reflection(topic: str, source_type: str, concept_clusters: li
             })
             if ok:
                 inserted += 1
-                print(f"[INGEST->HOT] Inserted hot_reflection for concept={concept}")
-            else:
-                print(f"[INGEST->HOT] sb_post failed for concept={concept}")
         except Exception as e:
             print(f"[INGEST->HOT] Error for concept={concept}: {e}")
             continue
@@ -290,13 +272,7 @@ def _ingest_to_hot_reflection(topic: str, source_type: str, concept_clusters: li
 
 # -- Gaps reconciliation -------------------------------------------------------
 def _reconcile_gaps(hots: list) -> int:
-    """TASK-19: Wire gaps_identified from hot_reflections into evolution_queue.
-    Extracts all gaps from the current batch, deduplicates via Groq,
-    and inserts unique actionable gaps as evolution_queue entries.
-    Returns count of gaps inserted.
-    """
     try:
-        # 1. Flatten all gaps from batch
         raw_gaps = []
         for h in hots:
             gaps = h.get("gaps_identified") or []
@@ -313,7 +289,6 @@ def _reconcile_gaps(hots: list) -> int:
         if not raw_gaps:
             return 0
 
-        # 2. Deduplicate and priority-score via Groq
         gaps_text = "\n".join(f"  [{i+1}] [{g['domain']}] {g['gap']}" for i, g in enumerate(raw_gaps))
         prompt = (
             f"You are CORE's gap reconciliation engine.\n"
@@ -335,7 +310,6 @@ def _reconcile_gaps(hots: list) -> int:
         except Exception as groq_err:
             print(f"[COLD] _reconcile_gaps Groq fallback (non-fatal): {groq_err}")
         if not deduped:
-            # Fallback: raw dedup by string equality -- always runs if Groq unavailable
             seen = set()
             deduped = []
             for g in raw_gaps:
@@ -344,7 +318,6 @@ def _reconcile_gaps(hots: list) -> int:
                     deduped.append({"gap": g["gap"], "domain": g["domain"], "priority": 2})
             deduped = deduped[:10]
 
-        # 3. Insert unique gaps into evolution_queue
         inserted = 0
         for item in deduped:
             gap_text = item.get("gap", "")[:400]
@@ -352,8 +325,6 @@ def _reconcile_gaps(hots: list) -> int:
             priority = int(item.get("priority", 2))
             if not gap_text:
                 continue
-            # Skip if already exists in evolution_queue (pattern_key match)
-            # TASK-29.B: match on pending only (not applied), extended to 100 chars for better coverage
             existing = sb_get("evolution_queue",
                 f"select=id&pattern_key=ilike.%25{gap_text[:100].replace(' ', '%25')}%25&status=eq.pending&limit=1",
                 svc=True)
@@ -373,7 +344,6 @@ def _reconcile_gaps(hots: list) -> int:
             })
             if ok:
                 inserted += 1
-                print(f"[COLD] Gap queued: [{domain}] {gap_text[:80]}")
 
         print(f"[COLD] _reconcile_gaps: raw={len(raw_gaps)} deduped={len(deduped)} inserted={inserted}")
         return inserted
@@ -384,25 +354,18 @@ def _reconcile_gaps(hots: list) -> int:
 
 # -- Cold processor ------------------------------------------------------------
 def _groq_synthesize_cold(hots: list, batch_counts: Counter, batch_domain: dict) -> str:
-    """Ask Groq to synthesize a meaningful cold reflection summary from the batch.
-    Returns a rich summary string. Falls back to dumb counter string on failure.
-    """
     fallback = f"Processed {len(hots)} hots. {len(batch_counts)} unique patterns."
     try:
-        # Build top-patterns context: top 15 by frequency in this batch
         top = sorted(batch_counts.items(), key=lambda x: x[1], reverse=True)[:15]
         top_text = "\n".join(
             f"  [{batch_domain.get(k,'?')}] ({v}x) {k[:120]}"
             for k, v in top
         )
-        # Domain breakdown
         domain_counts: Counter = Counter(batch_domain[k] for k in batch_counts)
         domain_text = ", ".join(f"{d}:{n}" for d, n in domain_counts.most_common(6))
-        # Session summaries (task_summary field from hots)
         session_summaries = "\n".join(
             f"  - {h.get('task_summary','')[:150]}" for h in hots[:10]
         )
-        # TASK-25.A: structured JSON schema for reliable Groq output parsing
         prompt = (
             f"You are CORE's cold processor synthesis engine.\n"
             f"You just processed {len(hots)} hot reflections covering {len(batch_counts)} unique patterns.\n\n"
@@ -420,11 +383,8 @@ def _groq_synthesize_cold(hots: list, batch_counts: Counter, batch_domain: dict)
         )
         raw = groq_chat(
             system="You are CORE's cold processor synthesis engine. Respond only with valid JSON. No preamble.",
-            user=prompt,
-            model=GROQ_MODEL,
-            max_tokens=500,
+            user=prompt, model=GROQ_MODEL, max_tokens=500,
         )
-        # TASK-25.A: parse structured JSON, fall back to raw text if parse fails
         try:
             parsed = json.loads(raw.strip())
             synthesis = parsed.get("summary", "").strip()
@@ -432,12 +392,10 @@ def _groq_synthesize_cold(hots: list, batch_counts: Counter, batch_domain: dict)
                 synthesis = parsed.get("themes", "").strip()
             if len(synthesis) > 50:
                 return synthesis
-            # Fallback: reconstruct from fields
             parts = [parsed.get("themes", ""), " | ".join(parsed.get("top_patterns", [])[:3])]
             synthesis = " ".join(p for p in parts if p)
             return synthesis if len(synthesis) > 20 else fallback
         except (json.JSONDecodeError, ValueError, AttributeError):
-            # Non-JSON response -- use raw text if long enough
             print(f"[COLD] synthesis JSON parse failed, using raw text fallback")
             synthesis = raw.strip()
             if len(synthesis) > 50:
@@ -449,9 +407,6 @@ def _groq_synthesize_cold(hots: list, batch_counts: Counter, batch_domain: dict)
 
 
 def _groq_kb_content(pattern_key: str, domain: str, frequency: int, src_key: str) -> str:
-    """Ask Groq to write proper KB entry content for a pattern that hit threshold.
-    Returns a rich content string. Falls back to the raw pattern key on failure.
-    """
     try:
         prompt = (
             f"You are CORE's knowledge base writer.\n"
@@ -476,10 +431,6 @@ def _groq_kb_content(pattern_key: str, domain: str, frequency: int, src_key: str
 
 
 def _backfill_patterns(batch_size: int = 10) -> int:
-    """TASK-20: Backfill pattern_frequency entries (frequency>=2, auto_applied=false)
-    into knowledge_base as KB entries via Groq. Runs after each cold processor batch.
-    Returns count of KB entries inserted.
-    """
     try:
         rows = sb_get(
             "pattern_frequency",
@@ -490,7 +441,6 @@ def _backfill_patterns(batch_size: int = 10) -> int:
             print("[BACKFILL] No patterns to backfill.")
             return 0
 
-        # Cap per run to avoid overloading Groq
         rows = rows[:batch_size]
         inserted = 0
 
@@ -501,24 +451,20 @@ def _backfill_patterns(batch_size: int = 10) -> int:
             if not key:
                 continue
 
-            # 20.B: check if KB entry already exists
             existing = sb_get(
                 "knowledge_base",
                 f"select=id&domain=eq.{domain}&topic=eq.{key[:100]}&limit=1",
                 svc=True
             )
             if existing:
-                # Already in KB -- mark auto_applied so we stop checking it
                 sb_upsert("pattern_frequency", {"pattern_key": key, "auto_applied": True}, on_conflict="pattern_key")
                 continue
 
-            # 20.C: generate KB content via Groq
             content = _groq_kb_content(key, domain, freq, "real")
             if not content or len(content) < 10:
                 print(f"[BACKFILL] Groq returned empty content for: {key[:60]}")
                 continue
 
-            # 20.D: insert into knowledge_base
             ok = sb_post("knowledge_base", {
                 "domain":     domain,
                 "topic":      key[:100],
@@ -546,13 +492,11 @@ def run_cold_processor():
         hots = sb_get("hot_reflections",
                       "select=id,domain,new_patterns,new_mistakes,quality_score,source,task_summary,gaps_identified&processed_by_cold=eq.0&id=gt.1&quality_score=gte.0.5&order=created_at.asc",
                       svc=True)
-        # TASK-25.B: quality gate -- hots below 0.5 are skipped (low signal, simulation noise)
         skipped_low_quality = sb_get("hot_reflections",
                       "select=id&processed_by_cold=eq.0&id=gt.1&quality_score=lt.0.5",
                       svc=True)
         if skipped_low_quality:
             print(f"[COLD] Skipped {len(skipped_low_quality)} low-quality hots (quality<0.5)")
-            # Mark them processed so they don't accumulate
             for lq in skipped_low_quality:
                 sb_patch("hot_reflections", f"id=eq.{lq['id']}", {"processed_by_cold": 1})
         if not hots:
@@ -578,14 +522,11 @@ def run_cold_processor():
                     raw_patterns = [x.strip() for x in raw_patterns.replace("\n", ",").split(",") if x.strip()]
             for p in raw_patterns:
                 if p and isinstance(p, str) and len(p) > 3:
-                    key = str(p)[:500]  # raised from 200 -- long patterns need full key for identity
+                    key = str(p)[:500]
                     batch_counts[key] += 1
                     batch_domain.setdefault(key, h.get("domain", "general"))
                     batch_sources.setdefault(key, set()).add(src)
 
-        # --- Semantic clustering: merge near-identical patterns before counting ---
-        # Fixes fragmentation bug: same concept with different wording = separate keys
-        # that never accumulate past threshold. Groq clusters them into canonical keys.
         if len(batch_counts) > 1:
             batch_counts, batch_domain, batch_sources = _groq_cluster_patterns(
                 batch_counts, batch_domain, batch_sources
@@ -619,9 +560,6 @@ def run_cold_processor():
                           on_conflict="pattern_key")
                 total_freq = batch_count
 
-            # ALLOWED_EVO_TYPES: cold processor only emits knowledge/code/config — never backlog
-            # auto_applied fix: re-queue at milestone frequencies (10, 25, 50) so high-frequency
-            # patterns get re-evaluated as KB entries, not permanently silenced after first queue.
             _milestones = {10, 25, 50, 100, 200, 500}
             _already_applied = (existing or {}).get("auto_applied", False)
             _at_milestone = total_freq in _milestones
@@ -631,11 +569,7 @@ def run_cold_processor():
             if _should_queue:
                 base_conf  = min(0.5 + total_freq * 0.05, 0.95)
                 final_conf = round(base_conf * src_mult, 3)
-
-                # Groq writes proper KB content for the evolution instead of raw pattern string
                 kb_content = _groq_kb_content(key, domain, total_freq, src_key)
-
-                # TASK-29.B: Dedup gate -- skip if identical pattern_key already pending
                 _already_pending = sb_get("evolution_queue",
                     f"select=id&pattern_key=eq.{key[:200]}&status=eq.pending&limit=1",
                     svc=True)
@@ -658,8 +592,6 @@ def run_cold_processor():
                     sb_upsert("pattern_frequency",
                               {"pattern_key": key, "auto_applied": True},
                               on_conflict="pattern_key")
-                    # TASK-17: auto-apply gate -- knowledge + confidence>=0.65 + source=real
-                    # code/config/new_tool always require owner review
                     if final_conf >= 0.65 and src_key == "real":
                         new_evo = sb_get("evolution_queue",
                             f"select=id&pattern_key=eq.{key[:100]}&status=eq.pending&order=id.desc&limit=1",
@@ -670,14 +602,10 @@ def run_cold_processor():
                                 auto_applied_count += 1
                                 print(f"[COLD] Auto-applied evolution #{new_evo[0]['id']}: {key[:80]}")
 
-        # TASK-19: Wire gaps_identified into evolution_queue
         gaps_inserted = _reconcile_gaps(hots)
         evolutions_queued += gaps_inserted
-
-        # TASK-20: Backfill pattern_frequency -> knowledge_base
         _backfill_patterns(batch_size=10)
 
-        # Groq synthesizes a meaningful cold reflection summary
         groq_summary = _groq_synthesize_cold(hots, batch_counts, batch_domain)
         counter_suffix = f" | hots={len(hots)} patterns={len(batch_counts)} evos={evolutions_queued}"
         summary_text = groq_summary + counter_suffix
@@ -715,11 +643,10 @@ def apply_evolution(evolution_id: int):
         applied = False; note = ""
 
         if change_type == "knowledge":
-            # change_summary is now Groq-generated KB content — use it directly as content
             applied = sb_post_critical("knowledge_base", {
                 "domain": evo.get("impact", "general"),
                 "topic": pattern_key[:100] or change_summary[:100],
-                "content": change_summary,  # rich Groq-written content
+                "content": change_summary,
                 "confidence": "high" if confidence >= 0.8 else "medium",
                 "tags": ["evolution", "auto"], "source": "evolution_queue",
             })
@@ -796,7 +723,6 @@ def apply_evolution(evolution_id: int):
             note = "Written to BEHAVIOR_UPDATES.md"
 
         elif change_type == "backlog":
-            # RETIRED 2026-03-14 (Task 7.2) — backlog is owner decision, never Groq's.
             reject_evolution(evolution_id, reason="backlog change_type retired — owner decides backlog", silent=True)
             return {"ok": False, "evolution_id": evolution_id, "change_type": change_type,
                     "note": "backlog change_type retired — auto-rejected"}
@@ -805,7 +731,6 @@ def apply_evolution(evolution_id: int):
             sb_patch("evolution_queue", f"id=eq.{evolution_id}",
                      {"status": "applied", "applied_at": datetime.utcnow().isoformat()})
             notify(f"Evolution #{evolution_id} applied\nType: {change_type}\n{note}")
-            # BACKLOG.md deleted in Task 1.8 - backlog lives in Supabase only
         else:
             if change_type not in ("backlog",):
                 notify(f"Evolution #{evolution_id} apply failed\nType: {change_type}")
@@ -818,7 +743,6 @@ def apply_evolution(evolution_id: int):
 
 
 def reject_evolution(evolution_id: int, reason: str = "", silent: bool = False):
-    """Reject a single evolution. silent=True skips Telegram notify + mistakes write (use for bulk ops)."""
     try:
         rows = sb_get("evolution_queue",
                       f"select=*&id=eq.{evolution_id}&status=in.(pending,synthesized)&limit=1", svc=True)
@@ -840,10 +764,6 @@ def reject_evolution(evolution_id: int, reason: str = "", silent: bool = False):
 
 
 def bulk_reject_evolutions(change_type: str = "", ids: list = None, reason: str = "", include_synthesized: bool = False) -> dict:
-    """Bulk reject evolutions by change_type or explicit id list.
-    Silent by default — one summary Telegram notify at the end.
-    include_synthesized: if True, also targets status=synthesized items (not just pending).
-    """
     try:
         statuses = "status=in.(pending,synthesized)" if include_synthesized else "status=eq.pending"
         if ids:
@@ -875,8 +795,6 @@ _STALE_CHECK_INTERVAL = 86400  # 24h
 _STALE_DAYS = 30
 
 def _check_stale_patterns() -> int:
-    """Mark patterns not seen in 30+ days as stale=true.
-    Returns count of newly staled patterns."""
     try:
         cutoff = (datetime.utcnow() - timedelta(days=_STALE_DAYS)).isoformat()
         stale_rows = sb_get(
@@ -887,8 +805,7 @@ def _check_stale_patterns() -> int:
         count = 0
         for row in stale_rows:
             try:
-                sb_patch("pattern_frequency", f"id=eq.{row['id']}",
-                         {"stale": True})
+                sb_patch("pattern_frequency", f"id=eq.{row['id']}", {"stale": True})
                 count += 1
             except Exception as _e:
                 print(f"[STALE] patch error for id={row['id']}: {_e}")
@@ -934,7 +851,6 @@ def cold_processor_loop():
                 run_cold_processor()
                 _last_cold_run = time.time()
                 _last_cold_kb_count = current_kb_count
-                # BACKLOG.md deleted in Task 1.8 - backlog lives in Supabase only
 
             for evo in sb_get("evolution_queue",
                                "select=id,confidence,change_type&status=eq.pending&change_type=eq.knowledge&id=gt.1",
@@ -942,7 +858,6 @@ def cold_processor_loop():
                 conf = float(evo.get("confidence") or 0)
                 if conf >= KNOWLEDGE_AUTO_CONFIDENCE:
                     apply_evolution(evo["id"])
-            # TASK-9.D: stale pattern check once per 24h
             if time.time() - _last_stale_check >= _STALE_CHECK_INTERVAL:
                 _check_stale_patterns()
                 _last_stale_check = time.time()
@@ -953,7 +868,6 @@ def cold_processor_loop():
 
 # -- Backlog helpers -----------------------------------------------------------
 def _backlog_add(items: list) -> list:
-    """Write new backlog items to Supabase backlog table."""
     try:
         existing_rows = sb_get("backlog", "select=title&order=id.asc&limit=500", svc=True)
         existing_titles = {r.get("title", "").lower() for r in existing_rows}
@@ -985,37 +899,26 @@ def _backlog_add(items: list) -> list:
         })
         if ok:
             new_items.append(item)
-        # NOTE: Backlog items are NEVER pushed to evolution_queue.
     return new_items
 
 
 def _sync_backlog_status():
-    """No-op: backlog status is managed directly in the backlog table."""
     return 0
 
 
 def _backlog_to_markdown() -> str:
-    """DEPRECATED - BACKLOG.md deleted in Task 1.8. Backlog lives in Supabase only.
-    Kept as no-op to avoid breaking any callers."""
     return "# BACKLOG.md deprecated - use get_backlog MCP tool or Supabase directly."
 
 
 # -- KB Mining -----------------------------------------------------------------
 def run_kb_mining(max_batches: int = 50, force: bool = False) -> dict:
-    """DEPRECATED 2026-03-14 - backlog table dropped. KB mining replaced by cold processor pipeline."""
     print("[KB MINE] deprecated - backlog table dropped, no-op")
     return {"ok": False, "deprecated": True, "reason": "backlog table dropped - use evolution_queue pipeline instead"}
 
 
 # -- Real signal + simulation --------------------------------------------------
 def _extract_real_signal() -> bool:
-    """Track A - extract patterns from real sessions + mistakes.
-    Uses last_real_signal_ts state key as lower bound - processes everything since last run.
-    Soft-boot default: yesterday, so first run after any deploy rescans last 24h.
-    After each successful run, saves current timestamp as the new lower bound.
-    """
     try:
-        # Read last_real_signal_ts from state (stored in sessions table as [state_update])
         state_rows = sb_get("sessions",
             "select=summary&summary=like.*last_real_signal_ts:*&order=created_at.desc&limit=1",
             svc=True)
@@ -1024,7 +927,6 @@ def _extract_real_signal() -> bool:
             since_ts = raw.replace("Z", "").split("+")[0]
             print(f"[RESEARCH/REAL] Using last_real_signal_ts: {since_ts}")
         else:
-            # Soft-boot: yesterday so first run after deploy always rescans recent data
             since_ts = (datetime.utcnow() - timedelta(days=1)).isoformat()
             print(f"[RESEARCH/REAL] No state key found, soft-boot to yesterday: {since_ts}")
 
@@ -1036,8 +938,6 @@ def _extract_real_signal() -> bool:
             svc=True)
 
         if not sessions and not mistakes:
-            # Fallback: always run with last 7 days even if anchor is recent
-            # Prevents pipeline stalling when no activity since last run
             since_ts = (datetime.utcnow() - timedelta(days=7)).isoformat()
             print(f"[RESEARCH/REAL] No new data since anchor -- falling back to 7d window: {since_ts}")
             sessions = sb_get("sessions",
@@ -1049,9 +949,7 @@ def _extract_real_signal() -> bool:
             if not sessions and not mistakes:
                 print("[RESEARCH/REAL] Still no data in 7d window -- skipping")
                 return False
-            print(f"[RESEARCH/REAL] 7d fallback: {len(sessions)} sessions, {len(mistakes)} mistakes")
 
-        # Enrich: KB total count
         try:
             kb_count_r = httpx.get(
                 f"{SUPABASE_URL}/rest/v1/knowledge_base?select=id&limit=1",
@@ -1060,7 +958,6 @@ def _extract_real_signal() -> bool:
         except Exception:
             kb_total = 0
 
-        # Enrich: recent changelog entries
         try:
             changelog_rows = sb_get("changelog",
                 "select=summary,category&order=id.desc&limit=5", svc=True)
@@ -1124,7 +1021,6 @@ Output ONLY valid JSON, no preamble."""
         })
         print(f"[RESEARCH/REAL] ok={ok} patterns={len(patterns)} domain={result.get('domain')}")
         if ok:
-            # Save current timestamp as new lower bound for next run
             run_ts = datetime.utcnow().isoformat()
             sb_post("sessions", {
                 "summary": f"[state_update] last_real_signal_ts: {run_ts}",
@@ -1139,9 +1035,6 @@ Output ONLY valid JSON, no preamble."""
 
 
 def _get_simulation_task() -> dict:
-    """Read the current custom simulation task from sessions state.
-    Returns the task dict if set, or None if using default.
-    """
     try:
         rows = sb_get("sessions",
             "select=summary&summary=like.*simulation_task*&order=created_at.desc&limit=5",
@@ -1152,7 +1045,7 @@ def _get_simulation_task() -> dict:
                 continue
             raw_val = summary.split("[state_update] simulation_task:")[-1].strip()
             if raw_val.lower() == "null":
-                return None  # explicitly cleared
+                return None
             task = json.loads(raw_val)
             if task and task.get("instruction"):
                 return task
@@ -1162,8 +1055,6 @@ def _get_simulation_task() -> dict:
 
 
 def _run_simulation_batch() -> bool:
-    """Track B - simulation. Uses custom task if set via set_simulation tool,
-    falls back to default 1M user population simulation."""
     try:
         try:
             from core_tools import TOOLS
@@ -1184,7 +1075,6 @@ def _run_simulation_batch() -> bool:
         kb_domains = list({r.get("domain", "general") for r in kb_sample})
         kb_topics_sample = [r.get("topic", "") for r in kb_sample[:10]]
 
-        # Enrich: KB total count
         try:
             kb_count_r = httpx.get(
                 f"{SUPABASE_URL}/rest/v1/knowledge_base?select=id&limit=1",
@@ -1193,7 +1083,6 @@ def _run_simulation_batch() -> bool:
         except Exception:
             kb_total = len(kb_sample)
 
-        # Enrich: recently applied evolutions (last 5)
         try:
             recent_evos = sb_get("evolution_queue",
                 "select=change_type,change_summary&status=eq.applied&order=id.desc&limit=5",
@@ -1205,7 +1094,6 @@ def _run_simulation_batch() -> bool:
         except Exception:
             evos_text = "Unavailable."
 
-        # Build runtime context -- injected into both custom and default prompts
         runtime_context = (
             f"CORE MCP tools ({len(tool_list)}): {', '.join(tool_list[:20])}\n"
             f"KB total entries: {kb_total}\n"
@@ -1215,11 +1103,9 @@ def _run_simulation_batch() -> bool:
             f"Sample KB topics: {', '.join(kb_topics_sample)}"
         )
 
-        # Check for custom simulation task
         task = _get_simulation_task()
 
         if task:
-            # Custom simulation -- use owner-defined scenario
             instruction = task.get("instruction", "")
             system = task.get("system_prompt", "")
             user_template = task.get("user_prompt_template", "")
@@ -1227,7 +1113,6 @@ def _run_simulation_batch() -> bool:
             task_summary = f"Custom simulation: {instruction[:150]}"
             print(f"[RESEARCH/SIM] Running custom simulation: {instruction[:80]}")
         else:
-            # Default -- hardcoded 1M user population simulation
             system = """You are simulating 1,000,000 users of CORE - a personal AGI orchestration system.
 Output MUST be valid JSON:
 {
@@ -1274,10 +1159,6 @@ Output ONLY valid JSON, no preamble."""
 
 # -- Public source ingestion ---------------------------------------------------
 def _ingest_public_sources() -> str:
-    """Fetch 2 public GitHub README sources per cycle (rotated by hour).
-    Returns combined trimmed content string, or empty string on failure.
-    Never raises -- always fails silently.
-    """
     sources = [
         "https://raw.githubusercontent.com/langchain-ai/langchain/master/README.md",
         "https://raw.githubusercontent.com/openai/openai-cookbook/main/README.md",
@@ -1294,10 +1175,10 @@ def _ingest_public_sources() -> str:
             r = httpx.get(url, timeout=8, follow_redirects=True, headers=headers)
             if r.status_code == 200:
                 text = r.text.strip()[:2000]
-                source_name = url.split("/")[4]  # repo owner as label
+                source_name = url.split("/")[4]
                 combined.append(f"[{source_name}]\n{text}")
         except Exception:
-            pass  # fail silently
+            pass
     return "\n\n".join(combined)
 
 
@@ -1315,7 +1196,6 @@ def background_researcher():
                 _last_research_run = now
                 _cycle_count += 1
 
-                # Track B-ext: public source ingestion every 6h
                 public_content = ""
                 if now - _last_public_source_run >= _PUBLIC_SOURCE_INTERVAL:
                     print("[RESEARCH] Fetching public sources...")
@@ -1350,7 +1230,6 @@ def background_researcher():
                 except Exception as _ae:
                     print(f"[RESEARCH] auto-apply error: {_ae}")
 
-                # Telegram cycle summary — only when something happened
                 try:
                     if real_ok or sim_ok or auto_applied:
                         parts = []
@@ -1364,7 +1243,7 @@ def background_researcher():
                             parts.append("public sources ingested")
                         notify(f"[CORE] Researcher cycle #{_cycle_count}\n" + " | ".join(parts))
                 except Exception:
-                    pass  # never block loop on notify failure
+                    pass
 
         except Exception as e:
             print(f"[RESEARCH] loop error: {e}")
@@ -1372,17 +1251,7 @@ def background_researcher():
 
 
 # -- Pattern semantic clustering -----------------------------------------------
-
 def _groq_cluster_patterns(batch_counts: "Counter", batch_domain: dict, batch_sources: dict) -> tuple:
-    """Ask Groq to cluster semantically identical/near-identical patterns into canonical keys.
-    Returns new (batch_counts, batch_domain, batch_sources) with fragmented keys merged.
-    Falls back to original dicts on any failure -- clustering is non-blocking.
-
-    This fixes the core fragmentation bug: same concept expressed with different wording
-    creates separate keys that never accumulate past the threshold. Groq reads all raw
-    pattern keys and returns a mapping of raw_key -> canonical_key. Keys that are already
-    unique/distinct are mapped to themselves.
-    """
     if len(batch_counts) <= 1:
         return batch_counts, batch_domain, batch_sources
     try:
@@ -1403,26 +1272,22 @@ def _groq_cluster_patterns(batch_counts: "Counter", batch_domain: dict, batch_so
         )
         raw = groq_chat(system="You are CORE's pattern clustering engine. Return only valid JSON.", user=prompt, model=GROQ_MODEL, max_tokens=2000)
         raw = raw.strip().lstrip("```json").lstrip("```").rstrip("```").strip()
-        mapping_by_num = json.loads(raw)  # {"1": "canonical", "2": "canonical", ...}
+        mapping_by_num = json.loads(raw)
 
-        # Build raw_key -> canonical_key map
         key_map: dict = {}
         for i, raw_key in enumerate(raw_keys):
             canonical = mapping_by_num.get(str(i + 1), raw_key).strip()
             if not canonical or len(canonical) < 5:
-                canonical = raw_key  # fallback to original if Groq returns garbage
-            key_map[raw_key] = canonical[:500]  # raised from 200 to 500
+                canonical = raw_key
+            key_map[raw_key] = canonical[:500]
 
-        # Rebuild counts/domain/sources with canonical keys
         new_counts: Counter = Counter()
         new_domain: dict = {}
         new_sources: dict = {}
         for raw_key, count in batch_counts.items():
             canonical = key_map.get(raw_key, raw_key)
             new_counts[canonical] += count
-            # Domain: keep most specific (first seen wins, same as before)
             new_domain.setdefault(canonical, batch_domain.get(raw_key, "general"))
-            # Sources: union of all source sets that merged into this canonical
             existing_src = new_sources.get(canonical, set())
             new_sources[canonical] = existing_src | batch_sources.get(raw_key, {"real"})
 
@@ -1437,13 +1302,6 @@ def _groq_cluster_patterns(batch_counts: "Counter", batch_domain: dict, batch_so
 
 # -- Listen Mode ---------------------------------------------------------------
 def listen_stream():
-    """Generator: drain cold processor + evolution queue, yield JSON-line chunks.
-    Stop conditions:
-      - 2 consecutive cold runs with 0 new patterns (drained)
-      - Groq 429 / rate limit exception (groq_limit)
-      - 3600s elapsed (timeout)
-    Claude calls GET /listen, reads stream end-to-end, synthesizes at stop signal.
-    """
     import time as _time
     deadline = _time.time() + 3600
     dry_cycles = 0
@@ -1452,7 +1310,6 @@ def listen_stream():
     while _time.time() < deadline:
         cycle += 1
 
-        # -- Cold processor run
         try:
             result = run_cold_processor()
             patterns_found = result.get("patterns_found", 0) if isinstance(result, dict) else 0
@@ -1475,7 +1332,6 @@ def listen_stream():
                 return
             yield json.dumps({"type": "cold_error", "error": err[:200], "cycle": cycle}) + "\n"
 
-        # -- Evolution queue snapshot
         try:
             evos = sb_get(
                 "evolution_queue",
@@ -1492,7 +1348,6 @@ def listen_stream():
         except Exception as e:
             yield json.dumps({"type": "evo_error", "error": str(e)[:200], "cycle": cycle}) + "\n"
 
-        # -- Top patterns snapshot
         try:
             pats = sb_get(
                 "pattern_frequency",
@@ -1508,7 +1363,6 @@ def listen_stream():
         except Exception as e:
             yield json.dumps({"type": "pat_error", "error": str(e)[:200], "cycle": cycle}) + "\n"
 
-        # -- Hot gaps snapshot
         try:
             hot_gaps = sb_get(
                 "hot_reflections",
@@ -1530,33 +1384,21 @@ def listen_stream():
         except Exception as e:
             yield json.dumps({"type": "hot_error", "error": str(e)[:200], "cycle": cycle}) + "\n"
 
-        # -- Drain check: 2 consecutive dry cold runs = nothing left to process
         if dry_cycles >= 2:
             yield json.dumps({"type": "stop", "reason": "drained", "cycle": cycle}) + "\n"
             return
 
-        _time.sleep(60)  # 1 min between cycles
+        _time.sleep(60)
 
     yield json.dumps({"type": "stop", "reason": "timeout", "cycle": cycle}) + "\n"
 
 
 # ── TASK-4: Binance Price Monitor ─────────────────────────────────────────────
 
-import threading as _threading
-
-# Config — override via Railway env vars
-_PRICE_MONITOR_SYMBOLS    = os.getenv("BINANCE_WATCH_SYMBOLS", "BTCUSDT,ETHUSDT,BNBUSDT").split(",")
-_PRICE_ALERT_THRESHOLD    = float(os.getenv("BINANCE_ALERT_THRESHOLD_PCT", "3.0"))  # % change triggers alert
-_PRICE_MONITOR_INTERVAL   = int(os.getenv("BINANCE_MONITOR_INTERVAL_S", "60"))      # poll every 60s
-_price_monitor_last_prices: dict = {}   # symbol -> last known price
-_price_monitor_running     = False
-
-
-def _fetch_price(symbol: str) -> float | None:
+def _fetch_price(symbol: str):
     """Fetch current Binance price for symbol. Returns None on error."""
     try:
-        import httpx as _httpx
-        r = _httpx.get(
+        r = httpx.get(
             "https://api.binance.com/api/v3/ticker/price",
             params={"symbol": symbol},
             timeout=8,
@@ -1573,7 +1415,7 @@ def price_monitor_loop():
     Background price monitoring thread.
     Polls Binance every BINANCE_MONITOR_INTERVAL_S seconds.
     Sends Telegram alert when price moves > BINANCE_ALERT_THRESHOLD_PCT%.
-    Stores latest prices in Supabase market_signals table.
+    Stores price alerts in Supabase market_signals table.
     """
     global _price_monitor_running, _price_monitor_last_prices
     _price_monitor_running = True
@@ -1601,11 +1443,9 @@ def price_monitor_loop():
                     )
                     print(f"[PRICE] {msg}")
                     try:
-                        from core_config import notify
                         notify(msg)
                     except Exception as ne:
                         print(f"[PRICE] notify error: {ne}")
-                    # Log to Supabase market_signals
                     try:
                         sb_post_critical("market_signals", {
                             "signal_type": "price_alert",
@@ -1634,4 +1474,3 @@ def start_price_monitor():
     t = _threading.Thread(target=price_monitor_loop, daemon=True, name="price_monitor")
     t.start()
     return t
-
