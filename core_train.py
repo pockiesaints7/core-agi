@@ -353,10 +353,12 @@ def _reconcile_gaps(hots: list) -> int:
             if not gap_text:
                 continue
             # Skip if already exists in evolution_queue (pattern_key match)
+            # TASK-29.B: match on pending only (not applied), extended to 100 chars for better coverage
             existing = sb_get("evolution_queue",
-                f"select=id&pattern_key=ilike.%25{gap_text[:60].replace(' ', '%25')}%25&status=in.(pending,applied)&limit=1",
+                f"select=id&pattern_key=ilike.%25{gap_text[:100].replace(' ', '%25')}%25&status=eq.pending&limit=1",
                 svc=True)
             if existing:
+                print(f"[COLD] Skipped duplicate gap (pending): {gap_text[:80]}")
                 continue
             confidence = round(min(0.3 + priority * 0.1, 0.8), 2)
             ok = sb_post_critical("evolution_queue", {
