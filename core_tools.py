@@ -32,6 +32,10 @@ from core_train import apply_evolution, reject_evolution, bulk_reject_evolutions
 # Alias — used in t_core_py_rollback and t_deploy_and_wait
 notify_owner = notify
 
+# BASE_URL and MCP_SECRET for tools that call Railway endpoints
+BASE_URL = os.environ.get("RAILWAY_PUBLIC_URL", "https://core-agi-production.up.railway.app")
+MCP_SECRET = os.environ.get("MCP_SECRET", "")
+
 
 # -- Helpers needed locally ---------------------------------------------------
 def get_latest_session():
