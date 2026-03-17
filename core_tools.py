@@ -300,8 +300,14 @@ def t_sb_query(table, filters="", limit=20, order="", select="*"):
 def t_sb_insert(table="", data=""):
     if isinstance(data, str):
         try: data = json.loads(data)
-        except Exception as e: return {"ok": False, "error": f"data must be valid JSON: {e}"}
-    return {"ok": sb_post(table, data), "table": table}
+        except Exception as e: return {"ok": False, "error_code": "invalid_json", "message": f"data must be valid JSON: {e}", "retry_hint": False, "domain": "supabase"}
+    try:
+        ok = sb_post(table, data)
+        if not ok:
+            return {"ok": False, "error_code": "insert_failed", "message": f"Supabase insert failed for table {table}", "retry_hint": True, "domain": "supabase"}
+        return {"ok": True, "table": table}
+    except Exception as e:
+        return {"ok": False, "error_code": "exception", "message": str(e), "retry_hint": True, "domain": "supabase"}
 
 def t_sb_bulk_insert(table: str, rows: str) -> dict:
     """Insert multiple rows into Supabase in a single HTTP call."""
@@ -3155,8 +3161,13 @@ def t_sb_patch(table: str = "", filters: str = "", data="") -> dict:
             return {"ok": False, "error": f"data must be valid JSON: {e}"}
     if not isinstance(data, dict) or not data:
         return {"ok": False, "error": "data must be a non-empty JSON object"}
-    ok = sb_patch(table, filters.strip(), data)
-    return {"ok": ok, "table": table, "filters": filters, "updated_fields": list(data.keys())}
+    try:
+        ok = sb_patch(table, filters.strip(), data)
+        if not ok:
+            return {"ok": False, "error_code": "patch_failed", "message": f"Supabase patch failed for table {table}", "retry_hint": True, "domain": "supabase"}
+        return {"ok": True, "table": table, "filters": filters, "updated_fields": list(data.keys())}
+    except Exception as e:
+        return {"ok": False, "error_code": "exception", "message": str(e), "retry_hint": True, "domain": "supabase"}
 
 
 def t_sb_upsert(table: str = "", data="", on_conflict: str = "") -> dict:
@@ -3174,8 +3185,13 @@ def t_sb_upsert(table: str = "", data="", on_conflict: str = "") -> dict:
             return {"ok": False, "error": f"data must be valid JSON: {e}"}
     if not isinstance(data, dict) or not data:
         return {"ok": False, "error": "data must be a non-empty JSON object"}
-    ok = sb_upsert(table, data, on_conflict.strip())
-    return {"ok": ok, "table": table, "on_conflict": on_conflict, "fields": list(data.keys())}
+    try:
+        ok = sb_upsert(table, data, on_conflict.strip())
+        if not ok:
+            return {"ok": False, "error_code": "upsert_failed", "message": f"Supabase upsert failed for table {table}", "retry_hint": True, "domain": "supabase"}
+        return {"ok": True, "table": table, "on_conflict": on_conflict, "fields": list(data.keys())}
+    except Exception as e:
+        return {"ok": False, "error_code": "exception", "message": str(e), "retry_hint": True, "domain": "supabase"}
 
 
 def t_sb_delete(table: str, filters: str, confirm: str = "") -> dict:
