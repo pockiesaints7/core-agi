@@ -144,6 +144,26 @@ def t_add_knowledge(domain="", topic="", instruction="", content="", tags="", co
     """Add knowledge entry. instruction = behavioral directive for CORE (primary). content = supporting detail. At least one required."""
     if not instruction and not content:
         return {"ok": False, "error": "At least one of instruction or content is required"}
+    # TASK-27.B: Contradiction + duplicate check before insert
+    try:
+        existing = sb_get("knowledge_base",
+            f"select=instruction,content&domain=eq.{domain}&topic=eq.{topic}&limit=1",
+            svc=True)
+        if existing:
+            ex = existing[0]
+            ex_instr = (ex.get("instruction") or "").strip().lower()
+            new_instr = (instruction or "").strip().lower()
+            if ex_instr and new_instr and ex_instr != new_instr:
+                # Contradiction detected -- alert owner, block insert
+                notify(f"[KB CONFLICT] {domain}/{topic}\nExisting: {ex_instr[:120]}\nProposed: {new_instr[:120]}\nAction: BLOCKED -- use kb_update to intentionally overwrite.")
+                return {"ok": False, "conflict": True, "action": "blocked",
+                        "existing_instruction": ex.get("instruction", "")[:200],
+                        "message": "Contradicts existing KB entry. Use kb_update to overwrite intentionally."}
+            elif ex_instr == new_instr:
+                # Near-duplicate -- skip silently
+                return {"ok": True, "action": "skipped_duplicate", "topic": topic}
+    except Exception:
+        pass  # Non-fatal -- proceed with insert if check fails
     tags_list = [t.strip() for t in tags.split(",")] if tags else []
     ok = sb_post("knowledge_base", {"domain": domain, "topic": topic, "instruction": instruction or None,
                                     "content": content or "", "confidence": confidence,
@@ -3287,12 +3307,22 @@ def t_task_add(title: str = "", description: str = "", priority: str = "5",
 def t_kb_update(domain: str, topic: str, instruction: str = "",
                 content: str = "", confidence: str = "medium") -> dict:
     """Upsert a KB entry on domain+topic. Updates if exists, inserts if new. Prevents duplicates.
-    Use instead of add_knowledge when the rule may already exist."""
+    Use instead of add_knowledge when the rule may already exist.
+    TASK-27.C: Logs overwrite diff to Telegram when instruction changes."""
     if not domain or not topic:
         return {"ok": False, "error": "domain and topic required"}
     if not instruction and not content:
         return {"ok": False, "error": "at least one of instruction or content required"}
     try:
+        # TASK-27.C: Check for existing entry -- notify owner if instruction is being changed
+        existing = sb_get("knowledge_base",
+            f"select=instruction&domain=eq.{domain}&topic=eq.{topic}&limit=1",
+            svc=True)
+        if existing:
+            ex_instr = (existing[0].get("instruction") or "").strip()
+            new_instr = (instruction or "").strip()
+            if ex_instr and new_instr and ex_instr.lower() != new_instr.lower():
+                notify(f"[KB UPDATE] {domain}/{topic}\nOld: {ex_instr[:120]}\nNew: {new_instr[:120]}")
         ok = sb_upsert("knowledge_base", {
             "domain": domain, "topic": topic,
             "instruction": instruction or None,
