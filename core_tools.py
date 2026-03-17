@@ -3794,6 +3794,8 @@ TOOLS = {
     "system_map_scan":        {"fn": t_system_map_scan, "perm": "READ", "args": ["trigger"], "desc": "Scan system_map table. trigger=session_start|session_end|manual"},
     "session_start":          {"fn": t_session_start,          "perm": "READ",    "args": [],
                                "desc": "One-call session bootstrap. Returns: health, counts, resume_task (highest priority in_progress -- start here), in_progress_tasks, pending_tasks, recent_mistakes (last 10 all domains), stale_pattern_count, session_md (full SESSION.md static doc for claude.ai bootstrap), system_map. Use get_mistakes(domain=X) for domain-specific lookup before any write."},
+    "tool_stats":             {"fn": t_tool_stats,             "perm": "READ",    "args": ["days"],
+                               "desc": "TASK-26: Per-tool success/fail rate for last N days (default 7). Returns tools sorted by fail_rate desc. fail_rate>0.2 = flagged. Use to identify flaky tools."},
     "checkpoint":             {"fn": t_checkpoint,             "perm": "WRITE",   "args": ["active_task_id", "last_action", "last_result"],
                                "desc": "TASK-28: Write mid-session checkpoint. Call after every subtask gate to prevent context collapse on long tasks. active_task_id=UUID of current task. last_action=brief description of last completed step. last_result=outcome or next step. session_start returns resume_checkpoint field with this data."},
     "session_end":            {"fn": t_session_end,            "perm": "WRITE",   "args": ["summary", "actions", "domain", "patterns", "quality", "skill_file_updated", "force_close", "active_task_ids"],
