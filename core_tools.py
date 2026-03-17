@@ -1901,10 +1901,10 @@ def t_railway_service_info() -> dict:
 
 
 def t_ping_health() -> dict:
-    """Hit the live Railway /health endpoint."""
+    """Hit the live Railway /ping endpoint for fast health check."""
     try:
         railway_url = os.environ.get("RAILWAY_PUBLIC_URL", "https://core-agi-production.up.railway.app")
-        r = httpx.get(f"{railway_url}/health", timeout=10)
+        r = httpx.get(f"{railway_url}/ping", timeout=5)
         return {"ok": r.is_success, "status_code": r.status_code,
                 "response": r.json() if "application/json" in r.headers.get("content-type","") else r.text[:500]}
     except Exception as e:
