@@ -596,14 +596,32 @@ def t_training_status():
 
 def t_trigger_cold_processor(): return run_cold_processor()
 
-def t_backfill_patterns(batch_size: str = "10") -> dict:
-    """TASK-20: Manually trigger pattern_frequency -> knowledge_base backfill.
-    Checks patterns with frequency>=2 and auto_applied=false, generates KB entries via Groq.
-    batch_size: max patterns to process per run (default 10).
+def t_backfill_patterns(batch_size: str = "20") -> dict:
+    """TASK-20: Fire-and-forget backfill of pattern_frequency -> knowledge_base.
+    Starts background thread via GET /backfill, returns job_id immediately.
+    batch_size: max patterns per run (default 20). Poll t_backfill_status for result.
     """
-    from core_train import _backfill_patterns
-    inserted = _backfill_patterns(batch_size=int(batch_size))
-    return {"ok": True, "inserted": inserted}
+    import httpx
+    url = f"{BASE_URL}/backfill"
+    try:
+        r = httpx.get(url, params={"batch_size": int(batch_size)},
+                      headers={"X-MCP-Secret": MCP_SECRET}, timeout=15)
+        return r.json()
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def t_backfill_status() -> dict:
+    """TASK-20: Poll backfill job status. Returns inserted count + done/running/error/idle.
+    Call after t_backfill_patterns. Wait ~30s between polls for large batches.
+    """
+    import httpx
+    url = f"{BASE_URL}/backfill/status"
+    try:
+        r = httpx.get(url, headers={"X-MCP-Secret": MCP_SECRET}, timeout=15)
+        return r.json()
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
 
 
 def t_ingest_knowledge(topic: str, sources: str = "all", max_per_source: int = 20, since_days: int = 7) -> dict:
