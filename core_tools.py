@@ -596,6 +596,15 @@ def t_training_status():
 
 def t_trigger_cold_processor(): return run_cold_processor()
 
+def t_backfill_patterns(batch_size: str = "10") -> dict:
+    """TASK-20: Manually trigger pattern_frequency -> knowledge_base backfill.
+    Checks patterns with frequency>=2 and auto_applied=false, generates KB entries via Groq.
+    batch_size: max patterns to process per run (default 10).
+    """
+    from core_train import _backfill_patterns
+    inserted = _backfill_patterns(batch_size=int(batch_size))
+    return {"ok": True, "inserted": inserted}
+
 
 def t_ingest_knowledge(topic: str, sources: str = "all", max_per_source: int = 20, since_days: int = 7) -> dict:
     """Trigger knowledge ingestion pipeline for a topic.
@@ -3704,6 +3713,8 @@ TOOLS = {
                                "desc": "Return mistakes logged in the last N hours (default 24). Use at session_end to review only this session's errors, not the rolling last-10."},
     "trigger_cold_processor": {"fn": t_trigger_cold_processor, "perm": "WRITE",   "args": [],
                                "desc": "Manually trigger cold processor."},
+    "backfill_patterns":      {"fn": t_backfill_patterns,      "perm": "WRITE",   "args": ["batch_size"],
+                               "desc": "TASK-20: Backfill pattern_frequency entries (freq>=2) into knowledge_base via Groq. batch_size=max per run (default 10)."},
     "ingest_knowledge":       {"fn": t_ingest_knowledge,       "perm": "EXECUTE", "args": ["topic", "sources", "max_per_source", "since_days"],
                                "desc": "Trigger knowledge ingestion pipeline. Fetches topic from public sources (arxiv/docs/medium/reddit/hackernews/stackoverflow), scores by engagement, writes to kb_* tables, injects hot_reflections for CORE to evolve. sources=comma-separated or 'all'. max_per_source=cap per fetcher (default 20). since_days=recency filter (default 7)."},
     "listen":                 {"fn": t_listen,                 "perm": "EXECUTE", "args": [],
