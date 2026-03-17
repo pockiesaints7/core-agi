@@ -313,6 +313,12 @@ def health_ep():
     return t_health()
 
 
+@app.get("/ping")
+def ping():
+    """Fast health check - just confirms server is responding."""
+    return {"ok": True, "service": "CORE v6.0", "ts": datetime.utcnow().isoformat()}
+
+
 @app.get("/state")
 def state_ep():
     from core_tools import t_state
