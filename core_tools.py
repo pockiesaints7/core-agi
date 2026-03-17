@@ -3909,10 +3909,68 @@ def handle_jsonrpc(body: dict, session_id: str = "") -> dict:
                     coerced_args[k] = v
             result = tool["fn"](**{k: v for k, v in coerced_args.items() if k in tool["args"] or not tool["args"]})
             text = json.dumps(result, default=str)
+            # TASK-26.B: Track success in tool_stats (fire-and-forget, non-fatal)
+            _track_tool_stat(tool_name, success=True)
             return ok({"content": [{"type": "text", "text": text}]})
         except Exception as e:
+            # TASK-26.B: Track failure in tool_stats (fire-and-forget, non-fatal)
+            _track_tool_stat(tool_name, success=False, error=str(e)[:200])
             return err(-32603, f"Tool error: {e}")
     return err(-32601, f"Unknown method: {method}")
+
+
+# -- TASK-26: Tool Reliability Tracking ---------------------------------------
+def _track_tool_stat(tool_name: str, success: bool, error: str = None):
+    """Fire-and-forget: upsert tool_stats row for today. Non-fatal -- never raises."""
+    try:
+        from datetime import date
+        today = date.today().isoformat()
+        # Upsert row, then increment the right counter
+        sb_upsert("tool_stats",
+            {"tool_name": tool_name, "date": today, "call_count": 1,
+             "success_count": 1 if success else 0,
+             "fail_count": 0 if success else 1,
+             "last_error": error if not success else None},
+            "tool_name,date")
+    except Exception:
+        pass  # Always non-fatal
+
+
+def t_tool_stats(days: str = "7") -> dict:
+    """TASK-26.C: Per-tool success/fail rate for last N days (default 7).
+    Returns tools sorted by fail_rate descending. Any tool with fail_rate > 0.2 is flagged.
+    Use to identify flaky tools that need investigation."""
+    try:
+        n = int(days) if days else 7
+        from datetime import date, timedelta
+        cutoff = (date.today() - timedelta(days=n)).isoformat()
+        rows = sb_get("tool_stats",
+            f"select=tool_name,date,call_count,success_count,fail_count,last_error&date=gte.{cutoff}&order=date.desc&limit=500",
+            svc=True) or []
+        # Aggregate per tool
+        agg = {}
+        for r in rows:
+            name = r["tool_name"]
+            if name not in agg:
+                agg[name] = {"tool_name": name, "calls": 0, "successes": 0, "failures": 0, "last_error": None}
+            agg[name]["calls"] += r.get("call_count", 0)
+            agg[name]["successes"] += r.get("success_count", 0)
+            agg[name]["failures"] += r.get("fail_count", 0)
+            if r.get("last_error") and not agg[name]["last_error"]:
+                agg[name]["last_error"] = r["last_error"]
+        results = []
+        flagged = []
+        for name, d in agg.items():
+            rate = round(d["failures"] / d["calls"], 3) if d["calls"] > 0 else 0.0
+            entry = {**d, "fail_rate": rate, "health": "ok" if rate <= 0.2 else "flagged"}
+            results.append(entry)
+            if rate > 0.2:
+                flagged.append(name)
+        results.sort(key=lambda x: x["fail_rate"], reverse=True)
+        return {"ok": True, "days": n, "tools_tracked": len(results),
+                "flagged": flagged, "results": results}
+    except Exception as e:
+        return {"ok": False, "error_code": "exception", "message": str(e), "retry_hint": True, "domain": "supabase"}
 
 
 # -- brain layer reconciliation ------------------------------------------------
