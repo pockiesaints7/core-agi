@@ -728,6 +728,65 @@ async def listen_status(req: Request):
     })
 
 
+# -- Backfill job background state -------------------------------------------
+_backfill_job: dict = {}   # {id, status, inserted, checked, started_at, stopped_at, error}
+_backfill_lock = threading.Lock()
+
+def _run_backfill_job(job_id: str, batch_size: int):
+    """Background thread: run _backfill_patterns(), update _backfill_job."""
+    from core_train import _backfill_patterns
+    try:
+        inserted = _backfill_patterns(batch_size=batch_size)
+        with _backfill_lock:
+            _backfill_job["status"] = "done"
+            _backfill_job["inserted"] = inserted
+            _backfill_job["stopped_at"] = datetime.utcnow().isoformat()
+        print(f"[BACKFILL-JOB] job={job_id} done inserted={inserted}")
+    except Exception as e:
+        print(f"[BACKFILL-JOB] job={job_id} error: {e}")
+        with _backfill_lock:
+            _backfill_job["status"] = "error"
+            _backfill_job["error"] = str(e)
+            _backfill_job["stopped_at"] = datetime.utcnow().isoformat()
+
+
+@app.get("/backfill")
+async def backfill_start(req: Request, batch_size: int = 20):
+    """Start backfill job in background. Returns job_id immediately. Poll /backfill/status."""
+    global _backfill_job
+    secret = req.headers.get("X-MCP-Secret", "")
+    if secret != MCP_SECRET:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    with _backfill_lock:
+        if _backfill_job.get("status") == "running":
+            return JSONResponse({"ok": True, "job_id": _backfill_job["id"], "status": "running", "note": "already running"})
+        job_id = str(uuid.uuid4())[:8]
+        _backfill_job = {"id": job_id, "status": "running", "inserted": 0, "started_at": datetime.utcnow().isoformat(), "stopped_at": None, "error": None}
+    t = threading.Thread(target=_run_backfill_job, args=(job_id, batch_size), daemon=True)
+    t.start()
+    print(f"[BACKFILL-JOB] Started job={job_id} batch_size={batch_size}")
+    return JSONResponse({"ok": True, "job_id": job_id, "status": "running", "batch_size": batch_size})
+
+
+@app.get("/backfill/status")
+async def backfill_status(req: Request):
+    """Poll backfill job status. Returns inserted count + done/running/error."""
+    secret = req.headers.get("X-MCP-Secret", "")
+    if secret != MCP_SECRET:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    with _backfill_lock:
+        job = dict(_backfill_job)
+    return JSONResponse({
+        "ok": True,
+        "job_id": job.get("id"),
+        "status": job.get("status", "idle"),
+        "inserted": job.get("inserted", 0),
+        "started_at": job.get("started_at"),
+        "stopped_at": job.get("stopped_at"),
+        "error": job.get("error"),
+    })
+
+
 @app.post("/webhook")
 async def webhook(req: Request):
     try:
