@@ -144,8 +144,8 @@ def t_update_state(key="", value="", reason=""):
                               "actions": [f"{key}={str(value)[:100]} - {reason}"], "interface": "mcp"})
     return {"ok": ok, "key": key}
 
-def t_add_knowledge(domain="", topic="", instruction="", content="", tags="", confidence="medium"):
-    """Add knowledge entry. instruction = behavioral directive for CORE (primary). content = supporting detail. At least one required."""
+def t_add_knowledge(domain="", topic="", instruction="", content="", tags="", confidence="medium", source_type="", source_ref=""):
+    """Add knowledge entry. instruction = behavioral directive for CORE (primary). content = supporting detail. At least one required. source_type=manual|ingested|evolved|session. source_ref=URL or session_id."""
     if not instruction and not content:
         return {"ok": False, "error": "At least one of instruction or content is required"}
     # TASK-27.B: Contradiction + duplicate check before insert
@@ -169,9 +169,14 @@ def t_add_knowledge(domain="", topic="", instruction="", content="", tags="", co
     except Exception:
         pass  # Non-fatal -- proceed with insert if check fails
     tags_list = [t.strip() for t in tags.split(",")] if tags else []
-    ok = sb_post("knowledge_base", {"domain": domain, "topic": topic, "instruction": instruction or None,
-                                    "content": content or "", "confidence": confidence,
-                                    "tags": tags_list, "source": "mcp_session"})
+    row = {"domain": domain, "topic": topic, "instruction": instruction or None,
+            "content": content or "", "confidence": confidence,
+            "tags": tags_list, "source": "mcp_session"}
+    if source_type:
+        row["source_type"] = source_type
+    if source_ref:
+        row["source_ref"] = source_ref
+    ok = sb_post("knowledge_base", row)
     return {"ok": ok, "topic": topic}
 
 def t_set_simulation(instruction: str) -> dict:
@@ -3416,10 +3421,12 @@ def t_task_add(title: str = "", description: str = "", priority: str = "5",
 
 
 def t_kb_update(domain: str, topic: str, instruction: str = "",
-                content: str = "", confidence: str = "medium") -> dict:
+                content: str = "", confidence: str = "medium",
+                source_type: str = "", source_ref: str = "") -> dict:
     """Upsert a KB entry on domain+topic. Updates if exists, inserts if new. Prevents duplicates.
     Use instead of add_knowledge when the rule may already exist.
-    TASK-27.C: Logs overwrite diff to Telegram when instruction changes."""
+    TASK-27.C: Logs overwrite diff to Telegram when instruction changes.
+    TASK-24.B: source_type=manual|ingested|evolved|session, source_ref=URL or session_id."""
     if not domain or not topic:
         return {"ok": False, "error": "domain and topic required"}
     if not instruction and not content:
@@ -3434,13 +3441,18 @@ def t_kb_update(domain: str, topic: str, instruction: str = "",
             new_instr = (instruction or "").strip()
             if ex_instr and new_instr and ex_instr.lower() != new_instr.lower():
                 notify(f"[KB UPDATE] {domain}/{topic}\nOld: {ex_instr[:120]}\nNew: {new_instr[:120]}")
-        ok = sb_upsert("knowledge_base", {
+        row = {
             "domain": domain, "topic": topic,
             "instruction": instruction or None,
             "content": content or "",
             "confidence": confidence,
             "source": "mcp_session",
-        }, "domain,topic")
+        }
+        if source_type:
+            row["source_type"] = source_type
+        if source_ref:
+            row["source_ref"] = source_ref
+        ok = sb_upsert("knowledge_base", row, "domain,topic")
         return {"ok": ok, "domain": domain, "topic": topic, "action": "upserted"}
     except Exception as e:
         return {"ok": False, "error": str(e)}
