@@ -319,6 +319,14 @@ def ping():
     return {"ok": True, "service": "CORE v6.0", "ts": datetime.utcnow().isoformat()}
 
 
+@app.get("/ip")
+def get_outbound_ip():
+    """Return Railway's outbound IP — used for Binance API key IP whitelisting."""
+    import httpx as _httpx
+    r = _httpx.get("https://api.ipify.org", timeout=5)
+    return {"railway_outbound_ip": r.text}
+
+
 @app.get("/state")
 def state_ep():
     from core_tools import t_state
