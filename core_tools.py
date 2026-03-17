@@ -2022,7 +2022,7 @@ def t_stats():
         scores = [min(1.0, max(0.0, float(h["quality_score"]))) for h in hots if h.get("quality_score") is not None]
         avg_quality = round(sum(scores) / len(scores), 2) if scores else None
         counts = get_system_counts()
-        evo_rows = sb_get("evolution_queue", "select=status&limit=500", svc=True) or []
+        evo_rows = sb_get("evolution_queue", "select=status&limit=1000", svc=True) or []
         evo_counts = Counter(e.get("status", "unknown") for e in evo_rows)
         cold_rows = sb_get("cold_reflections", "select=created_at&order=created_at.desc&limit=1", svc=True) or []
         last_cold = cold_rows[0].get("created_at", "never") if cold_rows else "never"
