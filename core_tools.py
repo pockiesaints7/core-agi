@@ -676,47 +676,70 @@ def t_ingest_knowledge(topic: str, sources: str = "all", max_per_source: int = 2
 
 
 def t_listen() -> dict:
-    """LISTEN MODE: fire-and-forget. Starts background listen job on Railway, returns job_id immediately.
+    """LISTEN MODE: Start background listen job directly via globals, no HTTP self-call.
     Call t_listen_result after ~2 minutes to fetch results once job is done.
     SOP: (1) call t_listen -> get job_id, (2) wait, (3) call t_listen_result -> synthesize chunks.
     """
     try:
-        railway_url = os.environ.get("RAILWAY_PUBLIC_URL", "https://core-agi-production.up.railway.app")
-        mcp_secret  = os.environ.get("MCP_SECRET", "")
-        headers     = {"X-MCP-Secret": mcp_secret}
-        r = httpx.get(f"{railway_url}/listen", headers=headers, timeout=15)
-        if r.status_code == 401:
-            return {"ok": False, "error": "Unauthorized - MCP_SECRET mismatch"}
-        r.raise_for_status()
-        job = r.json()
-        print(f"[t_listen] job started: {job.get('job_id')}")
-        return {"ok": True, "job_id": job.get("job_id"), "status": job.get("status"), "note": "Job started. Call t_listen_result in ~2 minutes to fetch results."}
+        import sys
+        import threading
+        import uuid
+        from datetime import datetime
+        
+        # Access core_main globals via sys.modules (avoids circular import)
+        core_main = sys.modules.get('core_main')
+        if not core_main:
+            return {"ok": False, "error": "core_main not loaded"}
+        
+        _listen_job = core_main._listen_job
+        _listen_lock = core_main._listen_lock
+        _run_listen_job = core_main._run_listen_job
+        
+        with _listen_lock:
+            if _listen_job.get("status") == "running":
+                return {"ok": True, "job_id": _listen_job["id"], "status": "running", "note": "already running"}
+            job_id = str(uuid.uuid4())[:8]
+            core_main._listen_job = {"id": job_id, "status": "running", "chunks": [], "started_at": datetime.utcnow().isoformat(), "stop_reason": None}
+        
+        t = threading.Thread(target=_run_listen_job, args=(job_id,), daemon=True)
+        t.start()
+        print(f"[t_listen] job started: {job_id}")
+        return {"ok": True, "job_id": job_id, "status": "running", "note": "Job started. Call t_listen_result in ~2 minutes to fetch results."}
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
 
 def t_listen_result() -> dict:
-    """Fetch current listen job status and results. Call after t_listen to get chunks.
+    """Fetch current listen job status and results directly via globals, no HTTP self-call.
     Returns status (running|done|error), stop_reason, cycles, patterns_found, evolutions_queued, chunks.
     If status=running, wait and call again. If status=done, synthesize chunks into tasks.
     """
     try:
-        railway_url = os.environ.get("RAILWAY_PUBLIC_URL", "https://core-agi-production.up.railway.app")
-        mcp_secret  = os.environ.get("MCP_SECRET", "")
-        headers     = {"X-MCP-Secret": mcp_secret}
-        s = httpx.get(f"{railway_url}/listen/status", headers=headers, timeout=15)
-        s.raise_for_status()
-        status = s.json()
+        import sys
+        
+        # Access core_main globals via sys.modules (avoids circular import)
+        core_main = sys.modules.get('core_main')
+        if not core_main:
+            return {"ok": False, "error": "core_main not loaded"}
+        
+        _listen_lock = core_main._listen_lock
+        
+        with _listen_lock:
+            job = dict(core_main._listen_job)
+        
+        chunks = job.get("chunks", [])
+        cold_runs = [c for c in chunks if isinstance(c, dict) and c.get("type") == "cold_run"]
+        
         return {
             "ok": True,
-            "job_id": status.get("job_id"),
-            "status": status.get("status", "idle"),
-            "stop_reason": status.get("stop_reason"),
-            "cycles": status.get("cycles", 0),
-            "total_patterns_found": status.get("total_patterns_found", 0),
-            "total_evolutions_queued": status.get("total_evolutions_queued", 0),
-            "chunk_count": status.get("chunk_count", 0),
-            "chunks": status.get("chunks", []),
+            "job_id": job.get("id"),
+            "status": job.get("status", "idle"),
+            "stop_reason": job.get("stop_reason"),
+            "cycles": len(cold_runs),
+            "total_patterns_found": sum(c.get("patterns_found", 0) for c in cold_runs),
+            "total_evolutions_queued": sum(c.get("evolutions_queued", 0) for c in cold_runs),
+            "chunk_count": len(chunks),
+            "chunks": chunks,
         }
     except Exception as e:
         return {"ok": False, "error": str(e)}
