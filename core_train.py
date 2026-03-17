@@ -475,6 +475,72 @@ def _groq_kb_content(pattern_key: str, domain: str, frequency: int, src_key: str
         return pattern_key
 
 
+def _backfill_patterns(batch_size: int = 10) -> int:
+    """TASK-20: Backfill pattern_frequency entries (frequency>=2, auto_applied=false)
+    into knowledge_base as KB entries via Groq. Runs after each cold processor batch.
+    Returns count of KB entries inserted.
+    """
+    try:
+        rows = sb_get(
+            "pattern_frequency",
+            "select=id,pattern_key,frequency,domain&frequency=gte.2&auto_applied=eq.false&stale=eq.false&order=frequency.desc",
+            svc=True
+        ) or []
+        if not rows:
+            print("[BACKFILL] No patterns to backfill.")
+            return 0
+
+        # Cap per run to avoid overloading Groq
+        rows = rows[:batch_size]
+        inserted = 0
+
+        for row in rows:
+            key    = row.get("pattern_key", "")[:500]
+            freq   = row.get("frequency", 2)
+            domain = row.get("domain", "general")
+            if not key:
+                continue
+
+            # 20.B: check if KB entry already exists
+            existing = sb_get(
+                "knowledge_base",
+                f"select=id&domain=eq.{domain}&topic=eq.{key[:100]}&limit=1",
+                svc=True
+            )
+            if existing:
+                # Already in KB -- mark auto_applied so we stop checking it
+                sb_upsert("pattern_frequency", {"pattern_key": key, "auto_applied": True}, on_conflict="pattern_key")
+                continue
+
+            # 20.C: generate KB content via Groq
+            content = _groq_kb_content(key, domain, freq, "real")
+            if not content or len(content) < 10:
+                print(f"[BACKFILL] Groq returned empty content for: {key[:60]}")
+                continue
+
+            # 20.D: insert into knowledge_base
+            ok = sb_post("knowledge_base", {
+                "domain":     domain,
+                "topic":      key[:100],
+                "content":    content,
+                "confidence": "medium" if freq < 5 else "high",
+                "tags":       ["backfill", "pattern_frequency"],
+                "source":     "pattern_frequency",
+            })
+            if ok:
+                inserted += 1
+                sb_upsert("pattern_frequency", {"pattern_key": key, "auto_applied": True}, on_conflict="pattern_key")
+                print(f"[BACKFILL] KB entry inserted: [{domain}] {key[:60]} (freq={freq})")
+            else:
+                print(f"[BACKFILL] sb_post failed for: {key[:60]}")
+
+        print(f"[BACKFILL] Done: checked={len(rows)} inserted={inserted}")
+        return inserted
+    except Exception as e:
+        print(f"[BACKFILL] error (non-fatal): {e}")
+        return 0
+
+
 def run_cold_processor():
     try:
         hots = sb_get("hot_reflections",
@@ -607,6 +673,9 @@ def run_cold_processor():
         # TASK-19: Wire gaps_identified into evolution_queue
         gaps_inserted = _reconcile_gaps(hots)
         evolutions_queued += gaps_inserted
+
+        # TASK-20: Backfill pattern_frequency -> knowledge_base
+        _backfill_patterns(batch_size=10)
 
         # Groq synthesizes a meaningful cold reflection summary
         groq_summary = _groq_synthesize_cold(hots, batch_counts, batch_domain)
