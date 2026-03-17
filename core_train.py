@@ -1480,7 +1480,7 @@ def listen_stream():
             evos = sb_get(
                 "evolution_queue",
                 "select=id,change_type,change_summary,confidence,pattern_key,domain"
-                "&status=eq.pending&order=confidence.desc&limit=50",
+                " &status=eq.pending&order=confidence.desc&limit=50",
                 svc=True
             ) or []
             yield json.dumps({
