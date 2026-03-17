@@ -630,37 +630,66 @@ def t_ingest_knowledge(topic: str, sources: str = "all", max_per_source: int = 2
 
 
 def t_listen() -> dict:
-    """LISTEN MODE: hit GET /listen stream, buffer all chunks, return full payload.
-    Blocks until CORE emits stop signal (drained|groq_limit|timeout).
-    Claude reads all chunks and synthesizes into tasks + session_end.
+    """LISTEN MODE: start background listen job on Railway, poll until done.
+    Non-blocking: fires POST /listen to start job, then polls GET /listen/status
+    every 30s with short timeouts MCP can handle. Returns when stop signal received.
+    Claude reads chunks and synthesizes into tasks + session_end.
     """
     try:
         railway_url = os.environ.get("RAILWAY_PUBLIC_URL", "https://core-agi-production.up.railway.app")
         mcp_secret  = os.environ.get("MCP_SECRET", "")
-        chunks = []
-        with httpx.stream(
-            "GET", f"{railway_url}/listen",
-            headers={"X-MCP-Secret": mcp_secret},
-            timeout=3700,
-        ) as r:
-            for line in r.iter_lines():
-                line = line.strip()
-                if line:
-                    try:
-                        chunks.append(json.loads(line))
-                    except Exception:
-                        chunks.append({"raw": line})
-        stop = next((c for c in chunks if c.get("type") == "stop"), {})
-        cold_runs = [c for c in chunks if c.get("type") == "cold_run"]
-        total_patterns = sum(c.get("patterns_found", 0) for c in cold_runs)
-        total_evos     = sum(c.get("evolutions_queued", 0) for c in cold_runs)
+        headers     = {"X-MCP-Secret": mcp_secret}
+
+        # 1. Start the listen job (returns immediately)
+        r = httpx.get(f"{railway_url}/listen", headers=headers, timeout=15)
+        if r.status_code == 401:
+            return {"ok": False, "error": "Unauthorized — MCP_SECRET mismatch"}
+        r.raise_for_status()
+        job = r.json()
+        job_id = job.get("job_id", "?")
+        print(f"[t_listen] job started: {job_id}")
+
+        # 2. Poll /listen/status until done (max 90 min)
+        deadline = time.time() + 5400
+        poll_interval = 30  # seconds between polls
+        last_chunk_count = 0
+
+        while time.time() < deadline:
+            time.sleep(poll_interval)
+            try:
+                s = httpx.get(f"{railway_url}/listen/status", headers=headers, timeout=20)
+                status = s.json()
+            except Exception as poll_err:
+                print(f"[t_listen] poll error (non-fatal): {poll_err}")
+                continue
+
+            current_count = status.get("chunk_count", 0)
+            if current_count != last_chunk_count:
+                print(f"[t_listen] job={job_id} status={status.get('status')} chunks={current_count} patterns={status.get('total_patterns_found')}")
+                last_chunk_count = current_count
+
+            if status.get("status") in ("done", "error"):
+                return {
+                    "ok": True,
+                    "job_id": job_id,
+                    "stop_reason": status.get("stop_reason", "unknown"),
+                    "cycles": status.get("cycles", 0),
+                    "total_patterns_found": status.get("total_patterns_found", 0),
+                    "total_evolutions_queued": status.get("total_evolutions_queued", 0),
+                    "chunks": status.get("chunks", []),
+                }
+
+        # Timeout — return whatever we have
+        s = httpx.get(f"{railway_url}/listen/status", headers=headers, timeout=20)
+        status = s.json()
         return {
             "ok": True,
-            "stop_reason": stop.get("reason", "unknown"),
-            "cycles": stop.get("cycle", len(cold_runs)),
-            "total_patterns_found": total_patterns,
-            "total_evolutions_queued": total_evos,
-            "chunks": chunks,
+            "job_id": job_id,
+            "stop_reason": "poll_timeout",
+            "cycles": status.get("cycles", 0),
+            "total_patterns_found": status.get("total_patterns_found", 0),
+            "total_evolutions_queued": status.get("total_evolutions_queued", 0),
+            "chunks": status.get("chunks", []),
         }
     except Exception as e:
         return {"ok": False, "error": str(e)}
