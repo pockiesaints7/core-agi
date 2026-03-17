@@ -4403,3 +4403,12 @@ def t_crypto_trade(symbol: str = "", side: str = "", quantity: str = "",
         "fills":    result.get("fills", []),
     }
 
+
+
+# ── TASK-4: Register Binance tools in TOOLS dict (must be after function defs) ─
+TOOLS["crypto_price"]   = {"fn": t_crypto_price,   "perm": "READ",    "args": ["symbol"],
+                            "desc": "Get current Binance spot price + 24h stats for a symbol. symbol=e.g. BTCUSDT, ETHUSDT, BNBUSDT (default BTCUSDT). No API key required. Returns price, 24h change %, high, low, volume."}
+TOOLS["crypto_balance"] = {"fn": t_crypto_balance, "perm": "READ",    "args": ["asset"],
+                            "desc": "Get Binance account balances. Requires BINANCE_API_KEY + BINANCE_SECRET_KEY env vars. asset=optional filter e.g. BTC. Returns all non-zero balances if asset empty."}
+TOOLS["crypto_trade"]   = {"fn": t_crypto_trade,   "perm": "EXECUTE", "args": ["symbol", "side", "quantity", "confirm", "order_type"],
+                            "desc": "Execute a Binance spot trade. REQUIRES confirm=CONFIRM to execute -- omit for dry run showing estimated value. symbol=e.g. BTCUSDT. side=BUY or SELL. quantity=base asset amount. order_type=MARKET (default) or LIMIT. Logs all trades to Supabase trades table. Sends Telegram notify on execution. NEVER execute without owner CONFIRM."}
