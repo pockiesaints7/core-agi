@@ -2022,8 +2022,17 @@ def t_stats():
         scores = [min(1.0, max(0.0, float(h["quality_score"]))) for h in hots if h.get("quality_score") is not None]
         avg_quality = round(sum(scores) / len(scores), 2) if scores else None
         counts = get_system_counts()
-        evo_rows = sb_get("evolution_queue", "select=status&limit=1000", svc=True) or []
-        evo_counts = Counter(e.get("status", "unknown") for e in evo_rows)
+        
+        # Evolution queue counts - use COUNT queries per status (scales to millions of rows)
+        evo_pending = sb_get("evolution_queue", "select=count&status=eq.pending", svc=True)
+        evo_applied = sb_get("evolution_queue", "select=count&status=eq.applied", svc=True)
+        evo_rejected = sb_get("evolution_queue", "select=count&status=eq.rejected", svc=True)
+        evo_counts = {
+            "pending": evo_pending[0]["count"] if evo_pending else 0,
+            "applied": evo_applied[0]["count"] if evo_applied else 0,
+            "rejected": evo_rejected[0]["count"] if evo_rejected else 0,
+        }
+        
         cold_rows = sb_get("cold_reflections", "select=created_at&order=created_at.desc&limit=1", svc=True) or []
         last_cold = cold_rows[0].get("created_at", "never") if cold_rows else "never"
         return {
@@ -2036,7 +2045,7 @@ def t_stats():
             "domain_distribution": dict(domain_counts.most_common(8)),
             "mistake_distribution": dict(mistake_counts.most_common(6)),
             "top_patterns": [{"pattern": p.get("pattern_key","")[:80], "freq": p.get("frequency",0), "domain": p.get("domain","")} for p in patterns],
-            "evolution_queue": dict(evo_counts),
+            "evolution_queue": evo_counts,
             "last_cold_processor_run": last_cold,
             "quality_trend_7d": t_get_quality_trend("7"),
         }
