@@ -630,65 +630,46 @@ def t_ingest_knowledge(topic: str, sources: str = "all", max_per_source: int = 2
 
 
 def t_listen() -> dict:
-    """LISTEN MODE: start background listen job on Railway, poll until done.
-    Non-blocking: fires POST /listen to start job, then polls GET /listen/status
-    every 30s with short timeouts MCP can handle. Returns when stop signal received.
-    Claude reads chunks and synthesizes into tasks + session_end.
+    """LISTEN MODE: fire-and-forget. Starts background listen job on Railway, returns job_id immediately.
+    Call t_listen_result after ~2 minutes to fetch results once job is done.
+    SOP: (1) call t_listen -> get job_id, (2) wait, (3) call t_listen_result -> synthesize chunks.
     """
     try:
         railway_url = os.environ.get("RAILWAY_PUBLIC_URL", "https://core-agi-production.up.railway.app")
         mcp_secret  = os.environ.get("MCP_SECRET", "")
         headers     = {"X-MCP-Secret": mcp_secret}
-
-        # 1. Start the listen job (returns immediately)
         r = httpx.get(f"{railway_url}/listen", headers=headers, timeout=15)
         if r.status_code == 401:
-            return {"ok": False, "error": "Unauthorized — MCP_SECRET mismatch"}
+            return {"ok": False, "error": "Unauthorized - MCP_SECRET mismatch"}
         r.raise_for_status()
         job = r.json()
-        job_id = job.get("job_id", "?")
-        print(f"[t_listen] job started: {job_id}")
+        print(f"[t_listen] job started: {job.get('job_id')}")
+        return {"ok": True, "job_id": job.get("job_id"), "status": job.get("status"), "note": "Job started. Call t_listen_result in ~2 minutes to fetch results."}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
 
-        # 2. Poll /listen/status until done (max 90 min)
-        deadline = time.time() + 5400
-        poll_interval = 30  # seconds between polls
-        last_chunk_count = 0
 
-        while time.time() < deadline:
-            time.sleep(poll_interval)
-            try:
-                s = httpx.get(f"{railway_url}/listen/status", headers=headers, timeout=20)
-                status = s.json()
-            except Exception as poll_err:
-                print(f"[t_listen] poll error (non-fatal): {poll_err}")
-                continue
-
-            current_count = status.get("chunk_count", 0)
-            if current_count != last_chunk_count:
-                print(f"[t_listen] job={job_id} status={status.get('status')} chunks={current_count} patterns={status.get('total_patterns_found')}")
-                last_chunk_count = current_count
-
-            if status.get("status") in ("done", "error"):
-                return {
-                    "ok": True,
-                    "job_id": job_id,
-                    "stop_reason": status.get("stop_reason", "unknown"),
-                    "cycles": status.get("cycles", 0),
-                    "total_patterns_found": status.get("total_patterns_found", 0),
-                    "total_evolutions_queued": status.get("total_evolutions_queued", 0),
-                    "chunks": status.get("chunks", []),
-                }
-
-        # Timeout — return whatever we have
-        s = httpx.get(f"{railway_url}/listen/status", headers=headers, timeout=20)
+def t_listen_result() -> dict:
+    """Fetch current listen job status and results. Call after t_listen to get chunks.
+    Returns status (running|done|error), stop_reason, cycles, patterns_found, evolutions_queued, chunks.
+    If status=running, wait and call again. If status=done, synthesize chunks into tasks.
+    """
+    try:
+        railway_url = os.environ.get("RAILWAY_PUBLIC_URL", "https://core-agi-production.up.railway.app")
+        mcp_secret  = os.environ.get("MCP_SECRET", "")
+        headers     = {"X-MCP-Secret": mcp_secret}
+        s = httpx.get(f"{railway_url}/listen/status", headers=headers, timeout=15)
+        s.raise_for_status()
         status = s.json()
         return {
             "ok": True,
-            "job_id": job_id,
-            "stop_reason": "poll_timeout",
+            "job_id": status.get("job_id"),
+            "status": status.get("status", "idle"),
+            "stop_reason": status.get("stop_reason"),
             "cycles": status.get("cycles", 0),
             "total_patterns_found": status.get("total_patterns_found", 0),
             "total_evolutions_queued": status.get("total_evolutions_queued", 0),
+            "chunk_count": status.get("chunk_count", 0),
             "chunks": status.get("chunks", []),
         }
     except Exception as e:
