@@ -4236,3 +4236,169 @@ def _reconcile_skeleton_docs(rows: list, inserted: list, tombstoned: list) -> No
     except Exception as e:
         print(f"[SMAP] _reconcile_skeleton_docs error: {e}")
 
+
+
+# ── TASK-4: Binance Integration ───────────────────────────────────────────────
+
+import hmac as _hmac
+import hashlib as _hashlib
+import time as _time
+import urllib.parse as _urlparse
+
+def _binance_sign(secret: str, params: dict) -> str:
+    """Sign Binance request with HMAC-SHA256."""
+    qs = _urlparse.urlencode(params)
+    return _hmac.new(secret.encode(), qs.encode(), _hashlib.sha256).hexdigest()
+
+def _binance_headers(api_key: str) -> dict:
+    return {"X-MBX-APIKEY": api_key, "Content-Type": "application/x-www-form-urlencoded"}
+
+def _binance_get(path: str, params: dict = None) -> dict:
+    """Unsigned Binance GET (public endpoints)."""
+    import httpx as _httpx
+    try:
+        r = _httpx.get(f"https://api.binance.com{path}", params=params or {}, timeout=10)
+        return r.json()
+    except Exception as e:
+        return {"error": str(e)}
+
+def _binance_signed_get(path: str, params: dict) -> dict:
+    """Signed Binance GET (account endpoints)."""
+    import httpx as _httpx
+    api_key = os.getenv("BINANCE_API_KEY", "")
+    secret  = os.getenv("BINANCE_SECRET_KEY", "")
+    if not api_key or not secret:
+        return {"error": "BINANCE_API_KEY or BINANCE_SECRET_KEY not set"}
+    params["timestamp"] = int(_time.time() * 1000)
+    params["signature"] = _binance_sign(secret, params)
+    try:
+        r = _httpx.get(f"https://api.binance.com{path}", params=params,
+                       headers=_binance_headers(api_key), timeout=10)
+        return r.json()
+    except Exception as e:
+        return {"error": str(e)}
+
+def _binance_signed_post(path: str, params: dict) -> dict:
+    """Signed Binance POST (order endpoints)."""
+    import httpx as _httpx
+    api_key = os.getenv("BINANCE_API_KEY", "")
+    secret  = os.getenv("BINANCE_SECRET_KEY", "")
+    if not api_key or not secret:
+        return {"error": "BINANCE_API_KEY or BINANCE_SECRET_KEY not set"}
+    params["timestamp"] = int(_time.time() * 1000)
+    params["signature"] = _binance_sign(secret, params)
+    try:
+        r = _httpx.post(f"https://api.binance.com{path}", data=params,
+                        headers=_binance_headers(api_key), timeout=10)
+        return r.json()
+    except Exception as e:
+        return {"error": str(e)}
+
+
+def t_crypto_price(symbol: str = "BTCUSDT") -> dict:
+    """Get current Binance spot price for a symbol. symbol=e.g. BTCUSDT, BNBUSDT, ETHUSDT."""
+    symbol = symbol.upper().replace("/", "").replace("-", "")
+    data = _binance_get("/api/v3/ticker/price", {"symbol": symbol})
+    if "error" in data:
+        return {"ok": False, "error": data["error"]}
+    if "price" not in data:
+        return {"ok": False, "error": f"Symbol not found or invalid: {symbol}", "raw": data}
+    price = float(data["price"])
+    # Also fetch 24h stats
+    stats = _binance_get("/api/v3/ticker/24hr", {"symbol": symbol})
+    result = {"ok": True, "symbol": symbol, "price": price}
+    if "priceChangePercent" in stats:
+        result["change_24h_pct"] = float(stats["priceChangePercent"])
+        result["high_24h"] = float(stats["highPrice"])
+        result["low_24h"] = float(stats["lowPrice"])
+        result["volume_24h"] = float(stats["volume"])
+    return result
+
+
+def t_crypto_balance(asset: str = "") -> dict:
+    """Get Binance account balances. asset=optional filter e.g. BTC. Returns all non-zero balances if empty."""
+    data = _binance_signed_get("/api/v3/account", {"recvWindow": 5000})
+    if "error" in data:
+        return {"ok": False, "error": data["error"]}
+    if "balances" not in data:
+        return {"ok": False, "error": "Unexpected response", "raw": data}
+    balances = [
+        {"asset": b["asset"], "free": float(b["free"]), "locked": float(b["locked"])}
+        for b in data["balances"]
+        if float(b["free"]) > 0 or float(b["locked"]) > 0
+    ]
+    if asset:
+        balances = [b for b in balances if b["asset"].upper() == asset.upper()]
+    return {"ok": True, "balances": balances, "count": len(balances)}
+
+
+def t_crypto_trade(symbol: str = "", side: str = "", quantity: str = "",
+                   confirm: str = "", order_type: str = "MARKET") -> dict:
+    """Execute a Binance spot trade. REQUIRES confirm='CONFIRM' to execute.
+    symbol=e.g. BTCUSDT. side=BUY or SELL. quantity=amount of BASE asset.
+    order_type=MARKET (default) or LIMIT (requires price param).
+    NEVER executes without explicit confirm='CONFIRM' from owner."""
+    if not symbol or not side or not quantity:
+        return {"ok": False, "error": "symbol, side, and quantity are all required"}
+    if confirm != "CONFIRM":
+        # Dry run -- show what would be executed
+        price_data = t_crypto_price(symbol)
+        est_price = price_data.get("price", "unknown")
+        est_value = float(quantity) * float(est_price) if est_price != "unknown" else "unknown"
+        return {
+            "ok": False,
+            "dry_run": True,
+            "message": f"DRY RUN -- pass confirm='CONFIRM' to execute",
+            "would_execute": {
+                "symbol": symbol.upper(),
+                "side": side.upper(),
+                "quantity": quantity,
+                "order_type": order_type,
+                "estimated_price_usdt": est_price,
+                "estimated_value_usdt": est_value,
+            }
+        }
+    # Execute trade
+    symbol = symbol.upper().replace("/", "").replace("-", "")
+    side   = side.upper()
+    if side not in ("BUY", "SELL"):
+        return {"ok": False, "error": "side must be BUY or SELL"}
+    params = {
+        "symbol":   symbol,
+        "side":     side,
+        "type":     order_type.upper(),
+        "quantity": quantity,
+    }
+    result = _binance_signed_post("/api/v3/order", params)
+    if "orderId" not in result:
+        return {"ok": False, "error": "Order failed", "raw": result}
+    # Log to Supabase trades table
+    try:
+        fills = result.get("fills", [])
+        avg_price = (
+            sum(float(f["price"]) * float(f["qty"]) for f in fills) /
+            sum(float(f["qty"]) for f in fills)
+        ) if fills else None
+        sb_post("trades", {
+            "order_id":    str(result["orderId"]),
+            "symbol":      symbol,
+            "side":        side,
+            "quantity":    float(quantity),
+            "price":       avg_price,
+            "status":      result.get("status", "UNKNOWN"),
+            "confirmed_by": "ki",
+            "raw_response": result,
+        })
+    except Exception as log_err:
+        print(f"[BINANCE] trade log error: {log_err}")
+    notify(f"[TRADE EXECUTED] {side} {quantity} {symbol}\nOrder ID: {result['orderId']}\nStatus: {result.get('status')}")
+    return {
+        "ok":       True,
+        "order_id": result["orderId"],
+        "symbol":   symbol,
+        "side":     side,
+        "quantity": quantity,
+        "status":   result.get("status"),
+        "fills":    result.get("fills", []),
+    }
+
