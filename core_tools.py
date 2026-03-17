@@ -1273,9 +1273,27 @@ def t_session_start() -> dict:
             "live_tool_count": len(TOOLS),
             "system_map_drift": drift,
             "system_map": smap,
+            "resume_checkpoint": _get_resume_checkpoint(resume_task_obj),
         }
     except Exception as e:
         return {"ok": False, "error": str(e)}
+
+
+def _get_resume_checkpoint(resume_task_obj: dict) -> dict:
+    """TASK-28.C: Fetch checkpoint_data from recent sessions for active resume_task.
+    Returns checkpoint dict if found, else None."""
+    try:
+        if not resume_task_obj:
+            return None
+        rows = sb_get("sessions",
+            "select=checkpoint_data,checkpoint_ts&order=created_at.desc&limit=5",
+            svc=True) or []
+        for row in rows:
+            if row.get("checkpoint_data"):
+                return row["checkpoint_data"]
+        return None
+    except Exception:
+        return None
 
 
 # -- TASK-28: Mid-Session State Checkpoint -----------------------------------
