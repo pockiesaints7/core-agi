@@ -3912,12 +3912,7 @@ TOOLS = {
                                  "desc": "Pure signal fetcher for Claude Desktop architect synthesis. Call when owner says 'synthesize'. Returns all accumulated signals: pending evolutions, top patterns, cold reflection themes, hot gaps, open tasks. NO Groq. NO auto task insertion. Claude reads the signals in chat, acts as architect thinking 6 months ahead, then calls task_add for each new task directly. Groq owns hot_reflection + cold_processor. Claude owns synthesis and blueprint."},
     "project_list":           {"fn": t_project_list,           "perm": "READ",    "args": [],
                                "desc": "List all registered projects: project_id, name, status, last_indexed, folder_path."},
-    "crypto_price":           {"fn": t_crypto_price,           "perm": "READ",    "args": ["symbol"],
-                               "desc": "Get current Binance spot price + 24h stats for a symbol. symbol=e.g. BTCUSDT, ETHUSDT, BNBUSDT (default BTCUSDT). No API key required. Returns price, 24h change %, high, low, volume."},
-    "crypto_balance":         {"fn": t_crypto_balance,         "perm": "READ",    "args": ["asset"],
-                               "desc": "Get Binance account balances. Requires BINANCE_API_KEY + BINANCE_SECRET_KEY env vars. asset=optional filter e.g. BTC. Returns all non-zero balances if asset empty."},
-    "crypto_trade":           {"fn": t_crypto_trade,           "perm": "EXECUTE", "args": ["symbol", "side", "quantity", "confirm", "order_type"],
-                               "desc": "Execute a Binance spot trade. REQUIRES confirm=CONFIRM to execute -- omit for dry run showing estimated value. symbol=e.g. BTCUSDT. side=BUY or SELL. quantity=base asset amount. order_type=MARKET (default) or LIMIT. Logs all trades to Supabase trades table. Sends Telegram notify on execution. NEVER execute without owner CONFIRM."},
+
     "project_get":            {"fn": t_project_get,            "perm": "READ",    "args": ["project_ids"],
                                "desc": "Load full context for one or more projects. project_ids=comma-separated slugs. Returns context_md ready for session injection."},
     "project_search":         {"fn": t_project_search,         "perm": "READ",    "args": ["project_id", "query"],
