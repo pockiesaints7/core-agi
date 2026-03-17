@@ -298,20 +298,12 @@ async def ingest_status():
 def root():
     counts = get_system_counts()
     step = get_resume_task()
-    try:
-        backlog_count = int(httpx.get(
-            f"{SUPABASE_URL}/rest/v1/backlog?select=id&limit=1",
-            headers=_sbh_count_svc(), timeout=10
-        ).headers.get("content-range", "*/0").split("/")[-1])
-    except Exception:
-        backlog_count = -1
     return {
         "service": "CORE v6.0",
         "step": step,
         "knowledge": counts.get("knowledge_base", 0),
         "sessions": counts.get("sessions", 0),
         "mistakes": counts.get("mistakes", 0),
-        "backlog_items": backlog_count,
     }
 
 
