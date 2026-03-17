@@ -1538,3 +1538,100 @@ def listen_stream():
         _time.sleep(60)  # 1 min between cycles
 
     yield json.dumps({"type": "stop", "reason": "timeout", "cycle": cycle}) + "\n"
+
+
+# ── TASK-4: Binance Price Monitor ─────────────────────────────────────────────
+
+import threading as _threading
+
+# Config — override via Railway env vars
+_PRICE_MONITOR_SYMBOLS    = os.getenv("BINANCE_WATCH_SYMBOLS", "BTCUSDT,ETHUSDT,BNBUSDT").split(",")
+_PRICE_ALERT_THRESHOLD    = float(os.getenv("BINANCE_ALERT_THRESHOLD_PCT", "3.0"))  # % change triggers alert
+_PRICE_MONITOR_INTERVAL   = int(os.getenv("BINANCE_MONITOR_INTERVAL_S", "60"))      # poll every 60s
+_price_monitor_last_prices: dict = {}   # symbol -> last known price
+_price_monitor_running     = False
+
+
+def _fetch_price(symbol: str) -> float | None:
+    """Fetch current Binance price for symbol. Returns None on error."""
+    try:
+        import httpx as _httpx
+        r = _httpx.get(
+            "https://api.binance.com/api/v3/ticker/price",
+            params={"symbol": symbol},
+            timeout=8,
+        )
+        data = r.json()
+        return float(data["price"]) if "price" in data else None
+    except Exception as e:
+        print(f"[PRICE] fetch error {symbol}: {e}")
+        return None
+
+
+def price_monitor_loop():
+    """
+    Background price monitoring thread.
+    Polls Binance every BINANCE_MONITOR_INTERVAL_S seconds.
+    Sends Telegram alert when price moves > BINANCE_ALERT_THRESHOLD_PCT%.
+    Stores latest prices in Supabase market_signals table.
+    """
+    global _price_monitor_running, _price_monitor_last_prices
+    _price_monitor_running = True
+    print(f"[PRICE] monitor started — symbols={_PRICE_MONITOR_SYMBOLS} threshold={_PRICE_ALERT_THRESHOLD}% interval={_PRICE_MONITOR_INTERVAL}s")
+
+    while _price_monitor_running:
+        for symbol in _PRICE_MONITOR_SYMBOLS:
+            symbol = symbol.strip().upper()
+            if not symbol:
+                continue
+            current = _fetch_price(symbol)
+            if current is None:
+                continue
+
+            last = _price_monitor_last_prices.get(symbol)
+            if last is not None:
+                change_pct = ((current - last) / last) * 100
+                if abs(change_pct) >= _PRICE_ALERT_THRESHOLD:
+                    direction = "UP" if change_pct > 0 else "DOWN"
+                    msg = (
+                        f"[PRICE ALERT] {symbol} {direction} {change_pct:+.2f}%\n"
+                        f"Current: {current:,.4f} USDT\n"
+                        f"Previous: {last:,.4f} USDT\n"
+                        f"Change: {current - last:+,.4f} USDT"
+                    )
+                    print(f"[PRICE] {msg}")
+                    try:
+                        from core_config import notify
+                        notify(msg)
+                    except Exception as ne:
+                        print(f"[PRICE] notify error: {ne}")
+                    # Log to Supabase market_signals
+                    try:
+                        sb_post_critical("market_signals", {
+                            "signal_type": "price_alert",
+                            "token_symbol": symbol,
+                            "chain": "CEX",
+                            "data": {
+                                "price": current,
+                                "previous": last,
+                                "change_pct": round(change_pct, 4),
+                                "direction": direction,
+                            },
+                        })
+                    except Exception as se:
+                        print(f"[PRICE] supabase log error: {se}")
+
+            _price_monitor_last_prices[symbol] = current
+            print(f"[PRICE] {symbol} = {current:,.4f} USDT")
+
+        _threading.Event().wait(_PRICE_MONITOR_INTERVAL)
+
+    print("[PRICE] monitor stopped")
+
+
+def start_price_monitor():
+    """Start price monitor in background thread. Called from startup."""
+    t = _threading.Thread(target=price_monitor_loop, daemon=True, name="price_monitor")
+    t.start()
+    return t
+
