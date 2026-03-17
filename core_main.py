@@ -651,24 +651,81 @@ def debug_real():
         return {"ok": False, "error": str(e), "trace": traceback.format_exc()}
 
 
+# -- Listen mode background state -------------------------------------------
+_listen_job: dict = {}   # {id, status, chunks, started_at, stopped_at, stop_reason}
+_listen_lock = threading.Lock()
+
+def _run_listen_job(job_id: str):
+    """Background thread: drain listen_stream(), accumulate chunks, update _listen_job."""
+    from core_train import listen_stream
+    chunks = []
+    try:
+        for chunk in listen_stream():
+            with _listen_lock:
+                _listen_job["chunks"] = _listen_job.get("chunks", []) + [chunk]
+                parsed = {}
+                try: parsed = json.loads(chunk) if isinstance(chunk, str) else chunk
+                except Exception: pass
+                if parsed.get("type") == "stop":
+                    _listen_job["status"] = "done"
+                    _listen_job["stop_reason"] = parsed.get("reason", "unknown")
+                    _listen_job["stopped_at"] = datetime.utcnow().isoformat()
+                    print(f"[LISTEN] job={job_id} done reason={parsed.get('reason')}")
+                    return
+    except Exception as e:
+        print(f"[LISTEN] job={job_id} error: {e}")
+        with _listen_lock:
+            _listen_job["status"] = "error"
+            _listen_job["error"] = str(e)
+            _listen_job["stopped_at"] = datetime.utcnow().isoformat()
+
+
 @app.get("/listen")
 async def listen_mode(req: Request):
-    """LISTEN MODE: stream cold processor + evolution queue signals as NDJSON.
-    Claude calls this once, reads the full stream, synthesizes into tasks at stop signal.
-    Stop signals emitted by listen_stream(): drained | groq_limit | timeout (1h).
+    """LISTEN MODE: start background listen job, return job_id immediately.
+    Poll GET /listen/status for results. Replaces blocking StreamingResponse.
     Auth: X-MCP-Secret header required.
     """
+    global _listen_job
     secret = req.headers.get("X-MCP-Secret", "")
     if secret != MCP_SECRET:
         raise HTTPException(status_code=401, detail="Unauthorized")
 
-    from core_train import listen_stream
+    with _listen_lock:
+        if _listen_job.get("status") == "running":
+            return JSONResponse({"ok": True, "job_id": _listen_job["id"], "status": "running", "note": "already running"})
+        job_id = str(uuid.uuid4())[:8]
+        _listen_job = {"id": job_id, "status": "running", "chunks": [], "started_at": datetime.utcnow().isoformat(), "stop_reason": None}
 
-    def _generate():
-        for chunk in listen_stream():
-            yield chunk
+    t = threading.Thread(target=_run_listen_job, args=(job_id,), daemon=True)
+    t.start()
+    print(f"[LISTEN] Started job={job_id}")
+    return JSONResponse({"ok": True, "job_id": job_id, "status": "running"})
 
-    return StreamingResponse(_generate(), media_type="application/x-ndjson")
+
+@app.get("/listen/status")
+async def listen_status(req: Request):
+    """Poll listen job status. Returns current chunks + done/running/error status."""
+    secret = req.headers.get("X-MCP-Secret", "")
+    if secret != MCP_SECRET:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    with _listen_lock:
+        job = dict(_listen_job)
+    chunks = job.get("chunks", [])
+    cold_runs = [c for c in chunks if isinstance(c, dict) and c.get("type") == "cold_run"]
+    return JSONResponse({
+        "ok": True,
+        "job_id": job.get("id"),
+        "status": job.get("status", "idle"),
+        "stop_reason": job.get("stop_reason"),
+        "started_at": job.get("started_at"),
+        "stopped_at": job.get("stopped_at"),
+        "chunk_count": len(chunks),
+        "cycles": len(cold_runs),
+        "total_patterns_found": sum(c.get("patterns_found", 0) for c in cold_runs),
+        "total_evolutions_queued": sum(c.get("evolutions_queued", 0) for c in cold_runs),
+        "chunks": chunks,
+    })
 
 
 @app.post("/webhook")
