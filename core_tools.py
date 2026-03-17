@@ -3671,17 +3671,35 @@ def t_predict_failure(operation: str = "", context: str = "", domain: str = "") 
 
 # -- TASK-26: Tool Reliability Tracking ---------------------------------------
 def _track_tool_stat(tool_name: str, success: bool, error: str = None):
-    """Fire-and-forget: upsert tool_stats row for today. Non-fatal -- never raises."""
+    """Fire-and-forget: increment tool_stats counters for today. Non-fatal -- never raises."""
     try:
         from datetime import date
         today = date.today().isoformat()
-        # Upsert row, then increment the right counter
-        sb_upsert("tool_stats",
-            {"tool_name": tool_name, "date": today, "call_count": 1,
-             "success_count": 1 if success else 0,
-             "fail_count": 0 if success else 1,
-             "last_error": error if not success else None},
-            "tool_name,date")
+        # Fetch existing row
+        existing = sb_get("tool_stats", 
+            f"select=call_count,success_count,fail_count&tool_name=eq.{tool_name}&date=eq.{today}",
+            svc=True)
+        if existing and len(existing) > 0:
+            # Row exists -- increment counters
+            row = existing[0]
+            new_data = {
+                "call_count": row["call_count"] + 1,
+                "success_count": row["success_count"] + (1 if success else 0),
+                "fail_count": row["fail_count"] + (0 if success else 1),
+            }
+            if not success and error:
+                new_data["last_error"] = error
+            sb_patch("tool_stats", f"tool_name=eq.{tool_name}&date=eq.{today}", new_data)
+        else:
+            # Row doesn't exist -- insert initial values
+            sb_insert("tool_stats", {
+                "tool_name": tool_name,
+                "date": today,
+                "call_count": 1,
+                "success_count": 1 if success else 0,
+                "fail_count": 0 if success else 1,
+                "last_error": error if not success else None
+            })
     except Exception:
         pass  # Always non-fatal
 
