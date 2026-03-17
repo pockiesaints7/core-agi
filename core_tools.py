@@ -1369,8 +1369,7 @@ def t_multi_patch(path: str, patches: str, message: str, repo: str = "") -> dict
                 applied.append({"index": i, "old_str": old[:80],
                                  "note": hint or "exact_match"})
         if not applied:
-            return {"ok": False, "error": "No patches applied",
-                    "skipped": skipped, "skipped_details": skipped}
+            return {"ok": False, "error_code": "no_patches_applied", "message": "No patches applied -- all old_str not found or ambiguous", "retry_hint": False, "domain": "github", "skipped": skipped}
         if path.endswith(".py"):
             import py_compile, tempfile as _tmpf
             with _tmpf.NamedTemporaryFile(mode="w", suffix=".py", delete=False, encoding="utf-8") as tf:
@@ -1379,7 +1378,7 @@ def t_multi_patch(path: str, patches: str, message: str, repo: str = "") -> dict
                 py_compile.compile(tmp, doraise=True)
             except py_compile.PyCompileError as e:
                 import os; os.unlink(tmp)
-                return {"ok": False, "error": f"Syntax error (patch not pushed): {e}"}
+                return {"ok": False, "error_code": "syntax_error", "message": f"Syntax error (patch not pushed): {e}", "retry_hint": False, "domain": "github"}
             finally:
                 import os
                 if os.path.exists(tmp): os.unlink(tmp)
@@ -1388,7 +1387,7 @@ def t_multi_patch(path: str, patches: str, message: str, repo: str = "") -> dict
                 "details": applied, "skipped_details": skipped,
                 "commit": commit_sha[:12] if commit_sha else None}
     except Exception as e:
-        return {"ok": False, "error": str(e)}
+        return {"ok": False, "error_code": "exception", "message": str(e), "retry_hint": True, "domain": "github"}
 
 
 def t_session_end(summary: str = "", actions: str = "", domain: str = "general",
@@ -3812,7 +3811,20 @@ def handle_jsonrpc(body: dict, session_id: str = "") -> dict:
         if not L.mcp(session_id):
             return err(-32000, "Rate limit exceeded")
         try:
-            result = tool["fn"](**{k: v for k, v in tool_args.items() if k in tool["args"] or not tool["args"]})
+            # TASK-23.D: Coerce numeric string args to int/float at dispatcher level
+            _INT_ARGS = {"start_line", "end_line", "limit", "hours", "lines", "priority", "max_results", "since_days", "max_per_source"}
+            _FLOAT_ARGS = {"confidence", "quality"}
+            coerced_args = {}
+            for k, v in tool_args.items():
+                if k in _INT_ARGS and isinstance(v, str):
+                    try: coerced_args[k] = int(v)
+                    except (ValueError, TypeError): coerced_args[k] = v
+                elif k in _FLOAT_ARGS and isinstance(v, str):
+                    try: coerced_args[k] = float(v)
+                    except (ValueError, TypeError): coerced_args[k] = v
+                else:
+                    coerced_args[k] = v
+            result = tool["fn"](**{k: v for k, v in coerced_args.items() if k in tool["args"] or not tool["args"]})
             text = json.dumps(result, default=str)
             return ok({"content": [{"type": "text", "text": text}]})
         except Exception as e:
