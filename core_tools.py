@@ -1278,6 +1278,38 @@ def t_session_start() -> dict:
         return {"ok": False, "error": str(e)}
 
 
+# -- TASK-28: Mid-Session State Checkpoint -----------------------------------
+def t_checkpoint(active_task_id: str = "", last_action: str = "", last_result: str = "") -> dict:
+    """Write a mid-session checkpoint to the current sessions row.
+    Call after every subtask gate to prevent context collapse on long tasks.
+    active_task_id: UUID of the task currently in progress.
+    last_action: brief description of last completed action (e.g. 'patched core_train.py 29.B').
+    last_result: outcome or next step (e.g. 'build SUCCESS, proceed to 29.C').
+    On next session_start: resume_checkpoint field will contain this data."""
+    try:
+        from datetime import datetime
+        checkpoint_data = {
+            "active_task_id": active_task_id or "",
+            "last_action": (last_action or "")[:500],
+            "last_result": (last_result or "")[:500],
+            "ts": datetime.utcnow().isoformat(),
+        }
+        # Write to most recent session row
+        latest = sb_get("sessions", "select=id&order=created_at.desc&limit=1", svc=True)
+        if not latest:
+            return {"ok": False, "error_code": "no_session", "message": "No session row found", "retry_hint": False, "domain": "supabase"}
+        session_id = latest[0]["id"]
+        ok = sb_patch("sessions", f"id=eq.{session_id}", {
+            "checkpoint_data": checkpoint_data,
+            "checkpoint_ts": checkpoint_data["ts"],
+        })
+        if not ok:
+            return {"ok": False, "error_code": "patch_failed", "message": "Failed to write checkpoint", "retry_hint": True, "domain": "supabase"}
+        return {"ok": True, "session_id": session_id, "checkpoint": checkpoint_data}
+    except Exception as e:
+        return {"ok": False, "error_code": "exception", "message": str(e), "retry_hint": True, "domain": "supabase"}
+
+
 def t_core_py_validate() -> dict:
     """Pre-deploy syntax checker for core_tools.py and core_main.py."""
     try:
