@@ -567,6 +567,14 @@ def run_cold_processor():
                 # Groq writes proper KB content for the evolution instead of raw pattern string
                 kb_content = _groq_kb_content(key, domain, total_freq, src_key)
 
+                # TASK-29.B: Dedup gate -- skip if identical pattern_key already pending
+                _already_pending = sb_get("evolution_queue",
+                    f"select=id&pattern_key=eq.{key[:200]}&status=eq.pending&limit=1",
+                    svc=True)
+                if _already_pending:
+                    print(f"[COLD] Skipped duplicate evo (pending): {key[:80]}")
+                    continue
+
                 ok = sb_post_critical("evolution_queue", {
                     "change_type":    "knowledge",
                     "change_summary": kb_content[:500],
