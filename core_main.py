@@ -32,7 +32,7 @@ from core_config import (
     _sbh, _sbh_count_svc, groq_chat,
 )
 from core_github import gh_read, gh_write, notify, set_webhook
-from core_train import cold_processor_loop, background_researcher
+from core_train import cold_processor_loop, background_researcher, start_price_monitor
 from core_tools import TOOLS, handle_jsonrpc
 
 # ---------------------------------------------------------------------------
@@ -957,6 +957,7 @@ def on_start():
     threading.Thread(target=cold_processor_loop, daemon=True).start()
     # self_sync_check disabled -- CORE_SELF.md is tombstoned, superseded by system_map
     threading.Thread(target=background_researcher, daemon=True).start()
+    start_price_monitor()  # TASK-4: Binance price monitoring thread
     counts = get_system_counts()
     resume = get_resume_task()
     evo_pending  = counts.get('evolution_pending', 0)
