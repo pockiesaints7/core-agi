@@ -1436,10 +1436,14 @@ def price_monitor_loop():
                 if abs(change_pct) >= _PRICE_ALERT_THRESHOLD:
                     direction = "UP" if change_pct > 0 else "DOWN"
                     msg = (
-                        f"[PRICE ALERT] {symbol} {direction} {change_pct:+.2f}%\n"
+                        f"\U0001f6a8 PRICE ALERT: {symbol} {direction} {change_pct:+.2f}%\n"
                         f"Current: {current:,.4f} USDT\n"
                         f"Previous: {last:,.4f} USDT\n"
-                        f"Change: {current - last:+,.4f} USDT"
+                        f"Change: {current - last:+,.4f} USDT\n\n"
+                        f"Reply to trade:\n"
+                        f"  APPROVE {symbol} <qty>\n"
+                        f"  SELL {symbol} <qty>\n"
+                        f"  REJECT"
                     )
                     print(f"[PRICE] {msg}")
                     try:
