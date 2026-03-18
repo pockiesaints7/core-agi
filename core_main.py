@@ -32,7 +32,7 @@ from core_config import (
     _sbh, _sbh_count_svc, groq_chat,
 )
 from core_github import gh_read, gh_write, notify, set_webhook
-from core_train import cold_processor_loop, background_researcher, start_price_monitor
+from core_train import cold_processor_loop, background_researcher
 from core_tools import TOOLS, handle_jsonrpc
 
 # ---------------------------------------------------------------------------
@@ -910,102 +910,8 @@ def handle_msg(msg):
             else:
                 notify(f"Could not prepare: {ids}. Check project IDs with /project list.", cid)
 
-    elif text.upper().startswith("APPROVE"):
-        # APPROVE BTCUSDT 0.001 [LIMIT 70000]
-        parts = text.split()
-        if len(parts) < 3:
-            notify("Usage: APPROVE <SYMBOL> <QTY> [LIMIT <price>]", cid)
-        else:
-            symbol   = parts[1].upper()
-            quantity = parts[2]
-            order_type = "MARKET"
-            price_arg  = ""
-            if len(parts) >= 5 and parts[3].upper() == "LIMIT":
-                order_type = "LIMIT"
-                price_arg  = parts[4]
-            from core_tools import t_crypto_trade
-            result = t_crypto_trade(
-                symbol=symbol,
-                side="BUY",
-                quantity=quantity,
-                order_type=order_type,
-                price=price_arg,
-                confirm="CONFIRM"
-            )
-            if result.get("ok"):
-                notify(
-                    f"\u2705 Trade executed\n"
-                    f"Symbol: {result.get('symbol')}\n"
-                    f"Side: {result.get('side')}\n"
-                    f"Qty: {result.get('executedQty', quantity)}\n"
-                    f"Price: {result.get('price', 'MARKET')}\n"
-                    f"Order ID: {result.get('orderId', '?')}",
-                    cid
-                )
-            else:
-                notify(f"\u274c Trade failed: {result.get('error', result)}", cid)
-
-    elif text.upper().startswith("SELL"):
-        # SELL BTCUSDT 0.001
-        parts = text.split()
-        if len(parts) < 3:
-            notify("Usage: SELL <SYMBOL> <QTY>", cid)
-        else:
-            symbol   = parts[1].upper()
-            quantity = parts[2]
-            from core_tools import t_crypto_trade
-            result = t_crypto_trade(
-                symbol=symbol,
-                side="SELL",
-                quantity=quantity,
-                order_type="MARKET",
-                confirm="CONFIRM"
-            )
-            if result.get("ok"):
-                notify(
-                    f"\u2705 SELL executed\n"
-                    f"Symbol: {result.get('symbol')}\n"
-                    f"Qty: {result.get('executedQty', quantity)}\n"
-                    f"Price: {result.get('price', 'MARKET')}",
-                    cid
-                )
-            else:
-                notify(f"\u274c SELL failed: {result.get('error', result)}", cid)
-
-    elif text.upper() == "REJECT" or text.upper() == "/reject":
-        notify("\u274c Trade rejected. No action taken.", cid)
-
-    elif text.upper() == "/price" or text.upper().startswith("/price "):
-        parts = text.split()
-        symbol = parts[1].upper() if len(parts) > 1 else "BTCUSDT"
-        from core_tools import t_crypto_price
-        r = t_crypto_price(symbol)
-        if r.get("ok"):
-            notify(
-                f"\U0001f4b9 {r['symbol']}\n"
-                f"Price: {r['price']:,.2f} USDT\n"
-                f"24h: {r.get('change_24h_pct', '?'):+.2f}%\n"
-                f"Hi: {r.get('high_24h','?'):,.2f} | Lo: {r.get('low_24h','?'):,.2f}",
-                cid
-            )
-        else:
-            notify(f"Price error: {r.get('error')}", cid)
-
-    elif text.upper() == "/balance":
-        from core_tools import t_crypto_balance
-        r = t_crypto_balance()
-        if r.get("ok"):
-            balances = r.get("balances", [])
-            if balances:
-                lines_out = [f"{b['asset']}: {b['free']}" for b in balances[:10]]
-                notify("\U0001f4b0 Balances:\n" + "\n".join(lines_out), cid)
-            else:
-                notify("No non-zero balances found.", cid)
-        else:
-            notify(f"Balance error: {r.get('error')}", cid)
-
     else:
-        notify("Commands: /status | /tstatus | /project | /price [SYM] | /balance\nTrade: APPROVE <SYM> <QTY> | SELL <SYM> <QTY> | REJECT", cid)
+        notify("Commands: /status | /tstatus | /project. Full interface \u2192 Claude Desktop.", cid)
 
 
 # ---------------------------------------------------------------------------
@@ -1051,7 +957,6 @@ def on_start():
     threading.Thread(target=cold_processor_loop, daemon=True).start()
     # self_sync_check disabled -- CORE_SELF.md is tombstoned, superseded by system_map
     threading.Thread(target=background_researcher, daemon=True).start()
-    start_price_monitor()  # TASK-4: Binance price monitoring thread
     counts = get_system_counts()
     resume = get_resume_task()
     evo_pending  = counts.get('evolution_pending', 0)
