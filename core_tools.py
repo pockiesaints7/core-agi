@@ -66,6 +66,57 @@ def get_current_step() -> str:
         return f"(step read error: {e})"
 
 
+# -- Schema registry: ground-truth column/enum enforcement -------------------
+_SCHEMA_REGISTRY = None
+
+def _load_schema_registry():
+    """Load operating_context.json from GitHub once per process. Cache in module global."""
+    global _SCHEMA_REGISTRY
+    if _SCHEMA_REGISTRY is not None:
+        return _SCHEMA_REGISTRY
+    try:
+        raw = gh_read("operating_context.json")
+        _SCHEMA_REGISTRY = json.loads(raw)
+        print("[SCHEMA] Registry loaded OK")
+    except Exception as e:
+        print(f"[SCHEMA] WARNING: could not load operating_context.json: {e}")
+        _SCHEMA_REGISTRY = {}
+    return _SCHEMA_REGISTRY
+
+def _validate_write(table: str, data: dict) -> list:
+    """Validate data dict against schema registry before any Supabase write.
+    Returns list of error strings. Empty list = OK to write.
+    Logs all violations to stdout so they appear in Railway logs."""
+    errors = []
+    reg = _load_schema_registry()
+    tables = reg.get("tables", {})
+    if table not in tables:
+        # Unknown table -- warn but don't block (table may be new)
+        print(f"[SCHEMA] WARNING: table '{table}' not in registry -- write proceeding unvalidated")
+        return errors
+    schema = tables[table]
+    known_cols = schema.get("columns", {})
+    enums = schema.get("enums", {})
+    required = schema.get("required", [])
+    # Check for unknown columns
+    for col in data:
+        if col not in known_cols:
+            errors.append(f"UNKNOWN_COLUMN: '{col}' does not exist in {table}. Known: {list(known_cols.keys())}")
+    # Check required fields
+    for col in required:
+        if col not in data or data[col] is None:
+            errors.append(f"MISSING_REQUIRED: '{col}' is required in {table}")
+    # Check enum values
+    for col, allowed in enums.items():
+        if col in data and data[col] is not None:
+            if str(data[col]) not in [str(v) for v in allowed]:
+                errors.append(f"INVALID_ENUM: '{col}'='{data[col]}' not in {allowed} for {table}")
+    if errors:
+        for e in errors:
+            print(f"[SCHEMA VIOLATION] {table}: {e}")
+    return errors
+
+
 # -- MCP tool implementations -------------------------------------------------
 def t_state(include_operating_context: str = "false"):
     """Read full system state. operating_context.json is NOT loaded by default (slow GitHub read).
