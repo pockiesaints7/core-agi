@@ -5474,7 +5474,7 @@ def t_lookahead(current_action: str = "", current_state: str = "", steps_ahead: 
         steps_ahead = 2
     try:
         # Get top patterns for consequence modeling
-        patterns = sb_get("pattern_frequency", "order=freq.desc&limit=10&id=gt.1", svc=True) or []
+        patterns = sb_get("pattern_frequency", "order=frequency.desc&limit=10&id=gt.1", svc=True) or []
         mistakes = sb_get("mistakes", "order=created_at.desc&limit=8&id=gt.1", svc=True) or []
         return {
             "ok": True,
