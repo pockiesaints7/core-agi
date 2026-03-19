@@ -225,13 +225,18 @@ _SB_SCHEMA = {
         "system_map": {
             "pk": "id", "pk_type": "bigserial",
             "columns": {"id": "bigint", "layer": "text", "component": "text",
-                        "description": "text", "status": "text", "last_verified": "timestamptz",
-                        "notes": "text"},
+                        "name": "text", "item_type": "text", "role": "text",
+                        "responsibility": "text", "description": "text",
+                        "key_facts": "jsonb", "is_volatile": "boolean",
+                        "status": "text", "notes": "text",
+                        "last_verified": "timestamptz", "last_updated": "timestamptz",
+                        "updated_by": "text"},
             "required": ["layer", "component"],
-            "enums": {"status": ["active", "degraded", "tombstone"]},
-            "fat_columns": ["description", "notes"],
-            "safe_select": "id,layer,component,status,last_verified",
-            "notes": "Use id=gt.1."
+            "enums": {"status": ["active", "degraded", "tombstone"],
+                      "item_type": ["tool", "file", "table", "service", "doc"]},
+            "fat_columns": ["description", "notes", "key_facts", "responsibility"],
+            "safe_select": "id,layer,component,name,item_type,status,last_updated",
+            "notes": "Use id=gt.1. 47+ rows covering all CORE layers. Auto-reconciled every 6h by background_researcher."
         },
         "script_templates": {
             "pk": "id", "pk_type": "bigserial",
