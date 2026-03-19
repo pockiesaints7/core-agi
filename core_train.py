@@ -52,6 +52,11 @@ _last_synthesis_run: float = 0.0
 _SYNTHESIS_INTERVAL = 6 * 24 * 3600  # 6 days
 _SYNTHESIS_DAY_UTC = 2               # Wednesday UTC
 
+# AGI-05: Weekly memory consolidation
+_last_consolidation_run: float = 0.0
+_CONSOLIDATION_INTERVAL = 6 * 24 * 3600  # 6 days
+_CONSOLIDATION_DAY_UTC = 6               # Sunday UTC (weekday=6)
+
 # ── TASK-4: Binance Price Monitor config ──────────────────────────────────────
 _PRICE_MONITOR_SYMBOLS  = os.getenv("BINANCE_WATCH_SYMBOLS", "BTCUSDT,ETHUSDT,BNBUSDT").split(",")
 _PRICE_ALERT_THRESHOLD  = float(os.getenv("BINANCE_ALERT_THRESHOLD_PCT", "3.0"))
@@ -495,6 +500,69 @@ def _backfill_patterns(batch_size: int = 10) -> int:
     except Exception as e:
         print(f"[BACKFILL] error (non-fatal): {e}")
         return 0
+
+
+def _run_memory_consolidation(dry_run: bool = False):
+    """AGI-05/S2: Weekly memory consolidation and forgetting job.
+    Consolidation: entries with access_count > 10 AND confidence != 'proven' -> boost to 'high'.
+    Forgetting: entries with last_accessed > 90 days AND access_count < 2 -> set active=false.
+    Non-blocking. Reports via Telegram.
+    """
+    try:
+        now = datetime.utcnow()
+        cutoff_90d = (now - timedelta(days=90)).isoformat()
+
+        # Consolidation: frequently accessed entries get confidence boost
+        consolidate_rows = sb_get("knowledge_base",
+            "select=id,domain,topic,confidence,access_count&id=gt.1&access_count=gte.10&confidence=neq.proven&limit=200",
+            svc=True) or []
+        consolidated = 0
+        for r in consolidate_rows:
+            if not dry_run:
+                try:
+                    sb_patch("knowledge_base", f"id=eq.{r['id']}", {"confidence": "high"})
+                    consolidated += 1
+                except Exception:
+                    pass
+            else:
+                consolidated += 1
+
+        # Forgetting: stale entries not referenced recently -> soft archive
+        forget_rows = sb_get("knowledge_base",
+            f"select=id,domain,topic,access_count,last_accessed&id=gt.1&access_count=lt.2&last_accessed=lt.{cutoff_90d}&limit=200",
+            svc=True) or []
+        # Extra safety: never archive entries referenced in mistakes or behavioral_rules
+        archived = 0
+        for r in forget_rows:
+            topic_slug = (r.get("topic") or "")[:50]
+            domain_slug = (r.get("domain") or "")
+            # Check if referenced in mistakes
+            refs = sb_get("mistakes",
+                f"select=id&or=(what_failed.ilike.*{topic_slug}*,correct_approach.ilike.*{topic_slug}*)&limit=1",
+                svc=True) or []
+            if refs:
+                continue  # Referenced in mistakes -- keep
+            if not dry_run:
+                try:
+                    sb_patch("knowledge_base", f"id=eq.{r['id']}", {"active": False})
+                    archived += 1
+                except Exception:
+                    pass
+            else:
+                archived += 1
+
+        summary = (
+            f"[CONSOLIDATION] {'DRY RUN ' if dry_run else ''}Done. "
+            f"Consolidated={consolidated} (confidence->high). "
+            f"Archived={archived} (active->false, stale 90d+)."
+        )
+        print(summary)
+        if not dry_run and (consolidated + archived) > 0:
+            notify(summary)
+        return {"ok": True, "consolidated": consolidated, "archived": archived, "dry_run": dry_run}
+    except Exception as e:
+        print(f"[CONSOLIDATION] error: {e}")
+        return {"ok": False, "error": str(e)}
 
 
 def _run_causal_quality_analysis():
@@ -971,6 +1039,17 @@ def cold_processor_loop():
                     _run_cross_domain_synthesis()
             except Exception as _se:
                 print(f"[SYNTH] trigger error: {_se}")
+            # AGI-05: Weekly memory consolidation on Sunday
+            try:
+                global _last_consolidation_run
+                now_utc = datetime.utcnow()
+                time_since_consol = time.time() - _last_consolidation_run
+                if (now_utc.weekday() == _CONSOLIDATION_DAY_UTC and
+                        time_since_consol >= _CONSOLIDATION_INTERVAL):
+                    _run_memory_consolidation()
+                    _last_consolidation_run = time.time()
+            except Exception as _ce:
+                print(f"[CONSOLIDATION] trigger error: {_ce}")
             # GAP-DATA-01: Weekly backup check -- runs if last backup > 6 days ago
             try:
                 _BACKUP_INTERVAL = 6 * 24 * 3600  # 6 days in seconds
