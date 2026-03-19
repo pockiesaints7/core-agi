@@ -1,164 +1,309 @@
 {
-  "_note": "Static tool rules + tombstone + FULL SCHEMA all active tables. Update ini kalau: (1) breaking change tool params, (2) tabel baru di-drop, (3) schema tabel berubah, (4) architecture berubah.",
-  "_last_updated": "2026-03-14 (Task 3 cleanup)",
-  "_version": "2.5",
-
-  "architecture": {
-    "system_name": "CORE v6.0 — Recursive Self-Improvement AGI",
-    "owner": "REINVAGNAR",
-    "repo": "pockiesaints7/core-agi",
-    "railway_url": "https://core-agi-production.up.railway.app",
-    "railway_service": "core-agi",
-    "entry_point": "core_main.py (v6.0 split architecture: core_config, core_github, core_train, core_tools, core_main). core_legacy.py = retired monolith (read-only reference).",
-    "language": "Python (FastAPI)",
-    "ai_model": "Groq llama-3.3-70b-versatile (primary), llama-3.1-8b-instant (fast)",
-    "database": "Supabase (PostgreSQL via PostgREST)",
-    "state_files": {
-      "SESSION.md": "Static: claude.ai bootstrap pointer, autonomous mode protocol, active rules. No longer auto-written by session_end.",
-      "operating_context.json": "Static: tool rules, full schema, tombstone tables — update only on structural change",
-      "CORE_SELF.md": "DELETED — superseded by system_map Supabase table + operating_context.json. Do not reference."
-    },
-    "key_endpoints": {
-      "GET /": "Health check + current step",
-      "GET /state": "Full system state (same as get_state MCP tool)",
-      "POST /patch": "Surgical file edit — {secret, path, old_str, new_str, message}",
-      "POST /telegram": "Telegram webhook",
-      "POST /mcp": "MCP tool dispatcher"
-    },
-    "training_config": {
-      "COLD_HOT_THRESHOLD": 10,
-      "COLD_TIME_THRESHOLD": 86400,
-      "PATTERN_EVO_THRESHOLD": 3,
-      "KNOWLEDGE_AUTO_CONFIDENCE": 0.7
-    },
-    "resource_ceilings": {
-      "groq_calls_per_hour": 200,
-      "supabase_writes_per_hour": 500,
-      "github_pushes_per_hour": 20,
-      "telegram_messages_per_hour": 30,
-      "mcp_tool_calls_per_minute": 30
-    },
-    "mcp_tools_count": 73,
-    "interfaces": ["claude.ai (primary)", "Claude Desktop (MCP direct)", "Telegram (@reinvagnarbot)"]
+  "_meta": {
+    "purpose": "Ground-truth schema registry for all CORE Supabase tables. Read this before ANY write. Never assume column names, types, or enum values. This file is the single source of truth.",
+    "last_verified": "2026-03-19",
+    "how_to_use": "Before calling sb_post/sb_insert/sb_patch on any table: (1) Check columns list -- only these columns exist. (2) Check enums -- only these values accepted. (3) Check required -- these cannot be null. (4) Check types -- pass correct Python type.",
+    "timestamp_rule": "All timestamp filters must use strftime('%Y-%m-%dT%H:%M:%SZ') format. Never isoformat() -- microseconds cause PostgREST 400.",
+    "mcp_arg_rule": "All MCP tool args arrive as strings. Always cast explicitly: int(x), float(x), x.lower()=='true' for bool. Never trust type hints alone."
   },
-
-  "tool_rules": {
-    "read_file":   "OMIT repo arg — default pockiesaints7/core-agi sudah benar",
-    "write_file":  "OMIT repo arg — default pockiesaints7/core-agi sudah benar. BLOCKED on core_main.py (guard active). For source edits use POST /patch from claude.ai or gh_search_replace from Desktop.",
-    "sb_query":    "param adalah 'filters' BUKAN 'query_string'. contoh: filters='domain=eq.mcp'",
-    "log_mistake": "required: context, what_failed, fix. optional: domain, root_cause, how_to_avoid, severity",
-    "sb_insert":   "data harus valid JSON string. sessions required: summary(str), actions(array), interface(str)",
-    "add_knowledge": "prefer over sb_insert untuk knowledge_base. required: topic, content. optional: domain, confidence, tags",
-    "sb_insert_hot_reflections": "required: task_summary(str), domain(str), new_patterns(array), quality_score(float), reflection_text(str)",
-    "session_start": "call at start of every Desktop session — replaces 4 separate calls",
-    "session_end": "call at end of every Desktop session — replaces 2-3 calls",
-    "processed_by_cold": "use eq.0/eq.1 (integer) in filters, NOT eq.true/eq.false"
-  },
-
-  "conventions": {
-    "read_before_write": true,
-    "check_mistakes_before_write": true,
-    "always_readback_after_write": true,
-    "schema_check_before_insert": "ALWAYS search KB 'CORE DB Schema [table]' OR sb_query limit=1 before first insert to any table in a new session",
-    "session_end": "ALWAYS call session_end — SESSION.md no longer updated by it. task_queue is source of truth."
-  },
-
-  "active_tables": {
+  "tables": {
     "knowledge_base": {
-      "purpose": "Long-term knowledge store — domain expertise, SOPs, routing rules",
-      "insert_via": "add_knowledge tool (preferred) or sb_insert",
-      "required_fields": ["domain", "topic", "content", "confidence"],
-      "optional_fields": ["tags (array)", "source"],
-      "auto_fields": ["id (int)", "created_at", "updated_at"],
-      "confidence_values": ["proven", "high", "medium", "low"],
-      "read_via": "search_kb tool"
+      "pk": "id",
+      "pk_type": "int4_serial",
+      "required": ["domain", "content", "topic"],
+      "columns": {
+        "id": "integer",
+        "domain": "text",
+        "topic": "text",
+        "content": "text",
+        "source": "text",
+        "confidence": "text_enum",
+        "tags": "text[]",
+        "project_id": "integer",
+        "created_at": "timestamptz",
+        "updated_at": "timestamptz",
+        "instruction": "text",
+        "source_type": "text",
+        "source_ref": "text",
+        "source_ts": "timestamptz",
+        "active": "boolean"
+      },
+      "enums": {
+        "confidence": ["low", "medium", "high", "proven"]
+      },
+      "defaults": {
+        "confidence": "medium",
+        "active": true
+      },
+      "notes": "confidence is TEXT enum NOT float. CHECK constraint enforces low/medium/high/proven only. domain+topic is unique key for upsert."
     },
-    "mistakes": {
-      "purpose": "Error log — prevent repeat failures across sessions",
-      "insert_via": "log_mistake tool (preferred) or sb_insert",
-      "required_fields": ["context", "what_failed", "fix (=correct_approach in DB)"],
-      "optional_fields": ["domain", "root_cause", "how_to_avoid", "severity (low/medium/high/critical)", "tags (array)"],
-      "auto_fields": ["id (int)", "created_at"],
-      "read_schema": "id, context, what_failed, root_cause, correct_approach, tags, domain, how_to_avoid, severity"
+    "behavioral_rules": {
+      "pk": "id",
+      "pk_type": "int8_serial",
+      "required": ["trigger", "pointer", "full_rule", "domain"],
+      "columns": {
+        "id": "bigint",
+        "trigger": "text",
+        "pointer": "text",
+        "full_rule": "text",
+        "domain": "text",
+        "priority": "integer",
+        "active": "boolean",
+        "tested": "boolean",
+        "source": "text",
+        "confidence": "float8",
+        "expires_at": "timestamptz",
+        "created_at": "timestamptz",
+        "updated_at": "timestamptz"
+      },
+      "enums": {
+        "domain": ["auth","code","failure_recovery","github","groq","local_pc","postgres","powershell","project","railway","reasoning","supabase","telegram","universal","zapier"]
+      },
+      "constraints": {
+        "priority": "1-10 integer",
+        "confidence": "0.0-1.0 float (NOT enum -- different from knowledge_base)"
+      },
+      "notes": "confidence here is FLOAT 0.0-1.0, NOT the enum used in knowledge_base. id=1 is PROBE row -- never query or modify."
     },
     "hot_reflections": {
-      "purpose": "Post-session learning capture — raw material for cold processor",
-      "insert_via": "sb_insert only",
-      "required_fields": ["task_summary", "domain", "new_patterns (array of str)", "quality_score (float 0-1)", "reflection_text"],
-      "optional_fields": ["verify_rate (float)", "mistake_consult_rate (float)", "new_mistakes (array)", "gaps_identified (str)"],
-      "auto_fields": ["id (int)", "created_at", "processed_by_cold (bool, default false)"],
-      "note": "Cold processor polls for processed_by_cold=0 rows. Use integer 0/1 in querystring filters, NOT true/false."
+      "pk": "id",
+      "pk_type": "int8_serial",
+      "required": [],
+      "columns": {
+        "id": "bigint",
+        "created_at": "timestamptz",
+        "task_summary": "text",
+        "domain": "text",
+        "verify_rate": "float8",
+        "mistake_consult_rate": "float8",
+        "new_patterns": "jsonb",
+        "new_mistakes": "jsonb",
+        "quality_score": "float8",
+        "gaps_identified": "text[]",
+        "reflection_text": "text",
+        "processed_by_cold": "boolean",
+        "source": "text"
+      },
+      "critical_column_names": {
+        "processed_by_cold": "NOT 'processed'. The column is processed_by_cold (boolean). Default false. Filter: processed_by_cold=eq.true"
+      },
+      "defaults": {
+        "processed_by_cold": false,
+        "source": "real",
+        "new_patterns": [],
+        "new_mistakes": []
+      },
+      "notes": "CRITICAL: column is processed_by_cold NOT processed. Purge filter: created_at=lt.{Z_timestamp}&processed_by_cold=eq.true&select=id"
     },
-    "cold_reflections": {
-      "purpose": "Distilled output of cold processor runs — read-only from Claude side",
-      "insert_via": "SYSTEM ONLY (cold_processor in core.py)",
-      "read_schema": "id, created_at, period_start, period_end, hot_count(int), patterns_found(int), evolutions_queued(int), auto_applied(int), summary_text(str)",
-      "note": "Never insert manually. Check here to verify cold processor ran."
-    },
-    "evolution_queue": {
-      "purpose": "Proposed system changes pending owner approval",
-      "insert_via": "SYSTEM ONLY (cold_processor) or manual for explicit proposals",
-      "required_fields_manual": ["change_summary", "change_type", "reversible (bool)"],
-      "read_schema": "id, created_at, status(pending/synthesized/approved/rejected/applied), confidence, impact, reversible(bool), change_type, change_summary, diff_content, pattern_key, frequency, owner_notified(bool), applied_at",
-      "approve_via": "approve_evolution tool",
-      "reject_via": "reject_evolution tool",
-      "synthesize_via": "synthesize_evolutions tool — Claude reads all signals as architect, marks status=synthesized, writes blueprint to SESSION.md"
-    },
-    "pattern_frequency": {
-      "purpose": "Tracks how often a pattern appears across hot_reflections — drives evolution threshold",
-      "insert_via": "SYSTEM ONLY (cold_processor)",
-      "read_schema": "id, pattern_key(str), domain(str), description(str), frequency(int), confidence(float), first_seen, last_seen, auto_applied(bool)",
-      "evo_threshold": "frequency >= 3 triggers evolution_queue entry"
+    "mistakes": {
+      "pk": "id",
+      "pk_type": "int4_serial",
+      "required": ["context", "what_failed", "root_cause", "correct_approach"],
+      "columns": {
+        "id": "integer",
+        "context": "text",
+        "what_failed": "text",
+        "root_cause": "text",
+        "correct_approach": "text",
+        "tags": "text[]",
+        "created_at": "timestamptz",
+        "domain": "text",
+        "how_to_avoid": "text",
+        "severity": "text"
+      },
+      "defaults": {
+        "domain": "general",
+        "severity": "medium"
+      }
     },
     "sessions": {
-      "purpose": "Session log — human-readable record of what happened each session",
-      "insert_via": "sb_insert",
-      "required_fields": ["summary (str)", "actions (array of str)", "interface (str)"],
-      "auto_fields": ["id (int)", "created_at"],
-      "interface_values": ["claude.ai", "claude-desktop", "telegram"]
+      "pk": "id",
+      "pk_type": "int4_serial",
+      "required": ["summary"],
+      "columns": {
+        "id": "integer",
+        "summary": "text",
+        "actions": "text[]",
+        "project_id": "integer",
+        "created_at": "timestamptz",
+        "interface": "text",
+        "checkpoint_data": "jsonb",
+        "checkpoint_ts": "timestamptz",
+        "resume_task": "text",
+        "domain": "text",
+        "quality_score": "float8",
+        "next_session": "text",
+        "interrupted": "boolean",
+        "tools_called": "jsonb"
+      },
+      "defaults": {
+        "interface": "claude-ai",
+        "interrupted": false
+      }
     },
     "task_queue": {
-      "purpose": "Persistent task storage across sessions",
-      "read_schema": "id(uuid), task(str), status(str), priority(int), result, error, created_at, updated_at, source, chat_id",
-      "status_values": ["pending", "in_progress", "done", "failed"]
+      "pk": "id",
+      "pk_type": "uuid",
+      "required": ["task"],
+      "columns": {
+        "id": "uuid",
+        "task": "text",
+        "status": "text",
+        "priority": "integer",
+        "result": "text",
+        "error": "text",
+        "created_at": "timestamptz",
+        "updated_at": "timestamptz",
+        "source": "text",
+        "chat_id": "text",
+        "next_step": "text",
+        "blocked_by": "text[]",
+        "checkpoint": "jsonb",
+        "checkpoint_at": "timestamptz",
+        "project_id": "text",
+        "checkpoint_draft": "jsonb"
+      },
+      "enums": {
+        "status": ["pending", "in_progress", "done", "failed"]
+      },
+      "defaults": {
+        "status": "pending",
+        "priority": 5,
+        "source": "manual"
+      },
+      "notes": "pk is UUID not integer. Use gen_random_uuid() default. task_add tool handles this correctly."
     },
-    "projects": {
-      "purpose": "Registered projects CORE can index and answer questions about",
-      "insert_via": "project_register tool",
-      "required_fields": ["project_id", "name"],
-      "optional_fields": ["folder_path", "index_path", "status"],
-      "auto_fields": ["id (int)", "created_at", "last_indexed"],
-      "read_via": "project_list tool"
+    "quality_metrics": {
+      "pk": "id",
+      "pk_type": "int8_serial",
+      "required": ["quality_score", "tasks_completed", "mistakes_made", "owner_corrections", "assumptions_caught"],
+      "columns": {
+        "id": "bigint",
+        "session_id": "uuid",
+        "date": "date",
+        "quality_score": "float8",
+        "tasks_completed": "integer",
+        "mistakes_made": "integer",
+        "owner_corrections": "integer",
+        "assumptions_caught": "integer",
+        "domain": "text",
+        "notes": "text",
+        "created_at": "timestamptz"
+      },
+      "notes": "session_id is UUID type. quality_score is float 0.0-1.0."
     },
-    "project_context": {
-      "purpose": "Prepared project KB context waiting for Claude Desktop to consume",
-      "insert_via": "SYSTEM ONLY (project_prepare tool)",
-      "read_via": "project_context_check tool",
-      "note": "Rows consumed (deleted) after Claude Desktop loads them via project_consume"
+    "reasoning_log": {
+      "pk": "id",
+      "pk_type": "int8_serial",
+      "required": ["action_planned", "assumptions_caught", "queries_triggered", "owner_confirm_needed", "behavioral_rule_proposed"],
+      "columns": {
+        "id": "bigint",
+        "session_id": "uuid",
+        "action_planned": "text",
+        "preflight_result": "text",
+        "assumptions_caught": "integer",
+        "queries_triggered": "integer",
+        "owner_confirm_needed": "boolean",
+        "behavioral_rule_proposed": "boolean",
+        "domain": "text",
+        "created_at": "timestamptz"
+      },
+      "defaults": {
+        "assumptions_caught": 0,
+        "queries_triggered": 0,
+        "owner_confirm_needed": false,
+        "behavioral_rule_proposed": false
+      }
     },
     "changelog": {
-      "purpose": "Permanent audit log of all system changes deployed to CORE",
-      "insert_via": "changelog_add tool (preferred) or sb_insert",
-      "required_fields": ["version", "change_type", "component", "title", "description"],
-      "optional_fields": ["triggered_by", "growth_flag_type", "before_state", "after_state", "files_changed (array)", "session_id"],
-      "auto_fields": ["id (int)", "created_at"],
-      "change_type_values": ["upgrade", "fix", "refactor", "add", "remove", "config"],
-      "read_schema": "id, version, change_type, component, title, description, triggered_by, growth_flag_type, before_state, after_state, files_changed(array), session_id, created_at",
-      "read_via": "sb_query table=changelog"
+      "pk": "id",
+      "pk_type": "int4_serial",
+      "required": ["change_type", "title"],
+      "columns": {
+        "id": "integer",
+        "version": "text",
+        "change_type": "text",
+        "component": "text",
+        "title": "text",
+        "description": "text",
+        "triggered_by": "text",
+        "growth_flag_type": "text",
+        "before_state": "text",
+        "after_state": "text",
+        "files_changed": "text[]",
+        "session_id": "integer",
+        "created_at": "timestamptz"
+      }
+    },
+    "evolution_queue": {
+      "pk": "id",
+      "pk_type": "int8_serial",
+      "required": [],
+      "columns": {
+        "id": "bigint",
+        "created_at": "timestamptz",
+        "status": "text",
+        "confidence": "float8",
+        "impact": "text",
+        "reversible": "boolean",
+        "change_type": "text",
+        "change_summary": "text",
+        "diff_content": "text",
+        "pattern_key": "text",
+        "frequency": "integer",
+        "owner_notified": "boolean",
+        "applied_at": "timestamptz",
+        "source": "text",
+        "recommendation": "text",
+        "target_table": "text",
+        "payload": "jsonb",
+        "rollback_plan": "text",
+        "reviewed_by": "text",
+        "implemented_at": "timestamptz"
+      },
+      "notes": "confidence is FLOAT here (not enum). Default status=pending."
+    },
+    "pattern_frequency": {
+      "pk": "id",
+      "pk_type": "int8_serial",
+      "required": [],
+      "columns": {
+        "id": "bigint",
+        "pattern_key": "text",
+        "domain": "text",
+        "description": "text",
+        "frequency": "integer",
+        "confidence": "float8",
+        "first_seen": "timestamptz",
+        "last_seen": "timestamptz",
+        "auto_applied": "boolean",
+        "stale": "boolean"
+      },
+      "notes": "confidence is FLOAT here (not enum)."
+    },
+    "cold_reflections": {
+      "pk": "id",
+      "pk_type": "int8_serial",
+      "required": [],
+      "columns": {
+        "id": "bigint",
+        "created_at": "timestamptz",
+        "period_start": "timestamptz",
+        "period_end": "timestamptz",
+        "hot_count": "integer",
+        "patterns_found": "integer",
+        "evolutions_queued": "integer",
+        "auto_applied": "integer",
+        "summary_text": "text",
+        "promoted_to": "text",
+        "promotion_threshold": "integer"
+      }
     }
   },
-
-  "schema_evolution_protocol": {
-    "when_table_added": ["Add to active_tables in this file", "Add KB entry: 'CORE DB Schema — [table_name]'", "Update SESSION.md Active Tables section"],
-    "when_table_dropped": ["Move from active_tables to tombstone_tables", "Add KB entry marking table as tombstone", "Update SESSION.md", "Remove from all queries in core.py"],
-    "when_schema_changes": ["Update schema in this file under active_tables", "Update KB entry for that table", "Add changelog entry", "Add migration note in core.py fix log"]
-  },
-
-  "tombstone_tables": [
-    "playbook", "memory", "master_prompt", "patterns",
-    "training_sessions", "training_sessions_v2", "training_flags",
-    "session_learning", "agent_registry", "knowledge_blocks",
-    "agi_mistakes", "stack_registry", "vault_logs", "vault"
-  ],
-  "_tombstone_note": "Tabel ini sudah dihapus permanen. JANGAN query. Kalau ada tabel baru yang di-drop, append ke list ini + update KB."
+  "write_rules": {
+    "before_any_filter": "Use strftime('%Y-%m-%dT%H:%M:%SZ') for timestamps. isoformat() produces microseconds that PostgREST rejects with 400.",
+    "before_any_write": "Check this file for column names and enum values. No assumptions.",
+    "mcp_string_args": "Cast all MCP args: int(x) for integers, x.lower()=='true' for booleans, float(x) for floats.",
+    "confidence_gotcha": "knowledge_base.confidence = TEXT enum (low/medium/high/proven). behavioral_rules.confidence = FLOAT 0.0-1.0. evolution_queue.confidence = FLOAT. pattern_frequency.confidence = FLOAT. Always check the table."
+  }
 }
