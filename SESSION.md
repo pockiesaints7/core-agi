@@ -2,9 +2,13 @@
 > Last updated: 2026-03-16 | Owner: REINVAGNAR | Version: CORE v6.0
 > This file is static — no longer auto-written by session_end.
 
-## last_good_commit: 2026-03-15 (post SESSION.md write removal refactor)
-> Railway recovery: use `github:get_file_contents` to read this file, restore via `github:push_files`.
+## last_good_commit: STALE — SESSION.md is no longer auto-updated by session_end
+> Railway recovery: DO NOT rely on this file for last_good_commit. It is frozen at 2026-03-15.
+> CORRECT RECOVERY: Query GitHub commits API directly:
+>   PowerShell: `Invoke-WebRequest https://api.github.com/repos/pockiesaints7/core-agi/commits -Headers @{Authorization="Bearer <PAT>"}`
+>   Find last commit BEFORE the crash commit. Use that SHA for rollback via GitHub PUT API.
 > Do NOT use core-agi: tools when Railway is confirmed down — they all fail simultaneously.
+> PAT location: C:\Users\rnvgg\.claude-skills\services\CREDENTIALS.md
 
 ---
 
