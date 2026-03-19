@@ -5199,30 +5199,22 @@ TOOLS["maintenance_purge"] = {"fn": t_maintenance_purge, "perm": "WRITE",
 # --- AGI-11: Execution Quality Layer -----------------------------------------
 
 def t_reason_chain(action: str = "", domain: str = "general"):
-    """AGI-11/S1: Generate causal reasoning chain before any non-trivial action.
-    Returns: chain, failure_modes, confidence, proceed_recommended.
-    CORE must call this before any non-trivial action."""
+    """AGI-11/S1: Fetch Supabase context for causal reasoning before any non-trivial action.
+    Returns domain mistakes + KB entries for Claude to reason on natively.
+    Claude generates: chain, failure_modes, confidence, proceed_recommended."""
     if not action:
         return {"ok": False, "error": "action is required"}
-    prompt = f"""You are CORE's causal reasoning engine. Analyze this planned action and produce a structured causal chain.
-
-Action: {action}
-Domain: {domain}
-
-Return ONLY valid JSON:
-{{
-  "chain": ["action -> consequence1", "consequence1 -> consequence2"],
-  "failure_modes": [{{"mode": "...", "probability": "low|medium|high", "prevention": "..."}}],
-  "confidence": 0.0,
-  "proceed_recommended": true,
-  "reasoning_summary": "..."
-}}"""
     try:
-        result = groq_chat([{"role": "user", "content": prompt}], model=GROQ_MODEL, temperature=0.2)
-        parsed = json.loads(result)
-        parsed["ok"] = True
-        parsed["action"] = action
-        return parsed
+        mistakes = sb_get("mistakes", f"domain=eq.{domain}&order=created_at.desc&limit=5&id=gt.1", svc=True) or []
+        kb = sb_get("knowledge_base", f"domain=eq.{domain}&limit=5&id=gt.1", svc=True) or []
+        return {
+            "ok": True,
+            "action": action,
+            "domain": domain,
+            "recent_mistakes": [{"context": m.get("context"), "what_failed": m.get("what_failed"), "correct_approach": m.get("correct_approach")} for m in mistakes],
+            "relevant_kb": [{"topic": k.get("topic"), "content": k.get("content")} for k in kb],
+            "instruction": "Claude: using this context, generate the causal chain, failure_modes, confidence (0.0-1.0), and proceed_recommended for the planned action."
+        }
     except Exception as e:
         return {"ok": False, "error": str(e), "action": action}
 
@@ -5322,17 +5314,12 @@ def t_goal_check(proposed_action: str = "", session_id: str = "", register_goal:
         if not rows:
             return {"ok": False, "error": "No goal registered for this session. Call with register_goal first.", "aligned": None}
         goal = rows[0].get("goal", "")
-        prompt = f"""Session goal: {goal}
-Proposed action: {proposed_action}
-
-Does this action directly advance the session goal? Return ONLY valid JSON:
-{{"aligned": true, "reasoning": "...", "alignment_score": 0.0, "recommendation": "proceed|defer|reconsider"}}"""
-        result = groq_chat([{"role": "user", "content": prompt}], model=GROQ_FAST, temperature=0.1)
-        parsed = json.loads(result)
-        parsed["ok"] = True
-        parsed["goal"] = goal
-        parsed["proposed_action"] = proposed_action
-        return parsed
+        return {
+            "ok": True,
+            "goal": goal,
+            "proposed_action": proposed_action,
+            "instruction": "Claude: does the proposed_action directly advance the goal? Return aligned=true/false, alignment_score (0.0-1.0), reasoning, and recommendation (proceed|defer|reconsider)."
+        }
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
@@ -5346,33 +5333,28 @@ TOOLS["goal_check"] = {"fn": t_goal_check, "perm": "WRITE",
 
 
 def t_mid_task_correct(anomaly: str = "", last_action: str = "", last_result: str = "", task_state: str = ""):
-    """AGI-11/S7: Mid-task self-correction loop.
-    Call when unexpected output detected instead of logging-and-pushing-through.
-    Returns root_cause, plan_adjustment, corrected_next_step."""
+    """AGI-11/S7: Fetch Supabase context for mid-task self-correction.
+    Returns similar past mistakes for Claude to diagnose the anomaly natively.
+    Claude generates: root_cause, plan_adjustment, corrected_next_step."""
     if not anomaly:
         return {"ok": False, "error": "anomaly description is required"}
-    prompt = f"""You are CORE's self-correction engine. Analyze this mid-task anomaly and produce a corrected plan.
-
-Anomaly detected: {anomaly}
-Last action taken: {last_action}
-Last result: {last_result}
-Current task state: {task_state}
-
-Return ONLY valid JSON:
-{{
-  "root_cause": "...",
-  "what_went_wrong": "...",
-  "plan_adjustment": "...",
-  "corrected_next_step": "...",
-  "should_abort": false,
-  "abort_reason": ""
-}}"""
     try:
-        result = groq_chat([{"role": "user", "content": prompt}], model=GROQ_MODEL, temperature=0.2)
-        parsed = json.loads(result)
-        parsed["ok"] = True
-        parsed["anomaly"] = anomaly
-        return parsed
+        # Search mistakes broadly — anomaly may cross domains
+        all_mistakes = sb_get("mistakes", "order=created_at.desc&limit=10&id=gt.1", svc=True) or []
+        # Filter for semantic relevance by checking key terms in anomaly
+        anomaly_terms = set(anomaly.lower().split())
+        similar = [m for m in all_mistakes if any(t in (m.get("what_failed") or "").lower() for t in anomaly_terms)]
+        if not similar:
+            similar = all_mistakes[:5]
+        return {
+            "ok": True,
+            "anomaly": anomaly,
+            "last_action": last_action,
+            "last_result": last_result,
+            "task_state": task_state,
+            "similar_past_mistakes": [{"context": m.get("context"), "what_failed": m.get("what_failed"), "correct_approach": m.get("correct_approach"), "root_cause": m.get("root_cause")} for m in similar],
+            "instruction": "Claude: using this context, diagnose root_cause, what_went_wrong, plan_adjustment, corrected_next_step, and whether to abort."
+        }
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
@@ -5389,31 +5371,22 @@ TOOLS["mid_task_correct"] = {"fn": t_mid_task_correct, "perm": "READ",
 # --- AGI-12: Task Intelligence Layer -----------------------------------------
 
 def t_decompose_task(goal: str = "", domain: str = "general"):
-    """AGI-12/S1: Autonomous task decomposition with dependency mapping.
-    Returns subtasks with dependency ordering, effort estimates, parallel candidates."""
+    """AGI-12/S1: Fetch Supabase context for task decomposition.
+    Returns domain KB + past mistakes for Claude to decompose the goal natively.
+    Claude generates: subtasks with dependencies, execution_order, parallel_candidates."""
     if not goal:
         return {"ok": False, "error": "goal is required"}
-    prompt = f"""You are CORE's task decomposition engine. Break this goal into actionable subtasks.
-
-Goal: {goal}
-Domain: {domain}
-
-Return ONLY valid JSON:
-{{
-  "subtasks": [
-    {{"id": "S1", "title": "...", "description": "...", "depends_on": [], "effort_estimate": "small|medium|large"}}
-  ],
-  "execution_order": ["S1", "S2"],
-  "parallel_candidates": [["S2", "S3"]],
-  "total_effort": "small|medium|large",
-  "critical_path": ["S1", "S4"]
-}}"""
     try:
-        result = groq_chat([{"role": "user", "content": prompt}], model=GROQ_MODEL, temperature=0.2)
-        parsed = json.loads(result)
-        parsed["ok"] = True
-        parsed["goal"] = goal
-        return parsed
+        kb = sb_get("knowledge_base", f"domain=eq.{domain}&limit=8&id=gt.1", svc=True) or []
+        mistakes = sb_get("mistakes", f"domain=eq.{domain}&order=created_at.desc&limit=5&id=gt.1", svc=True) or []
+        return {
+            "ok": True,
+            "goal": goal,
+            "domain": domain,
+            "domain_kb": [{"topic": k.get("topic"), "content": k.get("content")} for k in kb],
+            "domain_mistakes": [{"what_failed": m.get("what_failed"), "correct_approach": m.get("correct_approach")} for m in mistakes],
+            "instruction": "Claude: using this context, decompose the goal into subtasks with id, title, description, depends_on, effort_estimate. Return execution_order, parallel_candidates, total_effort, critical_path."
+        }
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
@@ -5426,32 +5399,21 @@ TOOLS["decompose_task"] = {"fn": t_decompose_task, "perm": "READ",
 
 
 def t_resolve_ambiguity(instruction: str = ""):
-    """AGI-12/S2: Structured ambiguity detection before acting.
-    Identifies what is unclear, lists interpretations, picks lowest-risk one.
-    Returns safe_to_proceed flag."""
+    """AGI-12/S2: Fetch Supabase context for ambiguity resolution before acting.
+    Returns relevant behavioral rules + KB for Claude to resolve ambiguity natively.
+    Claude generates: ambiguities list, safe_to_proceed, interpretation_chosen."""
     if not instruction:
         return {"ok": False, "error": "instruction is required"}
-    prompt = f"""You are CORE's ambiguity resolver. Analyze this instruction for unclear elements.
-
-Instruction: {instruction}
-
-Return ONLY valid JSON:
-{{
-  "ambiguities": [
-    {{"what": "...", "options": ["...", "..."], "chosen": "...", "risk_level": "low|medium|high", "reason_chosen": "..."}}
-  ],
-  "safe_to_proceed": true,
-  "interpretation_chosen": "...",
-  "confidence": 0.0,
-  "needs_owner_clarification": false,
-  "clarification_question": ""
-}}"""
     try:
-        result = groq_chat([{"role": "user", "content": prompt}], model=GROQ_MODEL, temperature=0.1)
-        parsed = json.loads(result)
-        parsed["ok"] = True
-        parsed["instruction"] = instruction
-        return parsed
+        rules = sb_get("behavioral_rules", "domain=eq.universal&active=eq.true&limit=10&id=gt.1", svc=True) or []
+        kb = sb_get("knowledge_base", "domain=eq.core_agi&limit=5&id=gt.1", svc=True) or []
+        return {
+            "ok": True,
+            "instruction": instruction,
+            "relevant_rules": [{"trigger": r.get("trigger"), "pointer": r.get("pointer")} for r in rules],
+            "relevant_kb": [{"topic": k.get("topic"), "content": k.get("content")} for k in kb],
+            "instruction_to_claude": "Claude: identify ambiguities in the instruction, list interpretations, pick lowest-risk one. Return ambiguities[], safe_to_proceed, interpretation_chosen, confidence, needs_owner_clarification, clarification_question."
+        }
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
@@ -5501,35 +5463,28 @@ TOOLS["scope_tracker"] = {"fn": t_scope_tracker, "perm": "READ",
 
 
 def t_lookahead(current_action: str = "", current_state: str = "", steps_ahead: int = 2):
-    """AGI-12/S4: Multi-step consequence modeling before acting.
-    Models N+1 and N+2 states. Returns blocking_detected if a future state is risky."""
+    """AGI-12/S4: Fetch Supabase context for multi-step consequence modeling.
+    Returns past failure patterns for Claude to model N+1 and N+2 states natively.
+    Claude generates: next_states, blocking_detected, recommendation."""
     if not current_action:
         return {"ok": False, "error": "current_action is required"}
     try:
         steps_ahead = int(steps_ahead)
     except (TypeError, ValueError):
         steps_ahead = 2
-    prompt = f"""You are CORE's lookahead engine. Model the next {steps_ahead} steps after this action.
-
-Current action: {current_action}
-Current system state: {current_state}
-
-Return ONLY valid JSON:
-{{
-  "next_states": [
-    {{"step": 1, "state_after": "...", "risk": "low|medium|high", "risk_description": "..."}}
-  ],
-  "blocking_detected": false,
-  "blocking_reason": "",
-  "recommendation": "proceed|reconsider|abort",
-  "summary": "..."
-}}"""
     try:
-        result = groq_chat([{"role": "user", "content": prompt}], model=GROQ_MODEL, temperature=0.2)
-        parsed = json.loads(result)
-        parsed["ok"] = True
-        parsed["current_action"] = current_action
-        return parsed
+        # Get top patterns for consequence modeling
+        patterns = sb_get("pattern_frequency", "order=freq.desc&limit=10&id=gt.1", svc=True) or []
+        mistakes = sb_get("mistakes", "order=created_at.desc&limit=8&id=gt.1", svc=True) or []
+        return {
+            "ok": True,
+            "current_action": current_action,
+            "current_state": current_state,
+            "steps_ahead": steps_ahead,
+            "top_failure_patterns": [{"pattern": p.get("pattern"), "domain": p.get("domain"), "freq": p.get("freq")} for p in patterns],
+            "recent_mistakes": [{"context": m.get("context"), "what_failed": m.get("what_failed"), "root_cause": m.get("root_cause")} for m in mistakes],
+            "instruction": f"Claude: model the next {steps_ahead} system states after this action. Return next_states (step, state_after, risk, risk_description), blocking_detected, blocking_reason, recommendation (proceed|reconsider|abort), summary."
+        }
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
@@ -5543,29 +5498,16 @@ TOOLS["lookahead"] = {"fn": t_lookahead, "perm": "READ",
 
 
 def t_sequence_plan(subtasks: str = ""):
-    """AGI-12/S5: Parallel vs sequential discrimination for subtasks.
-    Returns recommended execution order and parallel groups."""
+    """AGI-12/S5: Return subtask list for Claude to sequence natively.
+    No Supabase fetch needed — pure reasoning from input.
+    Claude generates: sequential order, parallel_groups, dependency_map, race_condition_risks."""
     if not subtasks:
         return {"ok": False, "error": "subtasks list is required"}
-    prompt = f"""You are CORE's execution sequencer. Analyze these subtasks for dependencies and parallelism.
-
-Subtasks: {subtasks}
-
-Return ONLY valid JSON:
-{{
-  "sequential": [{{"id": "...", "must_follow": "..."}}],
-  "parallel_groups": [["S2", "S3"]],
-  "recommended_order": ["S1", ["S2", "S3"], "S4"],
-  "dependency_map": {{"S2": ["S1"], "S3": ["S1"]}},
-  "race_condition_risks": ["..."]
-}}"""
-    try:
-        result = groq_chat([{"role": "user", "content": prompt}], model=GROQ_FAST, temperature=0.1)
-        parsed = json.loads(result)
-        parsed["ok"] = True
-        return parsed
-    except Exception as e:
-        return {"ok": False, "error": str(e)}
+    return {
+        "ok": True,
+        "subtasks": subtasks,
+        "instruction": "Claude: analyze these subtasks for dependencies and side effects. Return sequential[], parallel_groups[], recommended_order[], dependency_map{}, race_condition_risks[]."
+    }
 
 TOOLS["sequence_plan"] = {"fn": t_sequence_plan, "perm": "READ",
     "args": [
@@ -5575,29 +5517,23 @@ TOOLS["sequence_plan"] = {"fn": t_sequence_plan, "perm": "READ",
 
 
 def t_negative_space(task_description: str = "", domain: str = "general"):
-    """AGI-12/S6: Enumerate what NOT to do for a given task.
-    Returns forbidden_actions list with reasons and risk levels."""
+    """AGI-12/S6: Fetch all domain mistakes from Supabase for negative space reasoning.
+    Returns full mistake history for Claude to enumerate forbidden actions natively.
+    Claude generates: forbidden_actions[], common_mistakes_in_domain[], summary."""
     if not task_description:
         return {"ok": False, "error": "task_description is required"}
-    prompt = f"""You are CORE's negative space analyzer. For this task, enumerate actions that are tempting but wrong.
-
-Task: {task_description}
-Domain: {domain}
-
-Return ONLY valid JSON:
-{{
-  "forbidden_actions": [
-    {{"action": "...", "reason": "...", "risk": "medium|high|critical", "tempting_because": "..."}}
-  ],
-  "common_mistakes_in_domain": ["..."],
-  "summary": "..."
-}}"""
     try:
-        result = groq_chat([{"role": "user", "content": prompt}], model=GROQ_MODEL, temperature=0.3)
-        parsed = json.loads(result)
-        parsed["ok"] = True
-        parsed["task_description"] = task_description
-        return parsed
+        mistakes = sb_get("mistakes", f"domain=eq.{domain}&order=created_at.desc&limit=20&id=gt.1", svc=True) or []
+        if not mistakes:
+            # Fall back to all domains if no domain-specific mistakes
+            mistakes = sb_get("mistakes", "order=created_at.desc&limit=15&id=gt.1", svc=True) or []
+        return {
+            "ok": True,
+            "task_description": task_description,
+            "domain": domain,
+            "domain_mistakes": [{"context": m.get("context"), "what_failed": m.get("what_failed"), "root_cause": m.get("root_cause"), "how_to_avoid": m.get("how_to_avoid")} for m in mistakes],
+            "instruction": "Claude: from this mistake history, enumerate the forbidden_actions (tempting but wrong) for this task. Include action, reason, risk (medium|high|critical), tempting_because. Also list common_mistakes_in_domain and a summary."
+        }
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
@@ -5884,31 +5820,22 @@ TOOLS["resource_model"] = {"fn": t_resource_model, "perm": "READ",
 
 
 def t_impact_model(action: str = "", current_state: str = ""):
-    """AGI-14/S2: Stakeholder and system impact modeling.
-    Models who/what is affected, timing risk, side effects on other pending tasks."""
+    """AGI-14/S2: Fetch infrastructure map + pending tasks for system impact modeling.
+    Returns live system context for Claude to model impact natively.
+    Claude generates: affected_components, timing_risks, side_effects, proceed_recommended."""
     if not action:
         return {"ok": False, "error": "action is required"}
-    prompt = f"""You are CORE's impact modeler. Analyze this action for system-wide effects.
-
-Action: {action}
-Current system state: {current_state}
-
-Return ONLY valid JSON:
-{{
-  "affected_components": ["railway", "supabase", "github"],
-  "timing_safe": true,
-  "timing_risks": ["..."],
-  "side_effects": [{{"component": "...", "effect": "...", "severity": "low|medium|high"}}],
-  "pending_task_interference": ["..."],
-  "proceed_recommended": true,
-  "summary": "..."
-}}"""
     try:
-        result = groq_chat([{"role": "user", "content": prompt}], model=GROQ_FAST, temperature=0.2)
-        parsed = json.loads(result)
-        parsed["ok"] = True
-        parsed["action"] = action
-        return parsed
+        infra = sb_get("infrastructure_map", "status=eq.active&id=gt.1", svc=True) or []
+        pending_tasks = sb_get("task_queue", "status=eq.pending&order=priority.desc&limit=5&id=gt.1", svc=True) or []
+        return {
+            "ok": True,
+            "action": action,
+            "current_state": current_state,
+            "active_infrastructure": [{"component": i.get("component"), "label": i.get("label"), "notes": i.get("notes")} for i in infra],
+            "pending_tasks": [{"task": t.get("task", "{}")[:120], "priority": t.get("priority")} for t in pending_tasks],
+            "instruction": "Claude: given this infrastructure and pending tasks, model the system impact of the action. Return affected_components[], timing_safe, timing_risks[], side_effects[], pending_task_interference[], proceed_recommended, summary."
+        }
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
