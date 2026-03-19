@@ -544,11 +544,43 @@ def t_debug_fn(fn_name: str, dry_run: bool = True, extra_args: dict = None) -> d
     }
 
     if fn_name in known_staged:
-        # Staged execution: monkey-patch sb_post to no-op if dry_run
         from core_config import sb_get, sb_post, groq_chat, GROQ_MODEL
         import json as _json
 
-        # Stage 1 -- preflight data fetch
+        # -- Gemini staged test --
+        if known_staged[fn_name] == "gemini":
+            def gemini_preflight():
+                from core_config import _GEMINI_KEYS, _GEMINI_MODEL
+                return {"key_count": len(_GEMINI_KEYS), "model": _GEMINI_MODEL,
+                        "exhausted_keys": [i for i, k in enumerate(_GEMINI_KEYS) if not k]}
+            ok, _ = stage("1_preflight", gemini_preflight)
+            if not ok:
+                return {"fn": fn_name, "dry_run": dry_run, "stages": stages, "final": "failed_at_stage_1", "result": None}
+            if not dry_run:
+                call_kwargs = extra_args or {"system": "test", "user": "reply OK", "max_tokens": 10}
+                ok2, result = stage("2_execute", target_fn, **call_kwargs)
+            else:
+                stages.append({"stage": "2_execute", "status": "dry_run_skipped", "data": "pass dry_run=false to call Gemini API"})
+                ok2, result = True, None
+            return {"fn": fn_name, "dry_run": dry_run, "stages": stages, "final": "ok" if ok2 else "failed_at_stage_2", "result": result}
+
+        # -- Groq staged test --
+        if known_staged[fn_name] == "groq":
+            def groq_preflight():
+                from core_config import GROQ_API_KEY, GROQ_MODEL
+                return {"model": GROQ_MODEL, "key_set": bool(GROQ_API_KEY)}
+            ok, _ = stage("1_preflight", groq_preflight)
+            if not ok:
+                return {"fn": fn_name, "dry_run": dry_run, "stages": stages, "final": "failed_at_stage_1", "result": None}
+            if not dry_run:
+                call_kwargs = extra_args or {"system": "test", "user": "reply OK", "max_tokens": 10}
+                ok2, result = stage("2_execute", target_fn, **call_kwargs)
+            else:
+                stages.append({"stage": "2_execute", "status": "dry_run_skipped", "data": "pass dry_run=false to call Groq API"})
+                ok2, result = True, None
+            return {"fn": fn_name, "dry_run": dry_run, "stages": stages, "final": "ok" if ok2 else "failed_at_stage_2", "result": result}
+
+        # Stage 1 -- preflight data fetch (for pipeline functions)
         def do_preflight():
             mistakes = sb_get("mistakes", "select=domain,what_failed&order=id.desc&limit=5", svc=True)
             hots_count = len(sb_get("hot_reflections", "select=id&processed_by_cold=eq.0", svc=True) or [])
