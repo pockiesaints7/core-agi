@@ -1,5 +1,14 @@
 [
   {
+    "id": 330,
+    "domain": "core_agi.deployment",
+    "what_failed": "gh_search_replace always prepends [skip ci] to commit messages. deploy_and_wait reports success on the already-running version without verifying the new commit was actually built. Created a false-confidence deploy loop: patch -> [skip ci] commit -> deploy_and_wait succeeds (old version) -> test fails -> repeat.",
+    "correct_approach": "After any gh_search_replace or multi_patch, check the commit message Railway actually deployed against the commit SHA that was just pushed. If they differ, force-deploy via: push railway.json with a non-[skip ci] message (PowerShell PUT to GitHub API). Never rely on deploy_and_wait alone to confirm new code is live -- always verify commit SHA matches.",
+    "severity": "high",
+    "root_cause": "gh_search_replace tool hardcodes [skip ci] prefix on all commit messages. CORE never cross-checked whether the deployed commit SHA matched the patched commit SHA. deploy_and_wait only checks deploy status, not which commit is running.",
+    "created_at": "2026-03-19T10:26:56.317497+00:00"
+  },
+  {
     "id": 329,
     "domain": "supabase",
     "what_failed": "CREATE INDEX with WHERE active=true on mistakes table \u2014 column active does not exist on that table.",
