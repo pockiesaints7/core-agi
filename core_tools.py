@@ -2208,7 +2208,6 @@ def t_ask(question: str, domain: str = ""):
     if kb_context: user += f"Relevant knowledge:\n{kb_context}\n\n"
     if mistake_context: user += f"Known pitfalls to avoid:\n{mistake_context}\n\n"
     user += "Answer:"
-    model = GROQ_MODEL if (len(kb_results) > 3 or len(question) > 200) else GROQ_FAST
     try:
         answer = gemini_chat(system, user, max_tokens=512)
         return {"ok": True, "answer": answer, "kb_hits": len(kb_results), "model": "gemini-2.5-flash-lite", "question": question}
