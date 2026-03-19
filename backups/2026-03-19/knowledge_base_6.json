@@ -1,5 +1,14 @@
 [
   {
+    "id": 1555,
+    "domain": "backlog",
+    "topic": "[BACKLOG-1] User preferences and feedback collection",
+    "instruction": null,
+    "content": "type=missing_data effort=low impact=high domain=academic\nImplement mechanisms to collect and store user preferences (e.g., text format, tone) and feedback (e.g., ratings, comments) to improve the overall user experience and refine task-specific performance.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
     "id": 1556,
     "domain": "backlog",
     "topic": "[BACKLOG-4] Context-driven task routing",
@@ -1787,15 +1796,6 @@
     "topic": "[BACKLOG-1] Incorporate missing knowledge on data analysis techniques",
     "instruction": null,
     "content": "type=missing_data effort=medium impact=medium domain=data\nAdd knowledge entries on data analysis techniques, such as regression, classification, and clustering, to enhance task completion",
-    "confidence": "medium",
-    "active": true
-  },
-  {
-    "id": 1765,
-    "domain": "backlog",
-    "topic": "[BACKLOG-5] Data visualization techniques",
-    "instruction": null,
-    "content": "type=new_kb effort=high impact=high domain=data\nCreate a knowledge base on data visualization techniques, including common charts and plots, to support tasks like 'visualize trends'",
     "confidence": "medium",
     "active": true
   }
