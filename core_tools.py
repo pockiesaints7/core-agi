@@ -6015,3 +6015,25 @@ TOOLS["loop_detect"] = {"fn": t_loop_detect, "perm": "WRITE",
         {"name": "clear", "type": "string", "description": "true=reset this session's action log"}
     ],
     "desc": "AGI-14: Action loop detection. Tracks actions taken this session by fingerprint. Returns loop_detected if same action attempted before. CORE must change approach if loop detected — never retry blindly."}
+
+
+# --- AGI-01: Cross-Domain Synthesis ------------------------------------------
+
+def t_synthesize_cross_domain():
+    """AGI-01: Manual trigger for cross-domain synthesis. Runs _run_cross_domain_synthesis() immediately.
+    Reads top patterns per domain, finds structural similarities via Groq,
+    writes insights to knowledge_base(domain=synthesis)."""
+    try:
+        from core_train import _run_cross_domain_synthesis
+        _run_cross_domain_synthesis()
+        return {
+            "ok": True,
+            "message": "Cross-domain synthesis triggered. Check Railway logs for [SYNTH] output and Telegram for results.",
+            "instruction": "Check railway_logs_live keyword=SYNTH to monitor progress."
+        }
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+TOOLS["synthesize_cross_domain"] = {"fn": t_synthesize_cross_domain, "perm": "WRITE",
+    "args": [],
+    "desc": "AGI-01: Manual trigger for weekly cross-domain synthesis. Reads top patterns per domain, finds structural similarities via Groq, writes insights to knowledge_base(domain=synthesis). Also runs automatically every Wednesday."}
