@@ -66,97 +66,272 @@ def get_current_step() -> str:
         return f"(step read error: {e})"
 
 
-# -- Schema registry: ground-truth column/enum enforcement -------------------
-# Inline schema -- no network call, always available, instant response.
-# Source: operating_context.json as of 2026-03-19. Update here when schema changes.
-_SCHEMA_REGISTRY = {
+# =============================================================================
+# _SB_SCHEMA -- single source of truth for ALL Supabase tables.
+# Used by: t_sb_query (read guard), t_sb_insert/patch/upsert/delete (write guard),
+#          t_task_add, t_add_knowledge, t_kb_update, _validate_write.
+# Never duplicate this. Update here when DDL changes.
+# =============================================================================
+_SB_SCHEMA = {
+    # --- TOMBSTONE: never query these ---
+    "_tombstone": {
+        "playbook", "memory", "master_prompt", "patterns", "training_sessions",
+        "training_sessions_v2", "training_flags", "session_learning", "agent_registry",
+        "knowledge_blocks", "agi_mistakes", "stack_registry", "vault_logs", "vault"
+    },
+    # --- PROTECTED: no deletes allowed ---
+    "_protected": {
+        "sessions", "mistakes", "hot_reflections", "cold_reflections",
+        "pattern_frequency", "changelog", "evolution_queue"
+    },
+    # --- TABLE DEFINITIONS ---
     "tables": {
         "knowledge_base": {
-            "pk_type": "int4_serial",
+            "pk": "id", "pk_type": "bigserial",
             "columns": {"id": "integer", "domain": "text", "topic": "text", "content": "text",
-                         "source": "text", "confidence": "text_enum", "tags": "text[]",
-                         "instruction": "text", "source_type": "text", "source_ref": "text",
-                         "active": "boolean", "created_at": "timestamptz", "updated_at": "timestamptz"},
-            "allowed_values": {"confidence": ["low", "medium", "high", "proven"]}
+                        "source": "text", "confidence": "text_enum", "tags": "text[]",
+                        "instruction": "text", "source_type": "text", "source_ref": "text",
+                        "active": "boolean", "created_at": "timestamptz", "updated_at": "timestamptz"},
+            "required": ["domain", "topic"],
+            "enums": {"confidence": ["low", "medium", "high", "proven"]},
+            "fat_columns": ["content", "instruction"],
+            "safe_select": "id,domain,topic,confidence,source,created_at",
+            "on_conflict": "domain,topic",
+            "notes": "Use id=gt.1. contradiction check runs in t_add_knowledge before insert."
         },
         "behavioral_rules": {
-            "pk_type": "int8_serial",
+            "pk": "id", "pk_type": "bigserial",
             "columns": {"id": "bigint", "trigger": "text", "pointer": "text", "full_rule": "text",
-                         "domain": "text", "priority": "integer", "active": "boolean",
-                         "tested": "boolean", "source": "text", "confidence": "float8",
-                         "expires_at": "timestamptz", "created_at": "timestamptz"},
-            "allowed_values": {"domain": ["auth","code","failure_recovery","github","groq",
-                "local_pc","postgres","powershell","project","railway","reasoning",
-                "supabase","telegram","universal","zapier"]}
+                        "domain": "text", "priority": "integer", "active": "boolean",
+                        "tested": "boolean", "source": "text", "confidence": "float8",
+                        "expires_at": "timestamptz", "created_at": "timestamptz"},
+            "required": ["trigger", "domain"],
+            "enums": {"domain": ["auth","code","failure_recovery","github","groq","local_pc",
+                                  "postgres","powershell","project","railway","reasoning",
+                                  "supabase","telegram","universal","zapier"]},
+            "fat_columns": ["full_rule", "pointer"],
+            "safe_select": "id,domain,trigger,confidence,active,source,created_at",
+            "notes": "Use id=gt.1. 120+ active rules -- always paginate."
         },
         "hot_reflections": {
-            "pk_type": "int8_serial",
+            "pk": "id", "pk_type": "bigserial",
             "columns": {"id": "bigint", "task_summary": "text", "domain": "text",
-                         "quality_score": "float8", "reflection_text": "text",
-                         "processed_by_cold": "boolean", "source": "text", "created_at": "timestamptz"},
-            "allowed_values": {}
+                        "quality_score": "float8", "reflection_text": "text",
+                        "new_patterns": "text", "new_mistakes": "text", "gaps_identified": "text",
+                        "processed_by_cold": "boolean", "source": "text", "created_at": "timestamptz"},
+            "required": ["domain"],
+            "enums": {},
+            "fat_columns": ["new_patterns", "new_mistakes", "gaps_identified", "task_summary", "reflection_text"],
+            "safe_select": "id,domain,quality_score,source,processed_by_cold,created_at",
+            "notes": "Use id=gt.1. PROTECTED -- no deletes."
         },
         "mistakes": {
-            "pk_type": "int4_serial",
+            "pk": "id", "pk_type": "bigserial",
             "columns": {"id": "integer", "context": "text", "what_failed": "text",
-                         "root_cause": "text", "correct_approach": "text", "domain": "text",
-                         "how_to_avoid": "text", "severity": "text", "created_at": "timestamptz"},
-            "allowed_values": {"severity": ["low", "medium", "high", "critical"]}
+                        "root_cause": "text", "correct_approach": "text", "domain": "text",
+                        "how_to_avoid": "text", "severity": "text", "tags": "text[]",
+                        "created_at": "timestamptz"},
+            "required": ["domain", "what_failed"],
+            "enums": {"severity": ["low", "medium", "high", "critical"]},
+            "fat_columns": ["context", "correct_approach", "how_to_avoid"],
+            "safe_select": "id,domain,what_failed,severity,root_cause,created_at",
+            "notes": "Use id=gt.1. PROTECTED -- no deletes."
         },
         "task_queue": {
-            "pk_type": "uuid",
+            "pk": "id", "pk_type": "uuid",
             "columns": {"id": "uuid", "task": "text", "status": "text", "priority": "integer",
-                         "result": "text", "source": "text", "next_step": "text",
-                         "blocked_by": "text[]", "checkpoint": "jsonb", "created_at": "timestamptz"},
-            "allowed_values": {"status": ["pending", "in_progress", "done", "failed"]}
+                        "result": "text", "error": "text", "source": "text", "chat_id": "text",
+                        "next_step": "text", "blocked_by": "text", "checkpoint": "jsonb",
+                        "checkpoint_at": "timestamptz", "checkpoint_draft": "text",
+                        "project_id": "text", "created_at": "timestamptz", "updated_at": "timestamptz"},
+            "required": ["task", "status"],
+            "enums": {"status": ["pending", "in_progress", "done", "failed"],
+                      "source": ["mcp_session", "self_assigned", "core_v6_registry", "bulk_apply", "improvement"]},
+            "fat_columns": ["task", "checkpoint", "checkpoint_draft", "result"],
+            "safe_select": "id,status,priority,source,next_step,blocked_by,created_at",
+            "notes": "UUID PK -- no id=gt.1 rule. task column is string-encoded JSON blob -- never select=*."
+        },
+        "evolution_queue": {
+            "pk": "id", "pk_type": "bigserial",
+            "columns": {"id": "bigint", "change_type": "text", "change_summary": "text",
+                        "diff_content": "text", "pattern_key": "text", "confidence": "float8",
+                        "status": "text", "source": "text", "impact": "text",
+                        "recommendation": "text", "applied_at": "timestamptz", "created_at": "timestamptz"},
+            "required": ["change_type", "status"],
+            "enums": {"status": ["pending", "pending_desktop", "applied", "rejected", "synthesized"],
+                      "change_type": ["knowledge", "code", "new_tool", "script_template", "behavior", "backlog"]},
+            "fat_columns": ["diff_content", "change_summary"],
+            "safe_select": "id,change_type,status,confidence,pattern_key,source,created_at",
+            "notes": "Use id=gt.1. PROTECTED -- no deletes."
+        },
+        "sessions": {
+            "pk": "id", "pk_type": "bigserial",
+            "columns": {"id": "bigint", "started_at": "timestamptz", "ended_at": "timestamptz",
+                        "summary": "text", "actions": "text", "patterns": "text",
+                        "domain": "text", "quality": "float8",
+                        "state_key": "text", "state_value": "text"},
+            "required": [],
+            "enums": {},
+            "fat_columns": ["summary", "actions", "patterns"],
+            "safe_select": "id,domain,quality,started_at,ended_at,state_key,state_value",
+            "notes": "Use id=gt.1. PROTECTED -- no deletes."
+        },
+        "pattern_frequency": {
+            "pk": "id", "pk_type": "bigserial",
+            "columns": {"id": "bigint", "pattern_key": "text", "frequency": "integer",
+                        "domain": "text", "description": "text", "auto_applied": "boolean",
+                        "last_seen": "timestamptz", "stale": "boolean"},
+            "required": ["pattern_key"],
+            "enums": {},
+            "fat_columns": ["description"],
+            "safe_select": "id,pattern_key,frequency,domain,auto_applied,last_seen,stale",
+            "on_conflict": "pattern_key",
+            "notes": "Use id=gt.1. PROTECTED -- no deletes."
+        },
+        "changelog": {
+            "pk": "id", "pk_type": "bigserial",
+            "columns": {"id": "bigint", "action": "text", "detail": "text",
+                        "domain": "text", "created_at": "timestamptz"},
+            "required": ["action"],
+            "enums": {},
+            "fat_columns": ["detail"],
+            "safe_select": "id,action,domain,created_at",
+            "notes": "Use id=gt.1. PROTECTED -- no deletes."
+        },
+        "cold_reflections": {
+            "pk": "id", "pk_type": "bigserial",
+            "columns": {"id": "bigint", "period_start": "timestamptz", "period_end": "timestamptz",
+                        "hot_count": "integer", "patterns_found": "integer",
+                        "evolutions_queued": "integer", "auto_applied": "integer",
+                        "summary_text": "text", "created_at": "timestamptz"},
+            "required": [],
+            "enums": {},
+            "fat_columns": ["summary_text"],
+            "safe_select": "id,period_start,period_end,hot_count,patterns_found,evolutions_queued,auto_applied,created_at",
+            "notes": "Use id=gt.1. PROTECTED -- no deletes."
         },
         "quality_metrics": {
-            "pk_type": "int8_serial",
+            "pk": "id", "pk_type": "bigserial",
             "columns": {"id": "bigint", "session_id": "uuid", "quality_score": "float8",
-                         "tasks_completed": "integer", "mistakes_made": "integer",
-                         "owner_corrections": "integer", "assumptions_caught": "integer",
-                         "domain": "text", "notes": "text", "created_at": "timestamptz"},
-            "allowed_values": {}
-        }
+                        "tasks_completed": "integer", "mistakes_made": "integer",
+                        "owner_corrections": "integer", "assumptions_caught": "integer",
+                        "domain": "text", "notes": "text", "created_at": "timestamptz"},
+            "required": ["quality_score"],
+            "enums": {},
+            "fat_columns": ["notes"],
+            "safe_select": "id,session_id,quality_score,tasks_completed,mistakes_made,domain,created_at",
+            "notes": "Use id=gt.1."
+        },
+        "system_map": {
+            "pk": "id", "pk_type": "bigserial",
+            "columns": {"id": "bigint", "layer": "text", "component": "text",
+                        "description": "text", "status": "text", "last_verified": "timestamptz",
+                        "notes": "text"},
+            "required": ["layer", "component"],
+            "enums": {"status": ["active", "degraded", "tombstone"]},
+            "fat_columns": ["description", "notes"],
+            "safe_select": "id,layer,component,status,last_verified",
+            "notes": "Use id=gt.1."
+        },
+        "script_templates": {
+            "pk": "id", "pk_type": "bigserial",
+            "columns": {"id": "bigint", "name": "text", "description": "text",
+                        "trigger_pattern": "text", "code": "text",
+                        "use_count": "integer", "created_at": "timestamptz"},
+            "required": ["name"],
+            "enums": {},
+            "fat_columns": ["code"],
+            "safe_select": "id,name,description,trigger_pattern,use_count,created_at",
+            "on_conflict": "name",
+            "notes": "Use id=gt.1."
+        },
     }
 }
 
+def _sb_schema(table: str) -> dict:
+    """Return schema entry for a table, or empty dict if unknown."""
+    return _SB_SCHEMA["tables"].get(table, {})
+
 def _load_schema_registry():
-    """Return inline schema registry -- no network call, always instant."""
-    return _SCHEMA_REGISTRY
+    """Compat shim -- returns _SB_SCHEMA in old format for _validate_write."""
+    # Rebuild old format on the fly from unified schema
+    tables = {}
+    for tname, tdef in _SB_SCHEMA["tables"].items():
+        tables[tname] = {
+            "pk_type": tdef.get("pk_type", ""),
+            "columns": tdef.get("columns", {}),
+            "required": tdef.get("required", []),
+            "enums": tdef.get("enums", {}),
+        }
+    return {"tables": tables}
 
 def _validate_write(table: str, data: dict) -> list:
-    """Validate data dict against schema registry before any Supabase write.
-    Returns list of error strings. Empty list = OK to write.
-    Logs all violations to stdout so they appear in Railway logs."""
+    """Validate data dict against _SB_SCHEMA before any Supabase write.
+    Returns list of error strings (empty = OK). Logs violations to Railway stdout.
+    Checks: tombstone table, unknown columns, required fields, enum values."""
     errors = []
-    reg = _load_schema_registry()
-    tables = reg.get("tables", {})
-    if table not in tables:
-        # Unknown table -- warn but don't block (table may be new)
+    # Block tombstone tables
+    if table in _SB_SCHEMA.get("_tombstone", set()):
+        errors.append(f"TOMBSTONE_TABLE: '{table}' has been retired -- never query or write to it")
+        print(f"[SCHEMA VIOLATION] {table}: TOMBSTONE blocked")
+        return errors
+    schema = _sb_schema(table)
+    if not schema:
         print(f"[SCHEMA] WARNING: table '{table}' not in registry -- write proceeding unvalidated")
         return errors
-    schema = tables[table]
     known_cols = schema.get("columns", {})
-    enums = schema.get("enums", {})
-    required = schema.get("required", [])
-    # Check for unknown columns
+    enums      = schema.get("enums", {})
+    required   = schema.get("required", [])
     for col in data:
         if col not in known_cols:
-            errors.append(f"UNKNOWN_COLUMN: '{col}' does not exist in {table}. Known: {list(known_cols.keys())}")
-    # Check required fields
+            errors.append(f"UNKNOWN_COLUMN: '{col}' not in {table}. Known: {sorted(known_cols.keys())}")
     for col in required:
         if col not in data or data[col] is None:
-            errors.append(f"MISSING_REQUIRED: '{col}' is required in {table}")
-    # Check enum values
+            errors.append(f"MISSING_REQUIRED: '{col}' required in {table}")
     for col, allowed in enums.items():
         if col in data and data[col] is not None:
             if str(data[col]) not in [str(v) for v in allowed]:
-                errors.append(f"INVALID_ENUM: '{col}'='{data[col]}' not in {allowed} for {table}")
+                errors.append(f"INVALID_ENUM: '{col}'='{data[col]}' -- allowed: {allowed}")
     if errors:
-        for e in errors:
-            print(f"[SCHEMA VIOLATION] {table}: {e}")
+        for e in errors: print(f"[SCHEMA VIOLATION] {table}: {e}")
     return errors
+
+def _validate_read(table: str, select: str, filters: str = "") -> tuple:
+    """Validate a read operation. Returns (safe_select, warnings_list).
+    Blocks tombstone tables, auto-downgrades select=* on fat-column tables,
+    validates requested columns, warns about missing id=gt.1 on bigserial PKs."""
+    warnings = []
+    if table in _SB_SCHEMA.get("_tombstone", set()):
+        return None, [f"TOMBSTONE_TABLE: '{table}' is retired -- do not query"]
+    schema = _sb_schema(table)
+    if not schema:
+        warnings.append(f"table '{table}' not in schema registry -- proceeding blind")
+        return select, warnings
+    sel = select.strip() if select and select.strip() else "*"
+    fat = schema.get("fat_columns", [])
+    safe = schema.get("safe_select", "*")
+    if sel == "*" and fat:
+        warnings.append(
+            f"select=* auto-downgraded on '{table}' (fat: {fat}). "
+            f"Using safe_select: '{safe}'. Pass explicit columns to override."
+        )
+        sel = safe
+    else:
+        requested = [c.strip() for c in sel.split(",") if c.strip()]
+        known = set(schema["columns"].keys())
+        bad = [c for c in requested if c not in known and "->" not in c and "(" not in c]
+        fat_req = [c for c in requested if c in fat]
+        if bad:
+            warnings.append(f"unknown columns: {bad}. table '{table}' has: {sorted(known)}")
+        if fat_req:
+            warnings.append(
+                f"fat column(s) selected: {fat_req} -- risk of response overflow at scale. "
+                f"Recommended: '{safe}'"
+            )
+    pk_type = schema.get("pk_type", "")
+    if pk_type == "bigserial" and filters and "id=gt." not in filters and "id=eq." not in filters:
+        warnings.append(f"hint: '{table}' bigserial PK -- consider adding id=gt.1 to skip probe row")
+    return sel, warnings
 
 
 # -- MCP tool implementations -------------------------------------------------
@@ -433,10 +608,10 @@ def t_notify(message, level="info"):
     icons = {"info": "i", "warn": "!", "alert": "ALERT", "ok": "OK"}
     return {"ok": notify(f"{icons.get(level, '>')} CORE\n{message}")}
 
-# Schema registry -- all active tables, their columns, and fat columns to warn about.
-# fat_columns: large JSONB/text blobs that cause h11 Content-Length overflow when selected at scale.
-# safe_select: recommended select string to use instead of * for each table.
-_TABLE_SCHEMAS = {
+# _TABLE_SCHEMAS removed -- unified into _SB_SCHEMA above.
+# Legacy reference kept as alias for any internal code still using it.
+_TABLE_SCHEMAS = _SB_SCHEMA["tables"]  # type: ignore
+_TABLE_SCHEMAS_REMOVED = {
     "task_queue": {
         "pk": "id", "pk_type": "uuid",
         "columns": ["id", "task", "status", "priority", "result", "error",
