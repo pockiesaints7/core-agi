@@ -4012,14 +4012,28 @@ def _mcp_tool_schema(name, tool):
     _ARRAY_PARAMS = {"patches", "project_ids", "ids", "files", "edits", "actions"}
     props = {}
     for a in tool["args"]:
-        if a in _ARRAY_PARAMS:
-            props[a] = {
-                "type": "array",
-                "description": a,
-                "items": {"type": "object"}
-            }
+        # Support both plain string args and rich dict args {"name": x, "type": y, "description": z}
+        if isinstance(a, dict):
+            arg_name = a.get("name", str(a))
+            arg_type = a.get("type", "string")
+            arg_desc = a.get("description", arg_name)
+            if arg_name in _ARRAY_PARAMS or arg_type == "array":
+                props[arg_name] = {
+                    "type": "array",
+                    "description": arg_desc,
+                    "items": {"type": "object"}
+                }
+            else:
+                props[arg_name] = {"type": arg_type, "description": arg_desc}
         else:
-            props[a] = {"type": "string", "description": a}
+            if a in _ARRAY_PARAMS:
+                props[a] = {
+                    "type": "array",
+                    "description": a,
+                    "items": {"type": "object"}
+                }
+            else:
+                props[a] = {"type": "string", "description": a}
     return {"name": name, "description": tool.get("desc", name),
             "inputSchema": {"type": "object", "properties": props}}
 
