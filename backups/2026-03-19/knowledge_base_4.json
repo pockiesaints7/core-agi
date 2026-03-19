@@ -1,5 +1,14 @@
 [
   {
+    "id": 1142,
+    "domain": "backlog",
+    "topic": "[BACKLOG-4] General Code Refactoring",
+    "instruction": null,
+    "content": "type=new_kb effort=medium impact=medium domain=code\nCreate knowledge base entries for general code refactoring techniques such as loop optimization, variable renaming, and function extraction.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
     "id": 1143,
     "domain": "backlog",
     "topic": "[BACKLOG-3] Improved Entity Recognition",
@@ -1787,15 +1796,6 @@
     "topic": "[BACKLOG-2] Add code completion",
     "instruction": null,
     "content": "type=telegram_command effort=low impact=high domain=code\nIntegrate a code completion tool, such as CodeCompletion or CodeIntelligence, to enhance responses for coding tasks.",
-    "confidence": "medium",
-    "active": true
-  },
-  {
-    "id": 1344,
-    "domain": "backlog",
-    "topic": "[BACKLOG-1] Python debugger",
-    "instruction": null,
-    "content": "type=missing_data effort=low impact=low domain=code\nEnhance the knowledge base with information about common Python debuggers and their usage.",
     "confidence": "medium",
     "active": true
   }
