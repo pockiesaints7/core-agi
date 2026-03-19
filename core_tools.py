@@ -5045,12 +5045,11 @@ def t_backup_brain(dry_run: str = "false") -> dict:
         ci = httpx.get(f"https://api.github.com/repos/{GITHUB_REPO}/git/commits/{base_sha}", headers=h, timeout=15)
         ci.raise_for_status()
         base_tree_sha = ci.json()["tree"]["sha"]
-        tree_entries = []
-        for path, content in file_payloads.items():
-            blob = httpx.post(f"https://api.github.com/repos/{GITHUB_REPO}/git/blobs", headers=h, timeout=30,
-                              json={"content": content, "encoding": "utf-8"})
-            blob.raise_for_status()
-            tree_entries.append({"path": path, "mode": "100644", "type": "blob", "sha": blob.json()["sha"]})
+        # Inline content tree -- no separate blob API call, avoids 422 on Railway
+        tree_entries = [
+            {"path": path, "mode": "100644", "type": "blob", "content": content}
+            for path, content in file_payloads.items()
+        ]
         new_tree = httpx.post(f"https://api.github.com/repos/{GITHUB_REPO}/git/trees", headers=h, timeout=30,
                               json={"base_tree": base_tree_sha, "tree": tree_entries})
         new_tree.raise_for_status()
