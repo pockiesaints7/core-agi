@@ -1479,22 +1479,55 @@ def _patch_find(content: str, old_str: str):
     r = _find_in(nc7, no7, content, "full_whitespace_normalized")
     if r: return r
 
-    # All tiers failed -- build actionable near-miss hint
+    # Tier 8: fuzzy first-line anchor -- find closest matching line using char overlap
+    # Returns the actual file lines around the best match so CORE doesn't need gh_read_lines
     first_line = no.strip().splitlines()[0].strip() if no.strip() else ""
+    best_score = 0.0
+    best_line_idx = -1
+    all_lines = nc.splitlines()
+    if first_line and len(first_line) > 8:
+        fl_chars = set(first_line.lower())
+        for idx, line in enumerate(all_lines):
+            line_chars = set(line.strip().lower())
+            if not line_chars: continue
+            overlap = len(fl_chars & line_chars) / max(len(fl_chars | line_chars), 1)
+            # Bonus for matching start of line
+            if line.strip()[:20] == first_line[:20]:
+                overlap += 0.3
+            if overlap > best_score:
+                best_score = overlap
+                best_line_idx = idx
+
     hint = None
-    if first_line and len(first_line) > 10:
-        for line in nc.splitlines():
-            if first_line[:30] in line or line.strip()[:30] in first_line:
-                diff = list(difflib.ndiff([first_line], [line.strip()]))
-                near_diff = "".join(diff)[:300]
-                hint = (
-                    f"near_miss: {near_diff} "
-                    f"-- FIX: call gh_read_lines to get exact content, then retry with exact old_str"
-                )
-                break
-    if not hint:
-        hint = "not_found -- old_str has no close match in file. Verify the string exists with search_in_file first."
-    return False, 0, old_str, hint
+    auto_context = None
+    if best_line_idx >= 0 and best_score > 0.5:
+        # Extract surrounding context (5 lines before + 5 after)
+        ctx_start = max(0, best_line_idx - 2)
+        ctx_end   = min(len(all_lines), best_line_idx + 8)
+        ctx_lines = all_lines[ctx_start:ctx_end]
+        auto_context = {
+            "file_line_number": ctx_start + 1,  # 1-indexed
+            "actual_content": "\n".join(ctx_lines),
+            "match_score": round(best_score, 2),
+            "message": (
+                f"Best match found near line {best_line_idx + 1} (score={best_score:.2f}). "
+                f"Use this actual_content to build correct old_str -- no gh_read_lines needed."
+            )
+        }
+        # Also build char-level diff hint between first lines
+        diff = list(difflib.ndiff([first_line], [all_lines[best_line_idx].strip()]))
+        near_diff = "".join(diff)[:200]
+        hint = (
+            f"near_miss (score={best_score:.2f}): {near_diff} "
+            f"-- actual file content returned in auto_context, use it to fix old_str"
+        )
+    else:
+        hint = (
+            f"not_found -- no close match for '{first_line[:60]}'. "
+            f"Use search_in_file to locate the correct string first."
+        )
+    # Pack auto_context into hint tuple as 5th element (backwards-compatible: callers only use 4)
+    return False, 0, old_str, hint, auto_context
 
 
 def t_gh_search_replace(path="", old_str="", new_str=None, message="", repo="", dry_run="false", allow_deletion="false"):
