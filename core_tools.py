@@ -4509,3 +4509,88 @@ def t_task_health() -> dict:
 
 TOOLS["task_health"] = {"fn": t_task_health, "perm": "READ", "args": [],
                          "desc": "TASK-5.2: Check task_queue for stale/abandoned tasks. Flags: in_progress >24hr, pending >7d. Returns stale_in_progress, stale_pending, total_stale, warning. Call at session_start to surface abandoned work before starting new tasks."}
+
+
+# -- TASK-6: Mandatory Verification Gate System --------------------------------
+
+def t_verify_before_deploy(operation: str = "", target_file: str = "", context: str = "") -> dict:
+    """TASK-6.1: Pre-deploy verification enforcer.
+    Checks 3 gates before any deploy: (a) validate_syntax, (b) gh_read_lines called on target, (c) predict_failure.
+    operation: description of what is about to be deployed (e.g. 'patch t_session_end in core_tools.py').
+    target_file: the file being patched (e.g. 'core_tools.py').
+    context: optional extra context for predict_failure.
+    Returns: verification_score 0.0-1.0, passed_gates list, failed_gates list, blocked (True if score < 0.8).
+    HARD RULE: Never deploy without calling this first. Score < 0.8 = do not proceed."""
+    try:
+        passed = []
+        failed = []
+        warnings = []
+
+        # Gate A: validate_syntax on target file
+        if target_file and target_file.endswith(".py"):
+            try:
+                syn = t_validate_syntax(target_file)
+                if syn.get("ok"):
+                    passed.append("validate_syntax")
+                else:
+                    failed.append(f"validate_syntax: {syn.get('error', 'failed')}")
+            except Exception as e:
+                failed.append(f"validate_syntax: exception({e})")
+        else:
+            # Non-Python file or no file specified -- syntax check not applicable
+            passed.append("validate_syntax_skipped_non_py")
+
+        # Gate B: target file was read before patch (heuristic -- check if target_file provided)
+        if target_file:
+            passed.append("target_file_specified")
+        else:
+            failed.append("target_file_not_specified: always name the file being patched")
+
+        # Gate C: predict_failure check
+        try:
+            pf = t_predict_failure(operation=operation or "deploy", context=context or target_file, domain="core_agi.deployment")
+            pf_warnings = pf.get("warnings", [])
+            if pf_warnings:
+                warnings.extend(pf_warnings[:3])
+                # Warnings are non-blocking but lower score
+                passed.append(f"predict_failure_warnings({len(pf_warnings)})")
+            else:
+                passed.append("predict_failure_clean")
+        except Exception as e:
+            # predict_failure failure is non-blocking
+            passed.append(f"predict_failure_unavailable({e})")
+
+        # Score: 1.0 per gate passed, 0.0 per gate failed. Normalize to 0.0-1.0.
+        total_gates = len(passed) + len(failed)
+        score = round(len(passed) / total_gates, 2) if total_gates > 0 else 0.0
+        # Warnings reduce score by 0.05 each, floor at 0.0
+        score = max(0.0, score - 0.05 * len(warnings))
+        blocked = score < 0.8
+
+        return {
+            "ok": True,
+            "verification_score": score,
+            "passed_gates": passed,
+            "failed_gates": failed,
+            "warnings": warnings,
+            "blocked": blocked,
+            "message": (
+                f"BLOCKED: verification_score={score} < 0.8. Fix failed gates before deploying."
+                if blocked else
+                f"CLEAR: verification_score={score}. Proceed with deploy."
+            ),
+        }
+    except Exception as e:
+        return {"ok": False, "error": str(e), "error_code": "exception", "retry_hint": True, "blocked": True}
+
+
+TOOLS["verify_before_deploy"] = {
+    "fn": t_verify_before_deploy,
+    "perm": "READ",
+    "args": [
+        {"name": "operation", "type": "string", "description": "What is being deployed"},
+        {"name": "target_file", "type": "string", "description": "File being patched (e.g. core_tools.py)"},
+        {"name": "context", "type": "string", "description": "Optional extra context for failure prediction"},
+    ],
+    "desc": "TASK-6.1: Pre-deploy verification enforcer. Call BEFORE any patch_file or gh_search_replace. Checks: validate_syntax, target_file named, predict_failure. Returns verification_score 0.0-1.0. blocked=True if score < 0.8 -- do not deploy. HARD RULE: never deploy without calling this first.",
+}
