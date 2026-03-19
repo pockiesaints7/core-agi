@@ -5048,7 +5048,7 @@ def t_backup_brain(dry_run: str = "false") -> dict:
         tree_entries = []
         for path, content in file_payloads.items():
             blob = httpx.post(f"https://api.github.com/repos/{GITHUB_REPO}/git/blobs", headers=h, timeout=30,
-                              json={"content": content, "encoding": "utf-8"})
+                              json={"content": _b64.b64encode(content.encode("utf-8")).decode("ascii"), "encoding": "base64"})
             blob.raise_for_status()
             tree_entries.append({"path": path, "mode": "100644", "type": "blob", "sha": blob.json()["sha"]})
         new_tree = httpx.post(f"https://api.github.com/repos/{GITHUB_REPO}/git/trees", headers=h, timeout=30,
