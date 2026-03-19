@@ -1,5 +1,14 @@
 [
   {
+    "id": 941,
+    "domain": "backlog",
+    "topic": "[BACKLOG-4] Enhance Domain-Specific Rerouting",
+    "instruction": null,
+    "content": "type=logic_improvement effort=high impact=high domain=business\nIntroduce domain-specific routing rules and expert system logic to handle task-specific nuances, reducing general archetype reliance.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
     "id": 942,
     "domain": "backlog",
     "topic": "[BACKLOG-5] Business Knowledge Base Expansion",
@@ -1787,15 +1796,6 @@
     "topic": "[BACKLOG-5] Code Profiler",
     "instruction": null,
     "content": "type=new_tool effort=high impact=high domain=code\nImplement code profiling tool to analyze execution time, memory usage, and optimize Python functions.",
-    "confidence": "medium",
-    "active": true
-  },
-  {
-    "id": 1142,
-    "domain": "backlog",
-    "topic": "[BACKLOG-4] General Code Refactoring",
-    "instruction": null,
-    "content": "type=new_kb effort=medium impact=medium domain=code\nCreate knowledge base entries for general code refactoring techniques such as loop optimization, variable renaming, and function extraction.",
     "confidence": "medium",
     "active": true
   }
