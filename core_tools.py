@@ -2195,27 +2195,43 @@ def t_multi_patch(path: str, patches: str, message: str, repo: str = "") -> dict
         for i, patch in enumerate(patches):
             old = patch.get("old_str", "")
             new = patch.get("new_str", "")
-            found, count, matched, hint = _patch_find(content, old)
+            pf = _patch_find(content, old)
+            found, count, matched, hint = pf[0], pf[1], pf[2], pf[3]
+            auto_context = pf[4] if len(pf) > 4 else None
             if not found:
-                skipped.append({"index": i, "reason": "not found",
-                                 "old_str": old[:80], "hint": hint})
+                skip_entry = {"index": i, "reason": "not found", "old_str": old[:80], "hint": hint}
+                if auto_context: skip_entry["auto_context"] = auto_context
+                skipped.append(skip_entry)
             elif count > 1:
-                skipped.append({"index": i, "reason": f"ambiguous ({count}x)", "old_str": old[:80]})
+                # Collect all occurrence locations for ambiguity resolution
+                all_lines = content.splitlines()
+                locs = []
+                pos = 0
+                while True:
+                    idx = content.find(old, pos)
+                    if idx == -1: break
+                    ln = content[:idx].count('\n') + 1
+                    cs, ce = max(0, ln-3), min(len(all_lines), ln+old.count('\n')+3)
+                    locs.append({"line": ln, "context": "\n".join(f"{cs+j+1:4d}  {l}" for j,l in enumerate(all_lines[cs:ce]))})
+                    pos = idx + 1
+                    if len(locs) >= 5: break
+                skipped.append({"index": i, "reason": f"ambiguous ({count}x)",
+                                 "old_str": old[:80], "locations": locs,
+                                 "fix_hint": "Extend old_str with unique surrounding lines from one location."})
             else:
                 content = content.replace(matched, new, 1)
-                applied.append({"index": i, "old_str": old[:80],
-                                 "note": hint or "exact_match"})
+                applied.append({"index": i, "old_str": old[:80], "note": hint or "exact_match"})
         if not applied:
             return {
                 "ok": False, "error_code": "no_patches_applied",
                 "message": "No patches applied -- all old_str not found or ambiguous",
                 "retry_hint": False, "domain": "github", "skipped": skipped,
-                "fix_hint": "Call gh_read_lines on the target section, copy old_str exactly, retry."
+                "fix_hint": "Check auto_context in skipped entries -- actual file content provided, use it to fix old_str."
             }
         # NEAR-MISS PROTECTION: fail hard if any patch was skipped
         if skipped:
-            near_misses = [s for s in skipped if s.get("hint", "").startswith("near_miss")]
-            not_found   = [s for s in skipped if not s.get("hint", "").startswith("near_miss")]
+            near_misses = [s for s in skipped if "near_miss" in str(s.get("hint", ""))]
+            not_found   = [s for s in skipped if "near_miss" not in str(s.get("hint", ""))]
             return {
                 "ok": False,
                 "error_code": "partial_patch_blocked",
@@ -2224,10 +2240,7 @@ def t_multi_patch(path: str, patches: str, message: str, repo: str = "") -> dict
                 "skipped_count": len(skipped),
                 "near_misses": near_misses,
                 "not_found": not_found,
-                "fix_hint": (
-                    "For near_miss: call gh_read_lines to get exact content, copy old_str verbatim. "
-                    "For not_found: use search_in_file first."
-                ),
+                "fix_hint": "Use auto_context in each skipped entry -- actual file content is embedded, no gh_read_lines needed.",
                 "rolled_back": True,
             }
         if path.endswith(".py"):
@@ -2243,9 +2256,8 @@ def t_multi_patch(path: str, patches: str, message: str, repo: str = "") -> dict
                 import os
                 if os.path.exists(tmp): os.unlink(tmp)
         commit_sha = _gh_blob_write(path, content, message, repo)
-        return {"ok": True, "path": path, "applied": len(applied), "skipped": len(skipped),
-                "details": applied, "skipped_details": skipped,
-                "commit": commit_sha[:12] if commit_sha else None}
+        return {"ok": True, "path": path, "applied": len(applied), "skipped": 0,
+                "details": applied, "commit": commit_sha[:12] if commit_sha else None}
     except Exception as e:
         return {"ok": False, "error_code": "exception", "message": str(e), "retry_hint": True, "domain": "github"}
 
