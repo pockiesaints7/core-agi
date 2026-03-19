@@ -233,7 +233,7 @@ _SB_SCHEMA = {
                         "updated_by": "text"},
             "required": ["layer", "component"],
             "enums": {"status": ["active", "degraded", "tombstone"],
-                      "item_type": ["tool", "file", "table", "service", "doc"]},
+                      "item_type": ["tool", "file", "table", "service", "doc", "folder", "config", "module", "script"]},
             "fat_columns": ["description", "notes", "key_facts", "responsibility"],
             "safe_select": "id,layer,component,name,item_type,status,last_updated",
             "notes": "Use id=gt.1. 47+ rows covering all CORE layers. Auto-reconciled every 6h by background_researcher."
