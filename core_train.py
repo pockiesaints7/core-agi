@@ -1470,8 +1470,11 @@ def _ingest_public_sources() -> str:
 
 
 # -- Background researcher -----------------------------------------------------
+_last_smap_update: float = 0.0
+_SMAP_UPDATE_INTERVAL = 21600  # 6 hours -- sync system_map tool_count + reconcile
+
 def background_researcher():
-    global _last_research_run, _last_public_source_run
+    global _last_research_run, _last_public_source_run, _last_smap_update
     print("[RESEARCH] background researcher started - real signal + simulation + public source mode")
     _cycle_count = 0
 
@@ -1531,6 +1534,21 @@ def background_researcher():
                         notify(f"[CORE] Researcher cycle #{_cycle_count}\n" + " | ".join(parts))
                 except Exception:
                     pass
+
+            # system_map periodic auto-update (every 6h)
+            try:
+                if time.time() - _last_smap_update >= _SMAP_UPDATE_INTERVAL:
+                    from core_tools import t_system_map_scan
+                    result = t_system_map_scan(trigger="session_end")
+                    _last_smap_update = time.time()
+                    ins = result.get("inserted_tools", [])
+                    tomb = result.get("tombstoned_tools", [])
+                    upd = result.get("updates_applied", 0)
+                    print(f"[SMAP] Auto-update: {upd} volatile updates, {len(ins)} inserted, {len(tomb)} tombstoned")
+                    if ins or tomb:
+                        notify(f"[SMAP] system_map auto-reconciled\nInserted: {ins}\nTombstoned: {tomb}")
+            except Exception as _sme:
+                print(f"[SMAP] auto-update error: {_sme}")
 
         except Exception as e:
             print(f"[RESEARCH] loop error: {e}")
