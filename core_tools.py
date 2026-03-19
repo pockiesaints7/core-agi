@@ -1782,7 +1782,7 @@ def t_maintenance_purge(table: str = "", older_than_days: str = "30", dry_run: s
         if batch:
             id_list = ",".join(str(i) for i in batch)
             del_filter = f"id=in.({id_list})"
-            del_ok = sb_delete_rows(table, del_filter)
+            del_ok = sb_delete(table, del_filter)
             deleted = len(batch) if del_ok else 0
             if not del_ok:
                 errors.append(f"Delete batch failed for {table}")
