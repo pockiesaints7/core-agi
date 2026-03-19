@@ -5122,3 +5122,10 @@ def t_maintenance_purge(table: str = "hot_reflections", older_than_days: int = 1
         "cutoff": cutoff,
         "deleted_approx": count
     }
+TOOLS["maintenance_purge"] = {"fn": t_maintenance_purge, "perm": "WRITE",
+    "args": [
+        {"name": "table", "type": "string", "description": "Table to purge: hot_reflections | reasoning_log | sessions (default: hot_reflections)"},
+        {"name": "older_than_days", "type": "string", "description": "Delete rows older than N days (min 7, default 14)"},
+        {"name": "dry_run", "type": "string", "description": "true=count only, false=execute deletion (default: true -- must explicitly pass false to delete)"}
+    ],
+    "desc": "GAP-DB-02/03: Purge old rows from maintenance tables. dry_run=true default -- never deletes without explicit dry_run=false. Tables: hot_reflections (processed), reasoning_log, sessions."}
