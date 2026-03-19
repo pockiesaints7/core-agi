@@ -1596,7 +1596,7 @@ def _run_cross_domain_synthesis():
         import re as _re_s
         clean = _re_s.sub(r'```(?:json)?', '', raw).strip()
         # Extract JSON array
-        json_match = _re_s.search(r'\[.*?\]', clean, _re_s.DOTALL)
+        json_match = _re_s.search(r'\[.*\]', clean, _re_s.DOTALL)
         if not json_match:
             print(f"[SYNTH] No JSON array found in response: {clean[:300]}")
             _last_synthesis_run = time.time()
