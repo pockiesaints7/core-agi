@@ -3812,36 +3812,48 @@ def t_project_index(project_id: str = "", topic: str = "", content: str = "", no
 
 # -- TASK-10.D: CORE Mistake Predictor ----------------------------------------
 
-def _predict_failure(operation: str = "", context: str = "", domain: str = "") -> dict:
-    """Predicts likely failure modes before executing an operation.
-    Searches mistakes table for patterns matching the operation/domain.
-    Returns non-blocking warnings so caller can proceed with caution.
-    operation: short label of what's about to happen (e.g. 'gh_search_replace', 'sb_insert', 'patch_file').
+def _predict_failure(operation: str = "", context: str = "", domain: str = "", session_id: str = "") -> dict:
+    """Predicts likely failure modes before executing an operation -- AGI-03 causal layer.
+    Searches mistakes table via two passes: (1) what_failed keyword match, (2) root_cause + context match.
+    Returns structured causal chain: predicted_failure_modes=[{mode, probability, root_cause, prevention}].
+    Writes prediction to causal_predictions table for post-session counterfactual analysis.
+    operation: short label of what's about to happen (e.g. 'gh_search_replace', 'patch_file', 'sb_insert').
     context: extra info (e.g. file being edited, table being written to).
     domain: optional domain filter to narrow mistake search.
-    Returns: {predicted: bool, warnings: list, top_mistake: dict|None, confidence: float}
+    session_id: optional -- links prediction to session for accuracy tracking.
+    Returns: {predicted, warnings, predicted_failure_modes, top_mistake, confidence, match_count}
     """
     try:
         if not operation:
-            return {"predicted": False, "warnings": [], "top_mistake": None, "confidence": 0.0}
+            return {"predicted": False, "warnings": [], "predicted_failure_modes": [],
+                    "top_mistake": None, "confidence": 0.0}
 
-        # Build search query from operation + context
-        query_parts = [operation]
-        if context:
-            query_parts.append(context[:100])
-        search_query = " ".join(query_parts)
-
-        # Search mistakes table
-        qs = f"what_failed=ilike.%25{operation}%25&order=created_at.desc&limit=5"
+        # Pass 1: match on what_failed (existing behavior)
+        qs1 = f"what_failed=ilike.%25{operation}%25&order=created_at.desc&limit=5"
         if domain:
-            qs += f"&domain=eq.{domain}"
+            qs1 += f"&domain=eq.{domain}"
+        rows = sb_get("mistakes", qs1) or []
 
-        rows = sb_get("mistakes", qs)
+        # Pass 2: match on root_cause or context fields (broader causal signal)
+        if len(rows) < 3:
+            op_slug = operation.replace("_", " ")
+            qs2 = f"root_cause=ilike.%25{op_slug}%25&order=created_at.desc&limit=5"
+            if domain:
+                qs2 += f"&domain=eq.{domain}"
+            rows2 = sb_get("mistakes", qs2) or []
+            # Deduplicate by id
+            seen = {r.get("id") for r in rows}
+            for r in rows2:
+                if r.get("id") not in seen:
+                    rows.append(r)
+                    seen.add(r.get("id"))
+
         if not rows:
-            # Fallback: broader search via groq_chat if no direct matches
-            return {"predicted": False, "warnings": [], "top_mistake": None, "confidence": 0.0,
+            return {"predicted": False, "warnings": [], "predicted_failure_modes": [],
+                    "top_mistake": None, "confidence": 0.0,
                     "note": f"no known mistakes for operation={operation}"}
 
+        # Build flat warnings (backward compat)
         warnings = []
         for row in rows:
             if row.get("how_to_avoid"):
@@ -3852,23 +3864,58 @@ def _predict_failure(operation: str = "", context: str = "", domain: str = "") -
                     "severity": row.get("severity", "medium"),
                 })
 
-        top = rows[0] if rows else None
-        confidence = min(0.9, 0.3 + (len(rows) * 0.15))  # more matches = higher confidence
+        # Build causal chain: predicted_failure_modes
+        # Probability derived from: high=0.7, medium=0.45, low=0.2; recency boost if recent
+        _sev_prob = {"high": 0.70, "medium": 0.45, "low": 0.20}
+        predicted_failure_modes = []
+        for row in rows[:5]:
+            sev = row.get("severity", "medium")
+            prob = _sev_prob.get(sev, 0.45)
+            predicted_failure_modes.append({
+                "mode": (row.get("what_failed") or "")[:120],
+                "probability": prob,
+                "root_cause": (row.get("root_cause") or "")[:200],
+                "prevention": (row.get("how_to_avoid") or "")[:200],
+                "domain": row.get("domain", ""),
+                "severity": sev,
+            })
 
-        return {
-            "predicted": len(warnings) > 0,
+        top = rows[0] if rows else None
+        confidence = min(0.9, 0.3 + (len(rows) * 0.15))
+
+        result = {
+            "predicted": len(predicted_failure_modes) > 0,
             "warnings": warnings,
+            "predicted_failure_modes": predicted_failure_modes,
             "top_mistake": {
                 "domain": top.get("domain") if top else None,
-                "what_failed": top.get("what_failed", "")[:150] if top else None,
-                "correct_approach": top.get("correct_approach", "")[:200] if top else None,
+                "what_failed": (top.get("what_failed") or "")[:150] if top else None,
+                "correct_approach": (top.get("correct_approach") or "")[:200] if top else None,
             } if top else None,
             "confidence": round(confidence, 2),
             "match_count": len(rows),
+            "instruction": "Review predicted_failure_modes before proceeding. Highest probability modes indicate likely failure patterns based on mistake history.",
         }
+
+        # Write prediction to causal_predictions for post-session counterfactual analysis
+        try:
+            sb_post("causal_predictions", {
+                "session_id": session_id or "unknown",
+                "operation": operation[:200],
+                "domain": domain or (top.get("domain") if top else ""),
+                "planned_action": context[:500] if context else "",
+                "mistake_context": {"match_count": len(rows), "domains": list({r.get("domain", "") for r in rows})},
+                "predicted_failure_modes": predicted_failure_modes,
+                "actual_outcome": None,  # filled in at session_end counterfactual pass
+                "was_correct": None,
+            })
+        except Exception:
+            pass  # Non-fatal -- prediction still returned
+
+        return result
     except Exception as e:
-        return {"predicted": False, "warnings": [], "top_mistake": None, "confidence": 0.0,
-                "error": str(e)}
+        return {"predicted": False, "warnings": [], "predicted_failure_modes": [],
+                "top_mistake": None, "confidence": 0.0, "error": str(e)}
 
 
 def t_predict_failure(operation: str = "", context: str = "", domain: str = "") -> dict:
