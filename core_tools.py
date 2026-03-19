@@ -5425,33 +5425,20 @@ TOOLS["resolve_ambiguity"] = {"fn": t_resolve_ambiguity, "perm": "READ",
 
 
 def t_scope_tracker(planned_scope: str = "", actions_taken: str = "", task_id: str = ""):
-    """AGI-12/S3: Scope creep detection during execution.
-    Compares planned vs actual touch surface. Returns scope_exceeded if drift > threshold."""
+    """AGI-12/S3: Return planned vs actual scope for Claude to detect creep natively.
+    No Supabase fetch needed — pure input comparison.
+    Claude generates: scope_exceeded, drift_level, unplanned_items, recommendation."""
     if not planned_scope or not actions_taken:
         return {"ok": False, "error": "planned_scope and actions_taken are required"}
-    prompt = f"""You are CORE's scope tracker. Compare planned scope vs actions taken.
-
-Planned scope: {planned_scope}
-Actions taken so far: {actions_taken}
-
-Return ONLY valid JSON:
-{{
-  "scope_exceeded": false,
-  "drift_level": "none|minor|moderate|severe",
-  "planned_items": ["..."],
-  "unplanned_items": ["..."],
-  "overlap_percent": 0,
-  "recommendation": "continue|flag_owner|stop",
-  "summary": "..."
-}}"""
-    try:
-        result = groq_chat([{"role": "user", "content": prompt}], model=GROQ_FAST, temperature=0.1)
-        parsed = json.loads(result)
-        parsed["ok"] = True
-        parsed["task_id"] = task_id
-        return parsed
-    except Exception as e:
-        return {"ok": False, "error": str(e)}
+    actions_list = [a.strip() for a in actions_taken.split(",") if a.strip()]
+    return {
+        "ok": True,
+        "task_id": task_id,
+        "planned_scope": planned_scope,
+        "actions_taken": actions_list,
+        "action_count": len(actions_list),
+        "instruction": "Claude: compare planned_scope vs actions_taken. Return scope_exceeded (bool), drift_level (none|minor|moderate|severe), planned_items[], unplanned_items[], overlap_percent (0-100), recommendation (continue|flag_owner|stop), summary."
+    }
 
 TOOLS["scope_tracker"] = {"fn": t_scope_tracker, "perm": "READ",
     "args": [
@@ -5884,34 +5871,23 @@ TOOLS["trust_map"] = {"fn": t_trust_map, "perm": "READ",
 
 
 def t_contradiction_check(new_instruction: str = "", domain: str = "general"):
-    """AGI-14/S4: Contradictory instruction detection.
-    Searches behavioral_rules and KB for conflicts with the new instruction.
-    Returns conflict_detected with recommendation."""
+    """AGI-14/S4: Fetch behavioral_rules from Supabase for contradiction detection.
+    Returns rules for Claude to check the new instruction against natively.
+    Claude generates: conflict_detected, conflicting_rules, recommendation."""
     if not new_instruction:
         return {"ok": False, "error": "new_instruction is required"}
-    conflicts = []
     try:
-        rules = sb_get("behavioral_rules", f"domain=eq.{domain}&active=eq.true&select=trigger,full_rule,id", svc=True)
+        rules = sb_get("behavioral_rules", f"domain=eq.{domain}&active=eq.true&select=id,trigger,full_rule&id=gt.1", svc=True) or []
         if not rules:
-            rules = sb_get("behavioral_rules", "domain=eq.universal&active=eq.true&select=trigger,full_rule,id", svc=True)
-        prompt = f"""New instruction: {new_instruction}
-
-Existing rules (check for contradictions):
-{json.dumps(rules[:20], indent=2)}
-
-Return ONLY valid JSON:
-{{
-  "conflict_detected": false,
-  "conflicting_rules": [{{"rule_id": "...", "trigger": "...", "conflict_description": "...", "severity": "low|medium|high"}}],
-  "recommendation": "override|defer|ask_owner|safe_to_proceed",
-  "reasoning": "..."
-}}"""
-        result = groq_chat([{"role": "user", "content": prompt}], model=GROQ_FAST, temperature=0.1)
-        parsed = json.loads(result)
-        parsed["ok"] = True
-        parsed["new_instruction"] = new_instruction
-        parsed["rules_checked"] = len(rules)
-        return parsed
+            rules = sb_get("behavioral_rules", "domain=eq.universal&active=eq.true&select=id,trigger,full_rule&id=gt.1", svc=True) or []
+        return {
+            "ok": True,
+            "new_instruction": new_instruction,
+            "domain": domain,
+            "rules_checked": len(rules),
+            "existing_rules": [{"id": r.get("id"), "trigger": r.get("trigger"), "full_rule": (r.get("full_rule") or "")[:300]} for r in rules[:20]],
+            "instruction": "Claude: check if new_instruction contradicts any existing_rules. Return conflict_detected (bool), conflicting_rules (list of {rule_id, trigger, conflict_description, severity}), recommendation (override|defer|ask_owner|safe_to_proceed), reasoning."
+        }
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
