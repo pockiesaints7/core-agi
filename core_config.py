@@ -159,7 +159,7 @@ def groq_chat(system: str, user: str, model: str = None, max_tokens: int = 1024)
 # -- Gemini chat helper with round-robin key rotation -------------------------
 _GEMINI_KEYS = [k.strip() for k in os.getenv("GEMINI_KEYS", "").split(",") if k.strip()]
 _GEMINI_KEY_INDEX = 0
-_GEMINI_MODEL = "gemini-2.0-flash"
+_GEMINI_MODEL = "gemini-2.5-flash"
 
 def gemini_chat(system: str, user: str, max_tokens: int = 1024) -> str:
     """Gemini chat with round-robin key rotation and 429 fallback across all keys."""
