@@ -1,5 +1,14 @@
 [
   {
+    "id": 2405,
+    "domain": "backlog",
+    "topic": "[BACKLOG-4] Enhanced Tax Knowledge Base",
+    "instruction": null,
+    "content": "type=new_kb effort=high impact=high domain=finance\nIntegrate domain-specific tax laws and regulations for improved tax optimization recommendations.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
     "id": 2406,
     "domain": "backlog",
     "topic": "[BACKLOG-3] Runway Estimation Calculator",
@@ -1787,15 +1796,6 @@
     "topic": "[BACKLOG-3] Dynamic task routing",
     "instruction": null,
     "content": "type=logic_improvement effort=high impact=medium domain=business\nUpdate routing logic to consider task specifics, such as industry, product type, and business goals, to provide more accurate task assignments.",
-    "confidence": "medium",
-    "active": true
-  },
-  {
-    "id": 2618,
-    "domain": "backlog",
-    "topic": "[BACKLOG-2] Business metric tracking",
-    "instruction": null,
-    "content": "type=new_tool effort=medium impact=medium domain=business\nCreate a tool to track and analyze business metrics, such as customer acquisition cost, customer lifetime value, and churn rate, to provide data-driven insights.",
     "confidence": "medium",
     "active": true
   }
