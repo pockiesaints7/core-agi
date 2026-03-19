@@ -1,4 +1,4 @@
-﻿﻿"""core_tools.py â€” CORE AGI MCP tool implementations
+"""core_tools.py â€” CORE AGI MCP tool implementations
 All t_* functions, TOOLS registry, _mcp_tool_schema, handle_jsonrpc.
 Part of v6.0 split architecture: core_config, core_github, core_train, core_tools, core_main.
 
