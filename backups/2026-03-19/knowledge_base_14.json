@@ -1,5 +1,14 @@
 [
   {
+    "id": 3270,
+    "domain": "backlog",
+    "topic": "[BACKLOG-4] Business Planning Knowledge Base",
+    "instruction": null,
+    "content": "type=new_kb effort=high impact=high domain=business\nCreate a knowledge base specific to business planning, including industry best practices, case studies, and general business planning guidelines to support CORE's business-oriented tasks",
+    "confidence": "medium",
+    "active": true
+  },
+  {
     "id": 3271,
     "domain": "backlog",
     "topic": "[BACKLOG-2] Business Planning Command",
@@ -1787,15 +1796,6 @@
     "topic": "[BACKLOG-1] Business Scenario Data",
     "instruction": null,
     "content": "type=missing_data effort=medium impact=medium domain=business\nAdd a dataset of real-world business scenarios to enable CORE to learn from examples and improve its decision-making abilities in the business domain.",
-    "confidence": "medium",
-    "active": true
-  },
-  {
-    "id": 3487,
-    "domain": "backlog",
-    "topic": "[BACKLOG-4] Integrate domain expertise into routing",
-    "instruction": null,
-    "content": "type=logic_improvement effort=high impact=medium domain=finance\nIncorporate finance-specific routing rules to handle task nuances, reducing misrouting and improving task resolution rates",
     "confidence": "medium",
     "active": true
   }
