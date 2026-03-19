@@ -4594,3 +4594,323 @@ TOOLS["verify_before_deploy"] = {
     ],
     "desc": "TASK-6.1: Pre-deploy verification enforcer. Call BEFORE any patch_file or gh_search_replace. Checks: validate_syntax, target_file named, predict_failure. Returns verification_score 0.0-1.0. blocked=True if score < 0.8 -- do not deploy. HARD RULE: never deploy without calling this first.",
 }
+
+
+# -- TASK-V8: V8 Architecture Tools -------------------------------------------
+
+def t_get_behavioral_rules(domain: str = None) -> dict:
+    """Load active behavioral rules from behavioral_rules table.
+    If domain provided: return universal rules + domain-specific rules.
+    If domain=None: return universal rules only.
+    Filter: active=true, id=gt.1, order by priority asc.
+    If table does not exist (migration pending): return empty list with migration_needed flag."""
+    try:
+        if domain and domain.strip():
+            filters = f"active=eq.true&id=gt.1&domain=in.(universal,{domain.strip()})&order=priority.asc&limit=50"
+        else:
+            filters = "active=eq.true&id=gt.1&domain=eq.universal&order=priority.asc&limit=50"
+        rows = sb_get("behavioral_rules", f"select=trigger,pointer,full_rule,domain,priority,tested,confidence&{filters}", svc=True)
+        if rows is None:
+            return {"ok": True, "rules": [], "migration_needed": True, "warning": "behavioral_rules table may not exist yet"}
+        return {"ok": True, "rules": rows or [], "count": len(rows or []), "domain": domain or "universal"}
+    except Exception as e:
+        err = str(e)
+        if "not found" in err.lower() or "does not exist" in err.lower():
+            return {"ok": True, "rules": [], "migration_needed": True, "warning": f"behavioral_rules table not found: {err}"}
+        return {"ok": False, "error": err, "error_code": "exception", "retry_hint": True}
+
+TOOLS["get_behavioral_rules"] = {"fn": t_get_behavioral_rules, "perm": "READ",
+    "args": [{"name": "domain", "type": "string", "description": "Domain to load rules for (e.g. railway, code, postgres). Returns universal + domain rules."}],
+    "desc": "TASK-V8: Load active behavioral rules from behavioral_rules table. Pass domain= to get universal + domain-specific rules. Returns rules ordered by priority. If table missing returns migration_needed=true."}
+
+
+def t_add_behavioral_rule(trigger: str = "", pointer: str = "", full_rule: str = "",
+                           domain: str = "universal", priority: str = "5",
+                           source: str = "core_discovered", confidence: str = "0.8",
+                           expires_at: str = None) -> dict:
+    """Add new behavioral rule to behavioral_rules table.
+    Validates trigger against valid enum. Checks for duplicate trigger+domain+pointer."""
+    VALID_TRIGGERS = {
+        "before_any_act","during_action","post_action","before_domain_work",
+        "during_code_write","post_deploy","before_auth","during_deploy","post_mistake",
+        "before_ddl","during_supabase_write","post_discovery","before_code","post_new_service",
+        "before_deploy","on_failure","post_new_credential","before_project_doc","on_blocked",
+        "before_tool_call","on_tool_silent","session_open","before_api_call","on_empty_result",
+        "session_close","before_supabase_write","on_conflict","before_supabase_read",
+        "on_missing_credential","reasoning_preflight","before_adding_tool","on_version_mismatch",
+        "before_training_change","on_interrupted_session","before_routing_change",
+        "before_irreversible_act","post_action","during_deploy",
+    }
+    VALID_DOMAINS = {
+        "universal","postgres","railway","github","supabase","groq","powershell","zapier",
+        "project","auth","code","reasoning","failure_recovery","local_pc","telegram",
+    }
+    try:
+        if trigger not in VALID_TRIGGERS:
+            return {"ok": False, "error_code": "invalid_trigger", "message": f"Invalid trigger '{trigger}'. Valid: {sorted(VALID_TRIGGERS)}", "retry_hint": False, "domain": "behavioral_rules"}
+        if domain not in VALID_DOMAINS:
+            return {"ok": False, "error_code": "invalid_domain", "message": f"Invalid domain '{domain}'. Valid: {sorted(VALID_DOMAINS)}", "retry_hint": False, "domain": "behavioral_rules"}
+        try:
+            prio = int(priority)
+        except Exception:
+            prio = 5
+        try:
+            conf = float(confidence)
+            conf = max(0.0, min(1.0, conf))
+        except Exception:
+            conf = 0.8
+        # Duplicate check
+        existing = sb_get("behavioral_rules", f"select=id,pointer&active=eq.true&trigger=eq.{trigger}&domain=eq.{domain}&limit=5", svc=True) or []
+        for ex in existing:
+            if (ex.get("pointer") or "").strip().lower() == (pointer or "").strip().lower():
+                return {"ok": True, "action": "skipped_duplicate", "message": "Rule with same trigger+domain+pointer already exists"}
+        row = {"trigger": trigger, "pointer": pointer, "full_rule": full_rule,
+               "domain": domain, "priority": prio, "source": source, "confidence": conf, "active": True, "tested": False}
+        if expires_at:
+            row["expires_at"] = expires_at
+        ok = sb_post("behavioral_rules", row)
+        return {"ok": ok, "action": "inserted", "trigger": trigger, "domain": domain}
+    except Exception as e:
+        return {"ok": False, "error": str(e), "error_code": "exception", "retry_hint": True}
+
+TOOLS["add_behavioral_rule"] = {"fn": t_add_behavioral_rule, "perm": "WRITE",
+    "args": [
+        {"name": "trigger", "type": "string"}, {"name": "pointer", "type": "string"},
+        {"name": "full_rule", "type": "string"}, {"name": "domain", "type": "string"},
+        {"name": "priority", "type": "string"}, {"name": "source", "type": "string"},
+        {"name": "confidence", "type": "string"}, {"name": "expires_at", "type": "string"},
+    ],
+    "desc": "TASK-V8: Add new behavioral rule to behavioral_rules table. Validates trigger+domain enums. Checks for duplicate trigger+domain+pointer. source=owner|core_discovered|evolution|cold_processor."}
+
+
+def t_update_behavioral_rule(rule_id: str = "", active: str = None, full_rule: str = None,
+                              confidence: str = None, tested: str = None) -> dict:
+    """Update an existing behavioral rule by id."""
+    try:
+        if not rule_id:
+            return {"ok": False, "error_code": "missing_id", "message": "rule_id is required", "retry_hint": False, "domain": "behavioral_rules"}
+        updates = {}
+        if active is not None:
+            updates["active"] = str(active).strip().lower() in ("true","1","yes")
+        if full_rule:
+            updates["full_rule"] = full_rule
+        if confidence:
+            try:
+                updates["confidence"] = max(0.0, min(1.0, float(confidence)))
+            except Exception:
+                pass
+        if tested is not None:
+            updates["tested"] = str(tested).strip().lower() in ("true","1","yes")
+        if not updates:
+            return {"ok": False, "error_code": "no_updates", "message": "No valid update fields provided", "retry_hint": False, "domain": "behavioral_rules"}
+        updates["updated_at"] = datetime.utcnow().isoformat()
+        ok = sb_patch("behavioral_rules", f"id=eq.{rule_id}", updates)
+        return {"ok": ok, "rule_id": rule_id, "updated_fields": list(updates.keys())}
+    except Exception as e:
+        return {"ok": False, "error": str(e), "error_code": "exception", "retry_hint": True}
+
+TOOLS["update_behavioral_rule"] = {"fn": t_update_behavioral_rule, "perm": "WRITE",
+    "args": [{"name": "rule_id","type":"string"},{"name":"active","type":"string"},
+             {"name":"full_rule","type":"string"},{"name":"confidence","type":"string"},{"name":"tested","type":"string"}],
+    "desc": "TASK-V8: Update behavioral rule by id. Fields: active (true/false), full_rule, confidence (0.0-1.0), tested (true/false)."}
+
+
+def t_get_infrastructure(component: str = None) -> dict:
+    """Load infrastructure_map entries. Filter by component or return all active."""
+    try:
+        if component and component.strip():
+            filters = f"status=neq.tombstone&id=gt.1&component=eq.{component.strip()}&order=id.asc"
+        else:
+            filters = "status=neq.tombstone&id=gt.1&order=id.asc"
+        rows = sb_get("infrastructure_map",
+            f"select=component,label,url,service_id,env_id,project_id,token_ref,fallback_component,status,check_interval_min,notes&{filters}", svc=True)
+        if rows is None:
+            return {"ok": True, "components": [], "migration_needed": True}
+        return {"ok": True, "components": rows or [], "count": len(rows or [])}
+    except Exception as e:
+        return {"ok": False, "error": str(e), "error_code": "exception", "retry_hint": True}
+
+TOOLS["get_infrastructure"] = {"fn": t_get_infrastructure, "perm": "READ",
+    "args": [{"name": "component", "type": "string", "description": "Filter by component name (railway, supabase, github, groq, telegram, local_pc)"}],
+    "desc": "TASK-V8: Load infrastructure_map entries. Returns service URLs, IDs, token_refs (key names only -- not actual values). Component filter optional."}
+
+
+def t_update_infrastructure_status(component: str = "", status: str = "", notes: str = None,
+                                    owner_confirm: str = "false") -> dict:
+    """Update infrastructure component status. status=tombstone requires owner_confirm=true."""
+    try:
+        if not component or not status:
+            return {"ok": False, "error_code": "missing_params", "message": "component and status are required", "retry_hint": False, "domain": "infrastructure_map"}
+        if status == "tombstone" and str(owner_confirm).strip().lower() not in ("true","1","yes"):
+            return {"ok": False, "error_code": "permission_denied", "message": "Tombstoning a component requires owner_confirm=true. This is an irreversible action.", "retry_hint": False, "domain": "infrastructure_map"}
+        updates = {"status": status, "last_checked": datetime.utcnow().isoformat()}
+        if notes:
+            updates["notes"] = notes
+        ok = sb_patch("infrastructure_map", f"component=eq.{component}", updates)
+        return {"ok": ok, "component": component, "status": status}
+    except Exception as e:
+        return {"ok": False, "error": str(e), "error_code": "exception", "retry_hint": True}
+
+TOOLS["update_infrastructure_status"] = {"fn": t_update_infrastructure_status, "perm": "WRITE",
+    "args": [{"name":"component","type":"string"},{"name":"status","type":"string"},
+             {"name":"notes","type":"string"},{"name":"owner_confirm","type":"string"}],
+    "desc": "TASK-V8: Update infrastructure component status (active|degraded|tombstone). tombstone requires owner_confirm=true."}
+
+
+def t_add_infrastructure(component: str = "", label: str = "", url: str = None,
+                          token_ref: str = None, fallback_component: str = None,
+                          notes: str = None) -> dict:
+    """Add new infrastructure component to infrastructure_map."""
+    try:
+        if not component or not label:
+            return {"ok": False, "error_code": "missing_params", "message": "component and label are required", "retry_hint": False, "domain": "infrastructure_map"}
+        row = {"component": component, "label": label, "status": "active"}
+        if url: row["url"] = url
+        if token_ref: row["token_ref"] = token_ref
+        if fallback_component: row["fallback_component"] = fallback_component
+        if notes: row["notes"] = notes
+        ok = sb_post("infrastructure_map", row)
+        return {"ok": ok, "component": component}
+    except Exception as e:
+        return {"ok": False, "error": str(e), "error_code": "exception", "retry_hint": True}
+
+TOOLS["add_infrastructure"] = {"fn": t_add_infrastructure, "perm": "WRITE",
+    "args": [{"name":"component","type":"string"},{"name":"label","type":"string"},
+             {"name":"url","type":"string"},{"name":"token_ref","type":"string"},
+             {"name":"fallback_component","type":"string"},{"name":"notes","type":"string"}],
+    "desc": "TASK-V8: Add new infrastructure component to infrastructure_map."}
+
+
+def t_get_credentials_index(service: str = None) -> dict:
+    """Load credentials_index entries (pointers only -- no actual values).
+    Returns key_name, location, env_var_name for each service."""
+    try:
+        if service and service.strip():
+            filters = f"active=eq.true&id=gt.1&service=eq.{service.strip()}&order=id.asc"
+        else:
+            filters = "active=eq.true&id=gt.1&order=service.asc"
+        rows = sb_get("credentials_index",
+            "select=service,key_name,location,env_var_name,required_for,notes,last_verified,expires_at&" + filters,
+            svc=True)
+        if rows is None:
+            return {"ok": True, "credentials": [], "migration_needed": True}
+        return {"ok": True, "credentials": rows or [], "count": len(rows or [])}
+    except Exception as e:
+        return {"ok": False, "error": str(e), "error_code": "exception", "retry_hint": True}
+
+TOOLS["get_credentials_index"] = {"fn": t_get_credentials_index, "perm": "READ",
+    "args": [{"name": "service", "type": "string", "description": "Filter by service name (railway, supabase, github, groq, telegram)"}],
+    "desc": "TASK-V8: Load credentials_index entries (pointers only -- NOT actual credentials). Returns key_name + where to find each credential."}
+
+
+def t_add_credentials_index(service: str = "", key_name: str = "", location: str = "",
+                              env_var_name: str = None, required_for: str = None,
+                              notes: str = None) -> dict:
+    """Add new credential pointer to credentials_index."""
+    try:
+        if not service or not key_name or not location:
+            return {"ok": False, "error_code": "missing_params", "message": "service, key_name, location are required", "retry_hint": False, "domain": "credentials_index"}
+        row = {"service": service, "key_name": key_name, "location": location, "active": True}
+        if env_var_name: row["env_var_name"] = env_var_name
+        if required_for:
+            row["required_for"] = [x.strip() for x in required_for.split(",") if x.strip()]
+        if notes: row["notes"] = notes
+        ok = sb_post("credentials_index", row)
+        return {"ok": ok, "service": service, "key_name": key_name}
+    except Exception as e:
+        return {"ok": False, "error": str(e), "error_code": "exception", "retry_hint": True}
+
+TOOLS["add_credentials_index"] = {"fn": t_add_credentials_index, "perm": "WRITE",
+    "args": [{"name":"service","type":"string"},{"name":"key_name","type":"string"},
+             {"name":"location","type":"string"},{"name":"env_var_name","type":"string"},
+             {"name":"required_for","type":"string"},{"name":"notes","type":"string"}],
+    "desc": "TASK-V8: Add new credential pointer to credentials_index. Stores key_name and location ONLY -- never actual credential values."}
+
+
+def t_log_quality_metrics(session_id: str = "", quality_score: str = "0.8",
+                           tasks_completed: str = "0", mistakes_made: str = "0",
+                           owner_corrections: str = "0", assumptions_caught: str = "0",
+                           domain: str = None, notes: str = None) -> dict:
+    """Log quality score for current session. Called at session close."""
+    try:
+        try:
+            q = max(0.0, min(1.0, float(quality_score)))
+        except Exception:
+            q = 0.8
+        row = {
+            "quality_score": q,
+            "tasks_completed": int(tasks_completed) if str(tasks_completed).isdigit() else 0,
+            "mistakes_made": int(mistakes_made) if str(mistakes_made).isdigit() else 0,
+            "owner_corrections": int(owner_corrections) if str(owner_corrections).isdigit() else 0,
+            "assumptions_caught": int(assumptions_caught) if str(assumptions_caught).isdigit() else 0,
+        }
+        if session_id: row["session_id"] = session_id
+        if domain: row["domain"] = domain
+        if notes: row["notes"] = notes
+        ok = sb_post("quality_metrics", row)
+        return {"ok": ok, "quality_score": q}
+    except Exception as e:
+        return {"ok": False, "error": str(e), "error_code": "exception", "retry_hint": True}
+
+TOOLS["log_quality_metrics"] = {"fn": t_log_quality_metrics, "perm": "WRITE",
+    "args": [{"name":"session_id","type":"string"},{"name":"quality_score","type":"string"},
+             {"name":"tasks_completed","type":"string"},{"name":"mistakes_made","type":"string"},
+             {"name":"owner_corrections","type":"string"},{"name":"assumptions_caught","type":"string"},
+             {"name":"domain","type":"string"},{"name":"notes","type":"string"}],
+    "desc": "TASK-V8: Log session quality metrics to quality_metrics table. quality_score=0.0-1.0. Call at session close."}
+
+
+def t_get_quality_alert() -> dict:
+    """Check quality_metrics for last 7 days. Returns alert if 7d avg < 0.75 or 3 consecutive declining."""
+    try:
+        rows = sb_get("quality_metrics",
+            "select=quality_score,date,domain&id=gt.1&order=created_at.desc&limit=30", svc=True) or []
+        if len(rows) < 3:
+            return {"ok": True, "alert": False, "trend": "insufficient_data", "message": "Need 3+ sessions for quality trend analysis", "count": len(rows)}
+        scores = [float(r.get("quality_score", 0)) for r in rows[:7] if r.get("quality_score") is not None]
+        if not scores:
+            return {"ok": True, "alert": False, "trend": "no_data"}
+        avg_7d = round(sum(scores) / len(scores), 3)
+        # Check 3 consecutive declining
+        consecutive_decline = False
+        if len(scores) >= 3:
+            consecutive_decline = scores[0] < scores[1] < scores[2]
+        alert = avg_7d < 0.75 or consecutive_decline
+        trend = "declining" if consecutive_decline or (len(scores) >= 2 and scores[0] < scores[-1]) else "stable"
+        return {"ok": True, "alert": alert, "trend": trend, "7d_avg": avg_7d, "sample_count": len(scores),
+                "message": f"Quality {'ALERT' if alert else 'OK'}: 7d_avg={avg_7d}, trend={trend}"}
+    except Exception as e:
+        return {"ok": False, "error": str(e), "error_code": "exception", "retry_hint": True}
+
+TOOLS["get_quality_alert"] = {"fn": t_get_quality_alert, "perm": "READ", "args": [],
+    "desc": "TASK-V8: Check quality_metrics for last 7 days. Returns alert=true if 7d_avg < 0.75 or 3 consecutive declining sessions."}
+
+
+def t_log_reasoning(session_id: str = "", action_planned: str = "", preflight_result: str = "",
+                     assumptions_caught: str = "0", queries_triggered: str = "0",
+                     owner_confirm_needed: str = "false", domain: str = None) -> dict:
+    """Log cognitive pre-flight result. Called after each reasoning_preflight run."""
+    try:
+        if not action_planned:
+            return {"ok": False, "error_code": "missing_params", "message": "action_planned is required", "retry_hint": False, "domain": "reasoning_log"}
+        row = {
+            "action_planned": action_planned[:500],
+            "preflight_result": (preflight_result or "")[:500],
+            "assumptions_caught": int(assumptions_caught) if str(assumptions_caught).isdigit() else 0,
+            "queries_triggered": int(queries_triggered) if str(queries_triggered).isdigit() else 0,
+            "owner_confirm_needed": str(owner_confirm_needed).strip().lower() in ("true","1","yes"),
+            "behavioral_rule_proposed": False,
+        }
+        if session_id: row["session_id"] = session_id
+        if domain: row["domain"] = domain
+        ok = sb_post("reasoning_log", row)
+        return {"ok": ok, "action_planned": action_planned[:80]}
+    except Exception as e:
+        return {"ok": False, "error": str(e), "error_code": "exception", "retry_hint": True}
+
+TOOLS["log_reasoning"] = {"fn": t_log_reasoning, "perm": "WRITE",
+    "args": [{"name":"session_id","type":"string"},{"name":"action_planned","type":"string"},
+             {"name":"preflight_result","type":"string"},{"name":"assumptions_caught","type":"string"},
+             {"name":"queries_triggered","type":"string"},{"name":"owner_confirm_needed","type":"string"},
+             {"name":"domain","type":"string"}],
+    "desc": "TASK-V8: Log cognitive pre-flight result to reasoning_log. Call after each reasoning_preflight run."}
