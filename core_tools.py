@@ -1835,6 +1835,50 @@ def t_session_end(summary: str = "", actions: str = "", domain: str = "general",
                 except Exception:
                     pass
 
+        # 5.5 AGI-03/S2: Counterfactual analyzer
+        # For each mistake logged this session, write a hot_reflection with domain=causal
+        # capturing what the correct action would have been.
+        # Also close out any open causal_predictions from this session.
+        counterfactuals_written = 0
+        try:
+            session_ts_anchor = (session_start_at - timedelta(hours=2)).isoformat()
+            recent_mistakes = sb_get("mistakes",
+                f"select=id,domain,context,what_failed,correct_approach,root_cause,how_to_avoid,severity&created_at=gte.{session_ts_anchor}&order=created_at.desc&limit=10",
+                svc=True) or []
+            for m in recent_mistakes:
+                try:
+                    cf_content = (
+                        f"COUNTERFACTUAL ANALYSIS\n"
+                        f"Domain: {m.get('domain','')}\n"
+                        f"What failed: {(m.get('what_failed') or '')[:300]}\n"
+                        f"Root cause: {(m.get('root_cause') or '')[:300]}\n"
+                        f"Correct approach: {(m.get('correct_approach') or '')[:300]}\n"
+                        f"Prevention: {(m.get('how_to_avoid') or '')[:300]}\n"
+                        f"Counterfactual: If correct_approach had been applied, "
+                        f"the failure mode would not have occurred. "
+                        f"Pattern to reinforce: {(m.get('how_to_avoid') or '')[:200]}"
+                    )
+                    sb_post("hot_reflections", {
+                        "domain": "causal",
+                        "quality_score": 0.5 if m.get("severity") == "critical" else 0.7,
+                        "summary": f"Counterfactual: {(m.get('what_failed') or '')[:120]}",
+                        "content": cf_content,
+                        "interface": "session_end_counterfactual",
+                        "processed_by_cold": False,
+                    })
+                    counterfactuals_written += 1
+                except Exception:
+                    pass
+            # Mark open causal_predictions for this session as outcome=session_ended
+            try:
+                sb_patch("causal_predictions",
+                    f"session_id=eq.unknown&actual_outcome=is.null",
+                    {"actual_outcome": "session_ended_no_outcome_recorded"})
+            except Exception:
+                pass
+        except Exception:
+            pass
+
         # Build return -- surface reflection failure and task warnings
         result = {
             "ok": session_ok,
@@ -1847,6 +1891,7 @@ def t_session_end(summary: str = "", actions: str = "", domain: str = "general",
             "skill_file_updated": _skill_ok,
             "tools_updated": _tools_updated if _tools_updated else "none",
             "new_tool_sop": _new_sop if _new_sop else "none",
+            "counterfactuals_written": counterfactuals_written,
         }
         if not r_ok:
             result["reflection_warning"] = (
