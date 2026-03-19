@@ -508,12 +508,20 @@ def t_debug_fn(fn_name: str, dry_run: bool = True, extra_args: dict = None) -> d
             return False, None
 
     # Stage 0 -- resolve function
+    # Use reload() to pick up functions added in the current deploy/session.
+    # Cached imports miss functions registered after Railway started.
     target_fn = None
-    for mod_name in ["core_train", "core_tools", "core_config", "core_github", "core_main"]:
+    found_in = None
+    for mod_name in ["core_tools", "core_train", "core_config", "core_github", "core_main"]:
         try:
             mod = importlib.import_module(mod_name)
+            try:
+                importlib.reload(mod)  # force refresh -- catches new functions in same deploy
+            except Exception:
+                pass  # reload is best-effort; proceed with cached version if it fails
             if hasattr(mod, fn_name):
                 target_fn = getattr(mod, fn_name)
+                found_in = mod_name
                 stages.append({"stage": "0_resolve", "status": "ok",
                                "data": f"found in {mod_name}"})
                 break
@@ -529,8 +537,10 @@ def t_debug_fn(fn_name: str, dry_run: bool = True, extra_args: dict = None) -> d
     # Otherwise fall back to direct call with dry_run awareness
     known_staged = {
         "_run_simulation_batch": "simulation",
-        "_extract_real_signal": "real_signal",
-        "run_cold_processor":   "cold_processor",
+        "_extract_real_signal":  "real_signal",
+        "run_cold_processor":    "cold_processor",
+        "gemini_chat":           "gemini",
+        "groq_chat":             "groq",
     }
 
     if fn_name in known_staged:
