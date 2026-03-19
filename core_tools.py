@@ -3918,15 +3918,7 @@ def _predict_failure(operation: str = "", context: str = "", domain: str = "", s
                 "top_mistake": None, "confidence": 0.0, "error": str(e)}
 
 
-def t_predict_failure(operation: str = "", context: str = "", domain: str = "") -> dict:
-    """MCP wrapper: predict likely failure modes before an operation.
-    Searches mistake history for matching patterns and returns non-blocking warnings.
-    operation: what you're about to do (e.g. 'gh_search_replace', 'patch_file', 'sb_insert').
-    context: optional extra info (file name, table name, content snippet).
-    domain: optional domain to narrow search (e.g. 'core_agi.patching').
-    Use before any risky write operation to get a pre-flight warning.
-    """
-    return _predict_failure(operation=operation, context=context, domain=domain)
+
 
 # -- TASK-26: Tool Reliability Tracking ---------------------------------------
 def _track_tool_stat(tool_name: str, success: bool, error: str = None):
