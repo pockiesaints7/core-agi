@@ -1,5 +1,14 @@
 [
   {
+    "id": 2618,
+    "domain": "backlog",
+    "topic": "[BACKLOG-2] Business metric tracking",
+    "instruction": null,
+    "content": "type=new_tool effort=medium impact=medium domain=business\nCreate a tool to track and analyze business metrics, such as customer acquisition cost, customer lifetime value, and churn rate, to provide data-driven insights.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
     "id": 2619,
     "domain": "backlog",
     "topic": "[BACKLOG-1] KB search optimization",
@@ -1787,15 +1796,6 @@
     "topic": "[BACKLOG-4] Medical Entity Recognition",
     "instruction": null,
     "content": "type=new_tool effort=high impact=high domain=medical\nDevelop and integrate a medical entity recognition tool to extract relevant information from unstructured medical texts, such as patient history and diagnosis.",
-    "confidence": "medium",
-    "active": true
-  },
-  {
-    "id": 2832,
-    "domain": "backlog",
-    "topic": "[BACKLOG-3] Clinical Trial Updates",
-    "instruction": null,
-    "content": "type=new_kb effort=medium impact=medium domain=medical\nRegularly update the knowledge base with information on ongoing and completed clinical trials, treatments, and medical breakthroughs.",
     "confidence": "medium",
     "active": true
   }
