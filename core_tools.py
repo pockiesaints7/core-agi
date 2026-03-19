@@ -5138,6 +5138,8 @@ def t_maintenance_purge(table: str = "hot_reflections", older_than_days: int = 1
     Tables: hot_reflections (processed rows older than N days), reasoning_log (older than N days), sessions (older than N days).
     Safety: dry_run must be explicitly False to delete. Never purges tombstone tables."""
     ALLOWED_TABLES = {"hot_reflections", "reasoning_log", "sessions"}
+    # Load schema registry to verify column names before building any filter
+    _load_schema_registry()
     try:
         older_than_days = int(older_than_days)
     except (TypeError, ValueError):
