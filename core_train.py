@@ -700,6 +700,18 @@ def run_cold_processor():
             sb_patch("hot_reflections", f"id=eq.{h['id']}", {"processed_by_cold": 1})
         if evolutions_queued > 0:
             notify(f"Cold processor: {evolutions_queued} evolution(s) queued, {auto_applied_count} auto-applied.\n{groq_summary[:300]}\nPending owner review: {evolutions_queued - auto_applied_count}")
+        # AGI-03/S3: trigger causal quality analysis if recent quality is declining
+        try:
+            recent_scores = [float(h.get("quality_score") or 0.7) for h in hots[-10:]]
+            if len(recent_scores) >= 5:
+                avg5 = sum(recent_scores[-5:]) / 5
+                avg_all = sum(recent_scores) / len(recent_scores)
+                if avg5 < avg_all - 0.05:  # Recent 5 meaningfully worse than session average
+                    print(f"[COLD] Quality declining (recent_avg={avg5:.2f} vs overall={avg_all:.2f}) -- running causal analysis")
+                    _run_causal_quality_analysis()
+        except Exception:
+            pass
+
         print(f"[COLD] Done: processed={len(hots)} patterns={len(batch_counts)} evolutions={evolutions_queued} auto_applied={auto_applied_count}")
         return {"ok": True, "processed": len(hots), "patterns_found": len(batch_counts), "evolutions_queued": evolutions_queued, "auto_applied": auto_applied_count}
     except Exception as e:
