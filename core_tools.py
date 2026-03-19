@@ -1459,15 +1459,41 @@ def _patch_find(content: str, old_str: str):
     r = _find_in(nc5, no5, content, "tabs_and_trailing_normalized")
     if r: return r
 
-    # All tiers failed -- build near-miss hint from first line
+    # Tier 6: leading-whitespace normalization (catches indentation drift --
+    # most common near-miss cause: old_str copied from display has different indent)
+    def _strip_leading(s: str) -> str:
+        lines = s.splitlines()
+        if not lines: return s
+        # Find minimum non-empty indent
+        indents = [len(l) - len(l.lstrip()) for l in lines if l.strip()]
+        min_indent = min(indents) if indents else 0
+        return '\n'.join(l[min_indent:] if len(l) >= min_indent else l for l in lines)
+    nc6 = _strip_leading(nc)
+    no6 = _strip_leading(no)
+    r = _find_in(nc6, no6, content, "leading_whitespace_normalized")
+    if r: return r
+
+    # Tier 7: full normalization (leading + trailing + tabs + line endings)
+    nc7 = _strip_leading(_rstrip_lines(_detab(nc)))
+    no7 = _strip_leading(_rstrip_lines(_detab(no)))
+    r = _find_in(nc7, no7, content, "full_whitespace_normalized")
+    if r: return r
+
+    # All tiers failed -- build actionable near-miss hint
     first_line = no.strip().splitlines()[0].strip() if no.strip() else ""
     hint = None
     if first_line and len(first_line) > 10:
         for line in nc.splitlines():
             if first_line[:30] in line or line.strip()[:30] in first_line:
                 diff = list(difflib.ndiff([first_line], [line.strip()]))
-                hint = "near_miss: " + "".join(diff)[:300]
+                near_diff = "".join(diff)[:300]
+                hint = (
+                    f"near_miss: {near_diff} "
+                    f"-- FIX: call gh_read_lines to get exact content, then retry with exact old_str"
+                )
                 break
+    if not hint:
+        hint = "not_found -- old_str has no close match in file. Verify the string exists with search_in_file first."
     return False, 0, old_str, hint
 
 
@@ -2081,7 +2107,30 @@ def t_multi_patch(path: str, patches: str, message: str, repo: str = "") -> dict
                 applied.append({"index": i, "old_str": old[:80],
                                  "note": hint or "exact_match"})
         if not applied:
-            return {"ok": False, "error_code": "no_patches_applied", "message": "No patches applied -- all old_str not found or ambiguous", "retry_hint": False, "domain": "github", "skipped": skipped}
+            return {
+                "ok": False, "error_code": "no_patches_applied",
+                "message": "No patches applied -- all old_str not found or ambiguous",
+                "retry_hint": False, "domain": "github", "skipped": skipped,
+                "fix_hint": "Call gh_read_lines on the target section, copy old_str exactly, retry."
+            }
+        # NEAR-MISS PROTECTION: fail hard if any patch was skipped
+        if skipped:
+            near_misses = [s for s in skipped if s.get("hint", "").startswith("near_miss")]
+            not_found   = [s for s in skipped if not s.get("hint", "").startswith("near_miss")]
+            return {
+                "ok": False,
+                "error_code": "partial_patch_blocked",
+                "message": f"PARTIAL_PATCH_BLOCKED: {len(skipped)} of {len(patches)} patches skipped -- rolled back, nothing pushed.",
+                "applied_count": len(applied),
+                "skipped_count": len(skipped),
+                "near_misses": near_misses,
+                "not_found": not_found,
+                "fix_hint": (
+                    "For near_miss: call gh_read_lines to get exact content, copy old_str verbatim. "
+                    "For not_found: use search_in_file first."
+                ),
+                "rolled_back": True,
+            }
         if path.endswith(".py"):
             import py_compile, tempfile as _tmpf
             with _tmpf.NamedTemporaryFile(mode="w", suffix=".py", delete=False, encoding="utf-8") as tf:
@@ -3824,7 +3873,29 @@ def t_patch_file(path: str, patches: str, message: str, repo: str = "", dry_run:
                 content = content.replace(matched, new, 1)
                 applied.append({"index": i, "old_str": old[:80], "note": hint or "exact_match"})
         if not applied:
-            return {"ok": False, "error": "No patches applied", "skipped": skipped}
+            return {
+                "ok": False, "error": "No patches applied", "skipped": skipped,
+                "fix_hint": "Call gh_read_lines on the target lines, copy old_str exactly, retry."
+            }
+        # NEAR-MISS PROTECTION: fail hard if any patch was skipped
+        # Partial application is worse than no application -- it leaves code in an unknown state
+        if skipped:
+            near_misses = [s for s in skipped if s.get("hint", "").startswith("near_miss")]
+            not_found   = [s for s in skipped if not s.get("hint", "").startswith("near_miss")]
+            return {
+                "ok": False,
+                "error": f"PARTIAL_PATCH_BLOCKED: {len(skipped)} patch(es) skipped, {len(applied)} applied -- ALL changes rolled back to prevent partial state.",
+                "applied_count": len(applied),
+                "skipped_count": len(skipped),
+                "near_misses": near_misses,
+                "not_found": not_found,
+                "fix_hint": (
+                    "For near_miss: call gh_read_lines to get exact content at that location, "
+                    "copy the old_str character-for-character including all whitespace, then retry. "
+                    "For not_found: use search_in_file to verify the string exists."
+                ),
+                "rolled_back": True,
+            }
         # Syntax check for .py files
         syntax_ok = True
         syntax_error = ""
