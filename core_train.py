@@ -28,7 +28,7 @@ from core_config import (
     PATTERN_EVO_THRESHOLD, KNOWLEDGE_AUTO_CONFIDENCE,
     KB_MINE_BATCH_SIZE, KB_MINE_RATIO_THRESHOLD,
     sb_get, sb_post, sb_post_critical, sb_patch, sb_upsert, _sbh_count_svc,
-    groq_chat,
+    groq_chat, gemini_chat,
 )
 from core_github import notify, gh_write
 
@@ -1590,7 +1590,7 @@ def _run_cross_domain_synthesis():
     )
 
     try:
-        raw = groq_chat(system_prompt, user_prompt)
+        raw = gemini_chat(system_prompt, user_prompt, max_tokens=2048)
         # Parse JSON from response
         import re as _re_s
         json_match = _re_s.search(r'\[.*\]', raw, _re_s.DOTALL)
