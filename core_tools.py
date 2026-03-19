@@ -1301,6 +1301,14 @@ def t_session_start() -> dict:
             )
         except Exception:
             pass
+        # --- TASK-5.2.3: Task health check at boot ---
+        task_health_warning = None
+        try:
+            th = t_task_health()
+            if th.get("ok") and th.get("total_stale", 0) > 0:
+                task_health_warning = th.get("warning")
+        except Exception:
+            pass
         return {
             "ok": True,
             "health": health.get("overall", "unknown"),
@@ -1316,6 +1324,7 @@ def t_session_start() -> dict:
             "domain": detected_domain,
             "top_patterns": top_patterns,
             "quality_alert": quality_alert,
+            "task_health_warning": task_health_warning,
             "pending_evolutions": evolutions[:5] if isinstance(evolutions, list) else [],
             "training_pipeline": training,
             "live_tool_count": len(TOOLS),
