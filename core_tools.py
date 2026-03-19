@@ -5068,7 +5068,7 @@ def t_maintenance_purge(table: str = "hot_reflections", older_than_days: int = 1
         return {"ok": False, "error": f"Table '{table}' not in allowed purge list: {ALLOWED_TABLES}"}
     if older_than_days < 7:
         return {"ok": False, "error": "older_than_days must be >= 7 to prevent accidental recent-data deletion"}
-    cutoff = (datetime.utcnow() - timedelta(days=older_than_days)).isoformat()
+    cutoff = (datetime.utcnow() - timedelta(days=older_than_days)).strftime("%Y-%m-%dT%H:%M:%SZ")
     # Build count query
     try:
         count_filter = f"created_at=lt.{cutoff}"
