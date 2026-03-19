@@ -3920,6 +3920,18 @@ def _predict_failure(operation: str = "", context: str = "", domain: str = "", s
 
 
 
+
+
+def t_predict_failure(operation: str = "", context: str = "", domain: str = "", session_id: str = "") -> dict:
+    """MCP wrapper: predict likely failure modes before an operation.
+    Searches mistake history for matching patterns and returns causal chain warnings.
+    operation: what you're about to do (e.g. 'gh_search_replace', 'patch_file', 'sb_insert').
+    context: optional extra info (file name, table name, content snippet).
+    domain: optional domain to narrow search (e.g. 'core_agi.patching').
+    session_id: optional -- links prediction to session for counterfactual tracking.
+    Use before any risky write operation to get a pre-flight causal warning.
+    """
+    return _predict_failure(operation=operation, context=context, domain=domain, session_id=session_id)
 # -- TASK-26: Tool Reliability Tracking ---------------------------------------
 def _track_tool_stat(tool_name: str, success: bool, error: str = None):
     """Fire-and-forget: increment tool_stats counters for today. Non-fatal -- never raises."""
