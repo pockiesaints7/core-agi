@@ -215,15 +215,32 @@ def t_constitution():
     return {"constitution": txt, "immutable": True}
 
 def t_search_kb(query="", domain="", limit=10):
-    """Search knowledge_base. Multi-word queries search content, topic, and instruction fields."""
+    """Search knowledge_base. Multi-word queries search content, topic, and instruction fields.
+    AGI-05: increments access_count + updates last_accessed on every hit (fire-and-forget)."""
     lim = int(limit) if limit else 10
-    qs = f"select=domain,topic,instruction,content,confidence&limit={lim}"
+    qs = f"select=id,domain,topic,instruction,content,confidence&limit={lim}"
     if domain and domain not in ("all", ""):
         qs += f"&domain=eq.{domain}"
     if query:
         q = query.strip().replace("'", "").replace('"', "")
         qs += f"&or=(content.ilike.*{q}*,topic.ilike.*{q}*,instruction.ilike.*{q}*)"
-    return sb_get("knowledge_base", qs)
+    rows = sb_get("knowledge_base", qs)
+    # AGI-05: fire-and-forget access tracking -- never blocks return
+    try:
+        if rows:
+            now_ts = datetime.utcnow().isoformat()
+            for r in rows:
+                rid = r.get("id")
+                if rid and rid != 1:
+                    try:
+                        sb_patch("knowledge_base", f"id=eq.{rid}",
+                                 {"last_accessed": now_ts,
+                                  "access_count": (r.get("access_count") or 0) + 1})
+                    except Exception:
+                        pass
+    except Exception:
+        pass
+    return rows
 
 def t_get_mistakes(domain="", limit=10):
     try: lim = int(limit) if limit else 10
