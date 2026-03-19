@@ -1788,6 +1788,19 @@ def t_session_start() -> dict:
             pass
         try:
             smap = t_system_map_scan(trigger="session_start")
+            # Auto-reconcile immediately if tool drift detected -- don't wait 6h
+            try:
+                wiring_check = smap.get("wiring", {}) if smap.get("ok") else {}
+                registered_tool_count = sum(
+                    1 for r in wiring_check.get("executor", [])
+                    if r.get("type") == "tool"
+                )
+                if abs(len(TOOLS) - registered_tool_count) > 0:
+                    print(f"[SMAP] Drift at session_start: live={len(TOOLS)} registered={registered_tool_count} -- auto-syncing")
+                    t_sync_system_map(trigger="session_start", notify_on_changes="false")
+                    smap = t_system_map_scan(trigger="session_start")  # re-read post-fix
+            except Exception as _dr:
+                print(f"[SMAP] session_start drift check error: {_dr}")
         except Exception as e:
             smap = {"ok": False, "error": f"system_map scan failed: {e}"}
         # --- 16.E: Drift summary per layer ---
