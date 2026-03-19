@@ -43,9 +43,13 @@ _PUBLIC_SOURCE_INTERVAL = 21600  # 6 hours
 _SRC_CONF = {"real": 1.0, "simulation": 0.7, "both": 1.3}
 
 # AGI-02: Nightly self-diagnosis
-_last_self_diagnosis_run: float = 0.0
+# NOTE: _last_self_diagnosis_run is intentionally NOT initialised to 0.0 here.
+# It is seeded from Supabase at cold_processor_loop boot to survive Railway redeploys.
+# Initialised to a sentinel so the boot-restore logic can detect first-run.
+_last_self_diagnosis_run: float = -1.0   # -1 = not yet seeded from Supabase
 _SELF_DIAGNOSIS_INTERVAL = 86400  # 24 hours
 _SELF_DIAGNOSIS_HOUR_UTC = 19     # 02:00 WIB = 19:00 UTC
+_DIAG_STATE_KEY = "last_self_diagnosis_ts"  # key used in sessions state_key
 
 # AGI-01: Weekly cross-domain synthesis
 _last_synthesis_run: float = 0.0
@@ -1018,9 +1022,33 @@ def _check_stale_patterns() -> int:
 
 
 # -- Cold processor loop -------------------------------------------------------
+def _restore_diag_timestamp():
+    """Seed _last_self_diagnosis_run from Supabase on boot.
+    Prevents Railway redeploy from resetting the 24h guard to zero.
+    Falls back to (now - 25h) so first real 19:00 UTC window triggers normally."""
+    global _last_self_diagnosis_run
+    try:
+        rows = sb_get(
+            "sessions",
+            f"select=state_value&state_key=eq.{_DIAG_STATE_KEY}&order=id.desc&limit=1",
+            svc=True
+        ) or []
+        if rows:
+            stored = float(rows[0].get("state_value") or 0)
+            if stored > 0:
+                _last_self_diagnosis_run = stored
+                print(f"[DIAG] Restored last_diag_ts from Supabase: {datetime.utcfromtimestamp(stored).isoformat()}")
+                return
+    except Exception as e:
+        print(f"[DIAG] restore error: {e}")
+    # Fallback: treat as ran 25h ago so it will fire at next scheduled window, not immediately
+    _last_self_diagnosis_run = time.time() - (_SELF_DIAGNOSIS_INTERVAL + 3600)
+    print("[DIAG] No stored timestamp -- seeded to 25h ago (will fire at next 19:00 UTC window)")
+
 def cold_processor_loop():
     global _last_cold_run, _last_cold_kb_count, _last_stale_check
     print("[COLD] Background loop started")
+    _restore_diag_timestamp()  # AGI-02: seed from Supabase before first loop tick
     while True:
         try:
             hots        = sb_get("hot_reflections", "select=id&processed_by_cold=eq.0&id=gt.1", svc=True)
@@ -1064,6 +1092,9 @@ def cold_processor_loop():
             # AGI-02: Nightly self-diagnosis at 02:00 WIB (19:00 UTC)
             try:
                 now_utc = datetime.utcnow()
+                # Guard: if timestamp still sentinel (-1), restore before checking
+                if _last_self_diagnosis_run < 0:
+                    _restore_diag_timestamp()
                 time_since_diag = time.time() - _last_self_diagnosis_run
                 if (now_utc.hour == _SELF_DIAGNOSIS_HOUR_UTC and
                         time_since_diag >= _SELF_DIAGNOSIS_INTERVAL):
@@ -2002,10 +2033,31 @@ def _run_self_diagnosis():
     except Exception as e:
         print(f"[DIAG] stale task analysis error: {e}")
 
-    # Generate self-assigned tasks for each gap
+    # Generate self-assigned tasks -- with dedup guard before each insert
     tasks_created = []
+    try:
+        existing_pending = sb_get(
+            "task_queue",
+            "select=task&status=in.(pending,in_progress)&source=eq.self_assigned&limit=200",
+            svc=True
+        ) or []
+        existing_titles = set()
+        for row in existing_pending:
+            try:
+                t = json.loads(row.get("task") or "{}")
+                existing_titles.add(t.get("title", "").strip().lower())
+            except Exception:
+                pass
+    except Exception as e:
+        print(f"[DIAG] dedup pre-fetch error: {e}")
+        existing_titles = set()
+
     for gap in gaps:
         try:
+            title_key = gap["title"].strip().lower()
+            if title_key in existing_titles:
+                print(f"[DIAG] Skipped duplicate self-assigned task: {gap['title']}")
+                continue
             task_payload = {
                 "task": json.dumps({
                     "title": gap["title"],
@@ -2019,12 +2071,22 @@ def _run_self_diagnosis():
             result = sb_post("task_queue", task_payload)
             if result:
                 tasks_created.append(gap["title"])
+                existing_titles.add(title_key)  # prevent same-run dupes if gaps list has overlap
                 print(f"[DIAG] Created self-assigned task: {gap['title']}")
         except Exception as e:
             print(f"[DIAG] task creation error for '{gap['title']}': {e}")
 
-    # Notify owner
+    # Persist timestamp to Supabase so it survives Railway redeploys
     _last_self_diagnosis_run = time.time()
+    try:
+        sb_post("sessions", {
+            "state_key": _DIAG_STATE_KEY,
+            "state_value": str(_last_self_diagnosis_run),
+            "summary": f"AGI-02 self-diagnosis ran at {datetime.utcnow().isoformat()} -- {len(tasks_created)} tasks created",
+        })
+        print(f"[DIAG] Persisted last_diag_ts to Supabase: {_last_self_diagnosis_run}")
+    except Exception as e:
+        print(f"[DIAG] persist timestamp error: {e}")
     try:
         if tasks_created:
             task_list = "\n".join(f"  - {t}" for t in tasks_created)
