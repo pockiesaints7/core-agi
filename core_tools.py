@@ -4986,13 +4986,14 @@ TOOLS["log_reasoning"] = {"fn": t_log_reasoning, "perm": "WRITE",
 # -- GAP-DATA-01: Weekly brain backup -----------------------------------------
 
 def t_backup_brain(dry_run: str = "false") -> dict:
-    """Export critical Supabase tables to GitHub /backups/YYYY-MM-DD/ in a single batch commit.
-    dry_run=true lists what would be exported without writing. Call manually at any time."""
+    """Export critical Supabase tables to GitHub /backups/YYYY-MM-DD/.
+    Uses direct httpx per-file writes (bypasses L.gh() rate limiter).
+    dry_run=true lists what would be exported without writing."""
     from datetime import datetime as _dt
     import json as _json
-    import base64 as _b64
     dry = str(dry_run).strip().lower() in ("true", "1", "yes")
     date_str = _dt.utcnow().strftime("%Y-%m-%d")
+    # UUID-PK tables: no id=gt.1. Bigserial tables: use id=gt.1.
     tables = [
         ("behavioral_rules", "select=id,trigger,pointer,full_rule,domain,priority,active,confidence&order=id.asc&limit=500&id=gt.1"),
         ("task_queue",       "select=id,task,status,priority,source,created_at&order=priority.desc&limit=50"),
@@ -5004,18 +5005,19 @@ def t_backup_brain(dry_run: str = "false") -> dict:
     if dry:
         return {"ok": True, "dry_run": True, "date": date_str,
                 "tables": ["knowledge_base (paginated 200/chunk)"] + [t[0] for t in tables],
-                "message": f"Would batch-commit all tables to /backups/{date_str}/ in one GitHub commit"}
-    file_payloads = {}
+                "message": f"Would write all tables to /backups/{date_str}/ via direct httpx (no rate limit)"}
     results = []
-    errors = []
+    errors  = []
+    # Collect all payloads first (Supabase reads)
+    file_payloads = {}
     KB_CHUNK = 200
     kb_offset = 1
     kb_chunk_num = 1
     kb_total = 0
     try:
         while True:
-            qs_kb = f"select=id,domain,topic,instruction,content,confidence,active&order=id.asc&limit={KB_CHUNK}&id=gt.{kb_offset}"
-            chunk = sb_get("knowledge_base", qs_kb, svc=True) or []
+            qs = f"select=id,domain,topic,instruction,content,confidence,active&order=id.asc&limit={KB_CHUNK}&id=gt.{kb_offset}"
+            chunk = sb_get("knowledge_base", qs, svc=True) or []
             if not chunk:
                 break
             file_payloads[f"backups/{date_str}/knowledge_base_{kb_chunk_num}.json"] = _json.dumps(chunk, default=str, indent=2)
@@ -5037,45 +5039,42 @@ def t_backup_brain(dry_run: str = "false") -> dict:
     if errors:
         notify(f"[BACKUP] Supabase fetch errors: {[e['table'] for e in errors]}")
         return {"ok": False, "date": date_str, "exported": results, "errors": errors}
-    try:
-        h = _ghh()
-        ref = httpx.get(f"https://api.github.com/repos/{GITHUB_REPO}/git/ref/heads/main", headers=h, timeout=15)
-        ref.raise_for_status()
-        base_sha = ref.json()["object"]["sha"]
-        ci = httpx.get(f"https://api.github.com/repos/{GITHUB_REPO}/git/commits/{base_sha}", headers=h, timeout=15)
-        ci.raise_for_status()
-        base_tree_sha = ci.json()["tree"]["sha"]
-        # Inline content tree -- no separate blob API call, avoids 422 on Railway
-        tree_entries = [
-            {"path": path, "mode": "100644", "type": "blob", "content": content}
-            for path, content in file_payloads.items()
-        ]
-        new_tree = httpx.post(f"https://api.github.com/repos/{GITHUB_REPO}/git/trees", headers=h, timeout=30,
-                              json={"base_tree": base_tree_sha, "tree": tree_entries})
-        new_tree.raise_for_status()
-        new_commit = httpx.post(f"https://api.github.com/repos/{GITHUB_REPO}/git/commits", headers=h, timeout=15,
-                                json={"message": f"[skip ci] backup {date_str}: {len(file_payloads)} files",
-                                      "tree": new_tree.json()["sha"], "parents": [base_sha]})
-        new_commit.raise_for_status()
-        commit_sha = new_commit.json()["sha"]
-        httpx.patch(f"https://api.github.com/repos/{GITHUB_REPO}/git/refs/heads/main", headers=h, timeout=15,
-                    json={"sha": commit_sha}).raise_for_status()
-        for r in results:
-            r["ok"] = True
+    # Write each file directly via GitHub Contents API (bypasses L.gh() rate limiter)
+    import base64 as _b64
+    gh_headers = _ghh()
+    write_errors = []
+    for path, content in file_payloads.items():
         try:
-            sb_post("sessions", {"summary": f"[state_update] last_backup_ts: {_dt.utcnow().isoformat()}",
-                                 "actions": [f"backup_brain: {len(file_payloads)} files -> /backups/{date_str}/ [{commit_sha[:8]}]"],
-                                 "interface": "mcp"})
-        except Exception:
-            pass
-        notify(f"[BACKUP] Complete: {len(file_payloads)} files ({kb_total} KB rows) -> /backups/{date_str}/ [{commit_sha[:8]}]")
-        return {"ok": True, "date": date_str, "commit": commit_sha[:8], "files": len(file_payloads),
-                "exported": results, "errors": []}
-    except Exception as e:
-        notify(f"[BACKUP] Git Tree API error: {e}")
-        return {"ok": False, "date": date_str, "exported": results,
-                "errors": errors + [{"table": "git_commit", "error": str(e)}]}
-
+            sha = None
+            r = httpx.get(f"https://api.github.com/repos/{GITHUB_REPO}/contents/{path}",
+                          headers=gh_headers, timeout=10)
+            if r.is_success:
+                sha = r.json().get("sha")
+            payload = {"message": f"[skip ci] backup {date_str}: {path.split('/')[-1]}",
+                       "content": _b64.b64encode(content.encode("utf-8")).decode("ascii")}
+            if sha:
+                payload["sha"] = sha
+            put = httpx.put(f"https://api.github.com/repos/{GITHUB_REPO}/contents/{path}",
+                            headers=gh_headers, json=payload, timeout=30)
+            if not put.is_success:
+                write_errors.append({"path": path, "status": put.status_code, "body": put.text[:200]})
+        except Exception as e:
+            write_errors.append({"path": path, "error": str(e)})
+    for r in results:
+        r["ok"] = len(write_errors) == 0
+    try:
+        sb_post("sessions", {"summary": f"[state_update] last_backup_ts: {_dt.utcnow().isoformat()}",
+                             "actions": [f"backup_brain: {len(file_payloads)} files -> /backups/{date_str}/"],
+                             "interface": "mcp"})
+    except Exception:
+        pass
+    ok = len(write_errors) == 0
+    if ok:
+        notify(f"[BACKUP] Complete: {len(file_payloads)} files ({kb_total} KB rows) -> /backups/{date_str}/")
+    else:
+        notify(f"[BACKUP] Write errors ({len(write_errors)}): {[e.get('path','?').split('/')[-1] for e in write_errors[:5]]}")
+    return {"ok": ok, "date": date_str, "files": len(file_payloads),
+            "exported": results, "errors": write_errors}
 TOOLS["backup_brain"] = {"fn": t_backup_brain, "perm": "READ",
     "args": [{"name": "dry_run", "type": "string", "description": "true=list what would be exported without writing (default false)"}],
     "desc": "GAP-DATA-01: Export critical Supabase tables to GitHub /backups/YYYY-MM-DD/. Runs weekly. dry_run=true for safe preview."}
