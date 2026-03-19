@@ -2801,12 +2801,14 @@ def t_bulk_apply(executor_override: str = "claude_desktop", dry_run: bool = Fals
         failed  = [r for r in results if not r.get("ok") and not r.get("action")]
         notify(f"Bulk apply done\nApplied: {len(applied)} | Failed: {len(failed)} | Total: {len(results)}\nExecutor: {executor_override}")
         # BACKLOG.md deleted in Task 1.8 â€” backlog lives in Supabase only
-        return {"ok": True, "applied": len(applied), "failed": len(failed), "results": results}
+        # Slim results to prevent h11 Content-Length overflow on large batches
+        slim_results = [{"id": r.get("id"), "ok": r.get("ok"), "note": str(r.get("note", ""))[:120]} for r in results]
+        return {"ok": True, "applied": len(applied), "failed": len(failed), "results": slim_results}
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
 
-# -- Railway GraphQL constants (correct IDs discovered 2026-03-15) --------
+# -- Railway GraphQL constants
 _RAILWAY_TOKEN   = os.environ.get("RAILWAY_TOKEN", "")
 _RAILWAY_GQL     = "https://backboard.railway.app/graphql/v2"
 _RAILWAY_PROJECT = "b6ead639-5fa2-4637-b8a5-d403ce6dac82"
