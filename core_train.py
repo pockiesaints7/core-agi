@@ -43,6 +43,11 @@ _PUBLIC_SOURCE_INTERVAL = 21600  # 6 hours
 # Source confidence multipliers (Phase 3)
 _SRC_CONF = {"real": 1.0, "simulation": 0.7, "both": 1.3}
 
+# AGI-02: Nightly self-diagnosis
+_last_self_diagnosis_run: float = 0.0
+_SELF_DIAGNOSIS_INTERVAL = 86400  # 24 hours
+_SELF_DIAGNOSIS_HOUR_UTC = 19     # 02:00 WIB = 19:00 UTC
+
 # ── TASK-4: Binance Price Monitor config ──────────────────────────────────────
 _PRICE_MONITOR_SYMBOLS  = os.getenv("BINANCE_WATCH_SYMBOLS", "BTCUSDT,ETHUSDT,BNBUSDT").split(",")
 _PRICE_ALERT_THRESHOLD  = float(os.getenv("BINANCE_ALERT_THRESHOLD_PCT", "3.0"))
@@ -861,6 +866,15 @@ def cold_processor_loop():
             if time.time() - _last_stale_check >= _STALE_CHECK_INTERVAL:
                 _check_stale_patterns()
                 _last_stale_check = time.time()
+            # AGI-02: Nightly self-diagnosis at 02:00 WIB (19:00 UTC)
+            try:
+                now_utc = datetime.utcnow()
+                time_since_diag = time.time() - _last_self_diagnosis_run
+                if (now_utc.hour == _SELF_DIAGNOSIS_HOUR_UTC and
+                        time_since_diag >= _SELF_DIAGNOSIS_INTERVAL):
+                    _run_self_diagnosis()
+            except Exception as _de:
+                print(f"[DIAG] trigger error: {_de}")
             # GAP-DATA-01: Weekly backup check -- runs if last backup > 6 days ago
             try:
                 _BACKUP_INTERVAL = 6 * 24 * 3600  # 6 days in seconds
@@ -1498,3 +1512,138 @@ def start_price_monitor():
     t = _threading.Thread(target=price_monitor_loop, daemon=True, name="price_monitor")
     t.start()
     return t
+
+
+# -- AGI-02: Nightly Self-Diagnosis -------------------------------------------
+
+def _run_self_diagnosis():
+    """AGI-02: Autonomous gap detection. Runs nightly at 02:00 WIB.
+    Analyzes: mistakes, quality trend, KB domain coverage, stale tasks.
+    Generates self_assigned tasks for identified gaps.
+    Notifies owner via Telegram for approval before execution.
+    """
+    global _last_self_diagnosis_run
+    print("[DIAG] Starting nightly self-diagnosis...")
+    gaps = []
+
+    # Analysis 1: Top structural weaknesses from recent mistakes
+    try:
+        recent_mistakes = sb_get(
+            "mistakes",
+            "select=domain,root_cause,severity&order=created_at.desc&limit=50&id=gt.1",
+            svc=True
+        ) or []
+        domain_counts = Counter(m.get("domain", "general") for m in recent_mistakes)
+        high_sev = [m for m in recent_mistakes if m.get("severity") in ("high", "critical")]
+        high_sev_domains = Counter(m.get("domain", "general") for m in high_sev)
+        top_weak = high_sev_domains.most_common(3)
+        for domain, count in top_weak:
+            if count >= 2:
+                gaps.append({
+                    "source": "mistake_cluster",
+                    "title": f"Investigate recurring {domain} failures",
+                    "description": f"Self-diagnosis: {count} high/critical severity mistakes in domain '{domain}' in last 50 sessions. Root causes need structural fix.",
+                    "priority": 4,
+                })
+        print(f"[DIAG] Mistakes: {len(recent_mistakes)} scanned, {len(top_weak)} weak domains found")
+    except Exception as e:
+        print(f"[DIAG] mistake analysis error: {e}")
+
+    # Analysis 2: Quality trend — flag if declining
+    try:
+        metrics = sb_get(
+            "quality_metrics",
+            "select=quality_score,created_at&order=created_at.desc&limit=10&id=gt.1",
+            svc=True
+        ) or []
+        if len(metrics) >= 5:
+            scores = [float(m.get("quality_score") or 0) for m in metrics]
+            recent_avg = sum(scores[:5]) / 5
+            older_avg = sum(scores[5:]) / max(len(scores[5:]), 1)
+            if recent_avg < 0.75 or (older_avg > 0 and recent_avg < older_avg - 0.05):
+                gaps.append({
+                    "source": "quality_decline",
+                    "title": "Investigate quality score decline",
+                    "description": f"Self-diagnosis: recent 5-session avg quality={recent_avg:.2f}, prior avg={older_avg:.2f}. Quality declining or below threshold 0.75. Needs root cause analysis.",
+                    "priority": 4,
+                })
+        print(f"[DIAG] Quality: {len(metrics)} sessions scanned, recent_avg={sum(scores[:5])/5 if len(scores)>=5 else 'N/A'}")
+    except Exception as e:
+        print(f"[DIAG] quality analysis error: {e}")
+
+    # Analysis 3: KB domain coverage — flag domains with <10 entries
+    try:
+        kb_rows = sb_get(
+            "knowledge_base",
+            "select=domain&id=gt.1&active=eq.true",
+            svc=True
+        ) or []
+        domain_kb_counts = Counter(r.get("domain", "general") for r in kb_rows)
+        shallow = [(d, c) for d, c in domain_kb_counts.items() if c < 10 and not d.startswith("project:")]
+        for domain, count in shallow[:3]:  # cap at 3 gaps
+            gaps.append({
+                "source": "kb_coverage",
+                "title": f"Expand KB coverage for domain: {domain}",
+                "description": f"Self-diagnosis: domain '{domain}' has only {count} KB entries. Knowledge base is shallow here. Consider ingesting or adding structured entries.",
+                "priority": 3,
+            })
+        print(f"[DIAG] KB: {len(domain_kb_counts)} domains, {len(shallow)} shallow (<10 entries)")
+    except Exception as e:
+        print(f"[DIAG] KB coverage analysis error: {e}")
+
+    # Analysis 4: Stale tasks — pending >14 days with no checkpoint
+    try:
+        stale_cutoff = (datetime.utcnow() - timedelta(days=14)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        stale_tasks = sb_get(
+            "task_queue",
+            f"select=id,task,priority&status=eq.pending&created_at=lt.{stale_cutoff}&source=neq.self_assigned",
+            svc=True
+        ) or []
+        if len(stale_tasks) >= 3:
+            gaps.append({
+                "source": "stale_tasks",
+                "title": "Review stale pending tasks (>14 days)",
+                "description": f"Self-diagnosis: {len(stale_tasks)} tasks have been pending >14 days with no progress. Review for blockers, deprioritization, or cancellation.",
+                "priority": 3,
+            })
+        print(f"[DIAG] Stale tasks: {len(stale_tasks)} found")
+    except Exception as e:
+        print(f"[DIAG] stale task analysis error: {e}")
+
+    # Generate self-assigned tasks for each gap
+    tasks_created = []
+    for gap in gaps:
+        try:
+            task_payload = {
+                "task": json.dumps({
+                    "title": gap["title"],
+                    "description": gap["description"],
+                    "source": "self_assigned",
+                }),
+                "status": "pending",
+                "priority": gap["priority"],
+                "source": "self_assigned",
+            }
+            result = sb_post("task_queue", task_payload, svc=True)
+            if result:
+                tasks_created.append(gap["title"])
+                print(f"[DIAG] Created self-assigned task: {gap['title']}")
+        except Exception as e:
+            print(f"[DIAG] task creation error for '{gap['title']}': {e}")
+
+    # Notify owner
+    _last_self_diagnosis_run = time.time()
+    try:
+        if tasks_created:
+            task_list = "\n".join(f"  - {t}" for t in tasks_created)
+            notify(
+                f"[DIAG] Nightly self-diagnosis complete.\n"
+                f"{len(tasks_created)} gap(s) identified and queued (source=self_assigned, status=pending):\n"
+                f"{task_list}\n\n"
+                f"Review in next session before execution."
+            )
+        else:
+            notify("[DIAG] Nightly self-diagnosis: no gaps found. All systems nominal.")
+        print(f"[DIAG] Done. {len(tasks_created)} self-assigned tasks created.")
+    except Exception as e:
+        print(f"[DIAG] notify error: {e}")
