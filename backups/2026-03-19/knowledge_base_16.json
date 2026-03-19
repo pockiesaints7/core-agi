@@ -1,5 +1,14 @@
 [
   {
+    "id": 3717,
+    "domain": "backlog",
+    "topic": "[BACKLOG-5] Expertise Metrics for Code Tasks",
+    "instruction": null,
+    "content": "type=missing_data effort=very high impact=high domain=code\nEstablish clear, measurable metrics for code expertise, enabling the evaluation of CORE's performance and the detection of knowledge gaps in the code domain.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
     "id": 3718,
     "domain": "backlog",
     "topic": "[BACKLOG-4] Finance-specific Knowledge Base",
@@ -1787,15 +1796,6 @@
     "topic": "[TODO] Data Analysis Framework",
     "instruction": null,
     "content": "Type: new_tool\nData Analysis Framework",
-    "confidence": "low",
-    "active": true
-  },
-  {
-    "id": 5279,
-    "domain": "pending_impl",
-    "topic": "[TODO] Term Explorer",
-    "instruction": null,
-    "content": "Type: new_tool\nTerm Explorer",
     "confidence": "low",
     "active": true
   }
