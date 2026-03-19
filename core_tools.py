@@ -1544,6 +1544,38 @@ def t_session_start() -> dict:
         except Exception:
             migration_needed = True
             migration_missing.append("credentials_index")
+        # AGI-05/S3: Associative bridge -- surface 3 cross-domain KB entries related to current domain
+        associated_context = []
+        try:
+            if detected_domain and detected_domain not in ("general", ""):
+                # Get top keywords from domain KB entries
+                domain_kb = sb_get("knowledge_base",
+                    f"select=topic,instruction&id=gt.1&domain=eq.{detected_domain}&order=access_count.desc&limit=5",
+                    svc=True) or []
+                # Build keyword set from topics
+                keywords = []
+                for entry in domain_kb:
+                    t = (entry.get("topic") or "").replace("_", " ").split()
+                    keywords.extend([w for w in t if len(w) > 4])
+                # Search OTHER domains for entries sharing those keywords
+                seen_ids = set()
+                for kw in keywords[:3]:  # top 3 keywords only -- keep it fast
+                    cross = sb_get("knowledge_base",
+                        f"select=id,domain,topic,instruction&id=gt.1&domain=neq.{detected_domain}&or=(topic.ilike.*{kw}*,instruction.ilike.*{kw}*)&order=access_count.desc&limit=2",
+                        svc=True) or []
+                    for r in cross:
+                        rid = r.get("id")
+                        if rid and rid not in seen_ids and len(associated_context) < 3:
+                            associated_context.append({
+                                "domain": r.get("domain", ""),
+                                "topic": r.get("topic", ""),
+                                "instruction": (r.get("instruction") or "")[:200],
+                                "bridge_keyword": kw,
+                            })
+                            seen_ids.add(rid)
+        except Exception:
+            pass  # Non-fatal -- associative bridge is best-effort
+
         return {
             "ok": True,
             "health": health.get("overall", "unknown"),
@@ -1571,6 +1603,7 @@ def t_session_start() -> dict:
             "system_map_drift": drift,
             "system_map": smap,
             "resume_checkpoint": _get_resume_checkpoint(resume_task_obj),
+            "associated_context": associated_context,  # AGI-05/S3: cross-domain associative bridges
         }
     except Exception as e:
         return {"ok": False, "error": str(e)}
