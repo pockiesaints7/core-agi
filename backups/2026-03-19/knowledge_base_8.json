@@ -1,5 +1,14 @@
 [
   {
+    "id": 1972,
+    "domain": "backlog",
+    "topic": "[BACKLOG-5] Refine task routing for domain-specific archetypes",
+    "instruction": null,
+    "content": "type=logic_improvement effort=medium impact=high domain=creative\nEnforce archetype assignments based on domain-specific tasks to improve performance and quality of generated output.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
     "id": 1973,
     "domain": "backlog",
     "topic": "[BACKLOG-4] Domain-specific knowledge base for creative tasks",
@@ -1787,15 +1796,6 @@
     "topic": "[BACKLOG-3] Code Snippet Generator",
     "instruction": null,
     "content": "type=new_tool effort=high impact=medium domain=code\nDevelop a tool for generating sample code snippets based on provided parameters from KB entries.",
-    "confidence": "medium",
-    "active": true
-  },
-  {
-    "id": 2189,
-    "domain": "backlog",
-    "topic": "[BACKLOG-1] User Task Feedback Integration",
-    "instruction": null,
-    "content": "type=missing_data effort=low impact=low domain=code\nGather user feedback for tasks completed to improve CORE's understanding and quality of task delivery.",
     "confidence": "medium",
     "active": true
   }
