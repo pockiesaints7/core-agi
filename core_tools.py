@@ -4642,21 +4642,32 @@ TOOLS["verify_before_deploy"] = {
 
 # -- TASK-V8: V8 Architecture Tools -------------------------------------------
 
-def t_get_behavioral_rules(domain: str = None) -> dict:
+def t_get_behavioral_rules(domain: str = None, page: str = "1", page_size: str = "200") -> dict:
     """Load active behavioral rules from behavioral_rules table.
     If domain provided: return universal rules + domain-specific rules.
     If domain=None: return universal rules only.
     Filter: active=true, id=gt.1, order by priority asc.
-    If table does not exist (migration pending): return empty list with migration_needed flag."""
+    If table does not exist (migration pending): return empty list with migration_needed flag.
+    Supports pagination: page=1-based page number, page_size=rows per page (default 200, max 500)."""
     try:
+        try:
+            pg = max(1, int(page))
+            ps = min(500, max(10, int(page_size)))
+        except Exception:
+            pg, ps = 1, 200
+        offset = (pg - 1) * ps
         if domain and domain.strip():
-            filters = f"active=eq.true&id=gt.1&domain=in.(universal,{domain.strip()})&order=priority.asc&limit=50"
+            filters = f"active=eq.true&id=gt.1&domain=in.(universal,{domain.strip()})&order=priority.asc&limit={ps}&offset={offset}"
         else:
-            filters = "active=eq.true&id=gt.1&domain=eq.universal&order=priority.asc&limit=50"
+            filters = f"active=eq.true&id=gt.1&domain=eq.universal&order=priority.asc&limit={ps}&offset={offset}"
         rows = sb_get("behavioral_rules", f"select=trigger,pointer,full_rule,domain,priority,tested,confidence&{filters}", svc=True)
         if rows is None:
             return {"ok": True, "rules": [], "migration_needed": True, "warning": "behavioral_rules table may not exist yet"}
-        return {"ok": True, "rules": rows or [], "count": len(rows or []), "domain": domain or "universal"}
+        result = {"ok": True, "rules": rows or [], "count": len(rows or []), "domain": domain or "universal", "page": pg, "page_size": ps}
+        if len(rows or []) == ps:
+            result["has_more"] = True
+            result["next_page"] = pg + 1
+        return result
     except Exception as e:
         err = str(e)
         if "not found" in err.lower() or "does not exist" in err.lower():
@@ -4664,8 +4675,12 @@ def t_get_behavioral_rules(domain: str = None) -> dict:
         return {"ok": False, "error": err, "error_code": "exception", "retry_hint": True}
 
 TOOLS["get_behavioral_rules"] = {"fn": t_get_behavioral_rules, "perm": "READ",
-    "args": [{"name": "domain", "type": "string", "description": "Domain to load rules for (e.g. railway, code, postgres). Returns universal + domain rules."}],
-    "desc": "TASK-V8: Load active behavioral rules from behavioral_rules table. Pass domain= to get universal + domain-specific rules. Returns rules ordered by priority. If table missing returns migration_needed=true."}
+    "args": [
+        {"name": "domain", "type": "string", "description": "Domain to load rules for (e.g. railway, code, postgres). Returns universal + domain rules."},
+        {"name": "page", "type": "string", "description": "Page number (1-based, default 1)"},
+        {"name": "page_size", "type": "string", "description": "Rows per page (default 200, max 500)"},
+    ],
+    "desc": "TASK-V8: Load active behavioral rules from behavioral_rules table. Pass domain= to get universal + domain-specific rules. Returns rules ordered by priority. Supports pagination (page, page_size). If table missing returns migration_needed=true."}
 
 
 def t_add_behavioral_rule(trigger: str = "", pointer: str = "", full_rule: str = "",
@@ -4703,6 +4718,10 @@ def t_add_behavioral_rule(trigger: str = "", pointer: str = "", full_rule: str =
             conf = max(0.0, min(1.0, conf))
         except Exception:
             conf = 0.8
+        # Per-session rate limit: max 10 insertions per session
+        _br_counter = getattr(t_add_behavioral_rule, "_session_insert_count", 0)
+        if _br_counter >= 10:
+            return {"ok": False, "error_code": "rate_limited", "message": f"Behavioral rule rate limit reached ({_br_counter}/10 this session). Prevents evolution queue flooding. Owner can reset by restarting session.", "retry_hint": False}
         # Duplicate check
         existing = sb_get("behavioral_rules", f"select=id,pointer&active=eq.true&trigger=eq.{trigger}&domain=eq.{domain}&limit=5", svc=True) or []
         for ex in existing:
@@ -4713,7 +4732,9 @@ def t_add_behavioral_rule(trigger: str = "", pointer: str = "", full_rule: str =
         if expires_at:
             row["expires_at"] = expires_at
         ok = sb_post("behavioral_rules", row)
-        return {"ok": ok, "action": "inserted", "trigger": trigger, "domain": domain}
+        if ok:
+            t_add_behavioral_rule._session_insert_count = getattr(t_add_behavioral_rule, "_session_insert_count", 0) + 1
+        return {"ok": ok, "action": "inserted", "trigger": trigger, "domain": domain, "session_inserts": getattr(t_add_behavioral_rule, "_session_insert_count", 0)}
     except Exception as e:
         return {"ok": False, "error": str(e), "error_code": "exception", "retry_hint": True}
 
