@@ -1,5 +1,14 @@
 [
   {
+    "id": 3055,
+    "domain": "backlog",
+    "topic": "[BACKLOG-3] Risk-Assessment for Runway Calculation",
+    "instruction": null,
+    "content": "type=logic_improvement effort=medium impact=medium domain=finance\nIntegrate a probabilistic risk model to account for uncertain variables and improve the accuracy of runway calculation, considering multiple scenarios.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
     "id": 3056,
     "domain": "backlog",
     "topic": "[BACKLOG-2] Tax Laws and Regulations",
@@ -1787,15 +1796,6 @@
     "topic": "[BACKLOG-3] Task Contextualization",
     "instruction": null,
     "content": "type=logic_improvement effort=medium impact=high domain=business\nIntegrate contextual information about tasks, such as relevant news articles, industry trends, and company data, to enhance business planning and decision-making abilities",
-    "confidence": "medium",
-    "active": true
-  },
-  {
-    "id": 3270,
-    "domain": "backlog",
-    "topic": "[BACKLOG-4] Business Planning Knowledge Base",
-    "instruction": null,
-    "content": "type=new_kb effort=high impact=high domain=business\nCreate a knowledge base specific to business planning, including industry best practices, case studies, and general business planning guidelines to support CORE's business-oriented tasks",
     "confidence": "medium",
     "active": true
   }
