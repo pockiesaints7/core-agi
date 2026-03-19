@@ -1590,7 +1590,7 @@ def _run_cross_domain_synthesis():
     )
 
     try:
-        raw = gemini_chat(system_prompt, user_prompt, max_tokens=2048)
+        raw = gemini_chat(system_prompt, user_prompt, max_tokens=2048, json_mode=True)
         print(f"[SYNTH] Gemini raw (first 300): {raw[:300]}")
         # Strip markdown fences if present
         import re as _re_s
