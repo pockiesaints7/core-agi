@@ -1804,62 +1804,60 @@ def t_diff(path: str = "", sha_a: str = "", sha_b: str = "main") -> dict:
 
 
 def t_deploy_and_wait(reason: str = "", timeout: str = "120") -> dict:
-    """Non-blocking deploy status check.
-    Previous implementation used a blocking sleep loop which caused MCP socket timeouts on claude.ai.
-    Now: takes a single snapshot of the latest deployment + one /health ping. Returns immediately.
-    For live polling use PowerShell: Invoke-WebRequest https://core-agi-production.up.railway.app/health
-    timeout param retained for API compat but ignored (no blocking).
+    """Instant Railway deployment status snapshot. Returns in <5s always.
+    Root cause of previous hangs: any blocking I/O (sleep loops, urllib, long httpx timeout)
+    kills the claude.ai MCP socket. Fix: single Railway GQL call with 4s httpx timeout,
+    catch timeout immediately, return whatever state Railway has right now.
+    timeout param retained for API compat but ignored -- no blocking ever.
+    To poll live: PowerShell loop on https://core-agi-production.up.railway.app/health
     """
     try:
-        # Snapshot latest deployment state from Railway GraphQL
-        node = _railway_latest_deployment()
-        deploy_id = ""
-        commit_msg = ""
-        commit_sha = ""
-        status = "UNKNOWN"
-        if node:
-            status = node.get("status", "UNKNOWN")
-            deploy_id = node.get("id", "")[:12]
-            meta = node.get("meta", {}) or {}
-            commit_sha = (meta.get("commitHash") or "")[:12]
-            commit_msg = (meta.get("commitMessage") or "")[:80]
-
-        # One health ping -- fast, no retry
-        health_ok = False
-        health_detail = {}
-        try:
-            import urllib.request
-            req = urllib.request.Request(
-                "https://core-agi-production.up.railway.app/health",
-                headers={"User-Agent": "CORE-deploy-check"}
-            )
-            with urllib.request.urlopen(req, timeout=8) as resp:
-                import json as _json
-                health_detail = _json.loads(resp.read().decode())
-                health_ok = health_detail.get("overall") == "ok"
-        except Exception as he:
-            health_detail = {"error": str(he)}
-
+        tok = _RAILWAY_TOKEN or os.environ.get("RAILWAY_TOKEN", "")
+        q = """
+        query($projectId: String!, $serviceId: String!) {
+            deployments(first: 1, input: { projectId: $projectId, serviceId: $serviceId }) {
+                edges { node { id status createdAt meta } }
+            }
+        }"""
+        headers = {"Authorization": f"Bearer {tok}", "Content-Type": "application/json"}
+        body = {"query": q, "variables": {"projectId": _RAILWAY_PROJECT, "serviceId": _RAILWAY_SERVICE}}
+        # Hard 4s timeout -- MCP socket dies after ~10s, must return well before that
+        r = httpx.post(_RAILWAY_GQL, headers=headers, json=body, timeout=4)
+        data = r.json().get("data", {})
+        edges = data.get("deployments", {}).get("edges", [])
+        if not edges:
+            return {"ok": False, "status": "NO_DEPLOYMENTS", "source": "railway_gql"}
+        node = edges[0]["node"]
+        status = node.get("status", "UNKNOWN")
+        deploy_id = node.get("id", "")[:12]
+        meta = node.get("meta") or {}
+        if isinstance(meta, str):
+            import json as _j
+            try: meta = _j.loads(meta)
+            except: meta = {}
+        commit_sha = (meta.get("commitHash") or "")[:12]
+        commit_msg = (meta.get("commitMessage") or "")[:80]
         terminal = {"SUCCESS", "FAILED", "CRASHED", "REMOVED"}
         in_progress = status in {"BUILDING", "DEPLOYING", "INITIALIZING", "QUEUED"}
-
         result = {
-            "ok": status == "SUCCESS" and health_ok,
+            "ok": status == "SUCCESS",
             "status": status,
             "deploy_id": deploy_id,
             "commit_sha": commit_sha,
             "commit_msg": commit_msg,
-            "health_ok": health_ok,
-            "health_detail": health_detail,
-            "source": "snapshot_non_blocking",
+            "source": "railway_gql_snapshot",
         }
         if in_progress:
-            result["note"] = f"Deploy still {status}. Poll via PowerShell: Invoke-WebRequest https://core-agi-production.up.railway.app/health"
-        elif status not in terminal:
-            result["note"] = "Unknown status -- check Railway dashboard"
+            result["note"] = f"Still {status} -- poll: Invoke-WebRequest https://core-agi-production.up.railway.app/health"
+        elif status == "SUCCESS":
+            result["note"] = "Deploy complete. Call ping_health to verify app is responding."
+        elif status in {"FAILED", "CRASHED"}:
+            result["note"] = "Deploy failed -- call railway_logs_live to diagnose."
         return result
+    except httpx.TimeoutException:
+        return {"ok": False, "status": "GQL_TIMEOUT", "note": "Railway GQL did not respond in 4s. Poll manually: Invoke-WebRequest https://core-agi-production.up.railway.app/health", "source": "railway_gql_snapshot"}
     except Exception as e:
-        return {"ok": False, "error": str(e)}
+        return {"ok": False, "error": str(e), "source": "railway_gql_snapshot"}
 
 
 def t_railway_logs_live(lines: str = "50", keyword: str = "") -> dict:
