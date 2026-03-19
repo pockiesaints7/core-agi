@@ -4412,3 +4412,88 @@ TOOLS["crypto_balance"] = {"fn": t_crypto_balance, "perm": "READ",    "args": ["
                             "desc": "Get Binance account balances. Requires BINANCE_API_KEY + BINANCE_SECRET_KEY env vars. asset=optional filter e.g. BTC. Returns all non-zero balances if asset empty."}
 TOOLS["crypto_trade"]   = {"fn": t_crypto_trade,   "perm": "EXECUTE", "args": ["symbol", "side", "quantity", "confirm", "order_type"],
                             "desc": "Execute a Binance spot trade. REQUIRES confirm=CONFIRM to execute -- omit for dry run showing estimated value. symbol=e.g. BTCUSDT. side=BUY or SELL. quantity=base asset amount. order_type=MARKET (default) or LIMIT. Logs all trades to Supabase trades table. Sends Telegram notify on execution. NEVER execute without owner CONFIRM."}
+
+
+# -- TASK-5.2: Task State Validator ------------------------------------------
+
+def t_task_health() -> dict:
+    """Check task_queue for stale/abandoned tasks.
+    Flags: in_progress tasks older than 24hr, pending tasks with no updates older than 7 days.
+    Returns: {ok, stale_in_progress: [...], stale_pending: [...], total_stale, warning}
+    Called at session_start to surface abandoned work before starting new tasks."""
+    try:
+        from datetime import datetime, timezone, timedelta
+        now = datetime.now(timezone.utc)
+        threshold_in_progress = now - timedelta(hours=24)
+        threshold_pending = now - timedelta(days=7)
+
+        # Fetch in_progress tasks older than 24hr
+        stale_ip_rows = sb_get(
+            "task_queue",
+            f"select=id,task,status,created_at,updated_at&id=gt.1&status=eq.in_progress&order=created_at.asc",
+            svc=True
+        ) or []
+
+        # Fetch pending tasks older than 7 days
+        stale_pend_rows = sb_get(
+            "task_queue",
+            f"select=id,task,status,created_at,updated_at&id=gt.1&status=eq.pending&order=created_at.asc",
+            svc=True
+        ) or []
+
+        stale_in_progress = []
+        for row in stale_ip_rows:
+            ts_str = row.get("updated_at") or row.get("created_at") or ""
+            try:
+                ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+                if ts < threshold_in_progress:
+                    task_raw = row.get("task", "")
+                    title = task_raw[:80] if isinstance(task_raw, str) else str(task_raw)[:80]
+                    hours_stale = int((now - ts).total_seconds() / 3600)
+                    stale_in_progress.append({
+                        "id": str(row.get("id", "")),
+                        "title": title,
+                        "hours_stale": hours_stale,
+                        "last_update": ts_str,
+                    })
+            except Exception:
+                pass
+
+        stale_pending = []
+        for row in stale_pend_rows:
+            ts_str = row.get("updated_at") or row.get("created_at") or ""
+            try:
+                ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+                if ts < threshold_pending:
+                    task_raw = row.get("task", "")
+                    title = task_raw[:80] if isinstance(task_raw, str) else str(task_raw)[:80]
+                    days_stale = int((now - ts).total_seconds() / 86400)
+                    stale_pending.append({
+                        "id": str(row.get("id", "")),
+                        "title": title,
+                        "days_stale": days_stale,
+                        "last_update": ts_str,
+                    })
+            except Exception:
+                pass
+
+        total_stale = len(stale_in_progress) + len(stale_pending)
+        warning = None
+        if total_stale > 0:
+            parts = []
+            if stale_in_progress:
+                parts.append(f"{len(stale_in_progress)} in_progress task(s) stuck >24hr")
+            if stale_pending:
+                parts.append(f"{len(stale_pending)} pending task(s) untouched >7d")
+            warning = "STALE TASKS: " + ", ".join(parts) + ". Review before starting new work."
+
+        return {
+            "ok": True,
+            "stale_in_progress": stale_in_progress,
+            "stale_pending": stale_pending,
+            "total_stale": total_stale,
+            "warning": warning,
+        }
+    except Exception as e:
+        return {"ok": False, "error": str(e), "error_code": "exception", "retry_hint": True}
+
