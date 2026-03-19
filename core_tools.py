@@ -4981,3 +4981,55 @@ TOOLS["log_reasoning"] = {"fn": t_log_reasoning, "perm": "WRITE",
              {"name":"queries_triggered","type":"string"},{"name":"owner_confirm_needed","type":"string"},
              {"name":"domain","type":"string"}],
     "desc": "TASK-V8: Log cognitive pre-flight result to reasoning_log. Call after each reasoning_preflight run."}
+
+
+# -- GAP-DATA-01: Weekly brain backup -----------------------------------------
+def t_backup_brain(dry_run: str = "false") -> dict:
+    """Export critical Supabase tables to GitHub /backups/YYYY-MM-DD/. Runs weekly automatically.
+    dry_run=true lists what would be exported without writing. Call manually at any time."""
+    from datetime import datetime as _dt
+    import json as _json
+    dry = str(dry_run).strip().lower() in ("true", "1", "yes")
+    date_str = _dt.utcnow().strftime("%Y-%m-%d")
+    tables = [
+        ("knowledge_base",  "select=id,domain,topic,instruction,content,confidence,active&order=id.asc&limit=5000&id=gt.1"),
+        ("behavioral_rules", "select=id,trigger,pointer,full_rule,domain,priority,active,confidence&order=id.asc&limit=500&id=gt.1"),
+        ("task_queue",       "select=id,task,status,priority,source,created_at&order=priority.desc&limit=50&id=gt.1"),
+        ("sessions",         "select=id,summary,domain,quality,created_at&order=created_at.desc&limit=30&id=gt.1"),
+        ("mistakes",         "select=id,domain,what_failed,correct_approach,severity,root_cause,created_at&order=id.desc&limit=500&id=gt.1"),
+        ("infrastructure_map", "select=*&order=id.asc&id=gt.1"),
+        ("credentials_index",  "select=id,service,key_name,location,env_var_name,required_for&order=id.asc&id=gt.1"),
+    ]
+    if dry:
+        return {"ok": True, "dry_run": True, "date": date_str,
+                "tables": [t[0] for t in tables],
+                "message": f"Would write {len(tables)} tables to /backups/{date_str}/"}
+    results = []
+    errors = []
+    for table_name, qs in tables:
+        try:
+            rows = sb_get(table_name, qs, svc=True) or []
+            content = _json.dumps(rows, default=str, indent=2)
+            path = f"backups/{date_str}/{table_name}.json"
+            ok = gh_write(path, content, f"[skip ci] backup {table_name} {date_str}")
+            results.append({"table": table_name, "rows": len(rows), "ok": ok})
+        except Exception as e:
+            errors.append({"table": table_name, "error": str(e)})
+    # Update last backup timestamp in KB
+    try:
+        sb_post("sessions", {
+            "summary": f"[state_update] last_backup_ts: {_dt.utcnow().isoformat()}",
+            "actions": [f"backup_brain: {len(results)} tables exported to /backups/{date_str}/"],
+            "interface": "mcp"
+        })
+    except Exception:
+        pass
+    if errors:
+        notify(f"[BACKUP] Partial: {len(results)} OK, {len(errors)} errors: {errors}")
+    else:
+        notify(f"[BACKUP] Complete: {len(results)} tables -> /backups/{date_str}/")
+    return {"ok": len(errors) == 0, "date": date_str, "exported": results, "errors": errors}
+
+TOOLS["backup_brain"] = {"fn": t_backup_brain, "perm": "READ",
+    "args": [{"name": "dry_run", "type": "string", "description": "true=list what would be exported without writing (default false)"}],
+    "desc": "GAP-DATA-01: Export critical Supabase tables to GitHub /backups/YYYY-MM-DD/. Runs weekly. dry_run=true for safe preview."}
