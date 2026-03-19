@@ -1659,6 +1659,12 @@ def t_system_map_scan(trigger: str = "manual") -> dict:
             # --- 16.C: Auto-reconcile skeleton layer (.md/.json/.txt docs) ---
             _reconcile_skeleton_docs(rows, inserted_tools, tombstoned_tools)
 
+            # --- 16.D: Auto-reconcile interface layer (external MCP servers) ---
+            _reconcile_interface_services(rows, inserted_tools, tombstoned_tools)
+
+            # --- 16.E: Auto-reconcile local_pc skill file versions ---
+            _reconcile_skill_versions(rows, inserted_tools, tombstoned_tools)
+
         wiring = {}
         for row in rows:
             if row.get("status") == "tombstone":
