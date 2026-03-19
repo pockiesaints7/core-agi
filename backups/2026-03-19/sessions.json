@@ -1,5 +1,23 @@
 [
   {
+    "id": 536,
+    "summary": "[state_update] last_real_signal_ts: 2026-03-19T10:22:41.870176",
+    "domain": null,
+    "created_at": "2026-03-19T10:22:41.948626+00:00"
+  },
+  {
+    "id": 535,
+    "summary": "[state_update] last_real_signal_ts: 2026-03-19T10:14:46.544582",
+    "domain": null,
+    "created_at": "2026-03-19T10:14:46.620866+00:00"
+  },
+  {
+    "id": 534,
+    "summary": "[state_update] last_backup_ts: 2026-03-19T10:14:11.385912",
+    "domain": null,
+    "created_at": "2026-03-19T10:14:11.481475+00:00"
+  },
+  {
     "id": 533,
     "summary": "[state_update] last_backup_ts: 2026-03-19T10:09:56.300460",
     "domain": null,
@@ -160,23 +178,5 @@
     "summary": "[state_update] last_real_signal_ts: 2026-03-19T05:52:20.392455",
     "domain": null,
     "created_at": "2026-03-19T05:52:20.888808+00:00"
-  },
-  {
-    "id": 506,
-    "summary": "[state_update] last_real_signal_ts: 2026-03-19T04:52:09.503732",
-    "domain": null,
-    "created_at": "2026-03-19T04:52:09.636229+00:00"
-  },
-  {
-    "id": 505,
-    "summary": "[state_update] last_real_signal_ts: 2026-03-19T03:51:59.882510",
-    "domain": null,
-    "created_at": "2026-03-19T03:52:00.052133+00:00"
-  },
-  {
-    "id": 504,
-    "summary": "[state_update] last_real_signal_ts: 2026-03-19T02:51:49.080978",
-    "domain": null,
-    "created_at": "2026-03-19T02:51:49.196357+00:00"
   }
 ]
