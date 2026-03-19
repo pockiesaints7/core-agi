@@ -338,5 +338,15 @@
     "priority": 2,
     "active": true,
     "confidence": 0.95
+  },
+  {
+    "id": 36,
+    "trigger": "post_deploy",
+    "pointer": "force_railway_deploy_via_railway_json_push_when_code_patched()",
+    "full_rule": "gh_search_replace and multi_patch ALWAYS add [skip ci] to commit messages -- Railway will NOT redeploy from these commits. After any code patch via gh_search_replace: if Railway must run the new code, push railway.json without [skip ci] via PowerShell GitHub PUT (contents API, include current SHA) to force a real build. Then poll /health. After recovery, verify running commit SHA matches the patched commit. NEVER assume deploy_and_wait success = new code is live -- it may have re-deployed the old version silently.",
+    "domain": "railway",
+    "priority": 1,
+    "active": true,
+    "confidence": 1
   }
 ]
