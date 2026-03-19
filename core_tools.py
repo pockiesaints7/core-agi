@@ -493,6 +493,15 @@ def t_debug_fn(fn_name: str, dry_run: bool = True, extra_args: dict = None) -> d
     """
     import traceback, importlib
 
+    # MCP passes all args as strings -- coerce explicitly
+    if isinstance(dry_run, str):
+        dry_run = dry_run.lower() not in ("false", "0", "no")
+    if isinstance(extra_args, str):
+        try:
+            import json as _j; extra_args = _j.loads(extra_args)
+        except Exception:
+            extra_args = {}
+
     stages = []
     result = None
 
