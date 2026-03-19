@@ -161,8 +161,10 @@ _GEMINI_KEYS = [k.strip() for k in os.getenv("GEMINI_KEYS", "").replace(" ", "")
 _GEMINI_KEY_INDEX = 0
 _GEMINI_MODEL = "gemini-2.5-flash"
 
-def gemini_chat(system: str, user: str, max_tokens: int = 1024) -> str:
-    """Gemini chat with round-robin key rotation and 429 fallback across all keys."""
+def gemini_chat(system: str, user: str, max_tokens: int = 2048) -> str:
+    """Gemini chat with round-robin key rotation and 429 fallback across all keys.
+    Default max_tokens=2048 -- gemini-2.5-flash is a thinking model that uses tokens
+    for internal reasoning before output. Low limits cause empty content responses."""
     global _GEMINI_KEY_INDEX
     if not _GEMINI_KEYS:
         raise RuntimeError("GEMINI_KEYS env var not set")
@@ -185,7 +187,14 @@ def gemini_chat(system: str, user: str, max_tokens: int = 1024) -> str:
                 last_err = f"429 on key index {(_GEMINI_KEY_INDEX - 1) % len(_GEMINI_KEYS)}"
                 continue  # try next key
             r.raise_for_status()
-            return r.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
+            resp_json = r.json()
+            candidate = resp_json.get("candidates", [{}])[0]
+            parts = candidate.get("content", {}).get("parts", [])
+            if not parts:
+                # Thinking model exhausted token budget on reasoning -- treat as 429, try next key
+                last_err = f"empty parts (finish={candidate.get('finishReason','?')}) -- likely token budget exhausted"
+                continue
+            return parts[0]["text"].strip()
         except Exception as e:
             last_err = str(e)
             continue
