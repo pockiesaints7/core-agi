@@ -1,5 +1,14 @@
 [
   {
+    "id": 612,
+    "domain": "openclaw-docs",
+    "topic": "channels_zalouser",
+    "instruction": null,
+    "content": "Zalo Personal (unofficial): plugin required (@openclaw/zalouser). Automates personal Zalo account via zca-js. Login: openclaw channels login --channel zalouser (QR scan). WARNING: unofficial, risk of account ban. DM policy: pairing. Group support with mention gating. In-process via zca-js, no external CLI needed.",
+    "confidence": "high",
+    "active": true
+  },
+  {
     "id": 613,
     "domain": "openclaw-docs",
     "topic": "channels_location",
@@ -1787,15 +1796,6 @@
     "topic": "[BACKLOG-4] Optimize Data Retrieval",
     "instruction": null,
     "content": "type=performance effort=medium impact=medium domain=data\nImprove the efficiency of data retrieval from the knowledge base and external sources to reduce processing time and latency",
-    "confidence": "medium",
-    "active": true
-  },
-  {
-    "id": 941,
-    "domain": "backlog",
-    "topic": "[BACKLOG-4] Enhance Domain-Specific Rerouting",
-    "instruction": null,
-    "content": "type=logic_improvement effort=high impact=high domain=business\nIntroduce domain-specific routing rules and expert system logic to handle task-specific nuances, reducing general archetype reliance.",
     "confidence": "medium",
     "active": true
   }
