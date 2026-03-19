@@ -1804,59 +1804,60 @@ def t_diff(path: str = "", sha_a: str = "", sha_b: str = "main") -> dict:
 
 
 def t_deploy_and_wait(reason: str = "", timeout: str = "120") -> dict:
-    """Real-time Railway deployment poller via GraphQL.
-    Polls Railway directly every 3s until status is SUCCESS|FAILED|CRASHED|REMOVED.
-    Returns as soon as deployment reaches a terminal state.
-    timeout: max seconds to wait (default 120). Returns partial result on timeout.
+    """Non-blocking deploy status check.
+    Previous implementation used a blocking sleep loop which caused MCP socket timeouts on claude.ai.
+    Now: takes a single snapshot of the latest deployment + one /health ping. Returns immediately.
+    For live polling use PowerShell: Invoke-WebRequest https://core-agi-production.up.railway.app/health
+    timeout param retained for API compat but ignored (no blocking).
     """
     try:
-        max_secs = min(int(timeout) if timeout else 120, 300)
-        deadline = time.time() + max_secs
-        poll_interval = 3
-        attempts = 0
+        # Snapshot latest deployment state from Railway GraphQL
+        node = _railway_latest_deployment()
+        deploy_id = ""
+        commit_msg = ""
+        commit_sha = ""
+        status = "UNKNOWN"
+        if node:
+            status = node.get("status", "UNKNOWN")
+            deploy_id = node.get("id", "")[:12]
+            meta = node.get("meta", {}) or {}
+            commit_sha = (meta.get("commitHash") or "")[:12]
+            commit_msg = (meta.get("commitMessage") or "")[:80]
+
+        # One health ping -- fast, no retry
+        health_ok = False
+        health_detail = {}
+        try:
+            import urllib.request
+            req = urllib.request.Request(
+                "https://core-agi-production.up.railway.app/health",
+                headers={"User-Agent": "CORE-deploy-check"}
+            )
+            with urllib.request.urlopen(req, timeout=8) as resp:
+                import json as _json
+                health_detail = _json.loads(resp.read().decode())
+                health_ok = health_detail.get("overall") == "ok"
+        except Exception as he:
+            health_detail = {"error": str(he)}
+
         terminal = {"SUCCESS", "FAILED", "CRASHED", "REMOVED"}
-        last_status = None
-        deploy_id = None
+        in_progress = status in {"BUILDING", "DEPLOYING", "INITIALIZING", "QUEUED"}
 
-        while time.time() < deadline:
-            attempts += 1
-            try:
-                node = _railway_latest_deployment()
-                if not node:
-                    time.sleep(poll_interval)
-                    continue
-                status = node.get("status", "UNKNOWN")
-                deploy_id = node.get("id", "")[:12]
-                meta = node.get("meta", {}) or {}
-                commit_sha = (meta.get("commitHash") or "")[:12]
-                commit_msg = (meta.get("commitMessage") or "")[:60]
-                last_status = status
-                print(f"[DEPLOY_WAIT] attempt={attempts} status={status} deploy={deploy_id} commit={commit_msg[:40]}")
-                if status in terminal:
-                    elapsed = round(time.time() - (deadline - max_secs), 1)
-                    return {
-                        "ok": status == "SUCCESS",
-                        "status": status,
-                        "deploy_id": deploy_id,
-                        "commit_msg": commit_msg,
-                        "attempts": attempts,
-                        "elapsed_s": elapsed,
-                        "source": "railway_graphql_live",
-                    }
-            except Exception as pe:
-                print(f"[DEPLOY_WAIT] poll error: {pe}")
-            time.sleep(poll_interval)
-
-        # Timeout
-        return {
-            "ok": False,
-            "status": last_status or "TIMEOUT",
+        result = {
+            "ok": status == "SUCCESS" and health_ok,
+            "status": status,
             "deploy_id": deploy_id,
-            "attempts": attempts,
-            "elapsed_s": max_secs,
-            "error": f"Timed out after {max_secs}s waiting for terminal state",
-            "source": "railway_graphql_live",
+            "commit_sha": commit_sha,
+            "commit_msg": commit_msg,
+            "health_ok": health_ok,
+            "health_detail": health_detail,
+            "source": "snapshot_non_blocking",
         }
+        if in_progress:
+            result["note"] = f"Deploy still {status}. Poll via PowerShell: Invoke-WebRequest https://core-agi-production.up.railway.app/health"
+        elif status not in terminal:
+            result["note"] = "Unknown status -- check Railway dashboard"
+        return result
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
