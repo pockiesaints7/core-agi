@@ -497,6 +497,76 @@ def _backfill_patterns(batch_size: int = 10) -> int:
         return 0
 
 
+def _run_causal_quality_analysis():
+    """AGI-03/S3: When quality trend is declining, analyze last 10 sessions causally.
+    Identifies what changed (task types, domains, error rates) and writes explanation
+    to knowledge_base(domain=meta). Triggered by run_cold_processor when trend=declining.
+    Non-blocking -- never raises.
+    """
+    try:
+        # Check quality trend from last 10 hot_reflections
+        recent = sb_get("hot_reflections",
+            "select=quality_score,domain,summary,created_at&id=gt.1&order=created_at.desc&limit=10",
+            svc=True) or []
+        if len(recent) < 5:
+            return  # Not enough data
+
+        scores = [float(r.get("quality_score") or 0.7) for r in recent]
+        avg_recent = sum(scores[:5]) / 5
+        avg_older  = sum(scores[5:]) / max(len(scores[5:]), 1)
+
+        if avg_recent >= avg_older:  # Not actually declining
+            return
+
+        # Gather domain distribution
+        domain_counts: dict = {}
+        for r in recent[:5]:
+            d = r.get("domain", "general")
+            domain_counts[d] = domain_counts.get(d, 0) + 1
+        top_domain = max(domain_counts, key=domain_counts.get) if domain_counts else "unknown"
+
+        # Gather recent mistakes in that domain
+        recent_mistakes = sb_get("mistakes",
+            f"select=domain,what_failed,severity&domain=eq.{top_domain}&order=created_at.desc&limit=5",
+            svc=True) or []
+        mistake_summary = "; ".join([
+            (m.get("what_failed") or "")[:80] for m in recent_mistakes
+        ])
+
+        prompt = (
+            f"CORE AGI quality analysis. Recent 5 sessions avg={avg_recent:.2f}, "
+            f"prior 5 sessions avg={avg_older:.2f}. Trend: DECLINING.\n"
+            f"Top domain in recent sessions: {top_domain}\n"
+            f"Recent mistakes in that domain: {mistake_summary[:400]}\n"
+            f"In 2-3 sentences: what is the most likely causal explanation for the quality decline? "
+            f"Be specific about what changed. Output plain text, no lists."
+        )
+        explanation = gemini_chat(
+            system="You are CORE AGI's causal analyst. Be concise and precise.",
+            user=prompt,
+            max_tokens=200,
+            temperature=0.1,
+        )
+        if not explanation or len(explanation) < 20:
+            return
+
+        today = datetime.utcnow().strftime("%Y-%m-%d")
+        sb_post("knowledge_base", {
+            "domain": "meta",
+            "topic": f"quality_decline_causal_model_{today}",
+            "content": (
+                f"Quality decline detected {today}. "
+                f"Recent avg={avg_recent:.2f} vs prior avg={avg_older:.2f}. "
+                f"Top domain: {top_domain}. "
+                f"Causal explanation: {explanation}"
+            ),
+            "confidence": "medium",
+        })
+        print(f"[COLD][CAUSAL] Quality decline analysis written to KB: {explanation[:100]}")
+    except Exception as e:
+        print(f"[COLD][CAUSAL] error (non-fatal): {e}")
+
+
 def run_cold_processor():
     try:
         hots = sb_get("hot_reflections",
