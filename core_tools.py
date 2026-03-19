@@ -433,21 +433,173 @@ def t_notify(message, level="info"):
     icons = {"info": "i", "warn": "!", "alert": "ALERT", "ok": "OK"}
     return {"ok": notify(f"{icons.get(level, '>')} CORE\n{message}")}
 
+# Schema registry -- all active tables, their columns, and fat columns to warn about.
+# fat_columns: large JSONB/text blobs that cause h11 Content-Length overflow when selected at scale.
+# safe_select: recommended select string to use instead of * for each table.
+_TABLE_SCHEMAS = {
+    "task_queue": {
+        "pk": "id", "pk_type": "uuid",
+        "columns": ["id", "task", "status", "priority", "result", "error",
+                    "created_at", "updated_at", "source", "chat_id",
+                    "next_step", "blocked_by", "checkpoint", "checkpoint_at",
+                    "project_id", "checkpoint_draft"],
+        "fat_columns": ["task", "checkpoint", "checkpoint_draft", "result"],
+        "safe_select": "id,status,priority,source,next_step,blocked_by,created_at",
+        "notes": "task column is a large JSONB blob. Use task->>title for title extraction but it returns null (title is a string-encoded JSON key). Always exclude task from bulk queries."
+    },
+    "knowledge_base": {
+        "pk": "id", "pk_type": "bigserial",
+        "columns": ["id", "domain", "topic", "content", "confidence", "tags",
+                    "source", "created_at", "updated_at"],
+        "fat_columns": ["content"],
+        "safe_select": "id,domain,topic,confidence,source,created_at",
+        "notes": "Use id=gt.1 filter. content can be large."
+    },
+    "evolution_queue": {
+        "pk": "id", "pk_type": "bigserial",
+        "columns": ["id", "change_type", "change_summary", "diff_content", "pattern_key",
+                    "confidence", "status", "source", "impact", "recommendation",
+                    "applied_at", "created_at"],
+        "fat_columns": ["diff_content", "change_summary"],
+        "safe_select": "id,change_type,status,confidence,pattern_key,source,created_at",
+        "notes": "Use id=gt.1. diff_content can be large for code evolutions."
+    },
+    "hot_reflections": {
+        "pk": "id", "pk_type": "bigserial",
+        "columns": ["id", "domain", "new_patterns", "new_mistakes", "quality_score",
+                    "source", "task_summary", "gaps_identified", "processed_by_cold", "created_at"],
+        "fat_columns": ["new_patterns", "new_mistakes", "gaps_identified", "task_summary"],
+        "safe_select": "id,domain,quality_score,source,processed_by_cold,created_at",
+        "notes": "Use id=gt.1."
+    },
+    "mistakes": {
+        "pk": "id", "pk_type": "bigserial",
+        "columns": ["id", "domain", "context", "what_failed", "correct_approach",
+                    "root_cause", "how_to_avoid", "severity", "tags", "created_at"],
+        "fat_columns": ["context", "correct_approach", "how_to_avoid"],
+        "safe_select": "id,domain,what_failed,severity,root_cause,created_at",
+        "notes": "Use id=gt.1."
+    },
+    "sessions": {
+        "pk": "id", "pk_type": "bigserial",
+        "columns": ["id", "started_at", "ended_at", "summary", "actions",
+                    "patterns", "domain", "quality", "state_key", "state_value"],
+        "fat_columns": ["summary", "actions", "patterns"],
+        "safe_select": "id,domain,quality,started_at,ended_at,state_key,state_value",
+        "notes": "Use id=gt.1."
+    },
+    "behavioral_rules": {
+        "pk": "id", "pk_type": "bigserial",
+        "columns": ["id", "domain", "trigger", "instruction", "confidence",
+                    "active", "source", "created_at"],
+        "fat_columns": ["instruction"],
+        "safe_select": "id,domain,trigger,confidence,active,source,created_at",
+        "notes": "Use id=gt.1. 123 active rules -- use page/page_size for full load."
+    },
+    "pattern_frequency": {
+        "pk": "id", "pk_type": "bigserial",
+        "columns": ["id", "pattern_key", "frequency", "domain", "description",
+                    "auto_applied", "last_seen", "stale"],
+        "fat_columns": ["description"],
+        "safe_select": "id,pattern_key,frequency,domain,auto_applied,last_seen,stale",
+        "notes": "Use id=gt.1."
+    },
+    "system_map": {
+        "pk": "id", "pk_type": "bigserial",
+        "columns": ["id", "layer", "component", "description", "status",
+                    "last_verified", "notes"],
+        "fat_columns": ["description", "notes"],
+        "safe_select": "id,layer,component,status,last_verified",
+        "notes": "Use id=gt.1."
+    },
+    "script_templates": {
+        "pk": "id", "pk_type": "bigserial",
+        "columns": ["id", "name", "description", "trigger_pattern", "code",
+                    "use_count", "created_at"],
+        "fat_columns": ["code"],
+        "safe_select": "id,name,description,trigger_pattern,use_count,created_at",
+        "notes": "Use id=gt.1."
+    },
+    "changelog": {
+        "pk": "id", "pk_type": "bigserial",
+        "columns": ["id", "action", "detail", "domain", "created_at"],
+        "fat_columns": ["detail"],
+        "safe_select": "id,action,domain,created_at",
+        "notes": "Use id=gt.1."
+    },
+    "cold_reflections": {
+        "pk": "id", "pk_type": "bigserial",
+        "columns": ["id", "period_start", "period_end", "hot_count", "patterns_found",
+                    "evolutions_queued", "auto_applied", "summary_text", "created_at"],
+        "fat_columns": ["summary_text"],
+        "safe_select": "id,period_start,period_end,hot_count,patterns_found,evolutions_queued,auto_applied,created_at",
+        "notes": "Use id=gt.1."
+    },
+}
+
 def t_sb_query(table, filters="", limit=20, order="", select="*"):
-    """Raw Supabase read. Use dedicated tools first (search_kb, get_mistakes etc) -- this is the escape hatch.
+    """Schema-aware Supabase read. Validates columns, warns on fat-column selections,
+    and returns schema hints when unknown columns are requested.
+    Use dedicated tools first (search_kb, get_mistakes etc) -- this is the escape hatch.
     filters: PostgREST filter string e.g. 'status=eq.pending'.
     order: sort column e.g. 'created_at.desc'.
-    select: columns to return e.g. 'id,status,task' (default *)."""
+    select: columns to return e.g. 'id,status' (default *). Avoid * on large tables."""
     try: lim = int(limit) if limit else 20
     except: lim = 20
+
+    schema = _TABLE_SCHEMAS.get(table)
+    warnings = []
+
+    # Unknown table -- warn but proceed
+    if not schema:
+        warnings.append(f"table '{table}' not in schema registry -- proceeding blind")
+
     sel = select.strip() if select and select.strip() else "*"
+
+    if schema:
+        # Wildcard on a table with fat columns -- auto-downgrade to safe_select
+        if sel == "*" and schema.get("fat_columns"):
+            sel = schema["safe_select"]
+            warnings.append(
+                f"select=* blocked on '{table}' (fat columns: {schema['fat_columns']}) -- "
+                f"auto-downgraded to safe_select: '{sel}'. "
+                f"Pass explicit columns to override."
+            )
+        else:
+            # Validate requested columns against known schema
+            requested = [c.strip() for c in sel.split(",") if c.strip()]
+            known = set(schema["columns"])
+            bad = [c for c in requested if c not in known and "->" not in c and "(" not in c]
+            fat_requested = [c for c in requested if c in schema.get("fat_columns", [])]
+            if bad:
+                warnings.append(f"unknown columns requested: {bad}. known: {schema['columns']}")
+            if fat_requested:
+                warnings.append(
+                    f"fat column(s) selected: {fat_requested} -- may cause response overflow at scale. "
+                    f"Consider: {schema['safe_select']}"
+                )
+
+        # bigserial PK tables: remind caller about id=gt.1 rule
+        if schema.get("pk_type") == "bigserial" and filters and "id=gt." not in filters:
+            warnings.append(f"reminder: '{table}' uses bigserial PK -- add id=gt.1 to exclude probe row")
+
     qs = f"select={sel}"
     if filters and filters.strip():
         qs += f"&{filters.strip()}"
     if order and order.strip():
         qs += f"&order={order.strip()}"
     qs += f"&limit={lim}"
-    return sb_get(table, qs, svc=True)
+
+    result = sb_get(table, qs, svc=True)
+
+    if warnings:
+        if isinstance(result, list):
+            return {"data": result, "schema_warnings": warnings, "table": table, "schema": schema}
+        elif isinstance(result, dict):
+            result["schema_warnings"] = warnings
+            return result
+
+    return result
 
 def t_sb_insert(table="", data=""):
     if isinstance(data, str):
