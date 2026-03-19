@@ -5006,8 +5006,8 @@ def t_backup_brain(dry_run: str = "false") -> dict:
                 "message": f"Would write knowledge_base in 1000-row chunks + {len(tables)} tables to /backups/{date_str}/"}
     results = []
     errors = []
-    # knowledge_base: paginate in chunks of 1000 to avoid GitHub file size limits
-    KB_CHUNK = 500
+    # knowledge_base: paginate in chunks of 200 to stay under GitHub 1MB content API limit
+    KB_CHUNK = 200
     kb_offset = 2  # start after probe row (id=gt.1 means rows with id>1, offset via id filter)
     kb_chunk_num = 1
     kb_total = 0
