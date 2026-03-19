@@ -1720,6 +1720,95 @@ def t_session_end(summary: str = "", actions: str = "", domain: str = "general",
         return {"ok": False, "error": str(e)}
 
 
+def t_maintenance_purge(table: str = "", older_than_days: str = "30", dry_run: str = "true") -> dict:
+    """Table maintenance purge with dry_run=true default. Prevents unbounded table growth.
+    PROTECTED tables that cannot be purged: sessions, mistakes, hot_reflections, cold_reflections,
+    pattern_frequency, changelog, evolution_queue, behavioral_rules, behavioral_rules_history.
+    PURGEABLE: hot_reflections (processed=true only), reasoning_log, task_queue (done/failed only).
+    dry_run=true (default): returns rows that WOULD be deleted without deleting.
+    dry_run=false: executes deletion -- requires explicit owner action.
+    older_than_days: only rows older than this many days are eligible.
+    """
+    PROTECTED = {
+        "sessions", "mistakes", "cold_reflections", "pattern_frequency",
+        "changelog", "evolution_queue", "behavioral_rules", "behavioral_rules_history",
+        "knowledge_base", "credentials_index", "infrastructure_map", "system_map",
+    }
+    PURGEABLE = {
+        "hot_reflections": {"extra_filter": "processed=eq.true", "label": "processed hot reflections"},
+        "reasoning_log":   {"extra_filter": None,              "label": "reasoning log entries"},
+        "task_queue":      {"extra_filter": "status=in.(done,failed)", "label": "completed/failed tasks"},
+    }
+    try:
+        if not table:
+            return {"ok": False, "error": "table required", "purgeable": list(PURGEABLE.keys())}
+        if table in PROTECTED:
+            return {"ok": False, "error": f"table '{table}' is protected -- cannot purge", "protected": True}
+        if table not in PURGEABLE:
+            return {"ok": False, "error": f"table '{table}' is not in purgeable list", "purgeable": list(PURGEABLE.keys())}
+        try:
+            days = max(1, int(older_than_days))
+        except Exception:
+            days = 30
+        is_dry = str(dry_run).strip().lower() not in ("false", "0", "no")
+        cutoff = (datetime.utcnow() - timedelta(days=days)).isoformat()
+        cfg = PURGEABLE[table]
+        extra = cfg["extra_filter"]
+        # Build filter for count/preview
+        base_filter = f"created_at=lt.{cutoff}"
+        full_filter = f"{base_filter}&{extra}" if extra else base_filter
+        # Preview rows
+        preview = sb_get(table, f"select=id,created_at&{full_filter}&order=created_at.asc&limit=10", svc=True) or []
+        # Count eligible
+        count_rows = sb_get(table, f"select=id&{full_filter}&limit=1000", svc=True) or []
+        eligible_count = len(count_rows)
+        if is_dry:
+            return {
+                "ok": True,
+                "dry_run": True,
+                "table": table,
+                "label": cfg["label"],
+                "eligible_count": eligible_count,
+                "cutoff": cutoff,
+                "older_than_days": days,
+                "sample_rows": preview[:5],
+                "note": "Pass dry_run=false to execute deletion. Owner confirmation recommended.",
+            }
+        # Execute purge
+        deleted = 0
+        errors = []
+        # Delete in batches of 100 via PostgREST DELETE
+        batch = [r["id"] for r in count_rows[:100] if r.get("id")]
+        if batch:
+            id_list = ",".join(str(i) for i in batch)
+            del_filter = f"id=in.({id_list})"
+            del_ok = sb_delete_rows(table, del_filter)
+            deleted = len(batch) if del_ok else 0
+            if not del_ok:
+                errors.append(f"Delete batch failed for {table}")
+        return {
+            "ok": len(errors) == 0,
+            "dry_run": False,
+            "table": table,
+            "eligible_count": eligible_count,
+            "deleted": deleted,
+            "remaining": eligible_count - deleted,
+            "cutoff": cutoff,
+            "errors": errors,
+            "note": f"Deleted {deleted}/{eligible_count} rows older than {days} days from {table}.",
+        }
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+TOOLS["maintenance_purge"] = {"fn": t_maintenance_purge, "perm": "WRITE",
+    "args": [
+        {"name": "table",          "type": "string", "description": "Table to purge. Purgeable: hot_reflections (processed only), reasoning_log, task_queue (done/failed only)"},
+        {"name": "older_than_days","type": "string", "description": "Only rows older than this many days are eligible (default 30)"},
+        {"name": "dry_run",        "type": "string", "description": "true (default) = preview only. false = execute deletion. Always dry_run first."},
+    ],
+    "desc": "Table maintenance purge with dry_run=true default. Protected tables cannot be purged. Purgeable: hot_reflections (processed=true), reasoning_log, task_queue (done/failed). Always dry_run first -- pass dry_run=false to execute."}
+
+
 def t_core_py_rollback(commit_sha: str, file: str = "core_main.py") -> dict:
     """Emergency restore: fetch any CORE source file at a commit SHA, write back, redeploy.
     Defaults to core_main.py. core.py is deleted â€” do not use."""
