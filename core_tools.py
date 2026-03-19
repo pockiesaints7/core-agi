@@ -1,4 +1,4 @@
-"""core_tools.py — CORE AGI MCP tool implementations
+﻿"""core_tools.py â€” CORE AGI MCP tool implementations
 All t_* functions, TOOLS registry, _mcp_tool_schema, handle_jsonrpc.
 Part of v6.0 split architecture: core_config, core_github, core_train, core_tools, core_main.
 
@@ -7,7 +7,7 @@ Import chain:
   core_main imports: core_tools (TOOLS, handle_jsonrpc)
 
 NOTE: This IS the live implementation. Entry point = core_main.py (Procfile confirmed).
-core.py has been deleted — it was legacy monolith."""
+core.py has been deleted â€” it was legacy monolith."""
 import base64
 import difflib
 import json
@@ -29,7 +29,7 @@ from core_config import _sbh, _sbh_count_svc
 from core_github import _ghh, _gh_blob_read, _gh_blob_write, gh_read, gh_write, notify
 from core_train import apply_evolution, reject_evolution, bulk_reject_evolutions, run_cold_processor
 
-# Alias — used in t_core_py_rollback and t_deploy_and_wait
+# Alias â€” used in t_core_py_rollback and t_deploy_and_wait
 notify_owner = notify
 
 # BASE_URL and MCP_SECRET for tools that call Railway endpoints
@@ -61,7 +61,7 @@ def get_current_step() -> str:
         for line in content.splitlines():
             if line.startswith("## Current Step") or "## Step" in line or "Current Step" in line:
                 return line.strip()
-        return "(step unknown — read SESSION.md)"
+        return "(step unknown â€” read SESSION.md)"
     except Exception as e:
         return f"(step read error: {e})"
 
@@ -757,7 +757,7 @@ def t_list_evolutions(status="pending"):
 
 
 def t_bulk_reject_evolutions(change_type: str = "", ids: str = "", reason: str = "", include_synthesized: str = "false") -> dict:
-    """Bulk reject pending evolutions silently — one Telegram summary at end.
+    """Bulk reject pending evolutions silently â€” one Telegram summary at end.
     change_type: 'backlog' | 'knowledge' | '' (all pending).
     ids: comma-separated evolution IDs (overrides change_type).
     include_synthesized: 'true' to also reject status=synthesized items.
@@ -1440,7 +1440,7 @@ def t_core_py_validate() -> dict:
             for i, line in enumerate(lines, 1):
                 stripped = line.strip()
                 if stripped.startswith("def def ") or stripped.startswith("import import "):
-                    errors.append(f"L{i}: double keyword — {stripped[:60]}")
+                    errors.append(f"L{i}: double keyword â€” {stripped[:60]}")
             if target == "core_tools.py":
                 tool_fn_refs = _re.findall(r'"fn":\s*(t_\w+)', content)
                 defined_fns  = set(_re.findall(r'^def (t_\w+)\(', content, _re.MULTILINE))
@@ -1448,17 +1448,17 @@ def t_core_py_validate() -> dict:
                     if ref not in defined_fns:
                         errors.append(f"TOOLS refs '{ref}' but function not defined")
                 if "TOOLS = {" not in content:
-                    errors.append("TOOLS dict not found — critical corruption")
+                    errors.append("TOOLS dict not found â€” critical corruption")
             for i, line in enumerate(lines, 1):
                 if "backboard.railway" in line:
                     errors.append(f"L{i}: stale backboard.railway reference")
                 if "core.py" in line and not line.strip().startswith("#"):
-                    warnings.append(f"L{i}: stale core.py reference — file deleted")
+                    warnings.append(f"L{i}: stale core.py reference â€” file deleted")
             if size_kb > 150:
-                warnings.append(f"{target} is {size_kb}KB — consider splitting (>150KB)")
+                warnings.append(f"{target} is {size_kb}KB â€” consider splitting (>150KB)")
             triple_count = content.count('"""')
             if triple_count % 2 != 0:
-                warnings.append(f"Odd number of triple-quotes ({triple_count}) — possible unclosed docstring")
+                warnings.append(f"Odd number of triple-quotes ({triple_count}) â€” possible unclosed docstring")
             results[target] = {"ok": len(errors) == 0, "errors": errors,
                                "warnings": warnings, "line_count": line_count, "size_kb": size_kb}
         overall_ok = all(r["ok"] for r in results.values())
@@ -1704,7 +1704,7 @@ def t_session_end(summary: str = "", actions: str = "", domain: str = "general",
 
 def t_core_py_rollback(commit_sha: str, file: str = "core_main.py") -> dict:
     """Emergency restore: fetch any CORE source file at a commit SHA, write back, redeploy.
-    Defaults to core_main.py. core.py is deleted — do not use."""
+    Defaults to core_main.py. core.py is deleted â€” do not use."""
     try:
         if not commit_sha or len(commit_sha) < 6:
             return {"ok": False, "error": "commit_sha required (min 6 chars)"}
@@ -1726,7 +1726,7 @@ def t_core_py_rollback(commit_sha: str, file: str = "core_main.py") -> dict:
             f"rollback: restore {target} from {short_sha}"
         )
         deploy = t_redeploy(f"rollback {target} to {short_sha}")
-        notify_owner(f"ROLLBACK triggered — {target} restored from {short_sha}. Deploying...")
+        notify_owner(f"ROLLBACK triggered â€” {target} restored from {short_sha}. Deploying...")
         return {
             "ok": True,
             "file": target,
@@ -2122,7 +2122,7 @@ def t_search_mistakes(query: str = "", domain: str = "", limit: int = 10):
         return {"ok": False, "error": str(e)}
 
 
-# -- Background Researcher (globals + helpers only — loop lives in core_train) ----
+# -- Background Researcher (globals + helpers only â€” loop lives in core_train) ----
 _RESEARCH_DOMAINS = [
     ("code",     ["debug this python function", "optimize SQL query", "refactor async code"]),
     ("business", ["improve cash flow", "write investor pitch", "reduce churn"]),
@@ -2176,7 +2176,7 @@ def _sync_backlog_status():
 
 def _repopulate_evolution_queue():
     """DISABLED: Backlog items are never pushed to evolution_queue."""
-    print("[RESEARCH] _repopulate_evolution_queue: disabled — backlog items never go to evolution_queue")
+    print("[RESEARCH] _repopulate_evolution_queue: disabled â€” backlog items never go to evolution_queue")
     return 0
 
 
@@ -2347,7 +2347,7 @@ def t_redeploy(reason: str = "") -> dict:
         commit = httpx.get(f"https://api.github.com/repos/{GITHUB_REPO}/git/commits/{current_sha}", headers=h, timeout=10)
         commit.raise_for_status()
         tree_sha = commit.json()["tree"]["sha"]
-        msg = f"chore: trigger redeploy — {reason or 'manual trigger'}"
+        msg = f"chore: trigger redeploy â€” {reason or 'manual trigger'}"
         new_commit = httpx.post(
             f"https://api.github.com/repos/{GITHUB_REPO}/git/commits",
             headers=h,
@@ -2503,7 +2503,7 @@ def t_bulk_apply(executor_override: str = "claude_desktop", dry_run: bool = Fals
         applied = [r for r in results if r.get("ok")]
         failed  = [r for r in results if not r.get("ok") and not r.get("action")]
         notify(f"Bulk apply done\nApplied: {len(applied)} | Failed: {len(failed)} | Total: {len(results)}\nExecutor: {executor_override}")
-        # BACKLOG.md deleted in Task 1.8 — backlog lives in Supabase only
+        # BACKLOG.md deleted in Task 1.8 â€” backlog lives in Supabase only
         return {"ok": True, "applied": len(applied), "failed": len(failed), "results": results}
     except Exception as e:
         return {"ok": False, "error": str(e)}
@@ -2664,7 +2664,7 @@ def t_build_status() -> dict:
             "railway_live": railway_deploy,
             "railway_error": railway_error,
             "recent": recent,
-            "summary": f"Latest: {state} — {msg}"
+            "summary": f"Latest: {state} â€” {msg}"
         }
     except Exception as e:
         return {"ok": False, "error": str(e)}
@@ -3864,7 +3864,7 @@ TOOLS = {
     "add_knowledge":          {"fn": t_add_knowledge,          "perm": "WRITE",   "args": ["domain", "topic", "instruction", "content", "tags", "confidence", "source_type", "source_ref"],
                                "desc": "Add NEW knowledge that does not yet exist. Returns ok=False if domain+topic already exists -- correct behavior, not an error. Use ONLY for genuinely new knowledge. Use kb_update to overwrite stale or outdated existing knowledge. source_type=manual|ingested|evolved|session (optional). source_ref=URL or session_id (optional)."},
     "log_mistake":            {"fn": t_log_mistake,            "perm": "WRITE",   "args": ["context", "what_failed", "correct_approach", "domain", "root_cause", "how_to_avoid", "severity"],
-                               "desc": "Log a mistake so CORE never repeats it. correct_approach=the right way to do it (required). severity=low|medium|high|critical. Always call this when CORE makes an error — it is the primary learning mechanism."},
+                               "desc": "Log a mistake so CORE never repeats it. correct_approach=the right way to do it (required). severity=low|medium|high|critical. Always call this when CORE makes an error â€” it is the primary learning mechanism."},
     "notify_owner":           {"fn": t_notify,                 "perm": "WRITE",   "args": ["message", "level"],
                                "desc": "Send Telegram notification."},
     "sb_insert":              {"fn": t_sb_insert,              "perm": "WRITE",   "args": ["table", "data"],
@@ -3872,11 +3872,11 @@ TOOLS = {
     "sb_bulk_insert":         {"fn": t_sb_bulk_insert,         "perm": "WRITE",   "args": ["table", "rows"],
                                "desc": "Insert multiple rows into Supabase in one HTTP call."},
     "get_state_key":          {"fn": t_get_state_key,          "perm": "READ",    "args": ["key"],
-                               "desc": "Read back a specific state key written by update_state. Use to retrieve values set via update_state or set_simulation — the only way to read back those keys."},
+                               "desc": "Read back a specific state key written by update_state. Use to retrieve values set via update_state or set_simulation â€” the only way to read back those keys."},
     "task_update":            {"fn": t_task_update,            "perm": "WRITE",   "args": ["task_id", "status", "result"],
                                "desc": "Update a task_queue row status. task_id=UUID or TASK-N string. status=pending/in_progress/done/failed. result=optional outcome note. Use instead of raw sb_query for task status changes."},
     "task_add":               {"fn": t_task_add,               "perm": "WRITE",   "args": ["title", "description", "priority", "subtasks", "blocked_by"],
-                               "desc": "Add a new task to task_queue with proper schema. Sets source=mcp_session automatically. Use instead of raw sb_insert for new tasks — enforces correct structure."},
+                               "desc": "Add a new task to task_queue with proper schema. Sets source=mcp_session automatically. Use instead of raw sb_insert for new tasks â€” enforces correct structure."},
     "kb_update":              {"fn": t_kb_update,              "perm": "WRITE",   "args": ["domain", "topic", "instruction", "content", "confidence", "source_type", "source_ref"],
                                "desc": "Update EXISTING stale or outdated KB knowledge. Overwrites entry at domain+topic. Use when a rule has changed or content is wrong. Do NOT use for new knowledge -- use add_knowledge for that. Will also insert if not found (upsert behavior -- prevents duplicates). source_type=manual|ingested|evolved|session (optional). source_ref=URL or session_id (optional)."},
     "mistakes_since":         {"fn": t_mistakes_since,         "perm": "READ",    "args": ["hours"],
@@ -3904,9 +3904,9 @@ TOOLS = {
     "gh_read_lines":          {"fn": t_gh_read_lines,          "perm": "READ",    "args": ["path", "start_line", "end_line", "repo"],
                                "desc": "Read specific line range from a GitHub file with line numbers. Use before any edit to get exact content. Preferred over read_file for large files or when you need a specific section."},
     "write_file":             {"fn": t_write_file,             "perm": "EXECUTE", "args": ["path", "content", "message", "repo"],
-                               "desc": "Write NEW file to GitHub repo — FULL OVERWRITE. BLOCKED for core_main.py and core_tools.py. Use patch_file or gh_search_replace for surgical edits on existing files. Only use for brand new files."},
+                               "desc": "Write NEW file to GitHub repo â€” FULL OVERWRITE. BLOCKED for core_main.py and core_tools.py. Use patch_file or gh_search_replace for surgical edits on existing files. Only use for brand new files."},
     "ask":                    {"fn": t_ask,                    "perm": "READ",    "args": ["question", "domain"],
-                               "desc": "Ask CORE anything — searches KB + mistakes for context, then answers via Groq. Use for domain questions, SOPs, architectural decisions. Uses GROQ_FAST for simple questions, GROQ_MODEL for complex ones."},
+                               "desc": "Ask CORE anything â€” searches KB + mistakes for context, then answers via Groq. Use for domain questions, SOPs, architectural decisions. Uses GROQ_FAST for simple questions, GROQ_MODEL for complex ones."},
     "stats":                  {"fn": t_stats,                  "perm": "READ",    "args": [],
                                "desc": "Analytics dashboard: domain distribution, top patterns, mistake frequency, evolution queue counts by status, last cold processor run. Use at session start to orient or session end to summarize."},
     "search_mistakes":        {"fn": t_search_mistakes,        "perm": "READ",    "args": ["query", "domain", "limit"],
@@ -4076,7 +4076,8 @@ def handle_jsonrpc(body: dict, session_id: str = "") -> dict:
                     except (ValueError, TypeError): coerced_args[k] = v
                 else:
                     coerced_args[k] = v
-            result = tool["fn"](**{k: v for k, v in coerced_args.items() if k in tool["args"] or not tool["args"]})
+            arg_names = {d["name"] for d in tool["args"]} if tool["args"] else set()
+            result = tool["fn"](**{k: v for k, v in coerced_args.items() if not arg_names or k in arg_names})
             text = json.dumps(result, default=str)
             # TASK-26.B: Track success in tool_stats (fire-and-forget, non-fatal)
             _track_tool_stat(tool_name, success=True)
@@ -4303,7 +4304,7 @@ def _reconcile_skeleton_docs(rows: list, inserted: list, tombstoned: list) -> No
 
 
 
-# ── TASK-4: Binance Integration ───────────────────────────────────────────────
+# â”€â”€ TASK-4: Binance Integration â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 import hmac as _hmac
 import hashlib as _hashlib
@@ -4469,7 +4470,7 @@ def t_crypto_trade(symbol: str = "", side: str = "", quantity: str = "",
 
 
 
-# ── TASK-4: Register Binance tools in TOOLS dict (must be after function defs) ─
+# â”€â”€ TASK-4: Register Binance tools in TOOLS dict (must be after function defs) â”€
 TOOLS["crypto_price"]   = {"fn": t_crypto_price,   "perm": "READ",    "args": ["symbol"],
                             "desc": "Get current Binance spot price + 24h stats for a symbol. symbol=e.g. BTCUSDT, ETHUSDT, BNBUSDT (default BTCUSDT). No API key required. Returns price, 24h change %, high, low, volume."}
 TOOLS["crypto_balance"] = {"fn": t_crypto_balance, "perm": "READ",    "args": ["asset"],
