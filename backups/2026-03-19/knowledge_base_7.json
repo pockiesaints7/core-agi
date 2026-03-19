@@ -1,5 +1,14 @@
 [
   {
+    "id": 1765,
+    "domain": "backlog",
+    "topic": "[BACKLOG-5] Data visualization techniques",
+    "instruction": null,
+    "content": "type=new_kb effort=high impact=high domain=data\nCreate a knowledge base on data visualization techniques, including common charts and plots, to support tasks like 'visualize trends'",
+    "confidence": "medium",
+    "active": true
+  },
+  {
     "id": 1766,
     "domain": "backlog",
     "topic": "[BACKLOG-5] Refine Archetype Routing",
@@ -1787,15 +1796,6 @@
     "topic": "[BACKLOG-5] Optimize Code Analysis Speed",
     "instruction": null,
     "content": "type=performance effort=high impact=high domain=code\nImprove the speed and efficiency of CORE's code analysis capabilities, including the use of caching, parallel processing, and optimized algorithms.",
-    "confidence": "medium",
-    "active": true
-  },
-  {
-    "id": 1972,
-    "domain": "backlog",
-    "topic": "[BACKLOG-5] Refine task routing for domain-specific archetypes",
-    "instruction": null,
-    "content": "type=logic_improvement effort=medium impact=high domain=creative\nEnforce archetype assignments based on domain-specific tasks to improve performance and quality of generated output.",
     "confidence": "medium",
     "active": true
   }
