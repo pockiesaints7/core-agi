@@ -57,6 +57,11 @@ _last_consolidation_run: float = 0.0
 _CONSOLIDATION_INTERVAL = 6 * 24 * 3600  # 6 days
 _CONSOLIDATION_DAY_UTC = 6               # Sunday UTC (weekday=6)
 
+# AGI-06: Weekly capability report
+_last_capability_report_run: float = 0.0
+_CAPABILITY_REPORT_INTERVAL = 6 * 24 * 3600  # 6 days
+_CAPABILITY_REPORT_DAY_UTC = 1               # Tuesday UTC (weekday=1)
+
 # ── TASK-4: Binance Price Monitor config ──────────────────────────────────────
 _PRICE_MONITOR_SYMBOLS  = os.getenv("BINANCE_WATCH_SYMBOLS", "BTCUSDT,ETHUSDT,BNBUSDT").split(",")
 _PRICE_ALERT_THRESHOLD  = float(os.getenv("BINANCE_ALERT_THRESHOLD_PCT", "3.0"))
@@ -500,6 +505,37 @@ def _backfill_patterns(batch_size: int = 10) -> int:
     except Exception as e:
         print(f"[BACKFILL] error (non-fatal): {e}")
         return 0
+
+
+def _run_capability_report():
+    """AGI-06/S3: Weekly capability report. Reads last 7 days of capability_metrics,
+    computes averages per dimension, sends Telegram summary to owner.
+    Non-blocking.
+    """
+    try:
+        cutoff = (datetime.utcnow() - timedelta(days=7)).isoformat()
+        rows = sb_get("capability_metrics",
+            f"select=accuracy,efficiency,autonomy,robustness,learning_rate,transfer,composite_score,domain&session_ts=gte.{cutoff}&limit=100",
+            svc=True) or []
+        if not rows:
+            print("[CAP] No capability_metrics entries for last 7 days")
+            return
+        n = len(rows)
+        def avg(key): return round(sum(r.get(key) or 0 for r in rows) / n, 3)
+        report = (
+            f"\U0001f4ca CORE Capability Report (last 7d, {n} sessions)\n"
+            f"Accuracy:      {avg('accuracy')}\n"
+            f"Efficiency:    {avg('efficiency')}\n"
+            f"Autonomy:      {avg('autonomy')}\n"
+            f"Robustness:    {avg('robustness')}\n"
+            f"Learning Rate: {avg('learning_rate')}\n"
+            f"Transfer:      {avg('transfer')}\n"
+            f"Composite:     {avg('composite_score')}"
+        )
+        notify(report)
+        print(f"[CAP] Weekly report sent: composite={avg('composite_score')}")
+    except Exception as e:
+        print(f"[CAP] report error (non-fatal): {e}")
 
 
 def _run_memory_consolidation(dry_run: bool = False):
@@ -1050,6 +1086,17 @@ def cold_processor_loop():
                     _last_consolidation_run = time.time()
             except Exception as _ce:
                 print(f"[CONSOLIDATION] trigger error: {_ce}")
+            # AGI-06: Weekly capability report on Tuesday
+            try:
+                global _last_capability_report_run
+                now_utc = datetime.utcnow()
+                time_since_cap = time.time() - _last_capability_report_run
+                if (now_utc.weekday() == _CAPABILITY_REPORT_DAY_UTC and
+                        time_since_cap >= _CAPABILITY_REPORT_INTERVAL):
+                    _run_capability_report()
+                    _last_capability_report_run = time.time()
+            except Exception as _cape:
+                print(f"[CAP] trigger error: {_cape}")
             # GAP-DATA-01: Weekly backup check -- runs if last backup > 6 days ago
             try:
                 _BACKUP_INTERVAL = 6 * 24 * 3600  # 6 days in seconds
