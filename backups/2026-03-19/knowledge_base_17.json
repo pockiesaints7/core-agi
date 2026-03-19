@@ -1,5 +1,14 @@
 [
   {
+    "id": 5279,
+    "domain": "pending_impl",
+    "topic": "[TODO] Term Explorer",
+    "instruction": null,
+    "content": "Type: new_tool\nTerm Explorer",
+    "confidence": "low",
+    "active": true
+  },
+  {
     "id": 5280,
     "domain": "pending_impl",
     "topic": "[TODO] Medical Literature Search Tool",
@@ -1787,15 +1796,6 @@
     "topic": "equinix-jk1-2 | RMU + BTU > Commissioning Document RMU > sertifikat kalibrasi > 09. CMC 4  UPDATE JUNI 2026.pdf",
     "instruction": null,
     "content": "File: RMU + BTU\\Commissioning Document RMU\\sertifikat kalibrasi\\09. CMC 4  UPDATE JUNI 2026.pdf\nProject: equinix-jk1-2\nType: .pdf\nSize: 217 KB\n---\nLABORATORII.'M KALIBRASI\nPT GAYA DINAMIKA ANGKASA\nKompekPergucJanganBandaratulasBokAlNo 9Ail l\\4arsekalSuryaDarnraTangerang,BANTEN'INDONESIA\nPhoner +62-21-559'i2780 - Fax: +62-21-5591'2'li4 - Enrail: gayadinarnika@gmail com\nK.omiie Akredi!a:ir N;sinnal\nLABORATORIUM GLIBMSI\nLK.O77]DN\nSHMY'TS'TE(AT T.IBI?ASI\nC A LI B RAT'ON C E RT I F I C AT E\nG.25.0 417\nIDENTITAS ALAT\nlnstrument Details\nNama\nName\nMerek Pabrik\nManufacturer\nTipe / Nomor Serl\nType / Serial Number\nIDENTITAS FEMILIK\nOwner ldentification\nSECONDARY INJECTOR\nOMICRON\ncMc-356 t JA081 R\nPT.BINTANG ELEKTRIK SEMESTA -\nJl.lr.H.Juanda I Kav l,Tower A Suites 901 Jakarta\nSertifikat initerdiri dari :\nThis Cedificate Comprises of\n1Q Juni 2Q2E\nTangerang,\nTidak dibenarkan mengutip/memperbanyak sebagian Sertifikat ini, kecuali mendapat ijin dari PT. Gaya Dinamika Angkasa\nThis celilicate shall not be palially reproduced, exaept wtth full authoization from PT Gaya Anamika Angkasa\nhalaman\nPage\nADE MULYAWAN\nCalibration Mgr\nSertifikat ini sah bila telah ditandatangani oleh pejabat yang ber.wenang dan dibubuhi cap PT. Gaya Dinamika Angkasa\nThis certificate is valid if it has been apqoved and signed by authortzed person\nF PIV 18 05 R3\n.: .- LABORATORIUM KALIBRASI\n1 \nPT GAYA DINAMIKA ANGKASA\n)\n, \nKomile Akreditasi Nasisnat\n' \nLK-ftr7-inru\nNo Fesanan \n: FR.25.111\nOrder Number\nIDENTITAS ALAT\nlnstrurent ldentifiation\nNama \n: SEGONDARYINJEGTOR\nnama\n' \nFabrik Mert \n: OMICRON\nManufadue\nTanoqal Ditofima : 03 Juni 2025\nDate of Bec\u20acived\nTanoqal Dikalibrasi : MJuni 2025\nDate of Calibration\nNomor Sertiflkat : G.25.0417\nCaftiflcate No.\nHalaman \n:2dari 3lembar\nof \nsheets\nModel/ Part Number : CMC-356\nModou Pad Number\nNomorSeri/ldent. : JA081 R\nSeial Numbenldent\nHASIL KALIBRASI\nCALIBRATION RESULT\n1.AC VOLTAGE OUTPUT\nAlat Ukur/ UUT\nKoreksi/ Conection\nKetidakpastian/\nUncertainty (t)\nFungsi/ Function\nPembacaan/\nReadino\nV1\nv2\nV3\nv4\n10,000 v\n50,000 v\n100.000 v\n10,000 v\n50,000 v\n100,000 v\n'10,000 v\n50,000 v\n'100,000 v\n10,000 v\n50,000 v\n100 000 v\n-0,0",
-    "confidence": "high",
-    "active": true
-  },
-  {
-    "id": 5674,
-    "domain": "project:equinix-jk1-2",
-    "topic": "equinix-jk1-2 | RMU + BTU > Commissioning Document RMU > SUBMISSION #1 > 1. MOS Cx L2A RMU.docx",
-    "instruction": null,
-    "content": "File: RMU + BTU\\Commissioning Document RMU\\SUBMISSION #1\\1. MOS Cx L2A RMU.docx\nProject: equinix-jk1-2\nType: .docx\nSize: 1065 KB\n---\nMETHOD OF STATEMENT FOR\nCOMMISSIONING LEVEL 2A MV SWITCHGEAR\nPROJECT TITLE:\nEQUINIX JK1-2 DATA CENTER\nCUSTOMER:\nTBA\nEQUIPMENT:\nMV SWITCHGEAR\nMAIN CONTRACTOR\t: TBA\nSUBCONTRACTOR\t: PT. LS ELECTRIC INDONESIA\nTable of Content\nContent\t2\n1.\tIntroduction\t3\n1.1\tObjective\t3\n1.2\tScope of Work\t3\n1.3\tCx Organization Chart\t4\n1.4\tWork Flow\t5\n2.\tReferences\t6\n3.\tPrecondition\t6\n3.1\tSafety Information Personal\t6\n3.2\tSafety Work\t6\n3.3\tRisk & Mitigation\t7\n3.4\tLOTO (Lock Out Tag Out)\t7\n4.\tTest Instrumentation\t7\n5.\tEquipment Schedule / Tested\t8\n6.\tPre - Commissioning\t8\n7.\tTest Procedures\t9\n10\nCertificate Calibration\t13\nApproval Material\t14\nIntroduction\n1.1 Objective\nThis method of statement is prepared prior to performing the activity for Commissioning Level 2A of MV Switchgear after finish installation. The purpose of this work method statement is to ensure that all panels is carried out in proper, control condition and safe environment. All of the personnel involve in this activity shall read and understand fully this document and agree to obey and follow strictly before starting works.\n1.2 Scope of Work\nCommissioning Level 2 (Cx L2) of MV Switchgear. Installation verification (QA/QC) and static testing.\n1.3 Cx Organization Chart\n1.4 Work Flow\n`\nReferences\n2.1 Asbuilt Drawing\n2.2 Approval Material\nPrecondition\n3.1 Safety Information Personal\nTBA\n3.2 Safety Work\nPrior to start of work, risk assessment highlighting critical safety aspect to the work shall be briefed to workers.\nEnsure that all personnel at site have passed on-line induction exam.\nEnsure work skill for moving work.\nEnsure that all personnel at site have attended the Safety course\nEnsure that all tools and equipment have been inspected.\nHousekeeping in to be done during and after work.\nPersonal Protective Equipment:\nSafety Helmet\nProtective Clothing\nElectric Detectors Warning Device\nSafety Shoes\nSafety Gloves\n3.3 Risk & Mitigation Risk\n3.4 LOTO (Lock Out Tag Out)\nMake sure the voltage source to the incoming side is still o",
     "confidence": "high",
     "active": true
   }
