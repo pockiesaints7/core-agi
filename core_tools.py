@@ -5073,7 +5073,7 @@ def t_maintenance_purge(table: str = "hot_reflections", older_than_days: int = 1
     try:
         count_filter = f"created_at=lt.{cutoff}"
         if table == "hot_reflections":
-            count_filter += "&processed=eq.true"
+            count_filter += "&processed_by_cold=eq.true"
         rows = sb_get(table, count_filter + "&select=id", svc=True)
         count = len(rows) if isinstance(rows, list) else 0
     except Exception as e:
@@ -5091,7 +5091,7 @@ def t_maintenance_purge(table: str = "hot_reflections", older_than_days: int = 1
     # Execute deletion
     delete_filter = f"created_at=lt.{cutoff}"
     if table == "hot_reflections":
-        delete_filter += "&processed=eq.true"
+        delete_filter += "&processed_by_cold=eq.true"
     ok = sb_delete(table, delete_filter)
     print(f"[PURGE] {table}: deleted ~{count} rows older than {older_than_days}d. ok={ok}")
     return {
