@@ -3514,6 +3514,15 @@ def t_kb_update(domain: str, topic: str, instruction: str = "",
             new_instr = (instruction or "").strip()
             if ex_instr and new_instr and ex_instr.lower() != new_instr.lower():
                 notify(f"[KB UPDATE] {domain}/{topic}\nOld: {ex_instr[:120]}\nNew: {new_instr[:120]}")
+        # Normalize confidence enum (coerce float strings if needed)
+        VALID_CONFIDENCE = {"low", "medium", "high", "proven"}
+        if str(confidence) not in VALID_CONFIDENCE:
+            try:
+                v = float(confidence)
+                confidence = "proven" if v >= 0.9 else "high" if v >= 0.7 else "medium" if v >= 0.4 else "low"
+                print(f"[SCHEMA] confidence coerced {v} -> '{confidence}'")
+            except (TypeError, ValueError):
+                confidence = "medium"
         row = {
             "domain": domain, "topic": topic,
             "instruction": instruction or None,
@@ -3525,6 +3534,9 @@ def t_kb_update(domain: str, topic: str, instruction: str = "",
             row["source_type"] = source_type
         if source_ref:
             row["source_ref"] = source_ref
+        errs = _validate_write("knowledge_base", row)
+        if errs:
+            return {"ok": False, "domain": domain, "topic": topic, "error": f"Schema violation: {errs}"}
         try:
             h = {**_sbh(True), "Prefer": "resolution=merge-duplicates,return=minimal"}
             r = httpx.post(f"{SUPABASE_URL}/rest/v1/knowledge_base?on_conflict=domain,topic", headers=h, json=row, timeout=15)
