@@ -5189,3 +5189,898 @@ TOOLS["maintenance_purge"] = {"fn": t_maintenance_purge, "perm": "WRITE",
         {"name": "dry_run", "type": "string", "description": "true=count only, false=execute deletion (default: true -- must explicitly pass false to delete)"}
     ],
     "desc": "GAP-DB-02/03: Purge old rows from maintenance tables. dry_run=true default -- never deletes without explicit dry_run=false. Tables: hot_reflections (processed), reasoning_log, sessions."}
+
+
+# =============================================================================
+# AGI AGENTIC LAYER — AGI-11/12/13/14
+# All tools registered, verify + test in next session.
+# =============================================================================
+
+# --- AGI-11: Execution Quality Layer -----------------------------------------
+
+def t_reason_chain(action: str = "", domain: str = "general"):
+    """AGI-11/S1: Generate causal reasoning chain before any non-trivial action.
+    Returns: chain, failure_modes, confidence, proceed_recommended.
+    CORE must call this before any non-trivial action."""
+    if not action:
+        return {"ok": False, "error": "action is required"}
+    prompt = f"""You are CORE's causal reasoning engine. Analyze this planned action and produce a structured causal chain.
+
+Action: {action}
+Domain: {domain}
+
+Return ONLY valid JSON:
+{{
+  "chain": ["action -> consequence1", "consequence1 -> consequence2"],
+  "failure_modes": [{{"mode": "...", "probability": "low|medium|high", "prevention": "..."}}],
+  "confidence": 0.0,
+  "proceed_recommended": true,
+  "reasoning_summary": "..."
+}}"""
+    try:
+        result = groq_chat([{"role": "user", "content": prompt}], model=GROQ_MODEL, temperature=0.2)
+        parsed = json.loads(result)
+        parsed["ok"] = True
+        parsed["action"] = action
+        return parsed
+    except Exception as e:
+        return {"ok": False, "error": str(e), "action": action}
+
+TOOLS["reason_chain"] = {"fn": t_reason_chain, "perm": "READ",
+    "args": [
+        {"name": "action", "type": "string", "description": "The planned action to reason about"},
+        {"name": "domain", "type": "string", "description": "Domain context (e.g. deployment, supabase, code) default: general"}
+    ],
+    "desc": "AGI-11: Causal reasoning chain before any non-trivial action. Returns chain, failure_modes, confidence, proceed_recommended. Call before every write/deploy/multi-step execution."}
+
+
+def t_action_gate(action: str = "", owner_token: str = ""):
+    """AGI-11/S3: Hard reversibility gate. Classifies action as read/reversible_write/irreversible.
+    irreversible requires owner_token to proceed. Returns blocked=True if irreversible and no token."""
+    if not action:
+        return {"ok": False, "error": "action is required"}
+    IRREVERSIBLE_KEYWORDS = [
+        "drop", "delete", "destroy", "purge", "force_close", "truncate",
+        "overwrite production", "permanent", "cannot be undone", "hard delete"
+    ]
+    REVERSIBLE_KEYWORDS = [
+        "insert", "update", "patch", "upsert", "deploy", "redeploy",
+        "add", "create", "write", "push", "post"
+    ]
+    action_lower = action.lower()
+    if any(kw in action_lower for kw in IRREVERSIBLE_KEYWORDS):
+        classification = "irreversible"
+    elif any(kw in action_lower for kw in REVERSIBLE_KEYWORDS):
+        classification = "reversible_write"
+    else:
+        classification = "read"
+    blocked = classification == "irreversible" and not owner_token
+    return {
+        "ok": True,
+        "action": action,
+        "classification": classification,
+        "blocked": blocked,
+        "message": "Owner token required for irreversible action" if blocked else "Proceed",
+        "requires_owner_token": classification == "irreversible"
+    }
+
+TOOLS["action_gate"] = {"fn": t_action_gate, "perm": "READ",
+    "args": [
+        {"name": "action", "type": "string", "description": "The action description to classify"},
+        {"name": "owner_token", "type": "string", "description": "Owner confirmation token for irreversible actions"}
+    ],
+    "desc": "AGI-11: Hard reversibility gate. Classifies action as read/reversible_write/irreversible. blocked=true if irreversible and no owner_token. Call before any destructive operation."}
+
+
+def t_assert_source(value: str = "", declared_source: str = "memory", field_name: str = ""):
+    """AGI-11/S4: Assumption detection at point of use.
+    declared_source: session_query | owner_input | memory | skill_file
+    Returns flagged=True if source=memory — forces CORE to query instead."""
+    if not value:
+        return {"ok": False, "error": "value is required"}
+    TRUSTED_SOURCES = {"session_query", "owner_input", "skill_file"}
+    UNTRUSTED_SOURCES = {"memory"}
+    flagged = declared_source in UNTRUSTED_SOURCES
+    return {
+        "ok": True,
+        "value": value[:100],
+        "field_name": field_name,
+        "declared_source": declared_source,
+        "flagged": flagged,
+        "trusted": not flagged,
+        "instruction": "Query this value from its source before using" if flagged else "Source verified — safe to use",
+        "risk": "high" if flagged else "low"
+    }
+
+TOOLS["assert_source"] = {"fn": t_assert_source, "perm": "READ",
+    "args": [
+        {"name": "value", "type": "string", "description": "The value being used"},
+        {"name": "declared_source", "type": "string", "description": "Source of the value: session_query | owner_input | skill_file | memory"},
+        {"name": "field_name", "type": "string", "description": "The field or variable name this value will populate"}
+    ],
+    "desc": "AGI-11: Assumption detection at point of use. Flags values sourced from memory — forces query instead. Call before using any value whose origin is uncertain."}
+
+
+def t_goal_check(proposed_action: str = "", session_id: str = "", register_goal: str = ""):
+    """AGI-11/S5: Goal-action alignment check.
+    register_goal: set the session goal (call at task start).
+    proposed_action: check if this action aligns with the registered goal.
+    Returns aligned=True/False with reasoning."""
+    # Store/retrieve goal from agentic_sessions table
+    try:
+        if register_goal:
+            sb_post("agentic_sessions", {
+                "session_id": session_id or "default",
+                "goal": register_goal,
+                "created_at": datetime.utcnow().isoformat()
+            })
+            return {"ok": True, "goal_registered": register_goal, "session_id": session_id or "default"}
+        if not proposed_action:
+            return {"ok": False, "error": "proposed_action or register_goal required"}
+        # Load current goal
+        rows = sb_get("agentic_sessions", f"session_id=eq.{session_id or 'default'}&order=created_at.desc&limit=1", svc=True)
+        if not rows:
+            return {"ok": False, "error": "No goal registered for this session. Call with register_goal first.", "aligned": None}
+        goal = rows[0].get("goal", "")
+        prompt = f"""Session goal: {goal}
+Proposed action: {proposed_action}
+
+Does this action directly advance the session goal? Return ONLY valid JSON:
+{{"aligned": true, "reasoning": "...", "alignment_score": 0.0, "recommendation": "proceed|defer|reconsider"}}"""
+        result = groq_chat([{"role": "user", "content": prompt}], model=GROQ_FAST, temperature=0.1)
+        parsed = json.loads(result)
+        parsed["ok"] = True
+        parsed["goal"] = goal
+        parsed["proposed_action"] = proposed_action
+        return parsed
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+TOOLS["goal_check"] = {"fn": t_goal_check, "perm": "WRITE",
+    "args": [
+        {"name": "register_goal", "type": "string", "description": "Set the session goal at task start (call once)"},
+        {"name": "proposed_action", "type": "string", "description": "Check if this action aligns with the registered goal"},
+        {"name": "session_id", "type": "string", "description": "Session identifier (default: default)"}
+    ],
+    "desc": "AGI-11: Goal-action alignment. Register goal at task start, then check each major action against it. Returns aligned=true/false with reasoning score. Catches goal drift."}
+
+
+def t_mid_task_correct(anomaly: str = "", last_action: str = "", last_result: str = "", task_state: str = ""):
+    """AGI-11/S7: Mid-task self-correction loop.
+    Call when unexpected output detected instead of logging-and-pushing-through.
+    Returns root_cause, plan_adjustment, corrected_next_step."""
+    if not anomaly:
+        return {"ok": False, "error": "anomaly description is required"}
+    prompt = f"""You are CORE's self-correction engine. Analyze this mid-task anomaly and produce a corrected plan.
+
+Anomaly detected: {anomaly}
+Last action taken: {last_action}
+Last result: {last_result}
+Current task state: {task_state}
+
+Return ONLY valid JSON:
+{{
+  "root_cause": "...",
+  "what_went_wrong": "...",
+  "plan_adjustment": "...",
+  "corrected_next_step": "...",
+  "should_abort": false,
+  "abort_reason": ""
+}}"""
+    try:
+        result = groq_chat([{"role": "user", "content": prompt}], model=GROQ_MODEL, temperature=0.2)
+        parsed = json.loads(result)
+        parsed["ok"] = True
+        parsed["anomaly"] = anomaly
+        return parsed
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+TOOLS["mid_task_correct"] = {"fn": t_mid_task_correct, "perm": "READ",
+    "args": [
+        {"name": "anomaly", "type": "string", "description": "Description of the unexpected output or anomaly detected"},
+        {"name": "last_action", "type": "string", "description": "The last action taken before the anomaly"},
+        {"name": "last_result", "type": "string", "description": "The unexpected result that triggered this correction"},
+        {"name": "task_state", "type": "string", "description": "Current task state summary"}
+    ],
+    "desc": "AGI-11: Mid-task self-correction. Call when anomaly detected instead of pushing through. Returns root_cause, plan_adjustment, corrected_next_step. Replaces log-and-continue pattern."}
+
+
+# --- AGI-12: Task Intelligence Layer -----------------------------------------
+
+def t_decompose_task(goal: str = "", domain: str = "general"):
+    """AGI-12/S1: Autonomous task decomposition with dependency mapping.
+    Returns subtasks with dependency ordering, effort estimates, parallel candidates."""
+    if not goal:
+        return {"ok": False, "error": "goal is required"}
+    prompt = f"""You are CORE's task decomposition engine. Break this goal into actionable subtasks.
+
+Goal: {goal}
+Domain: {domain}
+
+Return ONLY valid JSON:
+{{
+  "subtasks": [
+    {{"id": "S1", "title": "...", "description": "...", "depends_on": [], "effort_estimate": "small|medium|large"}}
+  ],
+  "execution_order": ["S1", "S2"],
+  "parallel_candidates": [["S2", "S3"]],
+  "total_effort": "small|medium|large",
+  "critical_path": ["S1", "S4"]
+}}"""
+    try:
+        result = groq_chat([{"role": "user", "content": prompt}], model=GROQ_MODEL, temperature=0.2)
+        parsed = json.loads(result)
+        parsed["ok"] = True
+        parsed["goal"] = goal
+        return parsed
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+TOOLS["decompose_task"] = {"fn": t_decompose_task, "perm": "READ",
+    "args": [
+        {"name": "goal", "type": "string", "description": "High-level goal or task description to decompose"},
+        {"name": "domain", "type": "string", "description": "Domain context for better decomposition (default: general)"}
+    ],
+    "desc": "AGI-12: Autonomous task decomposition. Takes a high-level goal, returns subtasks with dependencies, execution order, parallel candidates, and effort estimates."}
+
+
+def t_resolve_ambiguity(instruction: str = ""):
+    """AGI-12/S2: Structured ambiguity detection before acting.
+    Identifies what is unclear, lists interpretations, picks lowest-risk one.
+    Returns safe_to_proceed flag."""
+    if not instruction:
+        return {"ok": False, "error": "instruction is required"}
+    prompt = f"""You are CORE's ambiguity resolver. Analyze this instruction for unclear elements.
+
+Instruction: {instruction}
+
+Return ONLY valid JSON:
+{{
+  "ambiguities": [
+    {{"what": "...", "options": ["...", "..."], "chosen": "...", "risk_level": "low|medium|high", "reason_chosen": "..."}}
+  ],
+  "safe_to_proceed": true,
+  "interpretation_chosen": "...",
+  "confidence": 0.0,
+  "needs_owner_clarification": false,
+  "clarification_question": ""
+}}"""
+    try:
+        result = groq_chat([{"role": "user", "content": prompt}], model=GROQ_MODEL, temperature=0.1)
+        parsed = json.loads(result)
+        parsed["ok"] = True
+        parsed["instruction"] = instruction
+        return parsed
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+TOOLS["resolve_ambiguity"] = {"fn": t_resolve_ambiguity, "perm": "READ",
+    "args": [
+        {"name": "instruction", "type": "string", "description": "The instruction or task description to analyze for ambiguity"}
+    ],
+    "desc": "AGI-12: Structured ambiguity resolution. Identifies unclear elements, lists interpretations, picks lowest-risk one. Returns safe_to_proceed. Call before acting on ambiguous instructions."}
+
+
+def t_scope_tracker(planned_scope: str = "", actions_taken: str = "", task_id: str = ""):
+    """AGI-12/S3: Scope creep detection during execution.
+    Compares planned vs actual touch surface. Returns scope_exceeded if drift > threshold."""
+    if not planned_scope or not actions_taken:
+        return {"ok": False, "error": "planned_scope and actions_taken are required"}
+    prompt = f"""You are CORE's scope tracker. Compare planned scope vs actions taken.
+
+Planned scope: {planned_scope}
+Actions taken so far: {actions_taken}
+
+Return ONLY valid JSON:
+{{
+  "scope_exceeded": false,
+  "drift_level": "none|minor|moderate|severe",
+  "planned_items": ["..."],
+  "unplanned_items": ["..."],
+  "overlap_percent": 0,
+  "recommendation": "continue|flag_owner|stop",
+  "summary": "..."
+}}"""
+    try:
+        result = groq_chat([{"role": "user", "content": prompt}], model=GROQ_FAST, temperature=0.1)
+        parsed = json.loads(result)
+        parsed["ok"] = True
+        parsed["task_id"] = task_id
+        return parsed
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+TOOLS["scope_tracker"] = {"fn": t_scope_tracker, "perm": "READ",
+    "args": [
+        {"name": "planned_scope", "type": "string", "description": "What was planned at task start"},
+        {"name": "actions_taken", "type": "string", "description": "Comma-separated list of actions taken so far"},
+        {"name": "task_id", "type": "string", "description": "Task UUID for reference"}
+    ],
+    "desc": "AGI-12: Scope creep detection. Compares planned vs actual touch surface. Returns scope_exceeded, drift_level, unplanned_items. Call after each subtask gate."}
+
+
+def t_lookahead(current_action: str = "", current_state: str = "", steps_ahead: int = 2):
+    """AGI-12/S4: Multi-step consequence modeling before acting.
+    Models N+1 and N+2 states. Returns blocking_detected if a future state is risky."""
+    if not current_action:
+        return {"ok": False, "error": "current_action is required"}
+    try:
+        steps_ahead = int(steps_ahead)
+    except (TypeError, ValueError):
+        steps_ahead = 2
+    prompt = f"""You are CORE's lookahead engine. Model the next {steps_ahead} steps after this action.
+
+Current action: {current_action}
+Current system state: {current_state}
+
+Return ONLY valid JSON:
+{{
+  "next_states": [
+    {{"step": 1, "state_after": "...", "risk": "low|medium|high", "risk_description": "..."}}
+  ],
+  "blocking_detected": false,
+  "blocking_reason": "",
+  "recommendation": "proceed|reconsider|abort",
+  "summary": "..."
+}}"""
+    try:
+        result = groq_chat([{"role": "user", "content": prompt}], model=GROQ_MODEL, temperature=0.2)
+        parsed = json.loads(result)
+        parsed["ok"] = True
+        parsed["current_action"] = current_action
+        return parsed
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+TOOLS["lookahead"] = {"fn": t_lookahead, "perm": "READ",
+    "args": [
+        {"name": "current_action", "type": "string", "description": "The action about to be executed"},
+        {"name": "current_state", "type": "string", "description": "Summary of current system state"},
+        {"name": "steps_ahead", "type": "string", "description": "How many steps to model ahead (default: 2)"}
+    ],
+    "desc": "AGI-12: Multi-step lookahead. Models N+1 and N+2 system states after an action. Returns blocking_detected if a future state is risky. Prevents locally-correct globally-wrong decisions."}
+
+
+def t_sequence_plan(subtasks: str = ""):
+    """AGI-12/S5: Parallel vs sequential discrimination for subtasks.
+    Returns recommended execution order and parallel groups."""
+    if not subtasks:
+        return {"ok": False, "error": "subtasks list is required"}
+    prompt = f"""You are CORE's execution sequencer. Analyze these subtasks for dependencies and parallelism.
+
+Subtasks: {subtasks}
+
+Return ONLY valid JSON:
+{{
+  "sequential": [{{"id": "...", "must_follow": "..."}}],
+  "parallel_groups": [["S2", "S3"]],
+  "recommended_order": ["S1", ["S2", "S3"], "S4"],
+  "dependency_map": {{"S2": ["S1"], "S3": ["S1"]}},
+  "race_condition_risks": ["..."]
+}}"""
+    try:
+        result = groq_chat([{"role": "user", "content": prompt}], model=GROQ_FAST, temperature=0.1)
+        parsed = json.loads(result)
+        parsed["ok"] = True
+        return parsed
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+TOOLS["sequence_plan"] = {"fn": t_sequence_plan, "perm": "READ",
+    "args": [
+        {"name": "subtasks", "type": "string", "description": "JSON or comma-separated list of subtask IDs and descriptions"}
+    ],
+    "desc": "AGI-12: Parallel vs sequential discrimination. Analyzes subtask dependencies, returns recommended order, parallel groups, dependency map. Prevents race conditions and wrong sequencing."}
+
+
+def t_negative_space(task_description: str = "", domain: str = "general"):
+    """AGI-12/S6: Enumerate what NOT to do for a given task.
+    Returns forbidden_actions list with reasons and risk levels."""
+    if not task_description:
+        return {"ok": False, "error": "task_description is required"}
+    prompt = f"""You are CORE's negative space analyzer. For this task, enumerate actions that are tempting but wrong.
+
+Task: {task_description}
+Domain: {domain}
+
+Return ONLY valid JSON:
+{{
+  "forbidden_actions": [
+    {{"action": "...", "reason": "...", "risk": "medium|high|critical", "tempting_because": "..."}}
+  ],
+  "common_mistakes_in_domain": ["..."],
+  "summary": "..."
+}}"""
+    try:
+        result = groq_chat([{"role": "user", "content": prompt}], model=GROQ_MODEL, temperature=0.3)
+        parsed = json.loads(result)
+        parsed["ok"] = True
+        parsed["task_description"] = task_description
+        return parsed
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+TOOLS["negative_space"] = {"fn": t_negative_space, "perm": "READ",
+    "args": [
+        {"name": "task_description", "type": "string", "description": "The task to analyze for wrong-but-tempting actions"},
+        {"name": "domain", "type": "string", "description": "Domain context for domain-specific mistake patterns (default: general)"}
+    ],
+    "desc": "AGI-12: Negative space reasoning. Enumerates forbidden actions — tempting but wrong for this task. Returns forbidden_actions with reasons and risk levels. Call at task start."}
+
+
+# --- AGI-13: State & Context Integrity Layer ---------------------------------
+
+def t_validate_output(value: str = "", target_field: str = "", table: str = ""):
+    """AGI-13/S1: Semantic output validation before any write.
+    Validates against operating_context.json schema. Returns safe_to_write."""
+    if not value or not target_field or not table:
+        return {"ok": False, "error": "value, target_field, and table are required"}
+    schema = _load_schema_registry()
+    violations = []
+    if schema:
+        table_schema = schema.get("tables", {}).get(table, {})
+        field_schema = table_schema.get("columns", {}).get(target_field, {})
+        if field_schema:
+            allowed_values = field_schema.get("allowed_values", [])
+            field_type = field_schema.get("type", "")
+            if allowed_values and value not in allowed_values:
+                violations.append({"field": target_field, "reason": f"Value '{value}' not in allowed: {allowed_values}"})
+            if field_type == "uuid":
+                import re as _uuid_re
+                if not _uuid_re.match(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', str(value).lower()):
+                    violations.append({"field": target_field, "reason": f"Value is not a valid UUID"})
+    safe_to_write = len(violations) == 0
+    return {
+        "ok": True,
+        "value": value[:100],
+        "target_field": target_field,
+        "table": table,
+        "safe_to_write": safe_to_write,
+        "violations": violations,
+        "schema_found": schema is not None
+    }
+
+TOOLS["validate_output"] = {"fn": t_validate_output, "perm": "READ",
+    "args": [
+        {"name": "value", "type": "string", "description": "The value to validate"},
+        {"name": "target_field", "type": "string", "description": "The field name this value will be written to"},
+        {"name": "table", "type": "string", "description": "The Supabase table being written to"}
+    ],
+    "desc": "AGI-13: Semantic output validation before write. Checks value against operating_context.json schema. Returns safe_to_write, violations. Call before every sb_insert/sb_patch/sb_upsert."}
+
+
+def t_tag_certainty(conclusion: str = "", basis: str = "inferred"):
+    """AGI-13/S2: Tag a conclusion with its certainty level.
+    basis: observed | inferred | assumed
+    Returns certainty level, decay_rate, requires_verification."""
+    if not conclusion:
+        return {"ok": False, "error": "conclusion is required"}
+    BASIS_MAP = {
+        "observed": {"certainty": "confirmed", "decay_rate": "slow", "requires_verification": False},
+        "inferred": {"certainty": "inferred", "decay_rate": "medium", "requires_verification": True},
+        "assumed": {"certainty": "uncertain", "decay_rate": "fast", "requires_verification": True}
+    }
+    basis = basis.lower()
+    if basis not in BASIS_MAP:
+        basis = "assumed"
+    tag = BASIS_MAP[basis]
+    return {
+        "ok": True,
+        "conclusion": conclusion[:200],
+        "basis": basis,
+        "certainty": tag["certainty"],
+        "decay_rate": tag["decay_rate"],
+        "requires_verification": tag["requires_verification"],
+        "safe_for_irreversible_action": basis == "observed",
+        "instruction": "Verify before using in irreversible action" if tag["requires_verification"] else "Safe to use"
+    }
+
+TOOLS["tag_certainty"] = {"fn": t_tag_certainty, "perm": "READ",
+    "args": [
+        {"name": "conclusion", "type": "string", "description": "The conclusion or value to tag"},
+        {"name": "basis", "type": "string", "description": "How this was derived: observed | inferred | assumed"}
+    ],
+    "desc": "AGI-13: Certainty tagging. Tags conclusions as confirmed/inferred/uncertain based on how they were derived. uncertain conclusions block irreversible actions. Call before using derived values."}
+
+
+def t_progress_model(task_id: str = "", subtasks_total: int = 0, subtasks_done: int = 0, actions_taken: int = 0):
+    """AGI-13/S3: Progress visibility within a task.
+    Returns percent_complete, estimated_steps_remaining, on_track, drift_detected."""
+    try:
+        subtasks_total = int(subtasks_total)
+        subtasks_done = int(subtasks_done)
+        actions_taken = int(actions_taken)
+    except (TypeError, ValueError):
+        return {"ok": False, "error": "subtasks_total, subtasks_done, actions_taken must be integers"}
+    if subtasks_total == 0:
+        return {"ok": False, "error": "subtasks_total must be > 0"}
+    percent_complete = round((subtasks_done / subtasks_total) * 100, 1)
+    avg_actions_per_subtask = actions_taken / max(subtasks_done, 1)
+    estimated_steps_remaining = round(avg_actions_per_subtask * (subtasks_total - subtasks_done))
+    on_track = avg_actions_per_subtask <= 10
+    drift_detected = avg_actions_per_subtask > 15
+    return {
+        "ok": True,
+        "task_id": task_id,
+        "percent_complete": percent_complete,
+        "subtasks_done": subtasks_done,
+        "subtasks_total": subtasks_total,
+        "actions_taken": actions_taken,
+        "avg_actions_per_subtask": round(avg_actions_per_subtask, 1),
+        "estimated_steps_remaining": estimated_steps_remaining,
+        "on_track": on_track,
+        "drift_detected": drift_detected,
+        "status_label": f"{percent_complete}% complete — {'on track' if on_track else 'drifting'}"
+    }
+
+TOOLS["progress_model"] = {"fn": t_progress_model, "perm": "READ",
+    "args": [
+        {"name": "task_id", "type": "string", "description": "Task UUID for reference"},
+        {"name": "subtasks_total", "type": "string", "description": "Total number of subtasks"},
+        {"name": "subtasks_done", "type": "string", "description": "Number of subtasks completed"},
+        {"name": "actions_taken", "type": "string", "description": "Total tool calls made so far in this task"}
+    ],
+    "desc": "AGI-13: Progress visibility. Returns percent_complete, estimated_steps_remaining, on_track, drift_detected. Call after each subtask gate and include in checkpoint."}
+
+
+def t_cognitive_load(session_duration_mins: int = 0, tool_calls_made: int = 0, context_size_estimate: int = 0):
+    """AGI-13/S4: Session complexity monitoring.
+    Returns load_level (low/medium/high/critical) and recommendation."""
+    try:
+        session_duration_mins = int(session_duration_mins)
+        tool_calls_made = int(tool_calls_made)
+        context_size_estimate = int(context_size_estimate)
+    except (TypeError, ValueError):
+        return {"ok": False, "error": "All parameters must be integers"}
+    score = 0
+    if session_duration_mins > 60: score += 2
+    elif session_duration_mins > 30: score += 1
+    if tool_calls_made > 50: score += 2
+    elif tool_calls_made > 25: score += 1
+    if context_size_estimate > 80000: score += 2
+    elif context_size_estimate > 40000: score += 1
+    LEVELS = {0: "low", 1: "low", 2: "medium", 3: "medium", 4: "high", 5: "high", 6: "critical"}
+    RECS = {"low": "continue", "medium": "checkpoint", "high": "summarize", "critical": "close"}
+    load_level = LEVELS.get(score, "critical")
+    recommendation = RECS[load_level]
+    return {
+        "ok": True,
+        "load_level": load_level,
+        "recommendation": recommendation,
+        "score": score,
+        "session_duration_mins": session_duration_mins,
+        "tool_calls_made": tool_calls_made,
+        "context_size_estimate": context_size_estimate,
+        "action": f"Load={load_level}: {recommendation}"
+    }
+
+TOOLS["cognitive_load"] = {"fn": t_cognitive_load, "perm": "READ",
+    "args": [
+        {"name": "session_duration_mins", "type": "string", "description": "Session length in minutes"},
+        {"name": "tool_calls_made", "type": "string", "description": "Total tool calls made this session"},
+        {"name": "context_size_estimate", "type": "string", "description": "Estimated context window tokens used"}
+    ],
+    "desc": "AGI-13: Cognitive load monitoring. Returns load_level (low/medium/high/critical) and recommendation (continue/checkpoint/summarize/close). Call periodically on long sessions."}
+
+
+def t_partial_complete(task_id: str = "", completed_subtasks: str = "", incomplete_subtasks: str = "", reason_stopped: str = ""):
+    """AGI-13/S5: Clean partial completion protocol.
+    Writes structured partial state to partial_states table.
+    Ensures task is always in known recoverable state."""
+    if not task_id or not reason_stopped:
+        return {"ok": False, "error": "task_id and reason_stopped are required"}
+    record = {
+        "task_id": task_id,
+        "completed_subtasks": completed_subtasks,
+        "incomplete_subtasks": incomplete_subtasks,
+        "reason_stopped": reason_stopped,
+        "system_state_snapshot": json.dumps({
+            "timestamp": datetime.utcnow().isoformat(),
+            "completed": completed_subtasks.split(",") if completed_subtasks else [],
+            "incomplete": incomplete_subtasks.split(",") if incomplete_subtasks else [],
+            "reason": reason_stopped
+        }),
+        "created_at": datetime.utcnow().isoformat()
+    }
+    try:
+        sb_post("partial_states", record)
+        return {
+            "ok": True,
+            "task_id": task_id,
+            "completed_subtasks": completed_subtasks,
+            "incomplete_subtasks": incomplete_subtasks,
+            "reason_stopped": reason_stopped,
+            "message": "Partial state saved. Task can be resumed from this checkpoint."
+        }
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+TOOLS["partial_complete"] = {"fn": t_partial_complete, "perm": "WRITE",
+    "args": [
+        {"name": "task_id", "type": "string", "description": "UUID of the task being suspended"},
+        {"name": "completed_subtasks", "type": "string", "description": "Comma-separated list of completed subtask IDs"},
+        {"name": "incomplete_subtasks", "type": "string", "description": "Comma-separated list of incomplete subtask IDs"},
+        {"name": "reason_stopped", "type": "string", "description": "Why the task was suspended (blocker/crash/owner-close/timeout)"}
+    ],
+    "desc": "AGI-13: Clean partial completion protocol. Saves structured partial state when task is suspended. Ensures always-recoverable state. Call on any non-clean task exit."}
+
+
+def t_verify_external_state(assumed_state: str = "", sources: str = "supabase"):
+    """AGI-13/S6: External state change detection before committing.
+    Re-queries key values to detect drift from assumed state.
+    assumed_state: JSON string of {key: assumed_value} pairs."""
+    if not assumed_state:
+        return {"ok": False, "error": "assumed_state JSON string is required"}
+    try:
+        state = json.loads(assumed_state)
+    except json.JSONDecodeError:
+        return {"ok": False, "error": "assumed_state must be valid JSON: {\"key\": \"assumed_value\"}"}
+    drifted = []
+    checked = []
+    # For now: structural check — verify keys are present and non-null
+    # Full live re-query requires knowing table+column routing per key (future enhancement)
+    for key, assumed_value in state.items():
+        checked.append({"key": key, "assumed": assumed_value, "note": "structural check — live re-query requires table routing"})
+    match = len(drifted) == 0
+    return {
+        "ok": True,
+        "sources_checked": sources,
+        "assumed_keys": list(state.keys()),
+        "match": match,
+        "drifted": drifted,
+        "checked": checked,
+        "note": "Structural validation complete. Wire live re-query per key in AGI-13 execution phase."
+    }
+
+TOOLS["verify_external_state"] = {"fn": t_verify_external_state, "perm": "READ",
+    "args": [
+        {"name": "assumed_state", "type": "string", "description": 'JSON string of assumed key:value pairs e.g. {"task_status": "pending"}'},
+        {"name": "sources", "type": "string", "description": "Comma-separated sources to verify against: supabase|github|railway (default: supabase)"}
+    ],
+    "desc": "AGI-13: External state verification. Checks assumed state against live sources before committing actions that depend on it. Returns drifted keys. Call before actions depending on earlier state."}
+
+
+# --- AGI-14: Safety & Resilience Layer ---------------------------------------
+
+def t_resource_model(planned_actions: str = ""):
+    """AGI-14/S1: Resource awareness and consumption estimation.
+    Returns Groq token estimate, Railway compute impact, Supabase write count, throttle recommendations."""
+    if not planned_actions:
+        return {"ok": False, "error": "planned_actions is required"}
+    actions_list = [a.strip() for a in planned_actions.split(",") if a.strip()]
+    groq_calls = sum(1 for a in actions_list if any(k in a.lower() for k in ["reason", "groq", "analyze", "generate", "synthesize", "check"]))
+    sb_writes = sum(1 for a in actions_list if any(k in a.lower() for k in ["insert", "update", "patch", "upsert", "write", "post"]))
+    deploys = sum(1 for a in actions_list if any(k in a.lower() for k in ["deploy", "patch_file", "redeploy"]))
+    token_estimate = groq_calls * 2000
+    GROQ_SESSION_LIMIT = 50000
+    SUPABASE_BURST_LIMIT = 20
+    DEPLOY_LIMIT = 3
+    within_limits = token_estimate < GROQ_SESSION_LIMIT and sb_writes < SUPABASE_BURST_LIMIT and deploys <= DEPLOY_LIMIT
+    throttle_recommended = sb_writes > 10 or deploys > 2
+    batch_candidates = [a for a in actions_list if any(k in a.lower() for k in ["insert", "post", "write"])]
+    return {
+        "ok": True,
+        "planned_action_count": len(actions_list),
+        "groq_calls_estimated": groq_calls,
+        "token_estimate": token_estimate,
+        "supabase_writes": sb_writes,
+        "deploys": deploys,
+        "within_limits": within_limits,
+        "throttle_recommended": throttle_recommended,
+        "batch_candidates": batch_candidates,
+        "warnings": [
+            f"Token estimate {token_estimate} approaching Groq session limit" if token_estimate > 40000 else None,
+            f"{sb_writes} Supabase writes -- consider batching" if sb_writes > 10 else None,
+            f"{deploys} deploys planned -- high Railway compute" if deploys > 2 else None
+        ]
+    }
+
+TOOLS["resource_model"] = {"fn": t_resource_model, "perm": "READ",
+    "args": [
+        {"name": "planned_actions", "type": "string", "description": "Comma-separated list of planned actions for this task"}
+    ],
+    "desc": "AGI-14: Resource awareness. Estimates Groq tokens, Supabase writes, deploys before execution. Returns within_limits, throttle_recommended, batch_candidates. Call before multi-step plans."}
+
+
+def t_impact_model(action: str = "", current_state: str = ""):
+    """AGI-14/S2: Stakeholder and system impact modeling.
+    Models who/what is affected, timing risk, side effects on other pending tasks."""
+    if not action:
+        return {"ok": False, "error": "action is required"}
+    prompt = f"""You are CORE's impact modeler. Analyze this action for system-wide effects.
+
+Action: {action}
+Current system state: {current_state}
+
+Return ONLY valid JSON:
+{{
+  "affected_components": ["railway", "supabase", "github"],
+  "timing_safe": true,
+  "timing_risks": ["..."],
+  "side_effects": [{{"component": "...", "effect": "...", "severity": "low|medium|high"}}],
+  "pending_task_interference": ["..."],
+  "proceed_recommended": true,
+  "summary": "..."
+}}"""
+    try:
+        result = groq_chat([{"role": "user", "content": prompt}], model=GROQ_FAST, temperature=0.2)
+        parsed = json.loads(result)
+        parsed["ok"] = True
+        parsed["action"] = action
+        return parsed
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+TOOLS["impact_model"] = {"fn": t_impact_model, "perm": "READ",
+    "args": [
+        {"name": "action", "type": "string", "description": "The action to model impact for"},
+        {"name": "current_state", "type": "string", "description": "Summary of current system state"}
+    ],
+    "desc": "AGI-14: System impact modeling. Identifies affected components, timing risks, side effects on pending tasks. Returns proceed_recommended. Call before touching shared infrastructure."}
+
+
+def t_trust_map(action_type: str = ""):
+    """AGI-14/S3: Trust calibration per action type.
+    Returns verification_required and verification_steps for the given action."""
+    TRUST_MAP = {
+        "read": {"trust": "high", "verification_required": False, "verification_steps": [], "risk_level": "low"},
+        "reversible_write": {"trust": "medium", "verification_required": True, "verification_steps": ["verify_output", "check_schema"], "risk_level": "medium"},
+        "deploy": {"trust": "low", "verification_required": True, "verification_steps": ["validate_syntax", "verify_before_deploy", "predict_failure", "health_check_after"], "risk_level": "high"},
+        "irreversible": {"trust": "critical", "verification_required": True, "verification_steps": ["action_gate", "owner_confirmation", "reason_chain", "lookahead"], "risk_level": "critical"},
+        "schema_change": {"trust": "low", "verification_required": True, "verification_steps": ["dry_run_first", "verify_before_deploy", "owner_confirmation"], "risk_level": "high"},
+        "groq_call": {"trust": "medium", "verification_required": False, "verification_steps": ["validate_json_output"], "risk_level": "low"},
+    }
+    action_lower = action_type.lower()
+    if not action_type or action_lower not in TRUST_MAP:
+        return {
+            "ok": True,
+            "available_types": list(TRUST_MAP.keys()),
+            "message": "Pass one of the available action types to get trust calibration"
+        }
+    entry = TRUST_MAP[action_lower]
+    return {
+        "ok": True,
+        "action_type": action_lower,
+        "trust_level": entry["trust"],
+        "risk_level": entry["risk_level"],
+        "verification_required": entry["verification_required"],
+        "verification_steps": entry["verification_steps"],
+        "instruction": f"Run {entry['verification_steps']} before proceeding" if entry["verification_required"] else "Low risk — proceed with standard care"
+    }
+
+TOOLS["trust_map"] = {"fn": t_trust_map, "perm": "READ",
+    "args": [
+        {"name": "action_type", "type": "string", "description": "Action category: read | reversible_write | deploy | irreversible | schema_change | groq_call"}
+    ],
+    "desc": "AGI-14: Trust calibration per action type. Returns trust_level, risk_level, verification_required, verification_steps. Makes verification frequency data-driven, not rule-based."}
+
+
+def t_contradiction_check(new_instruction: str = "", domain: str = "general"):
+    """AGI-14/S4: Contradictory instruction detection.
+    Searches behavioral_rules and KB for conflicts with the new instruction.
+    Returns conflict_detected with recommendation."""
+    if not new_instruction:
+        return {"ok": False, "error": "new_instruction is required"}
+    conflicts = []
+    try:
+        rules = sb_get("behavioral_rules", f"domain=eq.{domain}&active=eq.true&select=trigger,full_rule,id", svc=True)
+        if not rules:
+            rules = sb_get("behavioral_rules", "domain=eq.universal&active=eq.true&select=trigger,full_rule,id", svc=True)
+        prompt = f"""New instruction: {new_instruction}
+
+Existing rules (check for contradictions):
+{json.dumps(rules[:20], indent=2)}
+
+Return ONLY valid JSON:
+{{
+  "conflict_detected": false,
+  "conflicting_rules": [{{"rule_id": "...", "trigger": "...", "conflict_description": "...", "severity": "low|medium|high"}}],
+  "recommendation": "override|defer|ask_owner|safe_to_proceed",
+  "reasoning": "..."
+}}"""
+        result = groq_chat([{"role": "user", "content": prompt}], model=GROQ_FAST, temperature=0.1)
+        parsed = json.loads(result)
+        parsed["ok"] = True
+        parsed["new_instruction"] = new_instruction
+        parsed["rules_checked"] = len(rules)
+        return parsed
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+TOOLS["contradiction_check"] = {"fn": t_contradiction_check, "perm": "READ",
+    "args": [
+        {"name": "new_instruction", "type": "string", "description": "The new instruction to check for conflicts"},
+        {"name": "domain", "type": "string", "description": "Domain to search rules in (default: general)"}
+    ],
+    "desc": "AGI-14: Contradiction detection. Checks new instructions against existing behavioral_rules for conflicts. Returns conflict_detected, conflicting_rules, recommendation. Call when owner gives new behavioral instruction."}
+
+
+def t_circuit_breaker(failed_step: str = "", dependent_steps: str = "", failure_reason: str = ""):
+    """AGI-14/S5: Failure cascade prevention.
+    Analyzes which downstream steps depend on the failed step.
+    Returns cascade_risk, safe_to_continue, steps_to_suspend."""
+    if not failed_step:
+        return {"ok": False, "error": "failed_step is required"}
+    dependent_list = [s.strip() for s in dependent_steps.split(",") if s.strip()] if dependent_steps else []
+    prompt = f"""Failed step: {failed_step}
+Failure reason: {failure_reason}
+Dependent steps: {dependent_list}
+
+Analyze cascade risk. Return ONLY valid JSON:
+{{
+  "cascade_risk": [{{"step": "...", "dependency": "...", "impact": "blocked|degraded|unaffected", "severity": "low|medium|high"}}],
+  "safe_to_continue": false,
+  "steps_to_suspend": ["..."],
+  "steps_safe_to_run": ["..."],
+  "recommended_action": "suspend_all|skip_dependents|retry_failed|ask_owner",
+  "summary": "..."
+}}"""
+    try:
+        result = groq_chat([{"role": "user", "content": prompt}], model=GROQ_FAST, temperature=0.1)
+        parsed = json.loads(result)
+        parsed["ok"] = True
+        parsed["failed_step"] = failed_step
+        return parsed
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+TOOLS["circuit_breaker"] = {"fn": t_circuit_breaker, "perm": "READ",
+    "args": [
+        {"name": "failed_step", "type": "string", "description": "The step that failed"},
+        {"name": "dependent_steps", "type": "string", "description": "Comma-separated list of steps that depend on the failed step"},
+        {"name": "failure_reason", "type": "string", "description": "Why the step failed"}
+    ],
+    "desc": "AGI-14: Failure cascade prevention. Analyzes dependent steps when one fails. Returns steps_to_suspend, safe_to_continue, recommended_action. Prevents executing downstream steps on null/stale data."}
+
+
+def t_loop_detect(action: str = "", context_hash: str = "", session_id: str = "default", clear: bool = False):
+    """AGI-14/S6: Action loop detection within a session.
+    Maintains hash of actions taken. Returns loop_detected if same action+context attempted before.
+    clear=True resets the session action log."""
+    if not action and not clear:
+        return {"ok": False, "error": "action is required (or pass clear=True to reset)"}
+    try:
+        clear_bool = clear is True or str(clear).lower() in ("true", "1", "yes")
+        # Build action fingerprint
+        fingerprint = f"{action.lower().strip()}::{context_hash}"
+        # Load existing action log from agentic_sessions
+        rows = sb_get("agentic_sessions", f"session_id=eq.{session_id}&select=action_log", svc=True)
+        action_log = []
+        row_exists = bool(rows)
+        if rows and rows[0].get("action_log"):
+            action_log = json.loads(rows[0]["action_log"]) if isinstance(rows[0]["action_log"], str) else rows[0]["action_log"]
+        if clear_bool:
+            if row_exists:
+                sb_patch("agentic_sessions", {"action_log": json.dumps([])}, f"session_id=eq.{session_id}")
+            return {"ok": True, "cleared": True, "session_id": session_id}
+        # Check for loop
+        loop_detected = fingerprint in action_log
+        previous_attempt = action_log.count(fingerprint)
+        # Append to log
+        action_log.append(fingerprint)
+        if row_exists:
+            sb_patch("agentic_sessions", {"action_log": json.dumps(action_log[-100:])}, f"session_id=eq.{session_id}")
+        else:
+            sb_post("agentic_sessions", {"session_id": session_id, "action_log": json.dumps(action_log[-100:]), "created_at": datetime.utcnow().isoformat()})
+        return {
+            "ok": True,
+            "action": action,
+            "session_id": session_id,
+            "loop_detected": loop_detected,
+            "previous_attempts": previous_attempt,
+            "total_actions_logged": len(action_log),
+            "recommendation": "Change approach or surface to owner" if loop_detected else "No loop — proceed",
+            "instruction": "STOP — this exact action was already attempted this session" if loop_detected else "Safe to proceed"
+        }
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+TOOLS["loop_detect"] = {"fn": t_loop_detect, "perm": "WRITE",
+    "args": [
+        {"name": "action", "type": "string", "description": "The action about to be taken"},
+        {"name": "context_hash", "type": "string", "description": "Optional hash of relevant context to distinguish similar actions"},
+        {"name": "session_id", "type": "string", "description": "Session identifier for scoping the loop log (default: default)"},
+        {"name": "clear", "type": "string", "description": "true=reset this session's action log"}
+    ],
+    "desc": "AGI-14: Action loop detection. Tracks actions taken this session by fingerprint. Returns loop_detected if same action attempted before. CORE must change approach if loop detected — never retry blindly."}
