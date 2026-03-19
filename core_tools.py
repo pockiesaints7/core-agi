@@ -3975,36 +3975,47 @@ def t_patch_file(path: str, patches: str, message: str, repo: str = "", dry_run:
                 continue
             if new is None:
                 new = ""
-            found, count, matched, hint = _patch_find(content, old)
+            pf = _patch_find(content, old)
+            found, count, matched, hint = pf[0], pf[1], pf[2], pf[3]
+            auto_context = pf[4] if len(pf) > 4 else None
             if not found:
-                skipped.append({"index": i, "reason": "not found", "old_str": old[:80], "hint": hint})
+                skip_entry = {"index": i, "reason": "not found", "old_str": old[:80], "hint": hint}
+                if auto_context: skip_entry["auto_context"] = auto_context
+                skipped.append(skip_entry)
             elif count > 1:
-                skipped.append({"index": i, "reason": f"ambiguous ({count}x)", "old_str": old[:80]})
+                all_lines = content.splitlines()
+                locs, pos = [], 0
+                while True:
+                    idx = content.find(old, pos)
+                    if idx == -1: break
+                    ln = content[:idx].count('\n') + 1
+                    cs, ce = max(0, ln-3), min(len(all_lines), ln+old.count('\n')+3)
+                    locs.append({"line": ln, "context": "\n".join(f"{cs+j+1:4d}  {l}" for j,l in enumerate(all_lines[cs:ce]))})
+                    pos = idx + 1
+                    if len(locs) >= 5: break
+                skipped.append({"index": i, "reason": f"ambiguous ({count}x)", "old_str": old[:80],
+                                 "locations": locs,
+                                 "fix_hint": "Extend old_str with unique surrounding lines from one location."})
             else:
                 content = content.replace(matched, new, 1)
                 applied.append({"index": i, "old_str": old[:80], "note": hint or "exact_match"})
         if not applied:
             return {
                 "ok": False, "error": "No patches applied", "skipped": skipped,
-                "fix_hint": "Call gh_read_lines on the target lines, copy old_str exactly, retry."
+                "fix_hint": "Check auto_context in skipped entries -- actual file content provided, no gh_read_lines needed."
             }
         # NEAR-MISS PROTECTION: fail hard if any patch was skipped
-        # Partial application is worse than no application -- it leaves code in an unknown state
         if skipped:
-            near_misses = [s for s in skipped if s.get("hint", "").startswith("near_miss")]
-            not_found   = [s for s in skipped if not s.get("hint", "").startswith("near_miss")]
+            near_misses = [s for s in skipped if "near_miss" in str(s.get("hint", ""))]
+            not_found   = [s for s in skipped if "near_miss" not in str(s.get("hint", ""))]
             return {
                 "ok": False,
-                "error": f"PARTIAL_PATCH_BLOCKED: {len(skipped)} patch(es) skipped, {len(applied)} applied -- ALL changes rolled back to prevent partial state.",
+                "error": f"PARTIAL_PATCH_BLOCKED: {len(skipped)} patch(es) skipped -- ALL changes rolled back.",
                 "applied_count": len(applied),
                 "skipped_count": len(skipped),
                 "near_misses": near_misses,
                 "not_found": not_found,
-                "fix_hint": (
-                    "For near_miss: call gh_read_lines to get exact content at that location, "
-                    "copy the old_str character-for-character including all whitespace, then retry. "
-                    "For not_found: use search_in_file to verify the string exists."
-                ),
+                "fix_hint": "Use auto_context in each skipped entry -- actual file content embedded, no gh_read_lines needed.",
                 "rolled_back": True,
             }
         # Syntax check for .py files
