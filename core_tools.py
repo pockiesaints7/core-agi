@@ -4076,7 +4076,7 @@ def handle_jsonrpc(body: dict, session_id: str = "") -> dict:
                     except (ValueError, TypeError): coerced_args[k] = v
                 else:
                     coerced_args[k] = v
-            arg_names = {d["name"] for d in tool["args"]} if tool["args"] else set()
+            arg_names = {d["name"] if isinstance(d, dict) else d for d in tool["args"]} if tool["args"] else set()
             result = tool["fn"](**{k: v for k, v in coerced_args.items() if not arg_names or k in arg_names})
             text = json.dumps(result, default=str)
             # TASK-26.B: Track success in tool_stats (fire-and-forget, non-fatal)
