@@ -1,4 +1,4 @@
-﻿"""core_tools.py â€” CORE AGI MCP tool implementations
+﻿﻿"""core_tools.py â€” CORE AGI MCP tool implementations
 All t_* functions, TOOLS registry, _mcp_tool_schema, handle_jsonrpc.
 Part of v6.0 split architecture: core_config, core_github, core_train, core_tools, core_main.
 
@@ -155,17 +155,30 @@ def t_add_knowledge(domain="", topic="", instruction="", content="", tags="", co
             svc=True)
         if existing:
             ex = existing[0]
-            ex_instr = (ex.get("instruction") or "").strip().lower()
-            new_instr = (instruction or "").strip().lower()
+            ex_instr    = (ex.get("instruction") or "").strip().lower()
+            new_instr   = (instruction or "").strip().lower()
+            ex_content  = (ex.get("content") or "").strip()
+            new_content = (content or "").strip()
+            # Check 1: instruction conflict -- block and alert
             if ex_instr and new_instr and ex_instr != new_instr:
-                # Contradiction detected -- alert owner, block insert
-                notify(f"[KB CONFLICT] {domain}/{topic}\nExisting: {ex_instr[:120]}\nProposed: {new_instr[:120]}\nAction: BLOCKED -- use kb_update to intentionally overwrite.")
-                return {"ok": False, "conflict": True, "action": "blocked",
+                notify(f"[KB CONFLICT] {domain}/{topic}\nExisting: {ex_instr[:120]}\nProposed: {new_instr[:120]}\nBlocked -- use kb_update.")
+                return {"ok": False, "conflict": True, "conflict_type": "instruction",
+                        "action": "blocked",
                         "existing_instruction": ex.get("instruction", "")[:200],
-                        "message": "Contradicts existing KB entry. Use kb_update to overwrite intentionally."}
-            elif ex_instr == new_instr:
-                # Near-duplicate -- skip silently
+                        "existing_content": ex_content[:200],
+                        "message": "Instruction contradicts existing KB entry. Use kb_update to overwrite."}
+            # Check 2: exact duplicate -- skip silently
+            if ex_instr == new_instr and ex_content.lower() == new_content.lower():
                 return {"ok": True, "action": "skipped_duplicate", "topic": topic}
+            # Check 3: content conflict (substantial differing content, no instruction change)
+            if ex_content and new_content and ex_content.lower() != new_content.lower():
+                if len(ex_content) > 50 and len(new_content) > 50:
+                    notify(f"[KB CONTENT CONFLICT] {domain}/{topic}\nExisting: {ex_content[:120]}\nProposed: {new_content[:120]}\nBlocked -- use kb_update.")
+                    return {"ok": False, "conflict": True, "conflict_type": "content",
+                            "action": "blocked",
+                            "existing_instruction": ex.get("instruction", "")[:200],
+                            "existing_content": ex_content[:200],
+                            "message": "Content differs from existing KB entry. Use kb_update to overwrite."}
     except Exception:
         pass  # Non-fatal -- proceed with insert if check fails
     tags_list = [t.strip() for t in tags.split(",")] if tags else []
