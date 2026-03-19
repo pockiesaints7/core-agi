@@ -5906,27 +5906,13 @@ def t_circuit_breaker(failed_step: str = "", dependent_steps: str = "", failure_
     if not failed_step:
         return {"ok": False, "error": "failed_step is required"}
     dependent_list = [s.strip() for s in dependent_steps.split(",") if s.strip()] if dependent_steps else []
-    prompt = f"""Failed step: {failed_step}
-Failure reason: {failure_reason}
-Dependent steps: {dependent_list}
-
-Analyze cascade risk. Return ONLY valid JSON:
-{{
-  "cascade_risk": [{{"step": "...", "dependency": "...", "impact": "blocked|degraded|unaffected", "severity": "low|medium|high"}}],
-  "safe_to_continue": false,
-  "steps_to_suspend": ["..."],
-  "steps_safe_to_run": ["..."],
-  "recommended_action": "suspend_all|skip_dependents|retry_failed|ask_owner",
-  "summary": "..."
-}}"""
-    try:
-        result = groq_chat([{"role": "user", "content": prompt}], model=GROQ_FAST, temperature=0.1)
-        parsed = json.loads(result)
-        parsed["ok"] = True
-        parsed["failed_step"] = failed_step
-        return parsed
-    except Exception as e:
-        return {"ok": False, "error": str(e)}
+    return {
+        "ok": True,
+        "failed_step": failed_step,
+        "failure_reason": failure_reason,
+        "dependent_steps": dependent_list,
+        "instruction": "Claude: analyze cascade risk for these dependent steps given the failed step and reason. Return cascade_risk (list of {step, dependency, impact: blocked|degraded|unaffected, severity}), safe_to_continue, steps_to_suspend[], steps_safe_to_run[], recommended_action (suspend_all|skip_dependents|retry_failed|ask_owner), summary."
+    }
 
 TOOLS["circuit_breaker"] = {"fn": t_circuit_breaker, "perm": "READ",
     "args": [
