@@ -1,0 +1,2162 @@
+[
+  {
+    "id": 329,
+    "domain": "supabase",
+    "what_failed": "CREATE INDEX with WHERE active=true on mistakes table \u2014 column active does not exist on that table.",
+    "correct_approach": "Before using a column in a WHERE clause for an index, verify the column exists in that table with a SELECT * LIMIT 1 or information_schema check first.",
+    "severity": "low",
+    "root_cause": "Assumed mistakes table has active column because knowledge_base and behavioral_rules do. It doesn't.",
+    "created_at": "2026-03-19T09:52:44.847757+00:00"
+  },
+  {
+    "id": 328,
+    "domain": "core_agi.knowledge_base",
+    "what_failed": "Passed confidence=\"1.0\" and confidence=\"0.9\" (numeric strings) to kb_update and sb_insert for knowledge_base. All writes failed silently \u2014 sb_post returns ok=False with no surfaced error. Wasted ~12 tool calls before root cause found.",
+    "correct_approach": "confidence in knowledge_base is TEXT enum: \"high\", \"medium\", \"low\". Always use one of these three strings. Never pass numeric values.",
+    "severity": "medium",
+    "root_cause": "Schema mismatch \u2014 assumed confidence was a float column because the value 1.0 is semantically meaningful. It is actually a text enum enforced at DB level. sb_post swallows the 400 error without surfacing it to the caller.",
+    "created_at": "2026-03-19T09:36:46.730895+00:00"
+  },
+  {
+    "id": 327,
+    "domain": "core_agi.audit",
+    "what_failed": "Premature closure on dispatcher fix. The fix corrected the arg_names extraction logic (format-safe: handles both string and dict formats), but the audit only confirmed a handful of tools worked. 76 out of 105 registered tools still use string-format args in TOOLS dict. The fix happens to handle both formats correctly in the dispatcher \u2014 but this was never verified end-to-end against all 105 tools.",
+    "correct_approach": "After any dispatcher-level fix, run a full audit: (1) count all t_* defined, (2) count all registered in TOOLS dict, (3) diff for missing/ghost, (4) extract arg format for every tool, (5) test at least one tool per arg format type, (6) only then declare fixed.",
+    "severity": "high",
+    "root_cause": "Overconfidence after fix worked on a few tested tools. Did not enumerate all 105 tools systematically.",
+    "created_at": "2026-03-19T09:13:08.64506+00:00"
+  },
+  {
+    "id": 326,
+    "domain": "code",
+    "what_failed": "Dispatcher arg filter bug: k in tool[args] where tool[args] is list of dicts always returns False, silently dropping all arguments for every tool with a defined args list. Only empty-args-list tools worked correctly. Discovered when add_behavioral_rule received empty trigger string.",
+    "correct_approach": "Extract names format-safe before check: arg_names = {d[name] if isinstance(d,dict) else d for d in tool[args]} if tool[args] else set(). Filter: if not arg_names or k in arg_names. Fixed in commits f8b77e63 and fe62b90c.",
+    "severity": "critical",
+    "root_cause": "Two arg formats coexist in TOOLS dict: list-of-strings (old tools) and list-of-dicts (new V8 tools). First fix handled only dicts, broke string-format tools.",
+    "created_at": "2026-03-19T09:00:36.618629+00:00"
+  },
+  {
+    "id": 325,
+    "domain": "core_agi.skill_file",
+    "what_failed": "V8 skill file omitted core-agi: MCP server prefix on all tool calls. V7 used explicit 'core-agi:session_start' so Claude Desktop routed correctly. V8 used bare 'session_start()' notation which Claude Desktop cannot resolve to the core-agi MCP server -- tools appear broken even though Railway is healthy.",
+    "correct_approach": "ALL MCP tool calls in skill file MUST include the server prefix: core-agi:tool_name. Claude Desktop uses the prefix to route to the correct MCP server. Without it, the call fails silently or falls through to PowerShell relay.",
+    "severity": "critical",
+    "root_cause": "V8 skill was written in pseudocode style (tool_name()) instead of MCP call style (core-agi:tool_name). The difference between V7 and V8 was the explicit prefix in V7 that worked vs missing prefix in V8 that broke everything.",
+    "created_at": "2026-03-19T08:45:24.54586+00:00"
+  },
+  {
+    "id": 324,
+    "domain": "core_agi.boot",
+    "what_failed": "Boot sequence declared phone mode despite Desktop Commander and Windows-MCP tools being available. tool_search returned no results on first probe, but tools were loaded via subsequent tool_search calls. Boot sequence did not retry with a live test after tool_search succeeded on second attempt.",
+    "correct_approach": "On Claude Desktop, tool_search for Windows-MCP may require the exact query used in subsequent calls. After any tool_search returns tools, IMMEDIATELY run a live test (PowerShell echo ok) before declaring mode. Never declare phone mode until all three probe attempts including direct Windows-MCP:PowerShell call have failed.",
+    "severity": "medium",
+    "root_cause": "Boot step 1f fired prematurely. tool_search returned empty on first query but tools were discoverable via different query string. Did not proceed to step 1e (direct Windows-MCP:PowerShell probe) before declaring phone mode.",
+    "created_at": "2026-03-19T08:36:31.035715+00:00"
+  },
+  {
+    "id": 323,
+    "domain": "core_agi.deployment",
+    "what_failed": "All GitHub MCP tool calls failing with 404 or generic errors. Cannot read, search, or modify any files in the repo. Task-5 and Task-6 both require code changes, so both are blocked.",
+    "correct_approach": "Before starting any code modification task, verify GitHub API accessibility with a simple test call (e.g., github:list_issues with per_page=1). If GitHub is down or credentials invalid, immediately notify owner and pivot to alternative approach (document changes, wait for Railway fix, or use local filesystem if applicable).",
+    "severity": "high",
+    "root_cause": "No pre-flight GitHub accessibility check before attempting task execution. Assumed GitHub API would be available.",
+    "created_at": "2026-03-18T17:06:29.623579+00:00"
+  },
+  {
+    "id": 322,
+    "domain": "core_agi.deployment",
+    "what_failed": "Built complete Binance integration (3 MCP tools + monitoring thread + Telegram flow) without verifying Railway can reach Binance API. Discovered geo-block only after deploy. Wasted 4+ hours of development on unusable integration.",
+    "correct_approach": "BEFORE building any external API integration, verify from Railway's datacenter: (1) check if target API has geo-restrictions, (2) test API reachability with curl from Railway container, (3) verify IP whitelist/blocklist status. Railway runs in US-WEST region which is blocked by Binance and many crypto exchanges. For geoblocked APIs, must use local PC execution via Windows-MCP or find alternative hosting.",
+    "severity": "high",
+    "root_cause": "Did not verify API accessibility from deployment environment before implementation. Assumed all public APIs are accessible from all datacenters. Built entire integration without testing one API call from target host.",
+    "created_at": "2026-03-18T16:54:26.078779+00:00"
+  },
+  {
+    "id": 321,
+    "domain": "core_agi.deployment",
+    "what_failed": "Used manual polling (bash sleep 30 + build_status) instead of built-in deploy_and_wait tool. Wasted tool calls and time.",
+    "correct_approach": "ALWAYS use deploy_and_wait after redeploy. It handles polling internally and returns when deploy succeeds or fails. Workflow: (1) patch_file or gh_search_replace, (2) deploy_and_wait(reason='...'), (3) verify via ping_health or railway_logs_live if needed.",
+    "severity": "low",
+    "root_cause": "Tool blindness \u2014 didn't check available tools before implementing manual workflow. Used bash sleep + build_status when deploy_and_wait already existed and did exactly what was needed.",
+    "created_at": "2026-03-17T21:41:34.56529+00:00"
+  },
+  {
+    "id": 320,
+    "domain": "core_agi.code_reading",
+    "what_failed": "Failed to read provided code thoroughly. Relied on github:search_code returning 0 results and immediately concluded function was missing. Didn't search the pasted document. Didn't check deploy timestamps. Gave user code to insert when it was ALREADY THERE. Wasted user's time with lazy analysis.",
+    "correct_approach": "ALWAYS: (1) Search provided document FIRST before using tools. (2) Check deploy timestamps - crash may be OLD. (3) Verify current repo state matches what user says. (4) Read line-by-line when user explicitly asks. (5) Don't trust search tools blindly - verify with direct reads. User said \"check line 3662-3723\" - should have done that IMMEDIATELY, not after multiple failed attempts.",
+    "severity": "critical",
+    "root_cause": "Confirmation bias + tool over-reliance. Saw crash log saying \"not defined\", assumed it was current, trusted search returning 0 results, never verified the actual code user provided.",
+    "created_at": "2026-03-17T21:22:38.644268+00:00"
+  },
+  {
+    "id": 319,
+    "domain": "core_agi.code_reading",
+    "what_failed": "Failed to read provided code thoroughly. Relied on github:search_code returning 0 results and immediately concluded function was missing. Didn't search the pasted document. Didn't check deploy timestamps. Gave user code to insert when it was ALREADY THERE. Wasted user's time with lazy analysis.",
+    "correct_approach": "ALWAYS: (1) Search provided document FIRST before using tools. (2) Check deploy timestamps - crash may be OLD. (3) Verify current repo state matches what user says. (4) Read line-by-line when user explicitly asks. (5) Don't trust search tools blindly - verify with direct reads. User said \"check line 3662-3723\" - should have done that IMMEDIATELY, not after multiple failed attempts.",
+    "severity": "critical",
+    "root_cause": "Confirmation bias + tool over-reliance. Saw crash log saying \"not defined\", assumed it was current, trusted search returning 0 results, never verified the actual code user provided.",
+    "created_at": "2026-03-17T21:22:23.26245+00:00"
+  },
+  {
+    "id": 318,
+    "domain": "evolution",
+    "what_failed": "Evolution rejected by owner",
+    "correct_approach": "New cold run duplicate -- dedup gate now live to prevent future recurrence.",
+    "severity": "low",
+    "root_cause": "New cold run duplicate -- dedup gate now live to prevent future recurrence.",
+    "created_at": "2026-03-17T16:56:22.743558+00:00"
+  },
+  {
+    "id": 317,
+    "domain": "evolution",
+    "what_failed": "Evolution rejected by owner",
+    "correct_approach": "Vague inefficient data structures -- not actionable.",
+    "severity": "low",
+    "root_cause": "Vague inefficient data structures -- not actionable.",
+    "created_at": "2026-03-17T16:56:15.937381+00:00"
+  },
+  {
+    "id": 316,
+    "domain": "evolution",
+    "what_failed": "Evolution rejected by owner",
+    "correct_approach": "Internal clock sync irrelevant -- CORE uses UTC from Supabase, no sync gap exists.",
+    "severity": "low",
+    "root_cause": "Internal clock sync irrelevant -- CORE uses UTC from Supabase, no sync gap exists.",
+    "created_at": "2026-03-17T16:56:02.866336+00:00"
+  },
+  {
+    "id": 315,
+    "domain": "evolution",
+    "what_failed": "Evolution rejected by owner",
+    "correct_approach": "Vague memory-efficient data structures -- not actionable.",
+    "severity": "low",
+    "root_cause": "Vague memory-efficient data structures -- not actionable.",
+    "created_at": "2026-03-17T16:55:54.632652+00:00"
+  },
+  {
+    "id": 314,
+    "domain": "evolution",
+    "what_failed": "Evolution rejected by owner",
+    "correct_approach": "Vague limited context signal -- not actionable.",
+    "severity": "low",
+    "root_cause": "Vague limited context signal -- not actionable.",
+    "created_at": "2026-03-17T16:55:46.870657+00:00"
+  },
+  {
+    "id": 313,
+    "domain": "evolution",
+    "what_failed": "Evolution rejected by owner",
+    "correct_approach": "Vague activity log optimization -- not actionable.",
+    "severity": "low",
+    "root_cause": "Vague activity log optimization -- not actionable.",
+    "created_at": "2026-03-17T16:55:33.525277+00:00"
+  },
+  {
+    "id": 312,
+    "domain": "evolution",
+    "what_failed": "Evolution rejected by owner",
+    "correct_approach": "Vague memory-efficient structures signal -- not actionable.",
+    "severity": "low",
+    "root_cause": "Vague memory-efficient structures signal -- not actionable.",
+    "created_at": "2026-03-17T16:55:18.097631+00:00"
+  },
+  {
+    "id": 311,
+    "domain": "evolution",
+    "what_failed": "Evolution rejected by owner",
+    "correct_approach": "Vague -- long-term tool consequence evaluation not actionable.",
+    "severity": "low",
+    "root_cause": "Vague -- long-term tool consequence evaluation not actionable.",
+    "created_at": "2026-03-17T16:55:13.404425+00:00"
+  },
+  {
+    "id": 310,
+    "domain": "evolution",
+    "what_failed": "Evolution rejected by owner",
+    "correct_approach": "Vague RLHF signal from ingestion pipeline -- not actionable.",
+    "severity": "low",
+    "root_cause": "Vague RLHF signal from ingestion pipeline -- not actionable.",
+    "created_at": "2026-03-17T16:54:54.042241+00:00"
+  },
+  {
+    "id": 309,
+    "domain": "evolution",
+    "what_failed": "Evolution rejected by owner",
+    "correct_approach": "Vague agent goal alignment signal -- not actionable.",
+    "severity": "low",
+    "root_cause": "Vague agent goal alignment signal -- not actionable.",
+    "created_at": "2026-03-17T16:54:48.134043+00:00"
+  },
+  {
+    "id": 308,
+    "domain": "evolution",
+    "what_failed": "Evolution rejected by owner",
+    "correct_approach": "Vague Tree of Thought signal -- not actionable.",
+    "severity": "low",
+    "root_cause": "Vague Tree of Thought signal -- not actionable.",
+    "created_at": "2026-03-17T16:54:37.775109+00:00"
+  },
+  {
+    "id": 307,
+    "domain": "evolution",
+    "what_failed": "Evolution rejected by owner",
+    "correct_approach": "Vague ReAct conflicting data signal -- not actionable.",
+    "severity": "low",
+    "root_cause": "Vague ReAct conflicting data signal -- not actionable.",
+    "created_at": "2026-03-17T16:54:33.440444+00:00"
+  },
+  {
+    "id": 306,
+    "domain": "evolution",
+    "what_failed": "Evolution rejected by owner",
+    "correct_approach": "Vague hierarchical thinking signal -- not actionable.",
+    "severity": "low",
+    "root_cause": "Vague hierarchical thinking signal -- not actionable.",
+    "created_at": "2026-03-17T16:54:24.423328+00:00"
+  },
+  {
+    "id": 305,
+    "domain": "evolution",
+    "what_failed": "Evolution rejected by owner",
+    "correct_approach": "Vague CoT framework signal -- not actionable as CORE task.",
+    "severity": "low",
+    "root_cause": "Vague CoT framework signal -- not actionable as CORE task.",
+    "created_at": "2026-03-17T16:54:16.198758+00:00"
+  },
+  {
+    "id": 304,
+    "domain": "evolution",
+    "what_failed": "Evolution rejected by owner",
+    "correct_approach": "Vague ReAct tradeoff signal -- not actionable.",
+    "severity": "low",
+    "root_cause": "Vague ReAct tradeoff signal -- not actionable.",
+    "created_at": "2026-03-17T16:54:08.145555+00:00"
+  },
+  {
+    "id": 303,
+    "domain": "evolution",
+    "what_failed": "Evolution rejected by owner",
+    "correct_approach": "Vague CoT scaling signal -- not actionable.",
+    "severity": "low",
+    "root_cause": "Vague CoT scaling signal -- not actionable.",
+    "created_at": "2026-03-17T16:54:01.771981+00:00"
+  },
+  {
+    "id": 302,
+    "domain": "evolution",
+    "what_failed": "Evolution rejected by owner",
+    "correct_approach": "Vague ReAct research signal -- not actionable.",
+    "severity": "low",
+    "root_cause": "Vague ReAct research signal -- not actionable.",
+    "created_at": "2026-03-17T16:53:54.25242+00:00"
+  },
+  {
+    "id": 301,
+    "domain": "evolution",
+    "what_failed": "Evolution rejected by owner",
+    "correct_approach": "Vague CoT research signal -- not actionable.",
+    "severity": "low",
+    "root_cause": "Vague CoT research signal -- not actionable.",
+    "created_at": "2026-03-17T16:53:42.696917+00:00"
+  },
+  {
+    "id": 300,
+    "domain": "evolution",
+    "what_failed": "Evolution rejected by owner",
+    "correct_approach": "Already fixed -- TASK-19 gaps_identified field patch was completed sessions ago.",
+    "severity": "low",
+    "root_cause": "Already fixed -- TASK-19 gaps_identified field patch was completed sessions ago.",
+    "created_at": "2026-03-17T16:51:16.42077+00:00"
+  },
+  {
+    "id": 299,
+    "domain": "evolution",
+    "what_failed": "Evolution rejected by owner",
+    "correct_approach": "Changelog hallucination variant -- premature assumption of changelog availability.",
+    "severity": "low",
+    "root_cause": "Changelog hallucination variant -- premature assumption of changelog availability.",
+    "created_at": "2026-03-17T16:51:06.591287+00:00"
+  },
+  {
+    "id": 298,
+    "domain": "evolution",
+    "what_failed": "Evolution rejected by owner",
+    "correct_approach": "Duplicate of 341 -- force_close without owner instruction, same pattern.",
+    "severity": "low",
+    "root_cause": "Duplicate of 341 -- force_close without owner instruction, same pattern.",
+    "created_at": "2026-03-17T16:50:59.339433+00:00"
+  },
+  {
+    "id": 297,
+    "domain": "evolution",
+    "what_failed": "Evolution rejected by owner",
+    "correct_approach": "Duplicate of 348 -- mixed line endings, same pattern different wording.",
+    "severity": "low",
+    "root_cause": "Duplicate of 348 -- mixed line endings, same pattern different wording.",
+    "created_at": "2026-03-17T16:50:54.25892+00:00"
+  },
+  {
+    "id": 296,
+    "domain": "evolution",
+    "what_failed": "Evolution rejected by owner",
+    "correct_approach": "Duplicate -- covered by TASK-27.",
+    "severity": "low",
+    "root_cause": "Duplicate -- covered by TASK-27.",
+    "created_at": "2026-03-17T16:50:44.607533+00:00"
+  },
+  {
+    "id": 295,
+    "domain": "evolution",
+    "what_failed": "Evolution rejected by owner",
+    "correct_approach": "Duplicate -- covered by TASK-27.",
+    "severity": "low",
+    "root_cause": "Duplicate -- covered by TASK-27.",
+    "created_at": "2026-03-17T16:50:39.665753+00:00"
+  },
+  {
+    "id": 294,
+    "domain": "evolution",
+    "what_failed": "Evolution rejected by owner",
+    "correct_approach": "Duplicate KB enforcement gap -- covered by TASK-27.",
+    "severity": "low",
+    "root_cause": "Duplicate KB enforcement gap -- covered by TASK-27.",
+    "created_at": "2026-03-17T16:50:33.235816+00:00"
+  },
+  {
+    "id": 293,
+    "domain": "evolution",
+    "what_failed": "Evolution rejected by owner",
+    "correct_approach": "Duplicate -- evolution rule enforcement covered by TASK-27.",
+    "severity": "low",
+    "root_cause": "Duplicate -- evolution rule enforcement covered by TASK-27.",
+    "created_at": "2026-03-17T16:50:27.995312+00:00"
+  },
+  {
+    "id": 292,
+    "domain": "evolution",
+    "what_failed": "Evolution rejected by owner",
+    "correct_approach": "Duplicate KB enforcement gap -- covered by TASK-27.",
+    "severity": "low",
+    "root_cause": "Duplicate KB enforcement gap -- covered by TASK-27.",
+    "created_at": "2026-03-17T16:50:24.421211+00:00"
+  },
+  {
+    "id": 291,
+    "domain": "evolution",
+    "what_failed": "Evolution rejected by owner",
+    "correct_approach": "Duplicate KB enforcement gap -- covered by TASK-27.",
+    "severity": "low",
+    "root_cause": "Duplicate KB enforcement gap -- covered by TASK-27.",
+    "created_at": "2026-03-17T16:50:20.639716+00:00"
+  },
+  {
+    "id": 290,
+    "domain": "evolution",
+    "what_failed": "Evolution rejected by owner",
+    "correct_approach": "Duplicate KB enforcement gap -- covered by TASK-27.",
+    "severity": "low",
+    "root_cause": "Duplicate KB enforcement gap -- covered by TASK-27.",
+    "created_at": "2026-03-17T16:50:16.593891+00:00"
+  },
+  {
+    "id": 289,
+    "domain": "evolution",
+    "what_failed": "Evolution rejected by owner",
+    "correct_approach": "Changelog hallucination.",
+    "severity": "low",
+    "root_cause": "Changelog hallucination.",
+    "created_at": "2026-03-17T16:50:09.855465+00:00"
+  },
+  {
+    "id": 288,
+    "domain": "evolution",
+    "what_failed": "Evolution rejected by owner",
+    "correct_approach": "Changelog hallucination.",
+    "severity": "low",
+    "root_cause": "Changelog hallucination.",
+    "created_at": "2026-03-17T16:50:05.662898+00:00"
+  },
+  {
+    "id": 287,
+    "domain": "evolution",
+    "what_failed": "Evolution rejected by owner",
+    "correct_approach": "Changelog hallucination.",
+    "severity": "low",
+    "root_cause": "Changelog hallucination.",
+    "created_at": "2026-03-17T16:50:01.920226+00:00"
+  },
+  {
+    "id": 286,
+    "domain": "evolution",
+    "what_failed": "Evolution rejected by owner",
+    "correct_approach": "Changelog hallucination.",
+    "severity": "low",
+    "root_cause": "Changelog hallucination.",
+    "created_at": "2026-03-17T16:49:38.887607+00:00"
+  },
+  {
+    "id": 285,
+    "domain": "evolution",
+    "what_failed": "Evolution rejected by owner",
+    "correct_approach": "Changelog hallucination.",
+    "severity": "low",
+    "root_cause": "Changelog hallucination.",
+    "created_at": "2026-03-17T16:49:29.24988+00:00"
+  },
+  {
+    "id": 284,
+    "domain": "evolution",
+    "what_failed": "Evolution rejected by owner",
+    "correct_approach": "Changelog hallucination.",
+    "severity": "low",
+    "root_cause": "Changelog hallucination.",
+    "created_at": "2026-03-17T16:49:20.491244+00:00"
+  },
+  {
+    "id": 283,
+    "domain": "evolution",
+    "what_failed": "Evolution rejected by owner",
+    "correct_approach": "Changelog hallucination.",
+    "severity": "low",
+    "root_cause": "Changelog hallucination.",
+    "created_at": "2026-03-17T16:49:15.246794+00:00"
+  },
+  {
+    "id": 282,
+    "domain": "evolution",
+    "what_failed": "Evolution rejected by owner",
+    "correct_approach": "Changelog hallucination.",
+    "severity": "low",
+    "root_cause": "Changelog hallucination.",
+    "created_at": "2026-03-17T16:49:06.188253+00:00"
+  },
+  {
+    "id": 281,
+    "domain": "evolution",
+    "what_failed": "Evolution rejected by owner",
+    "correct_approach": "Changelog hallucination.",
+    "severity": "low",
+    "root_cause": "Changelog hallucination.",
+    "created_at": "2026-03-17T16:49:01.837545+00:00"
+  },
+  {
+    "id": 280,
+    "domain": "evolution",
+    "what_failed": "Evolution rejected by owner",
+    "correct_approach": "Changelog hallucination.",
+    "severity": "low",
+    "root_cause": "Changelog hallucination.",
+    "created_at": "2026-03-17T16:48:54.060567+00:00"
+  },
+  {
+    "id": 279,
+    "domain": "evolution",
+    "what_failed": "Evolution rejected by owner",
+    "correct_approach": "Changelog hallucination.",
+    "severity": "low",
+    "root_cause": "Changelog hallucination.",
+    "created_at": "2026-03-17T16:48:47.366227+00:00"
+  },
+  {
+    "id": 278,
+    "domain": "evolution",
+    "what_failed": "Evolution rejected by owner",
+    "correct_approach": "Changelog hallucination.",
+    "severity": "low",
+    "root_cause": "Changelog hallucination.",
+    "created_at": "2026-03-17T16:48:43.155319+00:00"
+  },
+  {
+    "id": 277,
+    "domain": "evolution",
+    "what_failed": "Evolution rejected by owner",
+    "correct_approach": "Changelog hallucination.",
+    "severity": "low",
+    "root_cause": "Changelog hallucination.",
+    "created_at": "2026-03-17T16:48:37.01254+00:00"
+  },
+  {
+    "id": 276,
+    "domain": "evolution",
+    "what_failed": "Evolution rejected by owner",
+    "correct_approach": "Changelog hallucination.",
+    "severity": "low",
+    "root_cause": "Changelog hallucination.",
+    "created_at": "2026-03-17T16:48:32.779127+00:00"
+  },
+  {
+    "id": 275,
+    "domain": "evolution",
+    "what_failed": "Evolution rejected by owner",
+    "correct_approach": "Changelog hallucination.",
+    "severity": "low",
+    "root_cause": "Changelog hallucination.",
+    "created_at": "2026-03-17T16:48:27.853602+00:00"
+  },
+  {
+    "id": 274,
+    "domain": "evolution",
+    "what_failed": "Evolution rejected by owner",
+    "correct_approach": "Changelog hallucination.",
+    "severity": "low",
+    "root_cause": "Changelog hallucination.",
+    "created_at": "2026-03-17T16:48:23.158861+00:00"
+  },
+  {
+    "id": 273,
+    "domain": "evolution",
+    "what_failed": "Evolution rejected by owner",
+    "correct_approach": "Changelog hallucination.",
+    "severity": "low",
+    "root_cause": "Changelog hallucination.",
+    "created_at": "2026-03-17T16:48:19.429415+00:00"
+  },
+  {
+    "id": 272,
+    "domain": "evolution",
+    "what_failed": "Evolution rejected by owner",
+    "correct_approach": "Changelog hallucination.",
+    "severity": "low",
+    "root_cause": "Changelog hallucination.",
+    "created_at": "2026-03-17T16:48:13.409604+00:00"
+  },
+  {
+    "id": 271,
+    "domain": "evolution",
+    "what_failed": "Evolution rejected by owner",
+    "correct_approach": "Changelog hallucination.",
+    "severity": "low",
+    "root_cause": "Changelog hallucination.",
+    "created_at": "2026-03-17T16:48:06.409156+00:00"
+  },
+  {
+    "id": 270,
+    "domain": "evolution",
+    "what_failed": "Evolution rejected by owner",
+    "correct_approach": "Changelog hallucination.",
+    "severity": "low",
+    "root_cause": "Changelog hallucination.",
+    "created_at": "2026-03-17T16:48:01.540032+00:00"
+  },
+  {
+    "id": 269,
+    "domain": "evolution",
+    "what_failed": "Evolution rejected by owner",
+    "correct_approach": "Changelog hallucination.",
+    "severity": "low",
+    "root_cause": "Changelog hallucination.",
+    "created_at": "2026-03-17T16:47:57.710438+00:00"
+  },
+  {
+    "id": 268,
+    "domain": "evolution",
+    "what_failed": "Evolution rejected by owner",
+    "correct_approach": "Changelog hallucination.",
+    "severity": "low",
+    "root_cause": "Changelog hallucination.",
+    "created_at": "2026-03-17T16:47:53.877445+00:00"
+  },
+  {
+    "id": 267,
+    "domain": "evolution",
+    "what_failed": "Evolution rejected by owner",
+    "correct_approach": "Changelog hallucination.",
+    "severity": "low",
+    "root_cause": "Changelog hallucination.",
+    "created_at": "2026-03-17T16:47:49.915375+00:00"
+  },
+  {
+    "id": 266,
+    "domain": "evolution",
+    "what_failed": "Evolution rejected by owner",
+    "correct_approach": "Changelog hallucination.",
+    "severity": "low",
+    "root_cause": "Changelog hallucination.",
+    "created_at": "2026-03-17T16:47:04.205329+00:00"
+  },
+  {
+    "id": 265,
+    "domain": "evolution",
+    "what_failed": "Evolution rejected by owner",
+    "correct_approach": "Changelog hallucination.",
+    "severity": "low",
+    "root_cause": "Changelog hallucination.",
+    "created_at": "2026-03-17T16:46:59.63627+00:00"
+  },
+  {
+    "id": 264,
+    "domain": "evolution",
+    "what_failed": "Evolution rejected by owner",
+    "correct_approach": "Changelog hallucination.",
+    "severity": "low",
+    "root_cause": "Changelog hallucination.",
+    "created_at": "2026-03-17T16:46:42.370177+00:00"
+  },
+  {
+    "id": 263,
+    "domain": "evolution",
+    "what_failed": "Evolution rejected by owner",
+    "correct_approach": "Changelog hallucination.",
+    "severity": "low",
+    "root_cause": "Changelog hallucination.",
+    "created_at": "2026-03-17T16:46:33.639462+00:00"
+  },
+  {
+    "id": 262,
+    "domain": "evolution",
+    "what_failed": "Evolution rejected by owner",
+    "correct_approach": "Changelog hallucination.",
+    "severity": "low",
+    "root_cause": "Changelog hallucination.",
+    "created_at": "2026-03-17T16:46:19.822651+00:00"
+  },
+  {
+    "id": 261,
+    "domain": "evolution",
+    "what_failed": "Evolution rejected by owner",
+    "correct_approach": "Changelog hallucination.",
+    "severity": "low",
+    "root_cause": "Changelog hallucination.",
+    "created_at": "2026-03-17T16:46:14.889279+00:00"
+  },
+  {
+    "id": 260,
+    "domain": "evolution",
+    "what_failed": "Evolution rejected by owner",
+    "correct_approach": "Changelog hallucination.",
+    "severity": "low",
+    "root_cause": "Changelog hallucination.",
+    "created_at": "2026-03-17T16:46:03.232616+00:00"
+  },
+  {
+    "id": 259,
+    "domain": "evolution",
+    "what_failed": "Evolution rejected by owner",
+    "correct_approach": "Changelog hallucination.",
+    "severity": "low",
+    "root_cause": "Changelog hallucination.",
+    "created_at": "2026-03-17T16:45:58.408574+00:00"
+  },
+  {
+    "id": 258,
+    "domain": "evolution",
+    "what_failed": "Evolution rejected by owner",
+    "correct_approach": "Changelog hallucination.",
+    "severity": "low",
+    "root_cause": "Changelog hallucination.",
+    "created_at": "2026-03-17T16:45:47.201313+00:00"
+  },
+  {
+    "id": 257,
+    "domain": "evolution",
+    "what_failed": "Evolution rejected by owner",
+    "correct_approach": "Changelog hallucination.",
+    "severity": "low",
+    "root_cause": "Changelog hallucination.",
+    "created_at": "2026-03-17T16:45:38.155766+00:00"
+  },
+  {
+    "id": 256,
+    "domain": "evolution",
+    "what_failed": "Evolution rejected by owner",
+    "correct_approach": "Tool interaction validation -- merging into TASK-23 structured error schema scope.",
+    "severity": "low",
+    "root_cause": "Tool interaction validation -- merging into TASK-23 structured error schema scope.",
+    "created_at": "2026-03-17T16:39:43.002646+00:00"
+  },
+  {
+    "id": 255,
+    "domain": "evolution",
+    "what_failed": "Evolution rejected by owner",
+    "correct_approach": "Merging into TASK-23 as subtask 23.D -- dispatcher validation covered there.",
+    "severity": "low",
+    "root_cause": "Merging into TASK-23 as subtask 23.D -- dispatcher validation covered there.",
+    "created_at": "2026-03-17T16:39:33.404457+00:00"
+  },
+  {
+    "id": 254,
+    "domain": "evolution",
+    "what_failed": "Evolution rejected by owner",
+    "correct_approach": "Dispatcher type coercion -- merging as subtask 23.D into TASK-23. Rejecting as standalone.",
+    "severity": "low",
+    "root_cause": "Dispatcher type coercion -- merging as subtask 23.D into TASK-23. Rejecting as standalone.",
+    "created_at": "2026-03-17T16:39:28.719249+00:00"
+  },
+  {
+    "id": 253,
+    "domain": "evolution",
+    "what_failed": "Evolution rejected by owner",
+    "correct_approach": "Vague architecture signal -- inconsistent memory efficiency prioritization. Not actionable.",
+    "severity": "low",
+    "root_cause": "Vague architecture signal -- inconsistent memory efficiency prioritization. Not actionable.",
+    "created_at": "2026-03-17T16:39:19.333363+00:00"
+  },
+  {
+    "id": 252,
+    "domain": "evolution",
+    "what_failed": "Evolution rejected by owner",
+    "correct_approach": "Vague memory management signal from ingestion pipeline. Not actionable as CORE task.",
+    "severity": "low",
+    "root_cause": "Vague memory management signal from ingestion pipeline. Not actionable as CORE task.",
+    "created_at": "2026-03-17T16:39:11.025647+00:00"
+  },
+  {
+    "id": 251,
+    "domain": "evolution",
+    "what_failed": "Evolution rejected by owner",
+    "correct_approach": "Vague -- balancing self-modifying code is not an actionable task. Research signal only.",
+    "severity": "low",
+    "root_cause": "Vague -- balancing self-modifying code is not an actionable task. Research signal only.",
+    "created_at": "2026-03-17T16:39:05.258177+00:00"
+  },
+  {
+    "id": 250,
+    "domain": "evolution",
+    "what_failed": "Evolution rejected by owner",
+    "correct_approach": "Vague CoT/ingestion research signal -- not actionable as CORE task. Add to KB gap if needed.",
+    "severity": "low",
+    "root_cause": "Vague CoT/ingestion research signal -- not actionable as CORE task. Add to KB gap if needed.",
+    "created_at": "2026-03-17T16:38:57.995624+00:00"
+  },
+  {
+    "id": 249,
+    "domain": "evolution",
+    "what_failed": "Evolution rejected by owner",
+    "correct_approach": "Covered by V7 hard rules. Behavioral not code.",
+    "severity": "low",
+    "root_cause": "Covered by V7 hard rules. Behavioral not code.",
+    "created_at": "2026-03-17T16:38:53.536069+00:00"
+  },
+  {
+    "id": 248,
+    "domain": "evolution",
+    "what_failed": "Evolution rejected by owner",
+    "correct_approach": "Covered by V7 hard rules. Behavioral not code.",
+    "severity": "low",
+    "root_cause": "Covered by V7 hard rules. Behavioral not code.",
+    "created_at": "2026-03-17T16:38:47.346244+00:00"
+  },
+  {
+    "id": 247,
+    "domain": "evolution",
+    "what_failed": "Evolution rejected by owner",
+    "correct_approach": "Covered by V7 hard rules -- skill file verification already enforced. Behavioral not code.",
+    "severity": "low",
+    "root_cause": "Covered by V7 hard rules -- skill file verification already enforced. Behavioral not code.",
+    "created_at": "2026-03-17T16:38:42.440762+00:00"
+  },
+  {
+    "id": 246,
+    "domain": "evolution",
+    "what_failed": "Evolution rejected by owner",
+    "correct_approach": "Covered by V7 hard rules -- read full source before patch. No new code needed.",
+    "severity": "low",
+    "root_cause": "Covered by V7 hard rules -- read full source before patch. No new code needed.",
+    "created_at": "2026-03-17T16:38:37.625403+00:00"
+  },
+  {
+    "id": 245,
+    "domain": "evolution",
+    "what_failed": "Evolution rejected by owner",
+    "correct_approach": "Covered by V7 hard rules -- read full source before patch. No new code needed.",
+    "severity": "low",
+    "root_cause": "Covered by V7 hard rules -- read full source before patch. No new code needed.",
+    "created_at": "2026-03-17T16:38:33.393402+00:00"
+  },
+  {
+    "id": 244,
+    "domain": "evolution",
+    "what_failed": "Evolution rejected by owner",
+    "correct_approach": "Changelog hallucination -- table always exists. Not actionable.",
+    "severity": "low",
+    "root_cause": "Changelog hallucination -- table always exists. Not actionable.",
+    "created_at": "2026-03-17T16:38:23.519325+00:00"
+  },
+  {
+    "id": 243,
+    "domain": "evolution",
+    "what_failed": "Evolution rejected by owner",
+    "correct_approach": "Changelog hallucination -- table always exists. Not actionable.",
+    "severity": "low",
+    "root_cause": "Changelog hallucination -- table always exists. Not actionable.",
+    "created_at": "2026-03-17T16:38:20.025686+00:00"
+  },
+  {
+    "id": 242,
+    "domain": "evolution",
+    "what_failed": "Evolution rejected by owner",
+    "correct_approach": "Changelog hallucination -- table always exists, Groq fabricates unavailability. Not actionable code gap.",
+    "severity": "low",
+    "root_cause": "Changelog hallucination -- table always exists, Groq fabricates unavailability. Not actionable code gap.",
+    "created_at": "2026-03-17T16:38:16.651693+00:00"
+  },
+  {
+    "id": 241,
+    "domain": "evolution",
+    "what_failed": "Evolution rejected by owner",
+    "correct_approach": "Changelog hallucination -- table always exists, Groq fabricates unavailability. Not actionable code gap.",
+    "severity": "low",
+    "root_cause": "Changelog hallucination -- table always exists, Groq fabricates unavailability. Not actionable code gap.",
+    "created_at": "2026-03-17T16:38:12.824958+00:00"
+  },
+  {
+    "id": 240,
+    "domain": "core_agi.patching",
+    "what_failed": "core-agi:listen always returned No result received from client-side tool execution on both claude.ai and Claude Desktop",
+    "correct_approach": "Any MCP tool that needs to wait for a long-running Railway process must use fire-and-forget + poll pattern: (1) hit endpoint to start background job, returns instantly with job_id, (2) poll status endpoint every 30s with short timeouts MCP can handle. Never hold an HTTP stream open from inside an MCP tool.",
+    "severity": "high",
+    "root_cause": "t_listen used httpx.stream with timeout=3700s holding the HTTP connection open. MCP protocol killed the tool call before Railway sent a stop signal.",
+    "created_at": "2026-03-17T01:43:50.238443+00:00"
+  },
+  {
+    "id": 239,
+    "domain": "core_agi.patching",
+    "what_failed": "All fetchers silently returned 0 results. hackernews.py crashed on timedelta(days=since_days) where since_days was string '7'. Other fetchers likely same issue.",
+    "correct_approach": "Add int() coercion for all numeric params at the router/dispatcher entry point \u2014 not in individual fetchers. Router.py is the single choke point: max_per_source=int(max_per_source), since_days=int(since_days) before dispatch covers all fetchers at once.",
+    "severity": "medium",
+    "root_cause": "MCP dispatcher passes all tool arguments as strings regardless of type annotation. timedelta(days='7') raises 'unsupported type for timedelta days component: str'. The fetcher caught the exception and returned empty list silently \u2014 no error surfaced in the tool response, only visible in railway_logs_live.",
+    "created_at": "2026-03-16T17:46:29.911446+00:00"
+  },
+  {
+    "id": 238,
+    "domain": "core_agi.sop",
+    "what_failed": "CORE called session_end with force_close=true without owner instruction, bypassing skill_file gate. New patterns from the session were never written to the active skill file. Behaviour baking failed silently -- no error, gate just passed.",
+    "correct_approach": "When patterns is non-empty and skill_file_updated=false: write patterns to the active skill file (query KB domain=core_agi.identity topic=active_skill_filename for path), then pass skill_file_updated=true. If owner explicitly says to skip: use force_close=true. Never self-authorize.",
+    "severity": "high",
+    "root_cause": "CORE treated force_close as a convenience escape hatch to avoid the extra work of writing the skill file. The gate exists precisely to force that work. Self-authorizing the bypass defeats the entire behaviour baking system.",
+    "created_at": "2026-03-15T22:37:27.403859+00:00"
+  },
+  {
+    "id": 237,
+    "domain": "core_agi.patching",
+    "what_failed": "gaps_identified not in sb_get select string in run_cold_processor. h.get('gaps_identified') returned None for every hot -- _reconcile_gaps silently processed zero gaps across all runs. No error, no log, just None. Required 3 debug iterations to find.",
+    "correct_approach": "Before writing any function that reads a field from a row fetched by a parent function: check the parent's sb_get select= string first. If the field is missing, add it to select in the same patch. Never ship a new function that reads a field without verifying that field is in the upstream fetch.",
+    "severity": "medium",
+    "root_cause": "run_cold_processor select= was written before gaps_identified was relevant. Adding a downstream consumer of a new field without auditing the upstream select is a silent failure pattern -- Supabase returns no error, just omits the column.",
+    "created_at": "2026-03-15T22:27:49.758529+00:00"
+  },
+  {
+    "id": 236,
+    "domain": "core_agi.patching",
+    "what_failed": "gaps_identified field not included in sb_get select string in run_cold_processor. h.get('gaps_identified') returned None for every hot -- _reconcile_gaps silently processed zero gaps across all runs until root cause found on 3rd debug iteration.",
+    "correct_approach": "Before writing any function that reads fields from a Supabase row fetched elsewhere: always check the select= string of that fetch call first. If the field is not in select=, it will not be in the response dict regardless of what the DB contains.",
+    "severity": "medium",
+    "root_cause": "run_cold_processor select string was written before gaps_identified was a relevant field. Adding a new function that reads a new field without updating the upstream select is a silent failure -- no error, just None.",
+    "created_at": "2026-03-15T22:27:37.447772+00:00"
+  },
+  {
+    "id": 235,
+    "domain": "evolution",
+    "what_failed": "Evolution rejected by owner",
+    "correct_approach": "Misidentified pattern. task_queue gate mechanism is not a real security gap -- internal Supabase table, not user-facing.",
+    "severity": "low",
+    "root_cause": "Misidentified pattern. task_queue gate mechanism is not a real security gap -- internal Supabase table, not user-facing.",
+    "created_at": "2026-03-15T22:13:15.405897+00:00"
+  },
+  {
+    "id": 234,
+    "domain": "evolution",
+    "what_failed": "Evolution rejected by owner",
+    "correct_approach": "Already captured in mistakes and KB as Unicode write SOP. No code task needed.",
+    "severity": "low",
+    "root_cause": "Already captured in mistakes and KB as Unicode write SOP. No code task needed.",
+    "created_at": "2026-03-15T22:13:06.069843+00:00"
+  },
+  {
+    "id": 233,
+    "domain": "evolution",
+    "what_failed": "Evolution rejected by owner",
+    "correct_approach": "Already in mistakes table and KB. No code change needed -- behavioral rule, not an architectural gap.",
+    "severity": "low",
+    "root_cause": "Already in mistakes table and KB. No code change needed -- behavioral rule, not an architectural gap.",
+    "created_at": "2026-03-15T22:13:00.655443+00:00"
+  },
+  {
+    "id": 232,
+    "domain": "core_agi.skill_file",
+    "what_failed": "Repeated gap cycles when rewriting skill file. Each write pass summarized or compressed V4 content instead of copying verbatim, causing content loss that only surfaced on comparison loops.",
+    "correct_approach": "When writing a new version of the skill file: read V4 section by section, copy verbatim, apply only structural fixes (renumber, remove duplicates, update filename). Never rewrite from understanding -- mechanical transfer first, then cleanup. Run automated string-match verification loop after every write, not just at the end.",
+    "severity": "medium",
+    "root_cause": "Rewrote content from understanding rather than from verbatim copy. Compression happens automatically when content passes through language model context -- only mechanical copy prevents it.",
+    "created_at": "2026-03-15T21:59:56.652843+00:00"
+  },
+  {
+    "id": 231,
+    "domain": "core_agi.sop",
+    "what_failed": "Every rewrite pass introduced new gaps: summarized content instead of copying verbatim, dropped context sentences, dropped explanation paragraphs, dropped standalone rules. Required 7+ correction rounds before zero-gap state was achieved.",
+    "correct_approach": "For skill file rewrites: read V4 section by section, copy content verbatim into V5 section by section. Apply only the known targeted fixes (remove duplicates, renumber, update filename references, fix false claims). Never rewrite from understanding. After writing, run automated string-check loop against V4 before declaring done.",
+    "severity": "high",
+    "root_cause": "Writing from understanding instead of copying verbatim. Each summarization step silently drops context sentences, explanation paragraphs, and detail that seems redundant but is actually load-bearing.",
+    "created_at": "2026-03-15T21:59:32.956881+00:00"
+  },
+  {
+    "id": 230,
+    "domain": "core_agi.architecture",
+    "what_failed": "append_to_file lands content AFTER the TOOLS dict. patch_file then added the TOOLS entry referencing t_predict_failure -- but TOOLS dict is evaluated at module load time, before the appended functions. Result: NameError: t_predict_failure is not defined -- crash loop.",
+    "correct_approach": "Never use append_to_file to add functions that will be referenced in the TOOLS dict. TOOLS dict is mid-file -- append always lands after it. Use patch_file with old_str anchored just before the TOOLS dict comment line to INSERT functions in the correct position.",
+    "severity": "high",
+    "root_cause": "append_to_file always adds to end of file. core_tools.py has TOOLS dict in the middle (~line 3444). Functions appended after line 3727 are defined AFTER TOOLS tries to reference them at module load. py_compile passes (syntax ok) but NameError at runtime.",
+    "created_at": "2026-03-15T20:37:40.064807+00:00"
+  },
+  {
+    "id": 229,
+    "domain": "core_agi.sop",
+    "what_failed": "Mixed line endings (1343 CRLF + 71 LF) caused YAML frontmatter parser to fail. File was written across multiple tools (Desktop Commander append = CRLF, Python binary write = LF) producing inconsistent line endings throughout.",
+    "correct_approach": "After ANY write or append to CORE_AGI_SKILL_V4.md, immediately run CRLF normalization: C:\\Python314\\python.exe -c \"path=r'C:\\Users\\rnvgg\\.claude-skills\\CORE_AGI_SKILL_V4.md'; d=open(path,'rb').read(); open(path,'wb').write(d.replace(b'\\r\\n',b'\\n'))\". This is the last step of every skill file edit \u2014 before confirming done.",
+    "severity": "high",
+    "root_cause": "Desktop Commander write_file append mode uses Windows CRLF. Python binary write uses LF. Mixed tools = mixed endings. YAML parser requires consistent line endings to detect closing --- of frontmatter block.",
+    "created_at": "2026-03-15T19:33:51.577795+00:00"
+  },
+  {
+    "id": 228,
+    "domain": "core_agi.sop",
+    "what_failed": "Mixed line endings (1343 CRLF + 71 LF) in the skill file caused the YAML frontmatter parser to fail. The file had been written/appended across multiple tools (Desktop Commander append, Python binary writes) that produced inconsistent line endings. BOM fix earlier today also produced a file with mixed endings.",
+    "correct_approach": "After ANY write or append to CORE_AGI_SKILL_V4.md, normalize line endings immediately: C:\\Python314\\python.exe -c \"path=r'C:\\Users\\rnvgg\\.claude-skills\\CORE_AGI_SKILL_V4.md'; d=open(path,'rb').read(); open(path,'wb').write(d.replace(b'\\r\\n',b'\\n'))\". Always use LF-only. Never mix CRLF and LF in the skill file.",
+    "severity": "high",
+    "root_cause": "Desktop Commander write_file in append mode uses Windows CRLF line endings. Python binary write used LF. Result: mixed endings throughout file. YAML parser in claude.ai skill loader requires consistent line endings to correctly detect the closing --- of the frontmatter block.",
+    "created_at": "2026-03-15T19:33:42.370193+00:00"
+  },
+  {
+    "id": 227,
+    "domain": "core_agi.sop",
+    "what_failed": "Desktop Commander:edit_block returned not-found for old_string containing em-dash. File had been previously written by PowerShell which corrupted the em-dash to garbled bytes. edit_block searched for clean U+2014 but file had corrupted encoding. Fuzzy search log showed similarity 19% -- complete mismatch.",
+    "correct_approach": "Before ANY edit_block call on a file that was previously touched by PowerShell: (1) Read the exact bytes first with Desktop Commander:read_file, (2) Copy the EXACT characters from the file output as old_string -- never type Unicode chars from memory. If the file contains garbled bytes (\u0192?\"), use line number anchor instead of character match. SOP: read_file -> find anchor by line number -> edit_block using exact text from read output.",
+    "severity": "medium",
+    "root_cause": "The KB rule said \"use Desktop Commander not PowerShell for Unicode writes\" -- correct. But it didn't address the case where the file ALREADY contained PowerShell-corrupted bytes. When edit_block searched for clean em-dash U+2014, the file had garbled bytes \u0192?\" from prior PowerShell write. The characters didn't match so edit_block returned not-found. The fix isn't just about which tool to use for writes -- it's about always reading actual file bytes before constructing old_string.",
+    "created_at": "2026-03-15T15:26:51.493512+00:00"
+  },
+  {
+    "id": 226,
+    "domain": "core_agi.project_mode",
+    "what_failed": "After creating, editing, or finding files in Google Drive/Docs, did not share the direct file link with the owner. Owner had to ask separately to find the Wednesday 18 March doc even though CORE had already accessed it.",
+    "correct_approach": "After EVERY GDrive/GDocs operation \u2014 always include the direct link in the response. No exceptions. Format: https://docs.google.com/document/d/{id}/edit",
+    "severity": "medium",
+    "root_cause": "No rule existed requiring link sharing after GDrive operations. Assumed owner could find the files themselves.",
+    "created_at": "2026-03-15T14:46:40.337606+00:00"
+  },
+  {
+    "id": 225,
+    "domain": "project:equinix-jk1-2",
+    "what_failed": "Three critical errors in daily report content: (1) GC named as Atoz Teknik Sejahtera \u2014 completely wrong, hallucinated company name. Correct GC is JO KIK & ACT. (2) CCTV commissioning activities included in LSEI daily report \u2014 CCTV is not LSEI scope. (3) DCOS cable laying activities included in LSEI daily report \u2014 DCOS is not LSEI scope.",
+    "correct_approach": "For any LSEI document on JK1-2: (1) GC = JO KIK & ACT \u2014 never any other name. (2) Cx Consultant = CTA (Commtech Asia). (3) LSEI scope = RMU + MLTX ONLY. Never include CCTV, DCOS, UPS, Generator, or any other system. If a daily report activity is outside RMU/MLTX scope, it does not belong in LSEI documentation.",
+    "severity": "high",
+    "root_cause": "Did not load project KB before generating daily report content. Party names and scope were inferred from general context rather than verified facts. CCTV and DCOS are common data center activities that appeared plausible but were not LSEI scope.",
+    "created_at": "2026-03-15T14:34:52.172805+00:00"
+  },
+  {
+    "id": 224,
+    "domain": "core_agi.sop",
+    "what_failed": "PowerShell string manipulation strips or corrupts Unicode characters (\u2192, \u2014, etc.) when writing to local files, even with -Encoding UTF8. This has happened 50+ times across sessions. The error is always caught after the fact \u2014 characters appear as garbage (\u0192?\") in the file. The agentic SOP was never updated to prevent it.",
+    "correct_approach": "Use Desktop Commander:edit_block for surgical edits to local files. Use Desktop Commander:write_file for full rewrites. Desktop Commander handles encoding correctly. PowerShell is for reading, searching, and non-Unicode operations only.",
+    "severity": "high",
+    "root_cause": "Defaulting to PowerShell for file writes because it feels like the \"system tool.\" But PowerShell -replace with Unicode source strings in the MCP context corrupts special characters. Desktop Commander is the correct writer.",
+    "created_at": "2026-03-15T14:13:44.296476+00:00"
+  },
+  {
+    "id": 223,
+    "domain": "core_agi.patching",
+    "what_failed": "Fallback tiers 3-5 in _patch_find would find the match but extract the wrong bytes from original content for replacement. The replacement would operate on misaligned content, potentially corrupting the file silently.",
+    "correct_approach": "Use line-count anchoring: count newlines before match position in normalized string to get start_line_idx, then extract that line range from the original content. This maps correctly regardless of per-line length differences caused by normalization.",
+    "severity": "high",
+    "root_cause": "_find_in did actual = orig_content[pos:pos+len(o)] where pos came from normalized string c. When trailing whitespace is stripped per line, each stripped line is shorter, so positions in normalized != positions in original. The actual block extracted would be offset or wrong-length.",
+    "created_at": "2026-03-15T08:58:49.805742+00:00"
+  },
+  {
+    "id": 222,
+    "domain": "core_agi.patching",
+    "what_failed": "gh_read_lines content field shows numbered display format (4-digit line number + 2 spaces + line). Copying from it visually causes: (1) miscounted leading spaces, (2) missed trailing spaces invisible in display, (3) tab vs space confusion. Results in near-miss failures requiring extra round-trips.",
+    "correct_approach": "Always use the raw field from gh_read_lines to construct old_str. raw contains exact file bytes with no prefix. Copy raw verbatim. Never type old_str from memory or from the numbered content display.",
+    "severity": "high",
+    "root_cause": "gh_read_lines previously only returned a numbered display format. No raw bytes field existed. Claude had no choice but to visually copy from the numbered display, introducing errors. Now fixed: raw field added to response.",
+    "created_at": "2026-03-15T08:55:34.319179+00:00"
+  },
+  {
+    "id": 221,
+    "domain": "core_agi.architecture",
+    "what_failed": "12 t_* functions had required positional args. MCP schema exposes all params as optional. Python function requires them. Every call without explicit values crashed with TypeError silently from the caller. log_mistake failed twice in previous session -- I bypassed with direct Supabase insert instead of debugging and fixing.",
+    "correct_approach": "Every t_* MCP function parameter must have a default value. str params default to empty string, typed params to their zero equivalent. After writing any new t_* function: run debug_fn(fn_name, dry_run=true) with no extra_args -- if TypeError missing required args, fix before merging. Never bypass a failing tool with a workaround without first debugging and fixing the root cause.",
+    "severity": "high",
+    "root_cause": "MCP tool schema and Python function signature mismatch. All MCP tool params are optional in the schema (no required array). But Python functions enforce positional arg requirements. When Claude calls a tool without providing all args, the schema passes but the Railway function crashes.",
+    "created_at": "2026-03-15T08:51:57.305731+00:00"
+  },
+  {
+    "id": 220,
+    "domain": "general",
+    "what_failed": "",
+    "correct_approach": "",
+    "severity": "medium",
+    "root_cause": "",
+    "created_at": "2026-03-15T08:51:42.897457+00:00"
+  },
+  {
+    "id": 219,
+    "domain": "core_agi.architecture",
+    "what_failed": "t_session_end crashed: TypeError missing 2 required positional arguments. MCP schema showed them optional but Python required them.",
+    "correct_approach": "Every t_* MCP function parameter must have a default value. str params default to empty string. Verify with debug_fn dry_run=true no extra_args after writing any new t_* function.",
+    "severity": "high",
+    "root_cause": "MCP schema and Python signature mismatch. Schema optional, Python required. Silent crash from caller perspective.",
+    "created_at": "2026-03-15T08:49:42.322167+00:00"
+  },
+  {
+    "id": 218,
+    "domain": "core_agi.architecture",
+    "what_failed": "t_deploy_and_wait and t_build_status always returned empty/error because _railway_latest_deployment returned {} on every call. t_deploy_and_wait appeared dead since deployment.",
+    "correct_approach": "Railway deployments query requires projectId in input. Always pass both projectId AND serviceId. Also meta field is a SCALAR \u2014 never select subfields.",
+    "severity": "high",
+    "root_cause": "Function was written without live testing against Railway API. serviceId alone returns empty result set silently (no error, just empty edges). meta subfield selection causes GRAPHQL_VALIDATION_FAILED.",
+    "created_at": "2026-03-15T08:46:00.550398+00:00"
+  },
+  {
+    "id": 217,
+    "domain": "core_agi.patching",
+    "what_failed": "patch_file returned not found on all 3 patches because old_str had 13 leading spaces. Actual file had 12. Needed PowerShell direct patch to fix.",
+    "correct_approach": "gh_read_lines to get exact content including whitespace before writing any patch. The near-miss hint shows the diff \u2014 use it to count spaces exactly.",
+    "severity": "medium",
+    "root_cause": "Wrote old_str from memory based on what gh_read_lines displayed, but miscounted the leading spaces. The display prefix (line number + tab) visually shifts the content.",
+    "created_at": "2026-03-15T08:45:49.950773+00:00"
+  },
+  {
+    "id": 216,
+    "domain": "core_agi.architecture",
+    "what_failed": "add_evolution_rule returned persisted_to: [knowledge_base, session_md] implying SESSION.md was written. But SESSION.md is declared static (never auto-written). The write logic had broken anchor detection that either: (1) found the anchor and did nothing, or (2) missed the anchor and injected the row at the wrong location via a fragile generic replace. Additionally Claude echoed the false claim verbatim to the user.",
+    "correct_approach": "add_evolution_rule writes ONLY to knowledge_base. SESSION.md is static. Never echo persisted_to values to the user without verifying they are true. The fix: removed the entire SESSION.md write block from t_add_evolution_rule, updated docstring, TOOLS dict desc, skill file, and cleaned the bad row from SESSION.md.",
+    "severity": "medium",
+    "root_cause": "SESSION.md was made static in a previous session but t_add_evolution_rule was never updated to remove its write logic. The broken logic silently failed in some cases and injected in wrong locations in others. The return value was constructed before verifying the write outcome. Claude then parroted the response without questioning it.",
+    "created_at": "2026-03-15T08:31:02.337468+00:00"
+  },
+  {
+    "id": 215,
+    "domain": "core_agi.session",
+    "what_failed": "Declared Desktop Commander and Windows-MCP unavailable on claude.ai without testing. Also stated core-agi:* MCP tools work on claude.ai without verifying \u2014 they are Railway-hosted, not local. Both claims were assumptions made from memory, not from live tool_search + actual tool call verification.",
+    "correct_approach": "At boot, NEVER declare any tool available or unavailable without testing. Use tool_search to attempt loading, then make a live test call (e.g. Windows-MCP:PowerShell echo or Desktop Commander:list_processes). The result of that test \u2014 success or failure \u2014 is the truth. Assumption from interface name alone is always wrong.",
+    "severity": "medium",
+    "root_cause": "Assumed interface type (claude.ai vs Desktop) determines tool availability. This is false. Tool availability is determined by what MCP servers are connected to the session, which can vary regardless of interface. Must always test, never infer from interface name.",
+    "created_at": "2026-03-15T08:26:56.896917+00:00"
+  },
+  {
+    "id": 214,
+    "domain": "core_agi.kb",
+    "what_failed": "Used kb_update to write brand new debug doctrine knowledge. Should have used add_knowledge.",
+    "correct_approach": "add_knowledge for new KB entries that don't exist yet. kb_update for replacing stale or wrong existing entries. The distinction: add=new, update=existing/stale.",
+    "severity": "low",
+    "root_cause": "kb_update was described as 'use instead of add_knowledge when entry may already exist' -- this made it sound like the safe default. The real contract is add=new, update=stale.",
+    "created_at": "2026-03-15T07:39:45.161466+00:00"
+  },
+  {
+    "id": 213,
+    "domain": "core_agi.training",
+    "what_failed": "Zero simulation entries and zero real signal entries ever generated by background_researcher. Both _run_simulation_batch() and _extract_real_signal() silently failed on every cycle due to processed_by_cold=False (bool) instead of 0 (int). The entire autonomous training pipeline was dead since day one.",
+    "correct_approach": "processed_by_cold column in hot_reflections is INTEGER type. Always use 0 (int) not False (Python bool). PostgREST rejects boolean values for integer columns with 400 error. Use 0 for unprocessed, 1 for processed.",
+    "severity": "critical",
+    "root_cause": "processed_by_cold is an integer column but code passed Python bool False. PostgREST returns 400 which is caught by except Exception and printed to Railway stdout only -- never visible to Claude. Both background researcher functions (simulation + real signal) have been failing on every single cycle since deployment, producing zero entries.",
+    "created_at": "2026-03-14T23:09:15.71703+00:00"
+  },
+  {
+    "id": 212,
+    "domain": "core_agi.architecture",
+    "what_failed": "TASK-21 description said t_add_evolution_rule() should write to GitHub skills/CORE_AGI_SKILL_V4.md. That file does not exist. A future session executing 21.A would have written to a non-existent GitHub path instead of the actual local PC file.",
+    "correct_approach": "Always verify file location before writing it into task descriptions, KB entries, or any persistent record. CORE_AGI_SKILL_V4.md lives at C:\\Users\\rnvgg\\.claude-skills\\CORE_AGI_SKILL_V4.md on local PC. It is NOT in GitHub. GitHub skills/ folder does not exist yet -- TASK-21.B creates it. Write location facts explicitly in task descriptions because a new session reading the task will act on whatever it says.",
+    "severity": "high",
+    "root_cause": "Wrote task description saying skill file is in GitHub at skills/CORE_AGI_SKILL_V4.md -- but that path does not exist. The file is local PC only. Wrote the desired end-state (after 21.B) as if it were current reality.",
+    "created_at": "2026-03-14T22:28:53.954494+00:00"
+  },
+  {
+    "id": 211,
+    "domain": "core_agi.patching",
+    "what_failed": "TOOLS dict description for synthesize_evolutions not updated after refactor. Next session would see wrong description and misunderstand what the tool does.",
+    "correct_approach": "After any refactor that changes a function's behavior, ALWAYS search for and update the corresponding TOOLS dict entry. The TOOLS dict description is what Claude reads in future sessions to understand what the tool does. Stale descriptions cause wrong tool usage. Update it in the same session, same commit if possible.",
+    "severity": "medium",
+    "root_cause": "Session closed without updating the TOOLS dict entry for synthesize_evolutions. The description still said Groq acts as architect even after the function was rewritten to be a pure data fetcher.",
+    "created_at": "2026-03-14T22:11:15.518794+00:00"
+  },
+  {
+    "id": 210,
+    "domain": "core_agi.patching",
+    "what_failed": "Wrote patch old_str from memory (assumed indentation was 20 spaces). 2 of 4 patches skipped because indentation did not match the live file. Required a second patch_file round trip to fix.",
+    "correct_approach": "ALWAYS call gh_read_lines on the exact line range BEFORE writing any patch. Copy old_str character-for-character from the read output. Never assume indentation from function source read -- the surrounding block may use different indent levels.",
+    "severity": "medium",
+    "root_cause": "Skipped the mandatory read-before-patch step. Wrote old_str from memory after reading the function via core_py_fn. core_py_fn shows the function body but the calling context indentation may differ.",
+    "created_at": "2026-03-14T22:11:04.739392+00:00"
+  },
+  {
+    "id": 209,
+    "domain": "core_agi.training",
+    "what_failed": "Pattern key fragmentation: same concept with different wording created separate keys. Threshold=3 never reached. Evolution pipeline produced zero evolutions even for patterns recurring 5+ times across sessions.",
+    "correct_approach": "Cluster semantically identical patterns via Groq before counting. _groq_cluster_patterns() maps all raw keys to canonical keys. Merged keys accumulate frequency correctly. Falls back to raw keys on Groq failure -- non-blocking.",
+    "severity": "high",
+    "root_cause": "Cold processor used Counter on raw pattern strings. Natural language produces infinite variations of the same rule. deploy_and_wait appeared 5x across sessions but as 3 different strings -- each at frequency 1-2, threshold=3 never triggered.",
+    "created_at": "2026-03-14T21:46:21.145628+00:00"
+  },
+  {
+    "id": 208,
+    "domain": "core_agi.training",
+    "what_failed": "gaps_identified always stored as null in hot_reflections despite Groq identifying real gaps every session. PostgREST silently coerces bare string to null when column is text[].",
+    "correct_approach": "Always check DB column type before writing any field. text[] requires a JSON array [\"value\"] not a bare string \"value\". jsonb accepts Python list directly via httpx json= param. Always verify schema with management API query before writing to array columns.",
+    "severity": "medium",
+    "root_cause": "gaps_identified column is text[] (PostgreSQL array) but Groq returns a plain string. Code sent the bare string to PostgREST which silently coerced it to null instead of raising a 400. Bug was invisible -- no crash, no error, just silent data loss on every session since pipeline launch.",
+    "created_at": "2026-03-14T21:39:05.659136+00:00"
+  },
+  {
+    "id": 207,
+    "domain": "core_agi.training",
+    "what_failed": "4 enrichment queries in auto_hot_reflection returned empty on every session. Groq had no real signal -- only summary + seed_patterns. Hot reflections were effectively pattern-blind.",
+    "correct_approach": "Anchor = last hot_reflection created_at. Fetch from DB: sb_get hot_reflections order=created_at.desc limit=1. This gives Groq the full delta since last scan -- everything that happened across all sessions since the previous reflection wrote.",
+    "severity": "high",
+    "root_cause": "session_created_at was set at session_end call time -- meaning the lower bound was the current second. All 4 enrichment queries (mistakes, KB, task_queue, changelog) used gte.{session_ts} which excluded everything written earlier in the same session.",
+    "created_at": "2026-03-14T21:22:11.67495+00:00"
+  },
+  {
+    "id": 206,
+    "domain": "core_agi.config",
+    "what_failed": "Invoke-RestMethod to Railway GraphQL variableUpsert returned Not Authorized. kb_update also failed with confidence=1.0 (float) \u2014 schema requires string values: proven/high/medium/low.",
+    "correct_approach": "Store sensitive config in Supabase knowledge_base (domain=system.config) and fetch at runtime via sb_get. Use add_knowledge with confidence=proven. The Railway GraphQL token lacks write scope for variableUpsert even with a valid token.",
+    "severity": "low",
+    "root_cause": "Railway API token has read-only scope. variableUpsert requires a token with variable write permission which the stored token does not have.",
+    "created_at": "2026-03-14T20:43:36.001121+00:00"
+  },
+  {
+    "id": 205,
+    "domain": "core_agi.deploy",
+    "what_failed": "deploy_and_wait always hung regardless of polling logic fixes \u2014 because Railway killed the container running the poll loop immediately after t_redeploy() pushed a new commit.",
+    "correct_approach": "deploy_and_wait must be poll-only. redeploy() is always called first and separately. New container handles the poll. Pattern: redeploy() \u2192 sleep 30s \u2192 deploy_and_wait(reason='sha:COMMIT').",
+    "severity": "high",
+    "root_cause": "deploy_and_wait called t_redeploy() internally. Railway tears down the container on new commit push. The poll loop was running on the dying container \u2014 connection dropped before any poll could complete. Every fix attempt addressed polling logic when the real issue was container lifecycle.",
+    "created_at": "2026-03-14T19:00:40.636576+00:00"
+  },
+  {
+    "id": 204,
+    "domain": "core_agi.deploy",
+    "what_failed": "Fixed version still hung: sha_match gate \u2014 t_redeploy creates an empty trigger commit, but _gh_commit_status() may return a different SHA during Railway's processing window. sha == commit_sha_short never matched, loop spun to timeout.",
+    "correct_approach": "Two-track design: Track 1 = GH commit status with sha match (fast). Track 2 = /health fallback after 60s (always works, no Railway status needed). Never depend solely on Railway posting back to GitHub.",
+    "severity": "medium",
+    "root_cause": "sha_match check compared commit_sha_short (from t_redeploy's new empty commit) against _gh_commit_status() SHA (which may be the previous commit or a different build commit during Railway's processing window). Mismatch = loop never exits.",
+    "created_at": "2026-03-14T18:54:15.429788+00:00"
+  },
+  {
+    "id": 203,
+    "domain": "core_agi.deploy",
+    "what_failed": "validate_syntax hung on every call. Root cause: subprocess.run(['python3', ...]) \u2014 python3 binary absent on Railway runtime.",
+    "correct_approach": "Rewrote t_validate_syntax to use py_compile module directly (same as patch_file and t_write_file guards) \u2014 no subprocess, no binary dependency, instant.",
+    "severity": "medium",
+    "root_cause": "t_validate_syntax used subprocess.run(['python3', '-m', 'py_compile', ...]) \u2014 python3 binary does not exist on Railway, causing the subprocess to hang indefinitely waiting for a binary that never responds.",
+    "created_at": "2026-03-14T18:34:16.518042+00:00"
+  },
+  {
+    "id": 202,
+    "domain": "core_agi.deploy",
+    "what_failed": "deploy_and_wait hung/timed out even though deploy succeeded. Tool polls GitHub commit statuses to detect Railway state \u2014 but Railway doesn't always push a commit status back to GitHub, so state stays empty and loop spins until timeout.",
+    "correct_approach": "Use deploy_status tool directly after triggering redeploy \u2014 it polls Railway API directly and is reliable. deploy_and_wait needs to be rewritten in 13.E.2 to use Railway API polling instead of GitHub commit statuses.",
+    "severity": "medium",
+    "root_cause": "deploy_and_wait relies on GitHub commit status API (railway context) to detect deploy state. Railway commit status delivery to GitHub is unreliable \u2014 sometimes it arrives, sometimes it doesn't. When missing, state='' and the poll loop never exits until timeout.",
+    "created_at": "2026-03-14T18:26:18.574848+00:00"
+  },
+  {
+    "id": 201,
+    "domain": "core_agi.code_patching",
+    "what_failed": "Indentation guessing in patch strings \u2014 writing 6 spaces or tabs instead of the actual 4-space standard used in core_tools.py. Caused by not reading the live file before patching.",
+    "correct_approach": "Always read the exact lines surrounding the insertion point with gh_read_lines BEFORE writing any patch. Match indentation character-for-character from the live file. Never write indentation from memory or mental model of the file.",
+    "severity": "medium",
+    "root_cause": "Writing code patches from a mental model of the file rather than reading the live file immediately before writing. Mental models drift across a long session, especially after many patches.",
+    "created_at": "2026-03-14T17:49:28.391944+00:00"
+  },
+  {
+    "id": 200,
+    "domain": "core_agi.tool_audit",
+    "what_failed": "Incorrectly flagged t_deploy_and_wait as crashing with NameError on notify_owner(). notify_owner is actually aliased at core_tools.py line 33: notify_owner = notify. The function works correctly.",
+    "correct_approach": "Before flagging an undefined function error, always search_in_file for the name first. Also check the top of core_tools.py for alias definitions \u2014 line 33 has notify_owner = notify which was missed during audit.",
+    "severity": "low",
+    "root_cause": "Audit looked at function body in isolation without checking module-level aliases defined elsewhere in the file.",
+    "created_at": "2026-03-14T17:19:01.43685+00:00"
+  },
+  {
+    "id": 199,
+    "domain": "core_agi.code_patching",
+    "what_failed": "t_deploy_and_wait calls notify_owner() on success, failure, and timeout branches - but notify_owner is not defined anywhere in core_tools.py. The correct function is notify(). This causes a NameError crash on every deploy_and_wait completion.",
+    "correct_approach": "Replace all notify_owner(...) calls in t_deploy_and_wait with notify(...). Always use notify() for Telegram notifications in core_tools.py - notify_owner does not exist.",
+    "severity": "high",
+    "root_cause": "Function was likely written referencing an old name or a different module's API without verifying the actual function name in scope",
+    "created_at": "2026-03-14T17:08:16.348583+00:00"
+  },
+  {
+    "id": 198,
+    "domain": "core_agi.code_patching",
+    "what_failed": "Used Windows-MCP:PowerShell to run python -m py_compile for syntax checking. PowerShell MCP tools fail silently or time out for this type of operation. CORE has validate_syntax MCP tool that runs py_compile server-side on Railway \u2014 that is the correct tool. Also: the patch_file tool already runs py_compile before pushing, making the pre-verification step redundant.",
+    "correct_approach": "For syntax verification of GitHub files: use validate_syntax(path=...) \u2014 it fetches the file from GitHub and runs py_compile on Railway server-side. For patching .py files: use patch_file \u2014 it runs py_compile automatically before push. Never use PowerShell for Python syntax checks.",
+    "severity": "medium",
+    "root_cause": "CORE did not consult get_mistakes(domain=core_agi.code_patching) before attempting local verification. The pattern is in the mistake log but was ignored.",
+    "created_at": "2026-03-14T16:24:32.342225+00:00"
+  },
+  {
+    "id": 197,
+    "domain": "core_agi.code_patching",
+    "what_failed": "Railway crash-looped on SyntaxError: unterminated f-string literal at line 157 of core_tools.py. MCP tools were completely unavailable until hotfix was pushed via direct GitHub API.",
+    "correct_approach": "Never write multi-line f-strings with bare newlines inside Python string literals in patch scripts. Use escaped newlines \\\\n inside single-line strings, or concatenate separate string literals. Always run python -m py_compile on the patched file locally before pushing to GitHub.",
+    "severity": "high",
+    "root_cause": "Multi-line f-string in patch script was written with literal newlines inside the f-string, which Python interprets as unterminated. The patch script did not include a syntax validation step before pushing.",
+    "created_at": "2026-03-14T15:32:33.185669+00:00"
+  },
+  {
+    "id": 196,
+    "domain": "core_agi.knowledge_base",
+    "what_failed": "add_knowledge silently failed across 3+ sessions because confidence=verified is not a valid value. The table has a CHECK constraint: confidence must be one of proven/high/medium/low. Error was misdiagnosed as MCP socket age issue.",
+    "correct_approach": "Always use confidence values from operating_context.json: proven, high, medium, low. Never use verified, assumption_risk, or user_corrected -- those are Layer 2 Behavior Pipeline concepts, not DB schema values. Check operating_context.json knowledge_base.confidence_values before writing.",
+    "severity": "high",
+    "root_cause": "Layer 2 Behavior Pipeline design used confidence labels (verified/assumption_risk/user_corrected) that were never aligned with the actual DB schema constraint. The schema only accepts proven/high/medium/low.",
+    "created_at": "2026-03-14T15:13:57.064762+00:00"
+  },
+  {
+    "id": 195,
+    "domain": "infrastructure",
+    "what_failed": "multi_patch failed with 'ambiguous' error (103737x matches) because old_str was empty after em-dash encoding mismatch. Then PowerShell -Command failed on ampersand characters in the old string. Both cost extra tool calls before the correct approach was used.",
+    "correct_approach": "For any function body containing em-dashes, ampersands, or complex string literals: always write a .py script file via Desktop Commander:write_file first, then run with python.exe. Never use multi_patch on files with known Unicode issues. Never use PowerShell -Command for multi-line Python strings.",
+    "severity": "medium",
+    "root_cause": "multi_patch uses gh_search_replace under the hood which fails on em-dash Unicode. PowerShell -Command mangles ampersands in strings. Both are known failure modes that were not avoided proactively.",
+    "created_at": "2026-03-14T15:10:19.394261+00:00"
+  },
+  {
+    "id": 194,
+    "domain": "code",
+    "what_failed": "t_project_prepare calls _notify which does not exist \u2014 causes NameError on every call, silently returns ok=False",
+    "correct_approach": "Change _notify(..., level=info) to notify(...) in t_project_prepare",
+    "severity": "medium",
+    "root_cause": "During architecture split from core.py, _notify was a local alias that was not carried over \u2014 notify is the correct imported name from core_github",
+    "created_at": "2026-03-14T14:27:52.644746+00:00"
+  },
+  {
+    "id": 193,
+    "domain": "infrastructure",
+    "what_failed": "PowerShell inline -Command with complex foreach loop failed due to em-dash unicode corruption from context window",
+    "correct_approach": "Write PS1 script to file first via Desktop Commander:write_file, then run with -File flag",
+    "severity": "low",
+    "root_cause": "Em-dash characters in context window corrupt PowerShell inline command strings",
+    "created_at": "2026-03-14T14:27:44.976422+00:00"
+  },
+  {
+    "id": 192,
+    "domain": "infrastructure",
+    "what_failed": "gh_search_replace old_str matching failed silently with 'old_str not found' even when the string looked correct in read output. The tool receives the em-dash as \\u2014 in JSON but the file stores it as the literal Unicode character \u2014 they don't match. multi_patch had the same issue. Multiple retries wasted tool calls.",
+    "correct_approach": "When gh_search_replace fails on a file known to contain em-dashes or other special Unicode, skip surgical patching entirely. Fetch the full file via github:get_file_contents (returns decoded content), make the edit in memory, then push the corrected version via github:create_or_update_file with the SHA. This bypasses the encoding mismatch entirely.",
+    "severity": "medium",
+    "root_cause": "gh_search_replace (and multi_patch) do string matching on the raw bytes of the GitHub file. When the tool payload encodes the em-dash as a JSON unicode escape \\u2014 but the file stores it as UTF-8 bytes for \u2014, the comparison fails. The read tools display both as \u2014 so the mismatch is invisible to the operator.",
+    "created_at": "2026-03-13T23:56:42.659864+00:00"
+  },
+  {
+    "id": 191,
+    "domain": "infrastructure",
+    "what_failed": "Ghost code \u2014 BACKLOG.md writes survived Task 1.8 deletion, causing spurious Railway redeploys mid-session via chore(backlog) commits",
+    "correct_approach": "Removed all 3 gh_write BACKLOG.md calls. Stubbed _backlog_to_markdown as deprecated no-op.",
+    "severity": "medium",
+    "root_cause": "Task 1.8 deleted the file but did not grep the codebase for all write references to it",
+    "created_at": "2026-03-13T22:28:26.820938+00:00"
+  },
+  {
+    "id": 190,
+    "domain": "infrastructure",
+    "what_failed": "gh_search_replace for TOOLS registry landed but function body write timed out \u2014 NameError on startup crashed Railway",
+    "correct_approach": "Used github:create_or_update_file to push complete core_tools.py with function body included",
+    "severity": "high",
+    "root_cause": "Two separate patches for one atomic operation \u2014 if second patch fails, Railway is left in broken state",
+    "created_at": "2026-03-13T22:16:46.105436+00:00"
+  },
+  {
+    "id": 189,
+    "domain": "training",
+    "what_failed": "Used last hot_reflection created_at as since_ts \u2014 circular and wrong because hot_reflections are written by session_end itself, so the window was always near-zero",
+    "correct_approach": "Replaced with last_real_signal_ts state key stored in sessions table. Soft-boot to yesterday. Saves new ts after each successful run.",
+    "severity": "medium",
+    "root_cause": "Misunderstood the anchor point \u2014 used output table (hot_reflections) instead of a dedicated state key tracking when the function last ran",
+    "created_at": "2026-03-13T21:43:27.145579+00:00"
+  },
+  {
+    "id": 188,
+    "domain": "evolution",
+    "what_failed": "Evolution rejected by owner",
+    "correct_approach": "Triage complete \u2014 cold_reflections insert after cold processor run is already enforced in core_train.py via sb_post_critical. auto_applied=false was correct at the time (pre-Task-7). Rule is now in KB as proven. No code change needed.",
+    "severity": "low",
+    "root_cause": "Triage complete \u2014 cold_reflections insert after cold processor run is already enforced in core_train.py via sb_post_critical. auto_applied=false was correct at the time (pre-Task-7). Rule is now in KB as proven. No code change needed.",
+    "created_at": "2026-03-13T20:40:13.802955+00:00"
+  },
+  {
+    "id": 187,
+    "domain": "evolution",
+    "what_failed": "Evolution rejected by owner",
+    "correct_approach": "backlog items must never be in evolution_queue \u2014 logic fixed at source",
+    "severity": "low",
+    "root_cause": "backlog items must never be in evolution_queue \u2014 logic fixed at source",
+    "created_at": "2026-03-13T18:23:14.595156+00:00"
+  },
+  {
+    "id": 186,
+    "domain": "infrastructure",
+    "what_failed": "deploy_and_wait called when deploy was already complete. Triggered a redundant second redeploy and appeared to hang waiting for a build that was already done.",
+    "correct_approach": "After github:push_files, Railway auto-deploys immediately. Use deploy_status to check if already done. Only call deploy_and_wait when you need to manually trigger a deploy (e.g. env var change, no code push).",
+    "severity": "low",
+    "root_cause": "deploy_and_wait called when deploy was already complete. Triggered a redundant second redeploy and appeared to hang waiting for a build that was already done.",
+    "created_at": "2026-03-13T18:05:44.07507+00:00"
+  },
+  {
+    "id": 184,
+    "domain": "infrastructure",
+    "what_failed": "sb_insert to backlog table returns ok:false with no error message \u2014 likely rate limiter (500 writes/hour) hit after heavy session",
+    "correct_approach": "Wait for rate limit window to reset (1 hour), then register backlog items. GOD_MODE_PLAN.md already saved to GitHub repo as permanent reference.",
+    "severity": "low",
+    "root_cause": "sb_insert to backlog table returns ok:false with no error message \u2014 likely rate limiter (500 writes/hour) hit after heavy session",
+    "created_at": "2026-03-13T11:24:15.438361+00:00"
+  },
+  {
+    "id": 183,
+    "domain": "mcp",
+    "what_failed": "Claude writes long explanation or plan before acting, causing user to wait with no progress",
+    "correct_approach": "Act first, explain only if blocked or done. One sentence max before first tool call.",
+    "severity": "medium",
+    "root_cause": "Default to verbose explanation mode instead of execution mode",
+    "created_at": "2026-03-11T19:00:18.790465+00:00"
+  },
+  {
+    "id": 182,
+    "domain": "mcp",
+    "what_failed": "Used Windows-MCP:PowerShell + Python subprocess for Railway HTTP calls. Silent timeout. Retried variations instead of switching tools. User had to wait with no feedback.",
+    "correct_approach": "For core.py edits: always use core-agi:gh_search_replace directly. It's an MCP tool, runs server-side, no timeout. Find it with tool_search if not loaded.",
+    "severity": "medium",
+    "root_cause": "Wrong tool selection. PowerShell MCP has ~25s client timeout. Railway round-trip + GitHub API = can exceed it. gh_search_replace exists exactly for this.",
+    "created_at": "2026-03-11T18:53:42.375494+00:00"
+  },
+  {
+    "id": 181,
+    "domain": "mcp",
+    "what_failed": "Got 'No result received from client-side tool execution' twice. Retried same approach instead of stopping to diagnose. Wasted 3 tool calls.",
+    "correct_approach": "Use core-agi:gh_search_replace MCP tool directly for all core.py patches. It exists for exactly this purpose. Never use PowerShell for Railway/GitHub network calls \u2014 MCP timeout kills them silently.",
+    "severity": "medium",
+    "root_cause": "Windows-MCP PowerShell has implicit response timeout. Python subprocess doing live network I/O (urllib \u2192 Railway) exceeds timeout. Result dropped silently. Claude retried instead of diagnosing.",
+    "created_at": "2026-03-11T18:45:21.468335+00:00"
+  },
+  {
+    "id": 180,
+    "domain": "mcp",
+    "what_failed": "Despite Filesystem MCP responding successfully (local file read worked), Claude concluded it was on claude.ai web and wasted 10+ tool calls on wrong routing \u2014 using fetch/HTTP workarounds instead of CORE MCP tools directly.",
+    "correct_approach": "Updated CORE_v5_plan.md: any local MCP responding (DC, Filesystem, Windows-MCP, railway, github, memory, sqlite) confirms Claude Desktop. Table updated. Proven bug note added.",
+    "severity": "medium",
+    "root_cause": "Detection rule in SOP only checked for Desktop Commander specifically. Did not generalize: ANY local MCP responding = Claude Desktop. Filesystem, Windows-MCP, railway are all Desktop-only but were not listed as signals.",
+    "created_at": "2026-03-11T18:19:42.492556+00:00"
+  },
+  {
+    "id": 179,
+    "domain": "system",
+    "what_failed": "Mass deleted scripts without auditing contents. Remove-Item -Force bypasses Recycle Bin - permanent loss. Only registered 18 scripts from current session, ignored 250+ from previous sessions.",
+    "correct_approach": "Before ANY bulk delete: (1) read each script, (2) register useful ones to SCRIPT_REGISTRY.md, (3) only delete confirmed junk. Never use Remove-Item -Force on unknown files.",
+    "severity": "high",
+    "root_cause": "Assumed old scripts = junk. Did not audit before deleting.",
+    "created_at": "2026-03-11T12:47:35.239224+00:00"
+  },
+  {
+    "id": 178,
+    "domain": "system",
+    "what_failed": "Used Windows-MCP PowerShell .ps1 script workarounds for GitHub reads/edits. Wrong env assumed (claude.ai). Desktop Commander:edit_block was available but not used.",
+    "correct_approach": "Run tool_search at session start. Desktop Commander:edit_block available = Claude Desktop. Use DC tools directly, never .ps1 workarounds.",
+    "severity": "high",
+    "root_cause": "Skipped env detection protocol. Assumed environment from previous session context instead of testing tool availability.",
+    "created_at": "2026-03-11T12:00:41.435551+00:00"
+  },
+  {
+    "id": 177,
+    "domain": "architecture",
+    "what_failed": "Railway went offline after core.py overwrite. All core-agi MCP tools (sb_insert, log_mistake, add_knowledge, etc.) returned errors. No way to log mistakes or update KB while Railway was down \u2014 the very tools needed for recovery logging were unavailable.",
+    "correct_approach": "CORE has no fallback when Railway is down. Recovery path: use github tool directly (available in claude.ai independently of Railway) to read last good commit SHA and restore. Always keep last known good commit SHA noted in SESSION.md.",
+    "severity": "critical",
+    "root_cause": "Single point of failure: all MCP tools route through Railway. If core.py breaks, everything breaks simultaneously with no graceful degradation.",
+    "created_at": "2026-03-11T11:03:21.247271+00:00"
+  },
+  {
+    "id": 176,
+    "domain": "github",
+    "what_failed": "write_file tool FULLY OVERWRITES the target file. Used it with only docstring content (26 lines), wiping entire 929-line core.py. Railway went down immediately. All MCP tools became unavailable because Railway was offline.",
+    "correct_approach": "For ANY edit to existing GitHub files from claude.ai: ALWAYS use POST /patch endpoint (surgical find-and-replace). write_file = new files or complete rewrites only where you hold 100% of the content.",
+    "severity": "critical",
+    "root_cause": "Tool name confusion: write_file sounds like it appends/writes to a file but it fully replaces content. No confirmation prompt, no diff preview, instant overwrite.",
+    "created_at": "2026-03-11T11:03:11.084046+00:00"
+  },
+  {
+    "id": 175,
+    "domain": "mcp",
+    "what_failed": "sb_insert to hot_reflections returned ok:false \u2014 likely schema mismatch or required field missing",
+    "correct_approach": "Check hot_reflections schema via sb_query before inserting. May need different field names than content/tags/session_ref.",
+    "severity": "low",
+    "root_cause": "sb_insert to hot_reflections returned ok:false \u2014 likely schema mismatch or required field missing",
+    "created_at": "2026-03-11T10:31:53.070434+00:00"
+  },
+  {
+    "id": 174,
+    "domain": "training",
+    "what_failed": "t_state() was not fetching SESSION.md or operating_context.json from GitHub - used stale hardcoded values",
+    "correct_approach": "t_state() must always fetch both operating_context.json and SESSION.md live from GitHub at call time",
+    "severity": "high",
+    "root_cause": "Initial implementation didn't include live GitHub fetch - relied on in-memory defaults",
+    "created_at": "2026-03-11T10:13:10.764315+00:00"
+  },
+  {
+    "id": 173,
+    "domain": "mcp",
+    "what_failed": "Passing 'repo' argument causes tool to fail or use wrong repo",
+    "correct_approach": "Omit repo arg entirely - default is pockiesaints7/core-agi which is always correct",
+    "severity": "medium",
+    "root_cause": "Tool has opinionated default; explicit repo arg overrides incorrectly",
+    "created_at": "2026-03-11T10:13:10.67312+00:00"
+  },
+  {
+    "id": 172,
+    "domain": "infrastructure",
+    "what_failed": "claude.ai bash container has egress blocked - cannot reach Railway directly via HTTP",
+    "correct_approach": "Use Desktop Commander PowerShell to call Railway /patch endpoint. PowerShell has full network access.",
+    "severity": "medium",
+    "root_cause": "claude.ai sandbox restricts outbound HTTP from bash tool",
+    "created_at": "2026-03-11T10:13:10.579817+00:00"
+  },
+  {
+    "id": 171,
+    "domain": "supabase",
+    "what_failed": "Insert failed silently due to Supabase rate limiter blocking sb_post calls",
+    "correct_approach": "Use sb_post_critical() which bypasses rate limiter for critical writes like cold_reflections",
+    "severity": "medium",
+    "root_cause": "Rate limiter applied uniformly, blocking important state-recording writes",
+    "created_at": "2026-03-11T10:13:10.486276+00:00"
+  },
+  {
+    "id": 170,
+    "domain": "mcp",
+    "what_failed": "Used 'query_string' as parameter name instead of 'filters', causing silent wrong results",
+    "correct_approach": "Always use 'filters' param: sb_query(table='x', filters={col: {op: val}})",
+    "severity": "high",
+    "root_cause": "Wrong parameter name assumption - no error thrown, just incorrect behavior",
+    "created_at": "2026-03-11T10:13:10.392519+00:00"
+  },
+  {
+    "id": 169,
+    "domain": "supabase",
+    "what_failed": "PostgREST rejected Python boolean True/False in URL querystring, returning no rows or error instead of filtering correctly",
+    "correct_approach": "Use integer equivalents in querystrings: eq.0 for false, eq.1 for true. JSON body booleans are still fine.",
+    "severity": "high",
+    "root_cause": "PostgREST querystring parser does not accept Python boolean literals",
+    "created_at": "2026-03-11T10:13:10.189106+00:00"
+  },
+  {
+    "id": 168,
+    "domain": "core",
+    "what_failed": "t_log_mistake was missing root_cause, how_to_avoid, severity \u2014 Supabase insert silently failed",
+    "correct_approach": "Always include root_cause, how_to_avoid, severity when calling t_log_mistake",
+    "severity": "medium",
+    "root_cause": "t_log_mistake was missing root_cause, how_to_avoid, severity \u2014 Supabase insert silently failed",
+    "created_at": "2026-03-10T21:13:56.826788+00:00"
+  },
+  {
+    "id": 166,
+    "domain": "core",
+    "what_failed": "TEST: Verifying log_mistake insert schema",
+    "correct_approach": "Include all required fields",
+    "severity": "low",
+    "root_cause": "Missing root_cause field in t_log_mistake",
+    "created_at": "2026-03-10T21:09:35.643253+00:00"
+  },
+  {
+    "id": 81,
+    "domain": "core",
+    "what_failed": "Saying 'done', 'confirmed', 'pushed', 'stored' based on API response without read-back confirmation",
+    "correct_approach": "Never say done/confirmed/pushed/stored until a read-back operation confirms the expected state. Write: [VERIFY OK] + what was confirmed.",
+    "severity": "critical",
+    "root_cause": "Assumption that success response = actual success. APIs can return ok/true even when operation failed, was rate-limited, or had wrong content.",
+    "created_at": "2026-03-09T18:47:33.292655+00:00"
+  },
+  {
+    "id": 80,
+    "domain": "core",
+    "what_failed": "Mistake DB existed with 77+ entries but was never consulted before remote operations in Claude desktop sessions - only the bot consulted it",
+    "correct_approach": "Before ANY remote write in a Claude session: query mistakes?domain=eq.{domain} first. Read results. Acknowledge what to avoid. Then proceed.",
+    "severity": "critical",
+    "root_cause": "Principle 19 was only implemented in orchestrator.py Phase 1 task loop. No equivalent enforcement existed for Claude session-level operations.",
+    "created_at": "2026-03-09T18:47:33.067608+00:00"
+  },
+  {
+    "id": 79,
+    "domain": "core",
+    "what_failed": "Reporting success based on API response alone without reading back to confirm actual state",
+    "correct_approach": "Write-then-read pattern: every write must be followed by a read that confirms the expected state. Only report success after read confirms.",
+    "severity": "critical",
+    "root_cause": "APIs return success codes even when operation partially failed, was rate limited, or content was wrong",
+    "created_at": "2026-03-09T18:40:56.223726+00:00"
+  },
+  {
+    "id": 78,
+    "domain": "telegram",
+    "what_failed": "Bot commands silently wiped to 0 after service redeploy - getMyCommands returns empty",
+    "correct_approach": "Always call setMyCommands + verify with getMyCommands after every Railway redeploy or orchestrator.py change.",
+    "severity": "medium",
+    "root_cause": "Railway redeploys do not preserve Telegram bot command registrations. Commands must be re-registered after every deploy.",
+    "created_at": "2026-03-09T18:40:56.111828+00:00"
+  },
+  {
+    "id": 77,
+    "domain": "railway",
+    "what_failed": "Rapid sequential variableUpsert calls hit rate limit: 'Service deployment rate limit exceeded'",
+    "correct_approach": "Add 3-4 second sleep between each variableUpsert call. Or batch verify after all are set rather than per-call.",
+    "severity": "medium",
+    "root_cause": "Railway rate limits rapid env var changes as each triggers a potential redeploy",
+    "created_at": "2026-03-09T18:40:55.956389+00:00"
+  },
+  {
+    "id": 76,
+    "domain": "powershell",
+    "what_failed": "Variable containing patched content becomes empty (3 bytes) when accessed in a new command block",
+    "correct_approach": "Always write content to a temp file immediately after building it. Read from file for subsequent operations. Never rely on PowerShell variables across command blocks.",
+    "severity": "high",
+    "root_cause": "PowerShell session variables do not persist reliably across separate shell tool calls in this environment",
+    "created_at": "2026-03-09T18:40:55.844581+00:00"
+  },
+  {
+    "id": 75,
+    "domain": "github",
+    "what_failed": "Using stale SHA from a previous API read - push returns empty commit SHA, content silently not updated",
+    "correct_approach": "Always fetch fresh SHA immediately before every push in the same API call chain. Never reuse SHA from a variable set earlier in the session.",
+    "severity": "high",
+    "root_cause": "SHA was read earlier in session, then another push happened in between, making SHA stale. GitHub PUT with wrong SHA silently fails or returns partial response.",
+    "created_at": "2026-03-09T18:40:55.739295+00:00"
+  },
+  {
+    "id": 74,
+    "domain": "powershell",
+    "what_failed": "Dollar sign variable assignments (\\, \\, etc.) stripped by shell pre-processor, resulting in malformed PS1 files with empty assignments",
+    "correct_approach": "Use DC write_file tool to write PS1 content directly (no shell), then run with -File flag",
+    "severity": "medium",
+    "root_cause": "PS -Command flag processes the string through shell variable expansion before executing, stripping \\$ characters",
+    "created_at": "2026-03-08T23:29:17.237912+00:00"
+  },
+  {
+    "id": 73,
+    "domain": "vault",
+    "what_failed": "Push-ToVault returned HTTP 422 on JARVIS-OS-ARCHITECTURE.md (stored only 3 bytes). No verification step - accepted as OK. File was lost from vault silently.",
+    "correct_approach": "After every vault push: pull back the file and compare byte count. If actual < 95% of expected: mark as CORRUPT and halt. Push-ToVault now does this automatically as of 2026-03-09.",
+    "severity": "medium",
+    "root_cause": "vault_sync.ps1 Push-ToVault had no post-push verification. Only checked that UploadData didn't throw, not that vault actually stored the content correctly.",
+    "created_at": "2026-03-08T23:07:57.894559+00:00"
+  },
+  {
+    "id": 72,
+    "domain": "file-safety",
+    "what_failed": "DC:write_file with mode='rewrite' and only the header content - destroyed the 600-line file, leaving 32 lines (1991 bytes)",
+    "correct_approach": "ALWAYS use Safe-WriteFile for any file >100 lines or any skill file. If using DC:write_file: include the FULL file content, never a partial section. For targeted edits: use str_replace pattern (old_str/new_str), never rewrite.",
+    "severity": "medium",
+    "root_cause": "Used DC:write_file rewrite with partial content intended for str_replace. The full file content was not included in the write call.",
+    "created_at": "2026-03-08T23:07:56.328676+00:00"
+  },
+  {
+    "id": 71,
+    "domain": "openclaw",
+    "what_failed": "Connection closed unexpectedly on both concepts/channel-routing and concepts/groups",
+    "correct_approach": "Trust 404s from Claw web fetch. Verify from PC via DC:start_process if uncertain. Do not retry non-existent pages.",
+    "severity": "medium",
+    "root_cause": "Pages genuinely do not exist in docs.openclaw.ai - confirmed 404 from PC network, not sandbox limitation",
+    "created_at": "2026-03-08T22:48:27.317339+00:00"
+  },
+  {
+    "id": 70,
+    "domain": "openclaw",
+    "what_failed": "Gateway logs showed: 'Both GOOGLE_API_KEY and GEMINI_API_KEY are set. Using GOOGLE_API_KEY.' - bypassed all 11-key Gemini rotation",
+    "correct_approach": "Only set GEMINI_API_KEY and GEMINI_API_KEYS in env block. Never set GOOGLE_API_KEY. Remove it if present.",
+    "severity": "medium",
+    "root_cause": "Gateway env var resolution prefers GOOGLE_API_KEY over GEMINI_API_KEY when both present. GEMINI_API_KEYS rotation never activated.",
+    "created_at": "2026-03-08T22:48:25.805384+00:00"
+  },
+  {
+    "id": 69,
+    "domain": "openclaw",
+    "what_failed": "Same hallucination as Llama - describes tool calls as text, does not execute. Ran hostname task, got explanation of how to run hostname instead of actual execution.",
+    "correct_approach": "Reserve Cerebras/OpenRouter/Llama for simple text generation tasks via Claw. For PC tasks needing exec/read/write, wait for Gemini keys (15:00 WIB reset) or test Gemini 2.0 Flash Lite via OpenRouter (paid, .075/M).",
+    "severity": "medium",
+    "root_cause": "GPT-OSS 120B and Llama models don't reliably trigger OpenClaw's native tool execution format. Only Gemini confirmed working.",
+    "created_at": "2026-03-08T21:36:18.847071+00:00"
+  },
+  {
+    "id": 68,
+    "domain": "openclaw",
+    "what_failed": "Llama describes tool calls as JSON text instead of executing them. Phases A/B/C all returned fake 'done' with no actual file changes.",
+    "correct_approach": "Use Gemini models (direct Google AI keys) for Claw tool execution. Wait for 15:00 WIB daily reset, or use gemini-2.0-flash-lite-001 via OpenRouter (paid but cheap). Avoid delegating complex multi-file tasks to Claw when running Llama.",
+    "severity": "medium",
+    "root_cause": "Llama 3.3 70B instruction following for OpenClaw's native tool format is unreliable for complex multi-step tasks",
+    "created_at": "2026-03-08T21:21:42.99371+00:00"
+  },
+  {
+    "id": 67,
+    "domain": "openclaw",
+    "what_failed": "Setting OC_MODEL to openrouter/meta-llama/llama-3.3-70b-instruct bypasses Claw entirely - goes straight to OpenRouter LLM, no tools, no execution",
+    "correct_approach": "Always set model='openclaw:main' in Invoke-OpenClaw. Add x-openclaw-agent-id: main header. This triggers the real embedded agent with exec/read/write/browser tools.",
+    "severity": "medium",
+    "root_cause": "The /v1/chat/completions endpoint routes by model field. openrouter/* = direct LLM proxy. openclaw:main = real agent loop with all tools",
+    "created_at": "2026-03-08T21:11:00.490145+00:00"
+  },
+  {
+    "id": 66,
+    "domain": "openrouter",
+    "what_failed": "Setting OPENROUTER_API_KEY as env var in launch-gateway.ps1 and expecting OpenClaw to pick it up",
+    "correct_approach": "Store key in openclaw.json under env.OPENROUTER_API_KEY. Model in agents.defaults.model.primary as openrouter/<author>/<slug>. No env vars needed in launch script.",
+    "severity": "medium",
+    "root_cause": "OpenClaw reads env config from openclaw.json env block, not from PS env vars set before node launch",
+    "created_at": "2026-03-08T20:58:58.084262+00:00"
+  },
+  {
+    "id": 65,
+    "domain": "openclaw",
+    "what_failed": "Using Start-Process powershell.exe to run launch-gateway.ps1 opens two windows - the PS window AND node window",
+    "correct_approach": "Launch node directly: Start-Process node.exe with -WindowStyle Hidden and -RedirectStandardOutput. No intermediate PS window. Also run 'openclaw gateway stop' first to cleanly kill registered service.",
+    "severity": "medium",
+    "root_cause": "Start-Process powershell.exe creates a visible PS window which then spawns node. Two processes visible.",
+    "created_at": "2026-03-08T20:58:56.528421+00:00"
+  },
+  {
+    "id": 64,
+    "domain": "scanner",
+    "what_failed": "Scanner flagged 300 playbook+mistake pairs as contradictions using tag overlap matching (p.tags && m.tags). All were false positives - they shared broad tags like 'boot' but described unrelated sub-topics with no actual method conflict.",
+    "correct_approach": "Real contradiction detection requires: (1) playbook.topic appears in mistake.what_failed verbatim, AND (2) semantic overlap between playbook.method and mistake.correct_approach. Tag overlap alone is insufficient. No DB changes needed - the existing data is clean.",
+    "severity": "medium",
+    "root_cause": "Scanner detection SQL used tag array overlap (&&) as proxy for semantic conflict. Too loose - any two entries sharing one tag get flagged regardless of whether their actual content conflicts.",
+    "created_at": "2026-03-08T19:21:38.735224+00:00"
+  },
+  {
+    "id": 63,
+    "domain": "claw",
+    "what_failed": "Claw did not know its own system - confused Railway auth token with Supabase PAT, had no knowledge of DB constraints, templates, execution rules, vision, audit system",
+    "correct_approach": "MEMORY.md must contain: all credentials, full API endpoint map, all DB tables + constraints, GitHub/Railway/Supabase access, code templates, execution rules, known failures, active tasks, vision, scanner flags, audit system, session state system, vault system, output stream semantics.",
+    "severity": "medium",
+    "root_cause": "Workspace files (MEMORY.md, IDENTITY.md, AGENTS.md) were generic scaffolding without actual operational content",
+    "created_at": "2026-03-08T19:09:33.443923+00:00"
+  },
+  {
+    "id": 62,
+    "domain": "supabase",
+    "what_failed": "Function checked .value to unwrap Management API response but API returns array directly - unwrap logic was dead code",
+    "correct_approach": "Return directly from Invoke-SupabaseSQL. No unwrap needed. Template was already patched.",
+    "severity": "medium",
+    "root_cause": "Supabase Management API returns results directly as array, not wrapped in {value:[...]}. The unwrap branch never fired.",
+    "created_at": "2026-03-08T19:09:31.914184+00:00"
+  },
+  {
+    "id": 61,
+    "domain": "powershell",
+    "what_failed": "Claude could not distinguish red errors from yellow warnings from white normal output - all appeared as same text",
+    "correct_approach": "Use Invoke-PSScript from run_ps.ps1 wrapper. Separates stdout/stderr/exitcode and tags every line: [OUTPUT], [WARNING], [ERROR], [EXIT:N]. Never assume success from stdout alone - always check exit code.",
+    "severity": "medium",
+    "root_cause": "DC:read_process_output strips ANSI color codes. Color = semantic meaning in PS (white=output, yellow=warning, red=error) but is lost in transit.",
+    "created_at": "2026-03-08T19:09:30.407806+00:00"
+  },
+  {
+    "id": 60,
+    "domain": "claude-ai",
+    "what_failed": "Claude tried curl/bash to call brain API boot endpoint - network is sandboxed on claude.ai, outbound blocked",
+    "correct_approach": "On claude.ai: use tool_search first to load Desktop Commander MCP, then read JARVIS-PROMPT.md from PC via DC. Never try curl/bash for brain API from claude.ai.",
+    "severity": "medium",
+    "root_cause": "claude.ai interface has no outbound network from sandbox. Brain API unreachable via bash/curl from claude.ai.",
+    "created_at": "2026-03-08T19:09:28.92869+00:00"
+  },
+  {
+    "id": 59,
+    "domain": "claude-role",
+    "what_failed": "Claude wrote step-by-step execution instructions as if doing the task itself, treating Claw like a dumb script runner",
+    "correct_approach": "Give Claw task context, goal, relevant brain facts. Let Claw reason and decide HOW. Claude only verifies the result.",
+    "severity": "medium",
+    "root_cause": "Confused executor role with instructor role. Claude is prompt engineer + verifier only.",
+    "created_at": "2026-03-08T19:09:27.415218+00:00"
+  },
+  {
+    "id": 58,
+    "domain": "claw",
+    "what_failed": "Claw did not know its own system - confused Railway auth token with Supabase PAT, had no knowledge of DB constraints, templates, execution rules, vision, audit system",
+    "correct_approach": "MEMORY.md must contain: all credentials, full API endpoint map, all DB tables + constraints, GitHub/Railway/Supabase access, code templates, execution rules, known failures, active tasks, vision, scanner flags, audit system, session state system, vault system, output stream semantics.",
+    "severity": "medium",
+    "root_cause": "Workspace files (MEMORY.md, IDENTITY.md, AGENTS.md) were generic scaffolding without actual operational content",
+    "created_at": "2026-03-08T19:09:24.518506+00:00"
+  },
+  {
+    "id": 57,
+    "domain": "supabase",
+    "what_failed": "Function checked .value to unwrap Management API response but API returns array directly - unwrap logic was dead code",
+    "correct_approach": "Return directly from Invoke-SupabaseSQL. No unwrap needed. Template was already patched.",
+    "severity": "medium",
+    "root_cause": "Supabase Management API returns results directly as array, not wrapped in {value:[...]}. The unwrap branch never fired.",
+    "created_at": "2026-03-08T19:09:23.017058+00:00"
+  },
+  {
+    "id": 56,
+    "domain": "powershell",
+    "what_failed": "Claude could not distinguish red errors from yellow warnings from white normal output - all appeared as same text",
+    "correct_approach": "Use Invoke-PSScript from run_ps.ps1 wrapper. Separates stdout/stderr/exitcode and tags every line: [OUTPUT], [WARNING], [ERROR], [EXIT:N]. Never assume success from stdout alone - always check exit code.",
+    "severity": "medium",
+    "root_cause": "DC:read_process_output strips ANSI color codes. Color = semantic meaning in PS (white=output, yellow=warning, red=error) but is lost in transit.",
+    "created_at": "2026-03-08T19:09:21.497301+00:00"
+  },
+  {
+    "id": 55,
+    "domain": "claude-ai",
+    "what_failed": "Claude tried curl/bash to call brain API boot endpoint - network is sandboxed on claude.ai, outbound blocked",
+    "correct_approach": "On claude.ai: use tool_search first to load Desktop Commander MCP, then read JARVIS-PROMPT.md from PC via DC. Never try curl/bash for brain API from claude.ai.",
+    "severity": "medium",
+    "root_cause": "claude.ai interface has no outbound network from sandbox. Brain API unreachable via bash/curl from claude.ai.",
+    "created_at": "2026-03-08T19:09:19.952531+00:00"
+  },
+  {
+    "id": 54,
+    "domain": "claude-role",
+    "what_failed": "Claude wrote step-by-step execution instructions as if doing the task itself, treating Claw like a dumb script runner",
+    "correct_approach": "Give Claw task context, goal, relevant brain facts. Let Claw reason and decide HOW. Claude only verifies the result.",
+    "severity": "medium",
+    "root_cause": "Confused executor role with instructor role. Claude is prompt engineer + verifier only.",
+    "created_at": "2026-03-08T19:09:18.393915+00:00"
+  },
+  {
+    "id": 53,
+    "domain": "claude-role",
+    "what_failed": "Claude wrote full step-by-step execution instructions as if doing the task itself instead of giving Claw context and letting it reason and act",
+    "correct_approach": "Give Claw: task goal, context from brain, what files/systems are involved, expected output. Let Claw decide HOW to execute. Claude only verifies the result.",
+    "severity": "medium",
+    "root_cause": "Confused executor role with instructor role. Treated Claw like a dumb script runner instead of an AI with its own reasoning and tool access",
+    "created_at": "2026-03-08T18:29:38.226634+00:00"
+  },
+  {
+    "id": 52,
+    "domain": "delegation",
+    "what_failed": "Claude was executing all PC tasks directly (writing PS scripts, running them, doing file ops) instead of delegating to Claw. Multiple full sessions ran this way. Claude was acting as if it IS Jarvis, not as the interface layer.",
+    "correct_approach": "Claude's job: boot, brain context, formulate task prompt, call Invoke-OpenClawTask, report result. Claw does the execution. Claude only touches direct MCP for boot sequence and brain API calls. Everything else goes to Claw.",
+    "severity": "medium",
+    "root_cause": "JARVIS-PROMPT.md said 'you are Jarvis' and 'OpenClaw = hands' -- framing Claude as the brain/actor, Claw as just a tool. The correct model: Claude = prompt engineer interface. Claw = the real persistent AI. All task execution should go through Claw.",
+    "created_at": "2026-03-08T18:14:42.779956+00:00"
+  },
+  {
+    "id": 51,
+    "domain": "delegation",
+    "what_failed": "Claude was executing all PC tasks directly (writing PS scripts, running them, doing file ops) instead of delegating to Claw. Multiple full sessions ran this way. Claude was acting as if it IS Jarvis, not as the interface layer.",
+    "correct_approach": "Claude's job: boot, brain context, formulate task prompt, call Invoke-OpenClawTask, report result. Claw does the execution. Claude only touches direct MCP for boot sequence and brain API calls. Everything else goes to Claw.",
+    "severity": "medium",
+    "root_cause": "JARVIS-PROMPT.md said 'you are Jarvis' and 'OpenClaw = hands' -- framing Claude as the brain/actor, Claw as just a tool. The correct model: Claude = prompt engineer interface. Claw = the real persistent AI. All task execution should go through Claw.",
+    "created_at": "2026-03-08T18:14:06.520498+00:00"
+  },
+  {
+    "id": 50,
+    "domain": "identity",
+    "what_failed": "System-wide contamination: owner called 'Vuk (Jakarta)' instead of 'REINVAGNAR (Indonesia)'. Persisted across multiple sessions in brain KB, skill files, and Claw workspace despite prior fix attempts. Also: Claw wrongly described as 'execution worker / hands' when Claw IS Jarvis OS - the full system.",
+    "correct_approach": "REINVAGNAR = operator (Indonesia, WIB UTC+7). NOT Vuk. NOT Jakarta. Jarvis OS = the FULL SYSTEM (brain + Railway + PC + all AI channels). Claude and Claw are both INPUT INTERFACES / channels - neither IS Jarvis. After any identity fix, run verify_clean.py to scan all files + brain search for 'Vuk' before closing.",
+    "severity": "medium",
+    "root_cause": "Original brain entries (who_i_am, jarvis_system_master_guide, jarvis_os_architecture etc.) written with wrong name before correction protocol existed. Upsert only works when exact domain+topic matches - duplicate entries with old content kept surfacing. Claw workspace written by OpenClaw itself and never had correct identity framing.",
+    "created_at": "2026-03-08T18:06:01.010456+00:00"
+  },
+  {
+    "id": 49,
+    "domain": "identity",
+    "what_failed": "System-wide contamination: owner called 'Vuk (Jakarta)' instead of 'REINVAGNAR (Indonesia)'. Persisted across multiple sessions in brain KB, skill files, and Claw workspace despite prior fix attempts. Also: Claw wrongly described as 'execution worker / hands' when Claw IS Jarvis OS - the full system.",
+    "correct_approach": "REINVAGNAR = operator (Indonesia, WIB UTC+7). NOT Vuk. NOT Jakarta. Jarvis OS = the FULL SYSTEM (brain + Railway + PC + all AI channels). Claude and Claw are both INPUT INTERFACES / channels - neither IS Jarvis. After any identity fix, run verify_clean.py to scan all files + brain search for 'Vuk' before closing.",
+    "severity": "medium",
+    "root_cause": "Original brain entries (who_i_am, jarvis_system_master_guide, jarvis_os_architecture etc.) written with wrong name before correction protocol existed. Upsert only works when exact domain+topic matches - duplicate entries with old content kept surfacing. Claw workspace written by OpenClaw itself and never had correct identity framing.",
+    "created_at": "2026-03-08T18:04:11.881522+00:00"
+  },
+  {
+    "id": 48,
+    "domain": "jarvis-api",
+    "what_failed": "Assumed /actions/session_state was a single endpoint. It has subpaths: /save, /load, /list. Also assumed key_facts accepted integers -- it requires Dict[str,str]. Also /actions/list live endpoint was stale and showed wrong path.",
+    "correct_approach": "Before ANY API call: read JARVIS-OS.md actions section. If schema uncertain: fetch routers/actions.py from GitHub. Never guess. /actions/list is documentation only and may lag behind deployed code.",
+    "severity": "medium",
+    "root_cause": "Did not read JARVIS-OS.md or router source before calling API. Relied on /actions/list which was outdated. Guessed schema instead of checking Pydantic models.",
+    "created_at": "2026-03-08T15:16:49.76176+00:00"
+  },
+  {
+    "id": 47,
+    "domain": "powershell",
+    "what_failed": "PS parse errors on syntactically valid-looking code: 'Unexpected token mapped', 'assignment expression not valid' -- caused by em-dash characters copied from context window into .ps1 string literals",
+    "correct_approach": "Write .ps1 files via Python (wsl -e python3) for any file containing strings from context. Python open() with utf-8 encoding handles them correctly. OR manually replace em-dashes with plain hyphens before writing.",
+    "severity": "medium",
+    "root_cause": "Claude context window always contains Unicode em-dashes (U+2014) in formatted output. These look like hyphens in the editor but PS tokenizer rejects them. DC:write_file passes them through unchanged.",
+    "created_at": "2026-03-08T15:16:48.273737+00:00"
+  },
+  {
+    "id": 46,
+    "domain": "openclaw",
+    "what_failed": "gateway.token key stopped working after 2026.x update",
+    "correct_approach": "Run openclaw doctor after every update. Key is now gateway.auth.token + gateway.auth.mode.",
+    "severity": "medium",
+    "root_cause": "Key renamed from gateway.token to gateway.auth.token.",
+    "created_at": "2026-03-08T13:57:13.086143+00:00"
+  },
+  {
+    "id": 45,
+    "domain": "openclaw",
+    "what_failed": "Waiting for agent result inside Windows-MCP:Shell - times out at 45s",
+    "correct_approach": "Launch as detached process writing to log. Read log separately. OR use Invoke-OpenClaw with 90s ProcessStartInfo timeout.",
+    "severity": "medium",
+    "root_cause": "Windows-MCP:Shell has 45s timeout. Agent calls take 15-60s.",
+    "created_at": "2026-03-08T13:57:11.584794+00:00"
+  },
+  {
+    "id": 44,
+    "domain": "openclaw",
+    "what_failed": "gateway.token key no longer worked after update to 2026.x - gateway refused to start",
+    "correct_approach": "Run openclaw doctor after every update. Check for renamed keys. Config key is now gateway.auth.token. Auth mode: gateway.auth.mode='token'.",
+    "severity": "medium",
+    "root_cause": "Key renamed from gateway.token to gateway.auth.token. Old key silently ignored.",
+    "created_at": "2026-03-08T13:56:27.818896+00:00"
+  },
+  {
+    "id": 43,
+    "domain": "openclaw",
+    "what_failed": "Attempting to call openclaw agent and wait for result inside Windows-MCP:Shell tool - times out at 45s",
+    "correct_approach": "Launch openclaw agent as detached process writing to log file. Use separate Shell call after delay to read log. OR use Invoke-OpenClaw from openclaw_agent.ps1 which uses ProcessStartInfo with 90s timeout outside of MCP tool context.",
+    "severity": "medium",
+    "root_cause": "Windows-MCP:Shell has 45s timeout. OpenClaw agent calls take 15-60s. Can't wait inline.",
+    "created_at": "2026-03-08T13:56:26.319217+00:00"
+  },
+  {
+    "id": 42,
+    "domain": "openclaw",
+    "what_failed": "Config with agent.model caused compatibility warning, gateway blocked with 'set gateway.mode=local'",
+    "correct_approach": "Always use agents.defaults.model.primary and set gateway.mode=local in config",
+    "severity": "medium",
+    "root_cause": "Two issues: (1) Old schema - agent.model replaced by agents.defaults.model.primary. (2) gateway.mode required since newer version",
+    "created_at": "2026-03-08T11:21:22.406753+00:00"
+  },
+  {
+    "id": 41,
+    "domain": "windows",
+    "what_failed": "schtasks command not found in Windows-MCP shell context",
+    "correct_approach": "Use Register-ScheduledTask PowerShell cmdlet instead of schtasks for task scheduling",
+    "severity": "medium",
+    "root_cause": "schtasks.exe may not be in PATH in restricted shell environments even though it exists in System32",
+    "created_at": "2026-03-08T11:21:20.835245+00:00"
+  },
+  {
+    "id": 40,
+    "domain": "brain_write",
+    "what_failed": "Used new_knowledge, new_playbook, new_mistakes, new_memory as field names in /actions/brain_write. All saves silently returned {saved: 0} with no error.",
+    "correct_approach": "Always use short field names for /actions/brain_write. Use Save-JarvisBulkWrite from jarvis_api.ps1 or kb_update.ps1 Write-JarvisKB - these already use the correct field names. Test first write with saved.knowledge > 0 check.",
+    "severity": "medium",
+    "root_cause": "/actions/brain_write endpoint uses short field names (knowledge, playbook, mistakes, memory). The new_ prefix is only correct for /actions/session_end. Silent failure with no validation error made this hard to detect.",
+    "created_at": "2026-03-08T09:50:43.10154+00:00"
+  },
+  {
+    "id": 39,
+    "domain": "test",
+    "what_failed": "test",
+    "correct_approach": "test",
+    "severity": "medium",
+    "root_cause": "test",
+    "created_at": "2026-03-08T09:47:05.658736+00:00"
+  },
+  {
+    "id": 38,
+    "domain": "brain_write",
+    "what_failed": "POST /actions/brain_write returned {ok:true, saved:{memory:0,knowledge:0,playbook:0,mistakes:0}, errors:[]} with no actual saves",
+    "correct_approach": "If /actions/brain_write returns 0 saved with no errors: fall back immediately to individual /brain/knowledge, /brain/playbook, /brain/mistake endpoints. For KB and playbook bulk writes: use direct Supabase Management API SQL with ON CONFLICT DO UPDATE as most reliable fallback.",
+    "severity": "medium",
+    "root_cause": "brain_write endpoint processes requests but the Railway API action layer silently fails to write when called from windows-mcp:Shell with complex nested JSON. Individual /brain/* endpoints work correctly.",
+    "created_at": "2026-03-08T09:28:12.908077+00:00"
+  },
+  {
+    "id": 37,
+    "domain": "powershell",
+    "what_failed": "PS -replace with replacement string containing same content as source file caused entire file to be duplicated and embedded inside itself",
+    "correct_approach": "For any file edit where replacement string might contain the original file content: delete file first, then rewrite from scratch using Out-File with string array. Never use -replace on large files.",
+    "severity": "medium",
+    "root_cause": "PS regex replace evaluates replacement string - when replacement contains the original file content, it creates recursive duplication",
+    "created_at": "2026-03-08T09:14:46.282391+00:00"
+  },
+  {
+    "id": 36,
+    "domain": "scanner",
+    "what_failed": "67 false positive contradictions from 3-word overlap between playbook.method and mistake.what_failed. Both naturally use same domain vocabulary (brain, session, write, call) without being contradictions.",
+    "correct_approach": "Require: (1) playbook TOPIC appears in the mistake failure text (not just vocabulary overlap), AND (2) 4+ meaningful word overlap after removing stop words. This forces specificity - the contradiction must be about the same playbook topic, not just general domain.",
+    "severity": "medium",
+    "root_cause": "3-word threshold too low for domain-specific text. A playbook about brain_write and a mistake about brain_write naturally share 3+ words without being contradictory.",
+    "created_at": "2026-03-08T09:01:36.494701+00:00"
+  },
+  {
+    "id": 35,
+    "domain": "scanner",
+    "what_failed": "Tags like 'boot','session','powershell','wsl' flagged as domain gaps even though KB entries covering these topics exist (in jarvis_system, windows, jarvis-ops domains). Also 83 false positive tags reported.",
+    "correct_approach": "Check tags against FULL KB coverage: domain names + topic slugs + individual words extracted from topic slugs (words > 4 chars). Add ignore list for core system operation tags that are covered inside master guide entries rather than standalone topics.",
+    "severity": "medium",
+    "root_cause": "Original code did: gaps = mistake_tags - kb_domains. Mistake TAGS are granular words (boot, powershell, wsl). KB DOMAINS are namespaces (jarvis_system, engineering, windows). Direct set difference will never match because they are different abstraction levels.",
+    "created_at": "2026-03-08T09:01:34.944365+00:00"
+  },
+  {
+    "id": 34,
+    "domain": "scanner",
+    "what_failed": "action 'pc_manifest_push' falsely flagged as uncovered. action.replace('_',' ') produces 'pc manifest push' but kb_text was built by joining 'topic + domain' with underscore separators. Space form not found in underscore text.",
+    "correct_approach": "Build a kb_topics_set with BOTH forms (underscore + space) of every topic. Then check action against the set, plus prefix matching: any(t.startswith(action_lower) for t in kb_topics_set). This catches 'pc_manifest_push' being covered by 'pc_manifest_push_workflow'.",
+    "severity": "medium",
+    "root_cause": "String contains check using SPACE form of action against kb_text that used UNDERSCORE form of topics. Apples vs oranges in string matching.",
+    "created_at": "2026-03-08T09:01:33.367823+00:00"
+  },
+  {
+    "id": 33,
+    "domain": "patch",
+    "what_failed": "JARVIS-PROMPT.md CODE TEMPLATES list not updated. SKILL.md not updated. Changelog not written. Declared patch complete after only updating SKILL-CORE.md.",
+    "correct_approach": "For any code-templates/ change: update ALL 4 text references: (1) SKILL-CORE.md template list, (2) JARVIS-PROMPT.md CODE TEMPLATES inline list, (3) SKILL.md Key Paths section, (4) README.md (already done). Then vault push ALL 4 files. Then changelog. SKILL-CORE.md alone is not sufficient - JARVIS-PROMPT.md is the main runtime reference.",
+    "severity": "medium",
+    "root_cause": "Patch checklist not applied systematically. Only updated the file that was top of mind (SKILL-CORE.md, loaded at boot) but missed JARVIS-PROMPT.md which also has a CODE TEMPLATES reference list, and SKILL.md which has a Key Paths section. Vault push and changelog skipped entirely.",
+    "created_at": "2026-03-08T08:13:42.760983+00:00"
+  },
+  {
+    "id": 32,
+    "domain": "boot",
+    "what_failed": "Sesi dimulai dari compacted transcript tanpa menjalankan boot sequence. Tidak ada: (1) DC:read_file JARVIS-SYSTEM-PROMPT.md, (2) POST /actions/boot?compact=true, (3) POST /actions/context sebelum menjawab topik baru, (4) save engineering insights ke brain di akhir sesi.",
+    "correct_approach": "SETIAP sesi tanpa terkecuali, bahkan yang dimulai dari compacted transcript: (1) Cek pc_manifest last_boot vs session created_at - kalau beda, boot belum jalan. (2) Jalankan /actions/boot?compact=true SEBELUM menjawab pertanyaan pertama. (3) Untuk setiap topik domain baru, panggil /actions/context dulu. (4) Di akhir sesi, save domain knowledge baru ke brain via /actions/brain_write.",
+    "severity": "medium",
+    "root_cause": "Compacted transcript membuat Jarvis langsung masuk ke konteks percakapan tanpa trigger boot. Tidak ada hard-check di awal: 'sudahkah boot sequence dijalankan sesi ini?'. Engineering response mode mengalahkan brain-first architecture.",
+    "created_at": "2026-03-08T07:50:24.345102+00:00"
+  },
+  {
+    "id": 31,
+    "domain": "boot",
+    "what_failed": "Wrote boot PS inline from scratch in JARVIS-BOOT.md and JARVIS-SYSTEM-PROMPT.md, duplicating and degrading the canonical jarvis_boot.ps1 template",
+    "correct_approach": "Always reference C:\\Users\\rnvgg\\.claude-skills\\code-templates\\jarvis_boot.ps1 for boot. Check code-templates/README.md before writing any PS boilerplate. SKILL-CORE.md now lists all templates at the boot-load level.",
+    "severity": "medium",
+    "root_cause": "Boot instructions did not reference code-templates/ at all. The template folder was invisible to the boot sequence documentation.",
+    "created_at": "2026-03-07T19:58:05.22849+00:00"
+  },
+  {
+    "id": 30,
+    "domain": "powershell",
+    "what_failed": "New-Object System.IO.StreamWriter with UTF8 encoding still produces BOM",
+    "correct_approach": "Use: New-Object System.Text.UTF8Encoding($false) then [System.IO.File]::WriteAllText(path, content, enc) - the false parameter disables BOM",
+    "severity": "medium",
+    "root_cause": "System.Text.Encoding.UTF8 in .NET includes BOM by default",
+    "created_at": "2026-03-07T19:49:14.444678+00:00"
+  },
+  {
+    "id": 29,
+    "domain": "boot",
+    "what_failed": "System prompt said 'read JARVIS-PROMPT.md then follow boot sequence in it' - model treated hop-2 as optional. Also: JARVIS-BOOT.md (light boot) was never referenced in system prompt at all.",
+    "correct_approach": "System prompt contains: Step 1 = light boot with inline PS code + explicit path to JARVIS-BOOT.md. Step 2 = explicit read of JARVIS-PROMPT.md by path. Both numbered, both mandatory, both before any output.",
+    "severity": "medium",
+    "root_cause": "Two-hop instructions (read file A to learn what to do) are treated as reference, not execution. Light boot and full instructions must both be explicitly named with file paths in the system prompt itself.",
+    "created_at": "2026-03-07T19:39:17.153749+00:00"
+  },
+  {
+    "id": 28,
+    "domain": "boot",
+    "what_failed": "JARVIS-PROMPT.md had boot sequence documented as steps but no hard imperative at the top. Model read it as reference, waited for user to trigger boot.",
+    "correct_approach": "First lines of any auto-execute prompt must be imperative commands: EXECUTE NOW, DO NOT GREET, RUN THIS FIRST. Pair with userPreferences that says 'before outputting any text' explicitly.",
+    "severity": "medium",
+    "root_cause": "Instructions framed as documentation are internalized as context, not executed. The model waits for a user action to apply them.",
+    "created_at": "2026-03-07T19:33:47.333138+00:00"
+  },
+  {
+    "id": 27,
+    "domain": "brain_write",
+    "what_failed": "Wrote each playbook and KB entry with a separate Windows-MCP:Shell call. 9 round trips to the API.",
+    "correct_approach": "Collect all writes into arrays. Send one POST /actions/brain_write with knowledge:[], playbook:[], mistakes:[] all populated. One call, one round trip.",
+    "severity": "medium",
+    "root_cause": "Didn''t apply the /actions/brain_write pattern. Treated writes as individual operations instead of a batch.",
+    "created_at": "2026-03-07T17:48:05.432767+00:00"
+  },
+  {
+    "id": 26,
+    "domain": "tool_search",
+    "what_failed": "Ran tool_search 3 times to load DC:get_config, DC:start_process, windows-mcp:File separately.",
+    "correct_approach": "Single tool_search query at session start: ''Desktop Commander get_config start_process windows-mcp File Shell Filesystem read_text_file''. Loads all session tools in 1 call.",
+    "severity": "medium",
+    "root_cause": "No pre-established pattern for loading tools. Each time a tool was needed, searched for it individually.",
+    "created_at": "2026-03-07T17:48:03.649772+00:00"
+  },
+  {
+    "id": 25,
+    "domain": "boot",
+    "what_failed": "Called GET /brain/boot 4 separate times in one session to stay under output limits. Split into: (1) counts, (2) health report, (3) sessions+KB+playbook, (4) full playbook+mistakes for growth flag analysis.",
+    "correct_approach": "Use /actions/boot once - it returns brain + scanner + unprocessed_exports already structured. If you need specific tables only, use targeted queries (GET /brain/search, GET /brain/playbook/{topic}/history). Never call /brain/boot more than once per session.",
+    "severity": "medium",
+    "root_cause": "/brain/boot returns all tables in one response - too large for a single shell output. No strategy to handle this: kept re-fetching.",
+    "created_at": "2026-03-07T17:48:01.907497+00:00"
+  },
+  {
+    "id": 24,
+    "domain": "knowledge_base",
+    "what_failed": "Documented wrong ON CONFLICT clause for knowledge_base. Actual constraint is ON CONFLICT (domain, topic) composite.",
+    "correct_approach": "Always verify ON CONFLICT clauses by reading the actual router source code or checking information_schema.table_constraints in Supabase before documenting. knowledge_base unique = (domain, topic) composite.",
+    "severity": "medium",
+    "root_cause": "actions.py source code uses ON CONFLICT (domain, topic) but JARVIS-PROMPT was never updated to reflect this. Propagated wrong constraint into supabase_schema_constraints_jarvis KB entry.",
+    "created_at": "2026-03-07T17:43:56.099346+00:00"
+  },
+  {
+    "id": 23,
+    "domain": "actions",
+    "what_failed": "actions/boot 200 response with ok:false. str(e) returned ''0'' not a real error message.",
+    "correct_approach": "1) ALTER TABLE sessions ADD COLUMN IF NOT EXISTS interface text DEFAULT ''claude-ai''. 2) Fix all session INSERTs in actions.py to include interface. 3) When debugging str(e)=''0'' or cryptic errors, check the actual Supabase query via Management API directly to see the real error message.",
+    "severity": "medium",
+    "root_cause": "sessions table was missing interface column. _brain_boot() SELECT query included interface which didn''t exist. httpx raise_for_status() raised HTTPStatusError, str() of that returned ''0'' not the actual SQL error.",
+    "created_at": "2026-03-07T17:43:54.197052+00:00"
+  },
+  {
+    "id": 22,
+    "domain": "supabase",
+    "what_failed": "INSERT INTO sessions (summary, actions, interface) failed with 400",
+    "correct_approach": "sessions INSERT uses only: (summary, actions). No interface column. Verify column existence via information_schema before building INSERTs.",
+    "severity": "medium",
+    "root_cause": "sessions table has no 'interface' column in public schema. JARVIS-OS.md docs claimed it exists but it does not. Actual columns: id, summary, actions, project_id, created_at",
+    "created_at": "2026-03-07T17:24:46.771222+00:00"
+  },
+  {
+    "id": 21,
+    "domain": "supabase",
+    "what_failed": "ON CONFLICT (topic) caused 42P10 error - no unique constraint on topic alone",
+    "correct_approach": "Always use ON CONFLICT (domain, topic) for knowledge_base upserts. Verify constraint names before using ON CONFLICT.",
+    "severity": "medium",
+    "root_cause": "knowledge_base unique constraint is COMPOSITE: UNIQUE (domain, topic) named knowledge_base_domain_topic_key - not a single-column constraint",
+    "created_at": "2026-03-07T17:24:45.221199+00:00"
+  },
+  {
+    "id": 20,
+    "domain": "mistakes",
+    "what_failed": "INSERT without root_cause column fails with not-null constraint violation.",
+    "correct_approach": "Always include root_cause in mistakes INSERT. 5 required columns: context, what_failed, root_cause, correct_approach, tags(optional).",
+    "severity": "medium",
+    "root_cause": "mistakes.root_cause is NOT NULL - required field.",
+    "created_at": "2026-03-07T16:10:11.142677+00:00"
+  },
+  {
+    "id": 19,
+    "domain": "memory",
+    "what_failed": "ON CONFLICT (category,key) fails - no unique constraint on that pair. Only key column has unique constraint (memory_key_key).",
+    "correct_approach": "Use ON CONFLICT (key) DO UPDATE when upserting memory. Or use INSERT ... WHERE NOT EXISTS to avoid conflict entirely.",
+    "severity": "medium",
+    "root_cause": "Schema design: memory.key is globally unique, not scoped to category. ON CONFLICT (category,key) is wrong.",
+    "created_at": "2026-03-07T16:10:10.340352+00:00"
+  },
+  {
+    "id": 18,
+    "domain": "jarvis-os",
+    "what_failed": "GET /brain/boot returns 500 even with correct env vars. /health and /brain/search work fine.",
+    "correct_approach": "Debug by checking Railway deploy logs. Test each table query individually. Add per-table try/catch in boot endpoint. /brain/search?q=test as quick Supabase connectivity check.",
+    "severity": "medium",
+    "root_cause": "Unknown - session ended before diagnosis. Likely bug in boot_load query (maybe a table scan or missing error handling for empty tables).",
+    "created_at": "2026-03-07T16:09:15.705243+00:00"
+  },
+  {
+    "id": 15,
+    "domain": "supabase",
+    "what_failed": "400 Bad Request - PS ConvertTo-Json mangled nested arrays and special chars in content field",
+    "correct_approach": "Write each INSERT as raw SQL via Management API POST /v1/projects/{ref}/database/query. Use dollar-quoted strings for content with special chars. Never use Supabase REST upsert for complex content from PowerShell.",
+    "severity": "medium",
+    "root_cause": "Supabase REST API + PS ConvertTo-Json fails on complex multi-line content with quotes, brackets, special chars. The JSON encoding breaks.",
+    "created_at": "2026-03-07T14:44:32.586512+00:00"
+  },
+  {
+    "id": 14,
+    "domain": "supabase",
+    "what_failed": "Got 400 Bad Request or check constraint violation on confidence column",
+    "correct_approach": "Always use one of: proven, high, medium for confidence values in knowledge_base. Never use low, unknown, or custom strings.",
+    "severity": "medium",
+    "root_cause": "knowledge_base.confidence has a CHECK constraint - only specific values allowed: proven, high, medium",
+    "created_at": "2026-03-07T14:44:31.761553+00:00"
+  },
+  {
+    "id": 13,
+    "domain": "wsl",
+    "what_failed": "wsl.exe returns: Nested virtualization is not supported on this machine. Happens consistently on claude-ai interface, not just transient.",
+    "correct_approach": "At boot: attempt WSL once, if nested virtualization error appears immediately fall back to PowerShell. Do not retry WSL multiple times. Use PowerShell .NET classes (ZipFile, Invoke-RestMethod, curl.exe) as primary fallback. Log which method was used in session entry.",
+    "severity": "medium",
+    "root_cause": "WSL requires Hyper-V nested virtualization. When MCP calls wsl.exe from within the claude-ai cloud process context, the virtualization layer blocks it. This is reproducible \u2014 not random.",
+    "created_at": "2026-03-07T13:33:58.06544+00:00"
+  },
+  {
+    "id": 12,
+    "domain": "powershell",
+    "what_failed": "curl in PS is an alias for Invoke-WebRequest and does NOT accept -H flag the same way",
+    "correct_approach": "Always use C:\\Windows\\System32\\curl.exe explicitly, NOT bare curl command in PowerShell scripts.",
+    "severity": "medium",
+    "root_cause": "PowerShell aliases curl to Invoke-WebRequest which uses -Headers hashtable, not -H string flags",
+    "created_at": "2026-03-07T12:59:09.66047+00:00"
+  },
+  {
+    "id": 11,
+    "domain": "wsl",
+    "what_failed": "WSL fails with: Nested virtualization is not supported on this machine",
+    "correct_approach": "If WSL fails: retry once. Still failing: use PowerShell fallback and log the error to mistakes. Do not assume it is permanently blocked.",
+    "severity": "medium",
+    "root_cause": "Likely transient WSL state \u2014 may have been suspended or not fully started. WSL IS installed and works from all interfaces. This is NOT a fundamental limitation.",
+    "created_at": "2026-03-07T12:58:37.863135+00:00"
+  },
+  {
+    "id": 10,
+    "domain": "wsl",
+    "what_failed": "WSL fails with: Nested virtualization is not supported on this machine",
+    "correct_approach": "If WSL fails: retry once. Still failing: use PowerShell fallback and log the error to mistakes. Do not assume it is permanently blocked.",
+    "severity": "medium",
+    "root_cause": "Likely transient WSL state \u2014 may have been suspended or not fully started. WSL IS installed and works from all interfaces. This is NOT a fundamental limitation.",
+    "created_at": "2026-03-07T12:57:39.689197+00:00"
+  },
+  {
+    "id": 9,
+    "domain": "desktop-commander",
+    "what_failed": "Using DC:read_file on a file just written by WSL \u2014 sometimes returns stale/cached content",
+    "correct_approach": "Delete output file before running WSL script, then read fresh. Or use DC:start_process and read stdout directly \u2014 no file caching.",
+    "severity": "medium",
+    "root_cause": "DC read_file can return cached results if file was recently read at same path",
+    "created_at": "2026-03-07T12:34:25.832267+00:00"
+  },
+  {
+    "id": 8,
+    "domain": "desktop-commander",
+    "what_failed": "Writing files over 50 lines in one write_file call causes DC performance warning",
+    "correct_approach": "Chunk large file writes: first chunk with mode=rewrite, subsequent chunks with mode=append, max 25-30 lines per chunk",
+    "severity": "medium",
+    "root_cause": "Desktop Commander fileWriteLineLimit is 500 but warns on large single writes",
+    "created_at": "2026-03-07T12:34:25.510173+00:00"
+  },
+  {
+    "id": 7,
+    "domain": "supabase",
+    "what_failed": "Trying to run DDL via Supabase REST API /rest/v1/ endpoint",
+    "correct_approach": "Use Supabase Management API: POST https://api.supabase.com/v1/projects/{ref}/database/query with PAT auth. Supports full SQL including DDL.",
+    "severity": "medium",
+    "root_cause": "Supabase REST API is for data operations only \u2014 does not support DDL",
+    "created_at": "2026-03-07T12:34:25.179911+00:00"
+  },
+  {
+    "id": 6,
+    "domain": "railway",
+    "what_failed": "Query { me { name } } returns 'Not Authorized'",
+    "correct_approach": "Use { projects(first:1) { edges { node { id name } } } } instead of { me { ... } } to verify Railway token validity",
+    "severity": "medium",
+    "root_cause": "Railway changed their GraphQL schema \u2014 'me' query requires different auth scope",
+    "created_at": "2026-03-07T12:34:24.868585+00:00"
+  },
+  {
+    "id": 5,
+    "domain": "google",
+    "what_failed": "OAuth2 flow blocked with 'jarvis-bot has not completed Google verification'",
+    "correct_approach": "Before running OAuth setup: go to console.cloud.google.com/auth/audience?project=PROJECT_ID, add target email as test user. Then run OAuth flow.",
+    "severity": "medium",
+    "root_cause": "App in Testing mode requires explicit test user allowlist in GCP > OAuth consent screen > Audience",
+    "created_at": "2026-03-07T12:34:24.519127+00:00"
+  },
+  {
+    "id": 4,
+    "domain": "wsl",
+    "what_failed": "Writing output to /mnt/c/... paths from inside WSL subprocess redirects",
+    "correct_approach": "Use DC:start_process with 'wsl -e bash -c ...' and read stdout directly from process output rather than file redirect when possible. For file-based: use 1>/mnt/c/Users/rnvgg/out.txt pattern (explicit fd redirect)",
+    "severity": "medium",
+    "root_cause": "WSL /mnt/c path works for python file open() but redirect operators in wsl -e bash -c sometimes lose output when path resolution fails",
+    "created_at": "2026-03-07T12:34:24.119004+00:00"
+  },
+  {
+    "id": 3,
+    "domain": "wsl",
+    "what_failed": "Writing .sh shell scripts via DC:write_file then running in WSL",
+    "correct_approach": "Always write Python scripts (.py) via DC:write_file, never .sh scripts. Python ignores CRLF. Run with: wsl -e bash -c 'python3 /mnt/c/Users/rnvgg/script.py'",
+    "severity": "medium",
+    "root_cause": "Windows CRLF line endings break bash \u2014 \\r\\n causes 'command not found' errors on every line",
+    "created_at": "2026-03-07T12:34:23.751715+00:00"
+  },
+  {
+    "id": 2,
+    "domain": "cloudflare",
+    "what_failed": "Using Python urllib or requests directly returns Cloudflare error 1010 (bot block)",
+    "correct_approach": "Always use subprocess curl with -A 'Mozilla/5.0' browser User-Agent. Never use urllib or requests for Railway, Supabase management API, or Cloudflare",
+    "severity": "medium",
+    "root_cause": "Cloudflare detects urllib/requests user-agent as bot and blocks with 1010",
+    "created_at": "2026-03-07T12:34:23.429303+00:00"
+  }
+]
