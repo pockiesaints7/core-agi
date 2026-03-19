@@ -4991,21 +4991,48 @@ def t_backup_brain(dry_run: str = "false") -> dict:
     import json as _json
     dry = str(dry_run).strip().lower() in ("true", "1", "yes")
     date_str = _dt.utcnow().strftime("%Y-%m-%d")
+    # Tables with bigserial PKs use id=gt.1 filter. UUID-PK tables (task_queue, sessions) do not.
     tables = [
-        ("knowledge_base",  "select=id,domain,topic,instruction,content,confidence,active&order=id.asc&limit=5000&id=gt.1"),
         ("behavioral_rules", "select=id,trigger,pointer,full_rule,domain,priority,active,confidence&order=id.asc&limit=500&id=gt.1"),
         ("task_queue",       "select=id,task,status,priority,source,created_at&order=priority.desc&limit=50"),
-        ("sessions",         "select=id,summary,domain,quality,created_at&order=created_at.desc&limit=30"),
+        ("sessions",         "select=id,summary,domain,created_at&order=created_at.desc&limit=30"),
         ("mistakes",         "select=id,domain,what_failed,correct_approach,severity,root_cause,created_at&order=id.desc&limit=500&id=gt.1"),
         ("infrastructure_map", "select=*&order=id.asc&id=gt.1"),
         ("credentials_index",  "select=id,service,key_name,location,env_var_name,required_for&order=id.asc&id=gt.1"),
     ]
     if dry:
         return {"ok": True, "dry_run": True, "date": date_str,
-                "tables": [t[0] for t in tables],
-                "message": f"Would write {len(tables)} tables to /backups/{date_str}/"}
+                "tables": ["knowledge_base (paginated)"] + [t[0] for t in tables],
+                "message": f"Would write knowledge_base in 1000-row chunks + {len(tables)} tables to /backups/{date_str}/"}
     results = []
     errors = []
+    # knowledge_base: paginate in chunks of 1000 to avoid GitHub file size limits
+    KB_CHUNK = 1000
+    kb_offset = 2  # start after probe row (id=gt.1 means rows with id>1, offset via id filter)
+    kb_chunk_num = 1
+    kb_total = 0
+    kb_ok = True
+    try:
+        while True:
+            qs_kb = f"select=id,domain,topic,instruction,content,confidence,active&order=id.asc&limit={KB_CHUNK}&id=gt.{kb_offset}"
+            chunk = sb_get("knowledge_base", qs_kb, svc=True) or []
+            if not chunk:
+                break
+            content = _json.dumps(chunk, default=str, indent=2)
+            path = f"backups/{date_str}/knowledge_base_{kb_chunk_num}.json"
+            ok = gh_write(path, content, f"[skip ci] backup knowledge_base chunk {kb_chunk_num} {date_str}")
+            if not ok:
+                kb_ok = False
+                errors.append({"table": f"knowledge_base_chunk_{kb_chunk_num}", "error": "gh_write returned false"})
+            kb_total += len(chunk)
+            kb_chunk_num += 1
+            kb_offset = chunk[-1]["id"]  # advance cursor to last id in chunk
+            if len(chunk) < KB_CHUNK:
+                break  # last page
+        results.append({"table": "knowledge_base", "rows": kb_total, "chunks": kb_chunk_num - 1, "ok": kb_ok})
+    except Exception as e:
+        errors.append({"table": "knowledge_base", "error": str(e)})
+    # All other tables
     for table_name, qs in tables:
         try:
             rows = sb_get(table_name, qs, svc=True) or []
@@ -5015,7 +5042,7 @@ def t_backup_brain(dry_run: str = "false") -> dict:
             results.append({"table": table_name, "rows": len(rows), "ok": ok})
         except Exception as e:
             errors.append({"table": table_name, "error": str(e)})
-    # Update last backup timestamp in KB
+    # Record last backup timestamp
     try:
         sb_post("sessions", {
             "summary": f"[state_update] last_backup_ts: {_dt.utcnow().isoformat()}",
@@ -5025,9 +5052,9 @@ def t_backup_brain(dry_run: str = "false") -> dict:
     except Exception:
         pass
     if errors:
-        notify(f"[BACKUP] Partial: {len(results)} OK, {len(errors)} errors: {errors}")
+        notify(f"[BACKUP] Partial: {len(results)} OK, {len(errors)} errors: {[e['table'] for e in errors]}")
     else:
-        notify(f"[BACKUP] Complete: {len(results)} tables -> /backups/{date_str}/")
+        notify(f"[BACKUP] Complete: {len(results)} tables ({kb_total} KB rows in {kb_chunk_num-1} chunks) -> /backups/{date_str}/")
     return {"ok": len(errors) == 0, "date": date_str, "exported": results, "errors": errors}
 
 TOOLS["backup_brain"] = {"fn": t_backup_brain, "perm": "READ",
