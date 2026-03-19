@@ -5060,6 +5060,10 @@ def t_maintenance_purge(table: str = "hot_reflections", older_than_days: int = 1
     Tables: hot_reflections (processed rows older than N days), reasoning_log (older than N days), sessions (older than N days).
     Safety: dry_run must be explicitly False to delete. Never purges tombstone tables."""
     ALLOWED_TABLES = {"hot_reflections", "reasoning_log", "sessions"}
+    try:
+        older_than_days = int(older_than_days)
+    except (TypeError, ValueError):
+        return {"ok": False, "error": f"older_than_days must be an integer, got: {older_than_days!r}"}
     if table not in ALLOWED_TABLES:
         return {"ok": False, "error": f"Table '{table}' not in allowed purge list: {ALLOWED_TABLES}"}
     if older_than_days < 7:
