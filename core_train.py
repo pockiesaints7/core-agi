@@ -1591,16 +1591,19 @@ def _run_cross_domain_synthesis():
 
     try:
         raw = gemini_chat(system_prompt, user_prompt, max_tokens=2048)
-        # Parse JSON from response
+        print(f"[SYNTH] Gemini raw (first 300): {raw[:300]}")
+        # Strip markdown fences if present
         import re as _re_s
-        json_match = _re_s.search(r'\[.*\]', raw, _re_s.DOTALL)
+        clean = _re_s.sub(r'```(?:json)?', '', raw).strip()
+        # Extract JSON array
+        json_match = _re_s.search(r'\[.*?\]', clean, _re_s.DOTALL)
         if not json_match:
-            print(f"[SYNTH] Groq returned no JSON array: {raw[:200]}")
+            print(f"[SYNTH] No JSON array found in response: {clean[:300]}")
             _last_synthesis_run = time.time()
             return
         insights = json.loads(json_match.group(0))
     except Exception as e:
-        print(f"[SYNTH] Groq synthesis error: {e}")
+        print(f"[SYNTH] Gemini synthesis error: {e} | raw: {raw[:200] if 'raw' in dir() else 'N/A'}")
         _last_synthesis_run = time.time()
         return
 
