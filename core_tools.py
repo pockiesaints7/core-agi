@@ -4427,17 +4427,17 @@ def t_task_health() -> dict:
         threshold_in_progress = now - timedelta(hours=24)
         threshold_pending = now - timedelta(days=7)
 
-        # Fetch in_progress tasks older than 24hr
+        # Fetch in_progress tasks older than 24hr (UUID PK -- no id=gt.1 filter)
         stale_ip_rows = sb_get(
             "task_queue",
-            f"select=id,task,status,created_at,updated_at&id=gt.1&status=eq.in_progress&order=created_at.asc",
+            "select=id,task,status,created_at,updated_at&status=eq.in_progress&order=created_at.asc",
             svc=True
         ) or []
 
-        # Fetch pending tasks older than 7 days
+        # Fetch pending tasks older than 7 days (UUID PK -- no id=gt.1 filter)
         stale_pend_rows = sb_get(
             "task_queue",
-            f"select=id,task,status,created_at,updated_at&id=gt.1&status=eq.pending&order=created_at.asc",
+            "select=id,task,status,created_at,updated_at&status=eq.pending&order=created_at.asc",
             svc=True
         ) or []
 
