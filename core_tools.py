@@ -176,8 +176,13 @@ def t_add_knowledge(domain="", topic="", instruction="", content="", tags="", co
         row["source_type"] = source_type
     if source_ref:
         row["source_ref"] = source_ref
-    ok = sb_post("knowledge_base", row)
-    return {"ok": ok, "topic": topic}
+    try:
+        r = httpx.post(f"{SUPABASE_URL}/rest/v1/knowledge_base", headers=_sbh(True), json=row, timeout=15)
+        if not r.is_success:
+            return {"ok": False, "topic": topic, "error": f"Supabase {r.status_code}: {r.text[:300]}"}
+        return {"ok": True, "topic": topic}
+    except Exception as e:
+        return {"ok": False, "topic": topic, "error": str(e)}
 
 def t_set_simulation(instruction: str) -> dict:
     """Set a custom simulation task for the background researcher.
@@ -3502,8 +3507,14 @@ def t_kb_update(domain: str, topic: str, instruction: str = "",
             row["source_type"] = source_type
         if source_ref:
             row["source_ref"] = source_ref
-        ok = sb_upsert("knowledge_base", row, "domain,topic")
-        return {"ok": ok, "domain": domain, "topic": topic, "action": "upserted"}
+        try:
+            h = {**_sbh(True), "Prefer": "resolution=merge-duplicates,return=minimal"}
+            r = httpx.post(f"{SUPABASE_URL}/rest/v1/knowledge_base?on_conflict=domain,topic", headers=h, json=row, timeout=15)
+            if not r.is_success:
+                return {"ok": False, "domain": domain, "topic": topic, "action": "upserted", "error": f"Supabase {r.status_code}: {r.text[:300]}"}
+            return {"ok": True, "domain": domain, "topic": topic, "action": "upserted"}
+        except Exception as e:
+            return {"ok": False, "domain": domain, "topic": topic, "action": "upserted", "error": str(e)}
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
