@@ -1588,7 +1588,7 @@ def t_system_map_scan(trigger: str = "manual") -> dict:
                         new_kf["tool_count"] = live_tool_count
                         changed = True
                 if changed:
-                    sb_patch("system_map", row["id"], {
+                    sb_patch("system_map", f"id=eq.{row['id']}", {
                         "key_facts": new_kf,
                         "last_updated": datetime.utcnow().isoformat(),
                         "updated_by": "session_end"
@@ -1633,7 +1633,8 @@ def t_system_map_scan(trigger: str = "manual") -> dict:
             removed = registered_names - live_tool_names
             for tool_name in sorted(removed):
                 try:
-                    row_id = registered[tool_name]["id"]
+                    row_id = registered[tool_name].get("id")
+                    if not row_id: continue
                     sb_patch("system_map", f"id=eq.{row_id}", {
                         "status": "tombstone",
                         "notes": "auto-tombstoned by session_end: not in TOOLS dict",
