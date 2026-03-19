@@ -1591,17 +1591,22 @@ def _run_cross_domain_synthesis():
 
     try:
         raw = gemini_chat(system_prompt, user_prompt, max_tokens=2048, json_mode=True)
-        print(f"[SYNTH] Gemini raw (first 300): {raw[:300]}")
-        # Strip markdown fences if present
+        print(f"[SYNTH] Gemini raw length={len(raw)} first_100={raw[:100]}")
+        # json_mode=True guarantees JSON -- parse directly, strip fences as fallback
         import re as _re_s
-        clean = _re_s.sub(r'```(?:json)?', '', raw).strip()
-        # Extract JSON array
-        json_match = _re_s.search(r'\[.*\]', clean, _re_s.DOTALL)
-        if not json_match:
-            print(f"[SYNTH] No JSON array found in response: {clean[:300]}")
-            _last_synthesis_run = time.time()
-            return
-        insights = json.loads(json_match.group(0))
+        clean = _re_s.sub(r'```(?:json)?\s*|\s*```', '', raw).strip()
+        # Try direct parse first, then array extraction as fallback
+        try:
+            insights = json.loads(clean)
+            if isinstance(insights, dict):  # wrapped in {insights: [...]}
+                insights = insights.get("insights", list(insights.values())[0] if insights else [])
+        except json.JSONDecodeError:
+            json_match = _re_s.search(r'\[.*\]', clean, _re_s.DOTALL)
+            if not json_match:
+                print(f"[SYNTH] No JSON parseable in response: {clean[:500]}")
+                _last_synthesis_run = time.time()
+                return
+            insights = json.loads(json_match.group(0))
     except Exception as e:
         print(f"[SYNTH] Gemini synthesis error: {e} | raw: {raw[:200] if 'raw' in dir() else 'N/A'}")
         _last_synthesis_run = time.time()
