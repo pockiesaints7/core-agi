@@ -1624,7 +1624,7 @@ def _run_self_diagnosis():
                 "priority": gap["priority"],
                 "source": "self_assigned",
             }
-            result = sb_post("task_queue", task_payload, svc=True)
+            result = sb_post("task_queue", task_payload)
             if result:
                 tasks_created.append(gap["title"])
                 print(f"[DIAG] Created self-assigned task: {gap['title']}")
