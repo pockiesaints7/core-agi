@@ -1,5 +1,14 @@
 [
   {
+    "id": 6454,
+    "domain": "core_agi.project_mode",
+    "topic": "project mode common sense rules -- facts only, no hallucination",
+    "instruction": "Apply these rules to ALL projects before any project-related task. No exceptions.",
+    "content": "PROJECT MODE COMMON SENSE RULES -- apply to every project, always:\n\n1. FACTS ONLY: Never infer party names, technical values, document numbers, revision numbers, dates, quantities, or scope from memory. If not in KB or a document read this session = UNKNOWN. Ask or read source.\n\n2. LOAD KB FIRST: Before any project document work, call project_get. Before any project question, call project_search. KB + documents = source of truth. Memory = unreliable.\n\n3. SCOPE DISCIPLINE: Only include confirmed scope. If activity not confirmed in KB or by owner = exclude. Ask when in doubt. Never pad a document with plausible-sounding out-of-scope content.\n\n4. PARTY NAMES ARE SACRED: Every party name must come from KB. Never substitute, abbreviate, or infer. Wrong party name in a formal document = serious professional error.\n\n5. DOCUMENT INTEGRITY: Flag errors to owner, do not silently correct. Mark unknown fields as [TBC]. Never add unrequested content. Revision numbers, submission dates, approval status = KB or owner only.\n\n6. TECHNICAL VALUES: Equipment ratings, specifications, cable sizes, settings, parameters = from approved documents only. Never round, estimate, or copy from reference project without explicit confirmation.\n\n7. WHEN UNCERTAIN: Say so. \"I don't have this in KB -- can you confirm?\" is the correct response. Wrong fact in formal document = rework, delays, loss of trust. Silence is better than guessing.",
+    "confidence": "proven",
+    "active": true
+  },
+  {
     "id": 6455,
     "domain": "core_agi.project_mode",
     "topic": "always share GDrive file links after operations",
