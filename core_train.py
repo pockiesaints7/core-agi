@@ -48,6 +48,11 @@ _last_self_diagnosis_run: float = 0.0
 _SELF_DIAGNOSIS_INTERVAL = 86400  # 24 hours
 _SELF_DIAGNOSIS_HOUR_UTC = 19     # 02:00 WIB = 19:00 UTC
 
+# AGI-01: Weekly cross-domain synthesis
+_last_synthesis_run: float = 0.0
+_SYNTHESIS_INTERVAL = 6 * 24 * 3600  # 6 days
+_SYNTHESIS_DAY_UTC = 2               # Wednesday UTC
+
 # ── TASK-4: Binance Price Monitor config ──────────────────────────────────────
 _PRICE_MONITOR_SYMBOLS  = os.getenv("BINANCE_WATCH_SYMBOLS", "BTCUSDT,ETHUSDT,BNBUSDT").split(",")
 _PRICE_ALERT_THRESHOLD  = float(os.getenv("BINANCE_ALERT_THRESHOLD_PCT", "3.0"))
@@ -875,6 +880,15 @@ def cold_processor_loop():
                     _run_self_diagnosis()
             except Exception as _de:
                 print(f"[DIAG] trigger error: {_de}")
+            # AGI-01: Weekly cross-domain synthesis on Wednesday
+            try:
+                now_utc = datetime.utcnow()
+                time_since_synth = time.time() - _last_synthesis_run
+                if (now_utc.weekday() == _SYNTHESIS_DAY_UTC and
+                        time_since_synth >= _SYNTHESIS_INTERVAL):
+                    _run_cross_domain_synthesis()
+            except Exception as _se:
+                print(f"[SYNTH] trigger error: {_se}")
             # GAP-DATA-01: Weekly backup check -- runs if last backup > 6 days ago
             try:
                 _BACKUP_INTERVAL = 6 * 24 * 3600  # 6 days in seconds
@@ -1512,6 +1526,168 @@ def start_price_monitor():
     t = _threading.Thread(target=price_monitor_loop, daemon=True, name="price_monitor")
     t.start()
     return t
+
+
+# -- AGI-01: Weekly Cross-Domain Synthesis ------------------------------------
+
+def _run_cross_domain_synthesis():
+    """AGI-01: Cross-domain pattern synthesis. Runs weekly on Wednesday.
+    Reads top 5 patterns per domain, uses Groq to find structural similarities,
+    writes unified insights to knowledge_base(domain=synthesis).
+    Notifies owner via Telegram.
+    """
+    global _last_synthesis_run
+    print("[SYNTH] Starting cross-domain synthesis...")
+
+    # Step 1: Load top patterns per domain
+    try:
+        top_patterns = sb_get(
+            "pattern_frequency",
+            "select=pattern_key,domain,frequency&stale=eq.false&order=frequency.desc&limit=200",
+            svc=True
+        ) or []
+    except Exception as e:
+        print(f"[SYNTH] pattern load error: {e}")
+        _last_synthesis_run = time.time()
+        return
+
+    if not top_patterns:
+        print("[SYNTH] No patterns found -- skipping")
+        _last_synthesis_run = time.time()
+        return
+
+    # Group top 5 per domain
+    domain_patterns: dict = {}
+    for p in top_patterns:
+        d = p.get("domain", "general")
+        if d not in domain_patterns:
+            domain_patterns[d] = []
+        if len(domain_patterns[d]) < 5:
+            domain_patterns[d].append(p.get("pattern_key", ""))
+
+    if len(domain_patterns) < 2:
+        print(f"[SYNTH] Only {len(domain_patterns)} domain(s) -- need 2+ for cross-domain synthesis")
+        _last_synthesis_run = time.time()
+        return
+
+    print(f"[SYNTH] Synthesizing across {len(domain_patterns)} domains: {list(domain_patterns.keys())[:8]}")
+
+    # Step 2: Ask Groq to find structural similarities
+    domain_summary = "\n".join(
+        f"Domain '{d}': " + " | ".join(ps[:3])
+        for d, ps in list(domain_patterns.items())[:10]
+    )
+    system_prompt = (
+        "You are an expert at finding structural patterns across different knowledge domains. "
+        "Given patterns from multiple domains, identify which patterns share the same ROOT CAUSE structure "
+        "even if they appear in different contexts. Focus on actionable insights."
+    )
+    user_prompt = (
+        f"Analyze these patterns from CORE AGI's operational domains:\n\n{domain_summary}\n\n"
+        "Find 3-5 cross-domain insights where the same root cause appears in multiple domains. "
+        "For each insight, write: INSIGHT: <one sentence>. DOMAINS: <which domains>. UNIFIED_RULE: <actionable rule that applies across all those domains>. "
+        "Be specific and actionable. Format as JSON array: [{\"insight\": str, \"domains\": [str], \"unified_rule\": str, \"confidence\": 0.0-1.0}]"
+    )
+
+    try:
+        raw = groq_chat(system_prompt, user_prompt)
+        # Parse JSON from response
+        import re as _re_s
+        json_match = _re_s.search(r'\[.*\]', raw, _re_s.DOTALL)
+        if not json_match:
+            print(f"[SYNTH] Groq returned no JSON array: {raw[:200]}")
+            _last_synthesis_run = time.time()
+            return
+        insights = json.loads(json_match.group(0))
+    except Exception as e:
+        print(f"[SYNTH] Groq synthesis error: {e}")
+        _last_synthesis_run = time.time()
+        return
+
+    if not insights:
+        print("[SYNTH] No insights generated")
+        _last_synthesis_run = time.time()
+        return
+
+    # Step 3: Write to knowledge_base + hot_reflections
+    written = 0
+    try:
+        import hashlib as _hl
+        date_tag = datetime.utcnow().strftime("%Y%m%d")
+        for ins in insights:
+            insight_text = ins.get("insight", "")
+            unified_rule = ins.get("unified_rule", "")
+            domains = ins.get("domains", [])
+            conf_raw = ins.get("confidence", 0.7)
+            if not insight_text or not unified_rule:
+                continue
+            # Map float confidence to enum
+            conf_val = float(conf_raw) if isinstance(conf_raw, (int, float)) else 0.7
+            conf_enum = "proven" if conf_val >= 0.9 else "high" if conf_val >= 0.75 else "medium" if conf_val >= 0.5 else "low"
+            topic_hash = _hl.md5(insight_text[:80].encode()).hexdigest()[:8]
+            topic = f"cross_domain_{topic_hash}_{date_tag}"
+            content = (
+                f"INSIGHT: {insight_text}\n"
+                f"DOMAINS: {', '.join(domains)}\n"
+                f"UNIFIED_RULE: {unified_rule}\n"
+                f"GENERATED: {datetime.utcnow().isoformat()}\n"
+                f"SOURCE: AGI-01 cross-domain synthesis"
+            )
+            # Upsert to avoid duplicates on re-run
+            existing = sb_get(
+                "knowledge_base",
+                f"select=id&domain=eq.synthesis&topic=eq.{topic}&id=gt.1",
+                svc=True
+            )
+            if existing:
+                print(f"[SYNTH] Skipped duplicate insight: {topic}")
+                continue
+            ok = sb_post("knowledge_base", {
+                "domain": "synthesis",
+                "topic": topic,
+                "content": content,
+                "confidence": conf_enum,
+                "source_type": "evolved",
+                "instruction": f"Apply this unified rule across domains: {', '.join(domains)}",
+            })
+            if ok:
+                written += 1
+                print(f"[SYNTH] Insight written: {insight_text[:80]}")
+    except Exception as e:
+        print(f"[SYNTH] KB write error: {e}")
+
+    # Step 4: Hot reflection for cold processor
+    try:
+        if written > 0:
+            patterns_list = [ins.get("insight", "") for ins in insights if ins.get("insight")]
+            sb_post("hot_reflections", {
+                "domain": "synthesis",
+                "task_summary": f"AGI-01 cross-domain synthesis: {written} insights across {len(domain_patterns)} domains",
+                "quality_score": 0.85,
+                "new_patterns": json.dumps(patterns_list),
+                "processed_by_cold": False,
+                "source": "real",
+                "reflection_text": f"Cross-domain synthesis identified {written} structural similarities. Domains covered: {list(domain_patterns.keys())}",
+            })
+    except Exception as e:
+        print(f"[SYNTH] hot_reflection error: {e}")
+
+    _last_synthesis_run = time.time()
+
+    # Step 5: Notify owner
+    try:
+        if written > 0:
+            summary_lines = [f"  {i+1}. {ins.get('insight','')[:80]}" for i, ins in enumerate(insights[:5])]
+            notify(
+                f"[SYNTH] Weekly cross-domain synthesis complete.\n"
+                f"{written} insight(s) written to KB (domain=synthesis):\n"
+                + "\n".join(summary_lines)
+            )
+        else:
+            notify("[SYNTH] Weekly synthesis ran but produced no new insights.")
+        print(f"[SYNTH] Done. {written} insights written.")
+    except Exception as e:
+        print(f"[SYNTH] notify error: {e}")
 
 
 # -- AGI-02: Nightly Self-Diagnosis -------------------------------------------
