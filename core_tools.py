@@ -5077,3 +5077,48 @@ def t_backup_brain(dry_run: str = "false") -> dict:
 TOOLS["backup_brain"] = {"fn": t_backup_brain, "perm": "READ",
     "args": [{"name": "dry_run", "type": "string", "description": "true=list what would be exported without writing (default false)"}],
     "desc": "GAP-DATA-01: Export critical Supabase tables to GitHub /backups/YYYY-MM-DD/. Runs weekly. dry_run=true for safe preview."}
+
+
+def t_maintenance_purge(table: str = "hot_reflections", older_than_days: int = 14, dry_run: bool = True):
+    """Purge old rows from maintenance tables. dry_run=True (default) only counts, never deletes.
+    Tables: hot_reflections (processed rows older than N days), reasoning_log (older than N days), sessions (older than N days).
+    Safety: dry_run must be explicitly False to delete. Never purges tombstone tables."""
+    ALLOWED_TABLES = {"hot_reflections", "reasoning_log", "sessions"}
+    if table not in ALLOWED_TABLES:
+        return {"ok": False, "error": f"Table '{table}' not in allowed purge list: {ALLOWED_TABLES}"}
+    if older_than_days < 7:
+        return {"ok": False, "error": "older_than_days must be >= 7 to prevent accidental recent-data deletion"}
+    cutoff = (datetime.utcnow() - timedelta(days=older_than_days)).isoformat()
+    # Build count query
+    try:
+        count_filter = f"created_at=lt.{cutoff}"
+        if table == "hot_reflections":
+            count_filter += "&processed=eq.true"
+        rows = sb_get(table, count_filter)
+        count = len(rows) if isinstance(rows, list) else 0
+    except Exception as e:
+        return {"ok": False, "error": f"Count query failed: {str(e)}"}
+    if dry_run is True or str(dry_run).lower() in ("true", "1", "yes"):
+        return {
+            "ok": True,
+            "dry_run": True,
+            "table": table,
+            "older_than_days": older_than_days,
+            "cutoff": cutoff,
+            "would_delete": count,
+            "note": "Pass dry_run=False to execute deletion"
+        }
+    # Execute deletion
+    delete_filter = f"created_at=lt.{cutoff}"
+    if table == "hot_reflections":
+        delete_filter += "&processed=eq.true"
+    ok = sb_delete(table, delete_filter)
+    print(f"[PURGE] {table}: deleted ~{count} rows older than {older_than_days}d. ok={ok}")
+    return {
+        "ok": ok,
+        "dry_run": False,
+        "table": table,
+        "older_than_days": older_than_days,
+        "cutoff": cutoff,
+        "deleted_approx": count
+    }
