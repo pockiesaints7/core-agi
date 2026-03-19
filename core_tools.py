@@ -1142,10 +1142,17 @@ def _patch_find(content: str, old_str: str):
     return False, 0, old_str, hint
 
 
-def t_gh_search_replace(path="", old_str="", new_str="", message="", repo="", dry_run="false"):
-    """Surgical find-replace using Blobs API (atomic commit, no SHA conflict, no size limit)."""
+def t_gh_search_replace(path="", old_str="", new_str=None, message="", repo="", dry_run="false", allow_deletion="false"):
+    """Surgical find-replace using Blobs API (atomic commit, no SHA conflict, no size limit).
+    allow_deletion: must be 'true' to permit empty new_str. Default false -- blocks accidental deletion."""
     try:
         repo = repo or GITHUB_REPO
+        # DELETION GUARD: block empty/missing new_str unless allow_deletion=true
+        _allow_del = str(allow_deletion).lower() == "true"
+        if (new_str is None or new_str == "") and not _allow_del:
+            return {"ok": False, "error": "DELETION BLOCKED: new_str is missing or empty. Pass allow_deletion=true if this deletion is intentional."}
+        if new_str is None:
+            new_str = ""
         file_content = _gh_blob_read(path, repo)
         found, count, matched, hint = _patch_find(file_content, old_str)
         if not found:
@@ -3282,11 +3289,13 @@ def t_synthesize_evolutions() -> dict:
 
 # -- Task 8: Server-side patching tools ---------------------------------------
 
-def t_patch_file(path: str, patches: str, message: str, repo: str = "", dry_run: str = "false") -> dict:
+def t_patch_file(path: str, patches: str, message: str, repo: str = "", dry_run: str = "false", allow_deletion: str = "false") -> dict:
     """Server-side patch: fetch file from GitHub, apply find-replace patches,
     run py_compile if .py, then push. Prevents syntax errors from crashing Railway.
     patches: JSON array of {old_str, new_str} objects (same format as multi_patch).
-    dry_run: true = show diff but do not push."""
+    dry_run: true = show diff but do not push.
+    allow_deletion: must be 'true' to permit a patch with empty/missing new_str.
+                    Default false -- empty new_str is BLOCKED to prevent accidental deletion."""
     try:
         import subprocess, tempfile as _tmpfile
         repo = repo or GITHUB_REPO
@@ -3295,9 +3304,16 @@ def t_patch_file(path: str, patches: str, message: str, repo: str = "", dry_run:
         content = _gh_blob_read(path, repo)
         applied = []
         skipped = []
+        _allow_del = str(allow_deletion).lower() == "true"
         for i, patch in enumerate(patches):
             old = patch.get("old_str", "")
-            new = patch.get("new_str", "")
+            new = patch.get("new_str")  # None if missing, "" if explicitly empty
+            # DELETION GUARD: block patches with missing or empty new_str unless allow_deletion=true
+            if (new is None or new == "") and not _allow_del:
+                skipped.append({"index": i, "reason": "DELETION BLOCKED: new_str is missing or empty. Pass allow_deletion=true to permit intentional deletions.", "old_str": old[:80]})
+                continue
+            if new is None:
+                new = ""
             found, count, matched, hint = _patch_find(content, old)
             if not found:
                 skipped.append({"index": i, "reason": "not found", "old_str": old[:80], "hint": hint})
