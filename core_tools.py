@@ -4994,8 +4994,8 @@ def t_backup_brain(dry_run: str = "false") -> dict:
     tables = [
         ("knowledge_base",  "select=id,domain,topic,instruction,content,confidence,active&order=id.asc&limit=5000&id=gt.1"),
         ("behavioral_rules", "select=id,trigger,pointer,full_rule,domain,priority,active,confidence&order=id.asc&limit=500&id=gt.1"),
-        ("task_queue",       "select=id,task,status,priority,source,created_at&order=priority.desc&limit=50&id=gt.1"),
-        ("sessions",         "select=id,summary,domain,quality,created_at&order=created_at.desc&limit=30&id=gt.1"),
+        ("task_queue",       "select=id,task,status,priority,source,created_at&order=priority.desc&limit=50"),
+        ("sessions",         "select=id,summary,domain,quality,created_at&order=created_at.desc&limit=30"),
         ("mistakes",         "select=id,domain,what_failed,correct_approach,severity,root_cause,created_at&order=id.desc&limit=500&id=gt.1"),
         ("infrastructure_map", "select=*&order=id.asc&id=gt.1"),
         ("credentials_index",  "select=id,service,key_name,location,env_var_name,required_for&order=id.asc&id=gt.1"),
