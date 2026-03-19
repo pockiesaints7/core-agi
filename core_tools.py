@@ -713,80 +713,60 @@ _TABLE_SCHEMAS_REMOVED = {
 }
 
 def t_sb_query(table, filters="", limit=20, order="", select="*"):
-    """Schema-aware Supabase read. Validates columns, warns on fat-column selections,
-    and returns schema hints when unknown columns are requested.
+    """Schema-aware Supabase read. Auto-blocks tombstone tables, auto-downgrades
+    select=* on fat-column tables, validates columns, warns on unsafe patterns.
     Use dedicated tools first (search_kb, get_mistakes etc) -- this is the escape hatch.
-    filters: PostgREST filter string e.g. 'status=eq.pending'.
-    order: sort column e.g. 'created_at.desc'.
-    select: columns to return e.g. 'id,status' (default *). Avoid * on large tables."""
+    filters: PostgREST filter string e.g. 'status=eq.pending'
+    order: sort column e.g. 'created_at.desc'
+    select: columns e.g. 'id,status,priority' (avoid * on large tables)"""
     try: lim = int(limit) if limit else 20
     except: lim = 20
-
-    schema = _TABLE_SCHEMAS.get(table)
-    warnings = []
-
-    # Unknown table -- warn but proceed
-    if not schema:
-        warnings.append(f"table '{table}' not in schema registry -- proceeding blind")
-
-    sel = select.strip() if select and select.strip() else "*"
-
-    if schema:
-        # Wildcard on a table with fat columns -- auto-downgrade to safe_select
-        if sel == "*" and schema.get("fat_columns"):
-            sel = schema["safe_select"]
-            warnings.append(
-                f"select=* blocked on '{table}' (fat columns: {schema['fat_columns']}) -- "
-                f"auto-downgraded to safe_select: '{sel}'. "
-                f"Pass explicit columns to override."
-            )
-        else:
-            # Validate requested columns against known schema
-            requested = [c.strip() for c in sel.split(",") if c.strip()]
-            known = set(schema["columns"])
-            bad = [c for c in requested if c not in known and "->" not in c and "(" not in c]
-            fat_requested = [c for c in requested if c in schema.get("fat_columns", [])]
-            if bad:
-                warnings.append(f"unknown columns requested: {bad}. known: {schema['columns']}")
-            if fat_requested:
-                warnings.append(
-                    f"fat column(s) selected: {fat_requested} -- may cause response overflow at scale. "
-                    f"Consider: {schema['safe_select']}"
-                )
-
-        # bigserial PK tables: remind caller about id=gt.1 rule
-        if schema.get("pk_type") == "bigserial" and filters and "id=gt." not in filters:
-            warnings.append(f"reminder: '{table}' uses bigserial PK -- add id=gt.1 to exclude probe row")
-
+    sel, warnings = _validate_read(table, select or "*", filters or "")
+    # Hard block on tombstone
+    if sel is None:
+        return {"ok": False, "error": warnings[0] if warnings else "tombstone table",
+                "schema_warnings": warnings}
     qs = f"select={sel}"
-    if filters and filters.strip():
-        qs += f"&{filters.strip()}"
-    if order and order.strip():
-        qs += f"&order={order.strip()}"
+    if filters and filters.strip(): qs += f"&{filters.strip()}"
+    if order and order.strip():     qs += f"&order={order.strip()}"
     qs += f"&limit={lim}"
-
     result = sb_get(table, qs, svc=True)
-
     if warnings:
         if isinstance(result, list):
-            return {"data": result, "schema_warnings": warnings, "table": table, "schema": schema}
-        elif isinstance(result, dict):
+            return {"data": result, "count": len(result), "schema_warnings": warnings,
+                    "table": table, "effective_select": sel}
+        if isinstance(result, dict):
             result["schema_warnings"] = warnings
-            return result
-
     return result
 
 def t_sb_insert(table="", data=""):
+    """Schema-validated Supabase insert. Blocks tombstone tables, validates columns/enums/required fields.
+    data: JSON string or dict. Returns ok + schema_warnings if any validation issues found."""
+    if not table:
+        return {"ok": False, "error": "table required"}
+    if table in _SB_SCHEMA.get("_tombstone", set()):
+        return {"ok": False, "error": f"TOMBSTONE: '{table}' is retired -- do not write to it",
+                "hint": "Check active tables in _SB_SCHEMA"}
     if isinstance(data, str):
         try: data = json.loads(data)
-        except Exception as e: return {"ok": False, "error_code": "invalid_json", "message": f"data must be valid JSON: {e}", "retry_hint": False, "domain": "supabase"}
+        except Exception as e:
+            schema = _sb_schema(table)
+            return {"ok": False, "error_code": "invalid_json", "message": str(e),
+                    "hint": f"Expected fields for {table}: {sorted(schema.get('columns', {}).keys()) if schema else 'unknown table'}"}
+    errs = _validate_write(table, data)
+    if errs:
+        schema = _sb_schema(table)
+        return {"ok": False, "error": "schema_violation", "violations": errs,
+                "required": schema.get("required", []),
+                "hint": f"Valid columns for {table}: {sorted(schema.get('columns', {}).keys())}"}
     try:
         ok = sb_post(table, data)
         if not ok:
-            return {"ok": False, "error_code": "insert_failed", "message": f"Supabase insert failed for table {table}", "retry_hint": True, "domain": "supabase"}
-        return {"ok": True, "table": table}
+            return {"ok": False, "error_code": "insert_failed",
+                    "message": f"Supabase insert rejected for '{table}'", "retry_hint": True}
+        return {"ok": True, "table": table, "inserted_fields": sorted(data.keys())}
     except Exception as e:
-        return {"ok": False, "error_code": "exception", "message": str(e), "retry_hint": True, "domain": "supabase"}
+        return {"ok": False, "error_code": "exception", "message": str(e), "retry_hint": True}
 
 def t_sb_bulk_insert(table: str, rows: str) -> dict:
     """Insert multiple rows into Supabase in a single HTTP call."""
@@ -3912,50 +3892,79 @@ def t_append_to_file(path: str, content_to_append: str, message: str, repo: str 
 
 # -- Supabase write layer (TASK-14) ------------------------------------------
 def t_sb_patch(table: str = "", filters: str = "", data="") -> dict:
-    """Update rows in a Supabase table matching filters.
-    filters: PostgREST filter string e.g. 'id=eq.abc123'. REQUIRED.
-    data: JSON string or dict of fields to update e.g. '{"status": "done"}'.
-    Never call without filters -- full-table updates are blocked."""
+    """Schema-validated Supabase update. Blocks tombstone+filterless calls.
+    filters: PostgREST filter string e.g. 'id=eq.abc123'. REQUIRED -- no filterless updates.
+    data: JSON string or dict of fields to update."""
+    if not table:
+        return {"ok": False, "error": "table required"}
+    if table in _SB_SCHEMA.get("_tombstone", set()):
+        return {"ok": False, "error": f"TOMBSTONE: '{table}' is retired"}
     if not filters or not filters.strip():
-        return {"ok": False, "error": "BLOCKED: filters required -- cannot update entire table"}
+        return {"ok": False, "error": "BLOCKED: filters required -- full-table updates not allowed",
+                "hint": "e.g. filters='id=eq.<uuid>' or filters='status=eq.pending'"}
     if isinstance(data, str):
-        try:
-            data = json.loads(data)
+        try: data = json.loads(data)
         except Exception as e:
             return {"ok": False, "error": f"data must be valid JSON: {e}"}
     if not isinstance(data, dict) or not data:
         return {"ok": False, "error": "data must be a non-empty JSON object"}
+    # Validate only the columns being updated (partial update -- don't require all required fields)
+    schema = _sb_schema(table)
+    if schema:
+        known = set(schema.get("columns", {}).keys())
+        bad = [c for c in data if c not in known]
+        if bad:
+            return {"ok": False, "error": f"UNKNOWN_COLUMN(S): {bad} not in '{table}'",
+                    "hint": f"Valid columns: {sorted(known)}"}
+        enums = schema.get("enums", {})
+        for col, allowed in enums.items():
+            if col in data and data[col] is not None and str(data[col]) not in [str(v) for v in allowed]:
+                return {"ok": False, "error": f"INVALID_ENUM: '{col}'='{data[col]}' -- allowed: {allowed}"}
     try:
         ok = sb_patch(table, filters.strip(), data)
         if not ok:
-            return {"ok": False, "error_code": "patch_failed", "message": f"Supabase patch failed for table {table}", "retry_hint": True, "domain": "supabase"}
-        return {"ok": True, "table": table, "filters": filters, "updated_fields": list(data.keys())}
+            return {"ok": False, "error_code": "patch_failed",
+                    "message": f"Supabase patch failed for '{table}'", "retry_hint": True}
+        return {"ok": True, "table": table, "filters": filters, "updated_fields": sorted(data.keys())}
     except Exception as e:
-        return {"ok": False, "error_code": "exception", "message": str(e), "retry_hint": True, "domain": "supabase"}
+        return {"ok": False, "error_code": "exception", "message": str(e), "retry_hint": True}
 
 
 def t_sb_upsert(table: str = "", data="", on_conflict: str = "") -> dict:
-    """Insert a row or update it if it already exists (upsert).
+    """Schema-validated Supabase upsert. Blocks tombstone, validates columns+enums+required.
     data: JSON string or dict of the full row.
-    on_conflict: column(s) defining uniqueness e.g. 'domain,topic' for knowledge_base,
-                 'project_id' for projects, 'name' for script_templates.
-    Common on_conflict values: knowledge_base=domain,topic -- projects=project_id -- script_templates=name"""
-    if not on_conflict or not on_conflict.strip():
-        return {"ok": False, "error": "on_conflict required -- specify column(s) e.g. 'domain,topic'"}
+    on_conflict: column(s) defining uniqueness. If omitted, schema default is used.
+    Schema defaults: knowledge_base=domain,topic | script_templates=name | pattern_frequency=pattern_key"""
+    if not table:
+        return {"ok": False, "error": "table required"}
+    if table in _SB_SCHEMA.get("_tombstone", set()):
+        return {"ok": False, "error": f"TOMBSTONE: '{table}' is retired"}
     if isinstance(data, str):
-        try:
-            data = json.loads(data)
+        try: data = json.loads(data)
         except Exception as e:
             return {"ok": False, "error": f"data must be valid JSON: {e}"}
     if not isinstance(data, dict) or not data:
         return {"ok": False, "error": "data must be a non-empty JSON object"}
+    # Auto-fill on_conflict from schema if not provided
+    schema = _sb_schema(table)
+    conflict_col = on_conflict.strip() if on_conflict and on_conflict.strip() else ""
+    if not conflict_col and schema:
+        conflict_col = schema.get("on_conflict", "")
+    if not conflict_col:
+        return {"ok": False, "error": "on_conflict required",
+                "hint": f"Schema default for '{table}': {schema.get('on_conflict', 'none defined -- specify manually')}"}
+    errs = _validate_write(table, data)
+    if errs:
+        return {"ok": False, "error": "schema_violation", "violations": errs,
+                "hint": f"Valid columns for {table}: {sorted(schema.get('columns', {}).keys()) if schema else 'unknown'}"}
     try:
-        ok = sb_upsert(table, data, on_conflict.strip())
+        ok = sb_upsert(table, data, conflict_col)
         if not ok:
-            return {"ok": False, "error_code": "upsert_failed", "message": f"Supabase upsert failed for table {table}", "retry_hint": True, "domain": "supabase"}
-        return {"ok": True, "table": table, "on_conflict": on_conflict, "fields": list(data.keys())}
+            return {"ok": False, "error_code": "upsert_failed",
+                    "message": f"Supabase upsert failed for '{table}'", "retry_hint": True}
+        return {"ok": True, "table": table, "on_conflict": conflict_col, "fields": sorted(data.keys())}
     except Exception as e:
-        return {"ok": False, "error_code": "exception", "message": str(e), "retry_hint": True, "domain": "supabase"}
+        return {"ok": False, "error_code": "exception", "message": str(e), "retry_hint": True}
 
 
 def t_sb_delete(table: str, filters: str, confirm: str = "") -> dict:
@@ -4059,13 +4068,31 @@ def t_task_update(task_id: str = "", status: str = "", result: str = "") -> dict
 
 def t_task_add(title: str = "", description: str = "", priority: str = "5",
                subtasks: str = "", blocked_by: str = "") -> dict:
-    """Add a new task to task_queue with proper schema. source=mcp_session set automatically."""
+    """Add a new task to task_queue. source=mcp_session set automatically.
+    Dedup guard: blocks insertion if a pending/in_progress task with same title already exists.
+    Only source=mcp_session allowed -- self_assigned tasks must not be created via this tool."""
     if not title:
         return {"ok": False, "error": "title required"}
+    try: pri = int(priority) if priority else 5
+    except Exception: pri = 5
+    # Dedup guard: check for existing pending/in_progress task with identical title
     try:
-        pri = int(priority) if priority else 5
+        existing = sb_get(
+            "task_queue",
+            "select=id,status,task&status=in.(pending,in_progress)&limit=100",
+            svc=True
+        ) or []
+        for row in existing:
+            try:
+                t = json.loads(row.get("task") or "{}")
+                if t.get("title", "").strip().lower() == title.strip().lower():
+                    return {"ok": False, "error": "DUPLICATE_TASK",
+                            "message": f"Task with title '{title}' already exists (id={row['id']}, status={row['status']})",
+                            "existing_id": row["id"], "hint": "Use task_update to progress the existing task instead"}
+            except Exception:
+                pass
     except Exception:
-        pri = 5
+        pass  # Dedup check non-fatal -- proceed if it fails
     task_json = json.dumps({
         "title": title,
         "description": description,
@@ -4074,10 +4101,8 @@ def t_task_add(title: str = "", description: str = "", priority: str = "5",
     })
     try:
         ok = sb_post("task_queue", {
-            "task": task_json,
-            "status": "pending",
-            "priority": pri,
-            "source": "mcp_session",
+            "task": task_json, "status": "pending",
+            "priority": pri, "source": "mcp_session",
         })
         return {"ok": ok, "title": title, "priority": pri}
     except Exception as e:
