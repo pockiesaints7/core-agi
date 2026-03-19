@@ -67,20 +67,62 @@ def get_current_step() -> str:
 
 
 # -- Schema registry: ground-truth column/enum enforcement -------------------
-_SCHEMA_REGISTRY = None
+# Inline schema -- no network call, always available, instant response.
+# Source: operating_context.json as of 2026-03-19. Update here when schema changes.
+_SCHEMA_REGISTRY = {
+    "tables": {
+        "knowledge_base": {
+            "pk_type": "int4_serial",
+            "columns": {"id": "integer", "domain": "text", "topic": "text", "content": "text",
+                         "source": "text", "confidence": "text_enum", "tags": "text[]",
+                         "instruction": "text", "source_type": "text", "source_ref": "text",
+                         "active": "boolean", "created_at": "timestamptz", "updated_at": "timestamptz"},
+            "allowed_values": {"confidence": ["low", "medium", "high", "proven"]}
+        },
+        "behavioral_rules": {
+            "pk_type": "int8_serial",
+            "columns": {"id": "bigint", "trigger": "text", "pointer": "text", "full_rule": "text",
+                         "domain": "text", "priority": "integer", "active": "boolean",
+                         "tested": "boolean", "source": "text", "confidence": "float8",
+                         "expires_at": "timestamptz", "created_at": "timestamptz"},
+            "allowed_values": {"domain": ["auth","code","failure_recovery","github","groq",
+                "local_pc","postgres","powershell","project","railway","reasoning",
+                "supabase","telegram","universal","zapier"]}
+        },
+        "hot_reflections": {
+            "pk_type": "int8_serial",
+            "columns": {"id": "bigint", "task_summary": "text", "domain": "text",
+                         "quality_score": "float8", "reflection_text": "text",
+                         "processed_by_cold": "boolean", "source": "text", "created_at": "timestamptz"},
+            "allowed_values": {}
+        },
+        "mistakes": {
+            "pk_type": "int4_serial",
+            "columns": {"id": "integer", "context": "text", "what_failed": "text",
+                         "root_cause": "text", "correct_approach": "text", "domain": "text",
+                         "how_to_avoid": "text", "severity": "text", "created_at": "timestamptz"},
+            "allowed_values": {"severity": ["low", "medium", "high", "critical"]}
+        },
+        "task_queue": {
+            "pk_type": "uuid",
+            "columns": {"id": "uuid", "task": "text", "status": "text", "priority": "integer",
+                         "result": "text", "source": "text", "next_step": "text",
+                         "blocked_by": "text[]", "checkpoint": "jsonb", "created_at": "timestamptz"},
+            "allowed_values": {"status": ["pending", "in_progress", "done", "failed"]}
+        },
+        "quality_metrics": {
+            "pk_type": "int8_serial",
+            "columns": {"id": "bigint", "session_id": "uuid", "quality_score": "float8",
+                         "tasks_completed": "integer", "mistakes_made": "integer",
+                         "owner_corrections": "integer", "assumptions_caught": "integer",
+                         "domain": "text", "notes": "text", "created_at": "timestamptz"},
+            "allowed_values": {}
+        }
+    }
+}
 
 def _load_schema_registry():
-    """Load operating_context.json from GitHub once per process. Cache in module global."""
-    global _SCHEMA_REGISTRY
-    if _SCHEMA_REGISTRY is not None:
-        return _SCHEMA_REGISTRY
-    try:
-        raw = gh_read("operating_context.json")
-        _SCHEMA_REGISTRY = json.loads(raw)
-        print("[SCHEMA] Registry loaded OK")
-    except Exception as e:
-        print(f"[SCHEMA] WARNING: could not load operating_context.json: {e}")
-        _SCHEMA_REGISTRY = {}
+    """Return inline schema registry -- no network call, always instant."""
     return _SCHEMA_REGISTRY
 
 def _validate_write(table: str, data: dict) -> list:
