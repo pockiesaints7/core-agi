@@ -5008,7 +5008,7 @@ def t_backup_brain(dry_run: str = "false") -> dict:
     errors = []
     # knowledge_base: paginate in chunks of 200 to stay under GitHub 1MB content API limit
     KB_CHUNK = 200
-    kb_offset = 2  # start after probe row (id=gt.1 means rows with id>1, offset via id filter)
+    kb_offset = 1  # start from id>1 (probe row is id=1, skip it via query filter)
     kb_chunk_num = 1
     kb_total = 0
     kb_ok = True
