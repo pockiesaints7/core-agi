@@ -1929,6 +1929,66 @@ def t_session_end(summary: str = "", actions: str = "", domain: str = "general",
         except Exception:
             pass
 
+        # AGI-06: Capability metrics -- multi-dimensional session scoring
+        cap_metrics = {}
+        try:
+            # Fetch recent mistakes count for this session (last 2hr window)
+            session_ts_cap = (datetime.utcnow() - timedelta(hours=2)).isoformat()
+            session_mistakes = sb_get("mistakes",
+                f"select=id,severity&created_at=gte.{session_ts_cap}&limit=20",
+                svc=True) or []
+            n_mistakes = len(session_mistakes)
+            n_critical = sum(1 for m in session_mistakes if m.get("severity") in ("critical", "high"))
+            n_actions = max(len(actions_list), 1)
+
+            # Derive dimensions from available session data
+            # ACCURACY: correctness without rework -- penalizes mistakes per action
+            accuracy = max(0.0, round(1.0 - min(n_mistakes / n_actions, 1.0), 3))
+
+            # EFFICIENCY: quality score directly (proxy for actions-to-outcome ratio)
+            efficiency = round(q, 3)
+
+            # AUTONOMY: 1.0 if no owner corrections, degrades with corrections
+            # Note: owner_corrections not in session_end params yet -- derive from patterns keyword
+            n_corrections = patterns.lower().count("correction") + patterns.lower().count("corrected")
+            autonomy = max(0.0, round(1.0 - min(n_corrections * 0.2, 1.0), 3))
+
+            # ROBUSTNESS: 1.0 if no critical/high mistakes, degrades with severity
+            robustness = max(0.0, round(1.0 - (n_critical * 0.3), 3))
+
+            # LEARNING RATE: improving if quality >= 0.8, stable 0.6-0.79, declining <0.6
+            learning_rate = 1.0 if q >= 0.8 else (0.7 if q >= 0.6 else 0.4)
+
+            # TRANSFER: did session produce cross-domain insights (patterns non-empty = yes)
+            transfer = 0.8 if (caller_patterns and q >= 0.7) else 0.5
+
+            composite = round((accuracy + efficiency + autonomy + robustness + learning_rate + transfer) / 6, 3)
+
+            cap_metrics = {
+                "accuracy": accuracy,
+                "efficiency": efficiency,
+                "autonomy": autonomy,
+                "robustness": robustness,
+                "learning_rate": learning_rate,
+                "transfer": transfer,
+                "composite_score": composite,
+            }
+            sb_post("capability_metrics", {
+                "domain": domain,
+                "accuracy": accuracy,
+                "efficiency": efficiency,
+                "autonomy": autonomy,
+                "robustness": robustness,
+                "learning_rate": learning_rate,
+                "transfer": transfer,
+                "composite_score": composite,
+                "raw_data": {"n_mistakes": n_mistakes, "n_critical": n_critical,
+                             "n_actions": n_actions, "quality": q},
+                "notes": summary[:200] if summary else "",
+            })
+        except Exception:
+            pass
+
         # Build return -- surface reflection failure and task warnings
         result = {
             "ok": session_ok,
@@ -1942,6 +2002,7 @@ def t_session_end(summary: str = "", actions: str = "", domain: str = "general",
             "tools_updated": _tools_updated if _tools_updated else "none",
             "new_tool_sop": _new_sop if _new_sop else "none",
             "counterfactuals_written": counterfactuals_written,
+            "capability_metrics": cap_metrics,
         }
         if not r_ok:
             result["reflection_warning"] = (
