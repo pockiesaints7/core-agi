@@ -1,5 +1,14 @@
 [
   {
+    "id": 2189,
+    "domain": "backlog",
+    "topic": "[BACKLOG-1] User Task Feedback Integration",
+    "instruction": null,
+    "content": "type=missing_data effort=low impact=low domain=code\nGather user feedback for tasks completed to improve CORE's understanding and quality of task delivery.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
     "id": 2190,
     "domain": "backlog",
     "topic": "[BACKLOG-5] Contextual Task Routing",
@@ -1787,15 +1796,6 @@
     "topic": "[BACKLOG-1] Optimize Financial Domain Queries",
     "instruction": null,
     "content": "type=performance effort=low impact=low domain=finance\nOptimize the query performance within the finance domain by reindexing relevant knowledge base entries and implementing more efficient data retrieval strategies.",
-    "confidence": "medium",
-    "active": true
-  },
-  {
-    "id": 2405,
-    "domain": "backlog",
-    "topic": "[BACKLOG-4] Enhanced Tax Knowledge Base",
-    "instruction": null,
-    "content": "type=new_kb effort=high impact=high domain=finance\nIntegrate domain-specific tax laws and regulations for improved tax optimization recommendations.",
     "confidence": "medium",
     "active": true
   }
