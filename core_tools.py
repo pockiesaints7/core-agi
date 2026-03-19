@@ -5585,16 +5585,16 @@ def t_validate_output(value: str = "", target_field: str = "", table: str = ""):
     violations = []
     if schema:
         table_schema = schema.get("tables", {}).get(table, {})
-        field_schema = table_schema.get("columns", {}).get(target_field, {})
-        if field_schema:
-            allowed_values = field_schema.get("allowed_values", [])
-            field_type = field_schema.get("type", "")
-            if allowed_values and value not in allowed_values:
-                violations.append({"field": target_field, "reason": f"Value '{value}' not in allowed: {allowed_values}"})
-            if field_type == "uuid":
-                import re as _uuid_re
-                if not _uuid_re.match(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', str(value).lower()):
-                    violations.append({"field": target_field, "reason": f"Value is not a valid UUID"})
+        # allowed_values lives at table level keyed by field name
+        allowed_values = table_schema.get("allowed_values", {}).get(target_field, [])
+        # field type lives in columns dict
+        field_type = table_schema.get("columns", {}).get(target_field, "")
+        if allowed_values and value not in allowed_values:
+            violations.append({"field": target_field, "reason": f"Value '{value}' not in allowed: {allowed_values}"})
+        if field_type == "uuid":
+            import re as _uuid_re
+            if not _uuid_re.match(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', str(value).lower()):
+                violations.append({"field": target_field, "reason": f"Value is not a valid UUID"})
     safe_to_write = len(violations) == 0
     return {
         "ok": True,
