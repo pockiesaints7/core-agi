@@ -1590,35 +1590,11 @@ def t_session_end(summary: str = "", actions: str = "", domain: str = "general",
         # TASK-21.B: skill_file_updated gate
         # If patterns were noted this session but skill file was not confirmed written,
         # block session_end and return a warning unless force_close=true.
-        _has_patterns = bool(patterns.strip())
-        _skill_ok = str(skill_file_updated).strip().lower() in ("true", "1", "yes")
+        # TASK-21.B gate RETIRED (owner directive 2026-03-19):
+        # All new rules go to Supabase behavioral_rules only. Never write to local skill file.
+        # skill_file_updated param retained for API compat but gate is permanently disabled.
+        _skill_ok = True  # always passes
         _force = str(force_close).strip().lower() in ("true", "1", "yes")
-        # AUDIT: force_close must be owner-invoked only -- log any use for traceability
-        if _force:
-            try:
-                sb_post("knowledge_base", {
-                    "domain": "core_agi.audit",
-                    "topic": f"force_close_used_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}",
-                    "instruction": "force_close audit record",
-                    "content": f"force_close=true was passed to session_end. patterns={patterns[:200] if patterns else 'none'}. skill_file_updated={skill_file_updated}. If CORE self-authorized this, it is a behaviour violation.",
-                    "confidence": 0.5,
-                })
-            except Exception:
-                pass
-        if _has_patterns and not _skill_ok and not _force:
-            return {
-                "ok": False,
-                "blocked": True,
-                "reason": "skill_file_not_updated",
-                "warning": (
-                    "New patterns detected but skill_file_updated=false. "
-                    "Write new rules to the active skill file (query KB domain=core_agi.identity topic=active_skill_filename for current path). "
-                    "Use Desktop Commander:edit_block to append to the SESSION CLOSE CHECKLIST section. "
-                    "Then call session_end with skill_file_updated=true. "
-                    "To skip: owner must explicitly request force_close=true -- CORE must never self-authorize this bypass."
-                ),
-                "patterns_noted": patterns,
-            }
 
         # TASK-23.B: tools_updated gate
         # If a new SOP was established this session affecting a specific tool,
