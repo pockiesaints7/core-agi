@@ -308,5 +308,35 @@
     "priority": 1,
     "active": true,
     "confidence": 1
+  },
+  {
+    "id": 33,
+    "trigger": "before_ddl",
+    "pointer": "verify column exists in table before DDL WHERE clause",
+    "full_rule": "Before using any column in a DDL WHERE clause (CREATE INDEX, ALTER TABLE), verify the column exists in that specific table. Never assume column existence based on other tables' schemas. Use: SELECT column_name FROM information_schema.columns WHERE table_name='target' AND column_name='col'",
+    "domain": "supabase",
+    "priority": 3,
+    "active": true,
+    "confidence": 0.95
+  },
+  {
+    "id": 34,
+    "trigger": "before_ddl",
+    "pointer": "use Management API for DDL -- not psycopg2 from WSL",
+    "full_rule": "For DDL operations (CREATE INDEX, ALTER TABLE, CREATE POLICY), use the Supabase Management API (POST /v1/projects/{ref}/database/query with PAT sbp_...) not psycopg2 direct from WSL. WSL cannot reach Supabase direct port 5432 or pooler port 6543 reliably.",
+    "domain": "supabase",
+    "priority": 3,
+    "active": true,
+    "confidence": 0.95
+  },
+  {
+    "id": 35,
+    "trigger": "on_tool_silent",
+    "pointer": "read error field on ok=False before retrying or assuming silent failure",
+    "full_rule": "When a write tool returns ok=False, always check for an 'error' field with the actual failure reason before retrying. kb_update and add_knowledge now return full Supabase error text on failure -- read it to diagnose (e.g. confidence enum violation, RLS block, missing column).",
+    "domain": "code",
+    "priority": 2,
+    "active": true,
+    "confidence": 0.95
   }
 ]
