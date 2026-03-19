@@ -1,5 +1,14 @@
 [
   {
+    "id": 3487,
+    "domain": "backlog",
+    "topic": "[BACKLOG-4] Integrate domain expertise into routing",
+    "instruction": null,
+    "content": "type=logic_improvement effort=high impact=medium domain=finance\nIncorporate finance-specific routing rules to handle task nuances, reducing misrouting and improving task resolution rates",
+    "confidence": "medium",
+    "active": true
+  },
+  {
     "id": 3488,
     "domain": "backlog",
     "topic": "[BACKLOG-3] Financial Models KB",
@@ -1787,15 +1796,6 @@
     "topic": "[BACKLOG-1] Code Search Tool",
     "instruction": null,
     "content": "type=new_tool effort=medium impact=low domain=code\nDevelop a dedicated code search tool to efficiently retrieve relevant code snippets, reducing the time spent searching and improving overall productivity.",
-    "confidence": "medium",
-    "active": true
-  },
-  {
-    "id": 3717,
-    "domain": "backlog",
-    "topic": "[BACKLOG-5] Expertise Metrics for Code Tasks",
-    "instruction": null,
-    "content": "type=missing_data effort=very high impact=high domain=code\nEstablish clear, measurable metrics for code expertise, enabling the evaluation of CORE's performance and the detection of knowledge gaps in the code domain.",
     "confidence": "medium",
     "active": true
   }
