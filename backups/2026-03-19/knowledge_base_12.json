@@ -1,5 +1,14 @@
 [
   {
+    "id": 2832,
+    "domain": "backlog",
+    "topic": "[BACKLOG-3] Clinical Trial Updates",
+    "instruction": null,
+    "content": "type=new_kb effort=medium impact=medium domain=medical\nRegularly update the knowledge base with information on ongoing and completed clinical trials, treatments, and medical breakthroughs.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
     "id": 2833,
     "domain": "backlog",
     "topic": "[BACKLOG-4] Optimize Medical Knowledge Base Search",
@@ -1787,15 +1796,6 @@
     "topic": "[BACKLOG-4] Finance Knowledge Graph",
     "instruction": null,
     "content": "type=new_tool effort=high impact=high domain=finance\nCreate a dedicated knowledge graph for finance concepts, entities, and relationships to improve tax optimization and unit economics understanding.",
-    "confidence": "medium",
-    "active": true
-  },
-  {
-    "id": 3055,
-    "domain": "backlog",
-    "topic": "[BACKLOG-3] Risk-Assessment for Runway Calculation",
-    "instruction": null,
-    "content": "type=logic_improvement effort=medium impact=medium domain=finance\nIntegrate a probabilistic risk model to account for uncertain variables and improve the accuracy of runway calculation, considering multiple scenarios.",
     "confidence": "medium",
     "active": true
   }
