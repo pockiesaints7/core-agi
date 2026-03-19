@@ -1542,24 +1542,90 @@ def t_gh_search_replace(path="", old_str="", new_str=None, message="", repo="", 
         if new_str is None:
             new_str = ""
         file_content = _gh_blob_read(path, repo)
-        found, count, matched, hint = _patch_find(file_content, old_str)
+        pf_result = _patch_find(file_content, old_str)
+        found, count, matched, hint = pf_result[0], pf_result[1], pf_result[2], pf_result[3]
+        auto_context = pf_result[4] if len(pf_result) > 4 else None
+
         if not found:
-            return {"ok": False, "error": f"old_str not found in {path}",
-                    "hint": hint or "check whitespace/indentation"}
+            # Build all-occurrence search to help locate the string if it exists differently
+            response = {
+                "ok": False,
+                "error": f"old_str not found in {path}",
+                "hint": hint or "check whitespace/indentation",
+            }
+            if auto_context:
+                response["auto_context"] = auto_context
+            return response
+
         if count > 1:
-            return {"ok": False, "error": f"old_str found {count}x - be more specific"}
+            # Ambiguity: show ALL locations with surrounding context so CORE can disambiguate
+            all_lines = file_content.splitlines()
+            locations = []
+            search_in = file_content
+            pos = 0
+            occurrence = 0
+            while True:
+                idx = search_in.find(old_str, pos)
+                if idx == -1: break
+                occurrence += 1
+                line_num = file_content[:idx].count('\n') + 1
+                ctx_s = max(0, line_num - 3)
+                ctx_e = min(len(all_lines), line_num + old_str.count('\n') + 3)
+                locations.append({
+                    "occurrence": occurrence,
+                    "line": line_num,
+                    "context": "\n".join(
+                        f"{ctx_s+i+1:4d}  {l}"
+                        for i, l in enumerate(all_lines[ctx_s:ctx_e])
+                    )
+                })
+                pos = idx + 1
+                if occurrence >= 5: break  # cap at 5
+            return {
+                "ok": False,
+                "error": f"AMBIGUOUS: old_str found {count}x in {path} -- add more surrounding lines to old_str to make it unique",
+                "occurrence_count": count,
+                "locations": locations,
+                "fix_hint": "Extend old_str to include 2-3 unique surrounding lines that only appear near one of these locations."
+            }
+
         new_content = file_content.replace(matched, new_str, 1)
+
+        # Syntax check for .py files before committing
+        if path.endswith(".py"):
+            import py_compile, tempfile as _tmpf
+            with _tmpf.NamedTemporaryFile(mode="w", suffix=".py", delete=False, encoding="utf-8") as tf:
+                tf.write(new_content); tmp = tf.name
+            try:
+                py_compile.compile(tmp, doraise=True)
+            except py_compile.PyCompileError as ce:
+                import os; os.unlink(tmp)
+                return {"ok": False, "error": f"SYNTAX ERROR -- not pushed: {ce}",
+                        "hint": "Fix the syntax error in new_str before retrying."}
+            finally:
+                import os
+                if os.path.exists(tmp): os.unlink(tmp)
+
+        # Build compact diff (always returned, even on live write)
+        diff_lines = list(difflib.unified_diff(
+            file_content.splitlines(keepends=True),
+            new_content.splitlines(keepends=True),
+            fromfile=f"{path} (before)", tofile=f"{path} (after)", n=2
+        ))
+        compact_diff = "".join(diff_lines)[:2000]
+
         if str(dry_run).lower() == "true":
-            diff = list(difflib.unified_diff(
-                file_content.splitlines(keepends=True),
-                new_content.splitlines(keepends=True),
-                fromfile=f"{path} (before)", tofile=f"{path} (after)", n=3
-            ))
             return {"ok": True, "dry_run": True, "path": path,
-                    "would_replace": old_str[:80], "diff": "".join(diff)[:3000]}
+                    "would_replace": old_str[:80], "diff": compact_diff,
+                    "match_note": hint or "exact_match"}
+
         commit_sha = _gh_blob_write(path, new_content, message, repo)
-        return {"ok": True, "dry_run": False, "path": path,
-                "replaced": old_str[:80], "commit": commit_sha[:12] if commit_sha else None}
+        return {
+            "ok": True, "dry_run": False, "path": path,
+            "replaced": old_str[:80], "commit": commit_sha[:12] if commit_sha else None,
+            "match_note": hint or "exact_match",
+            "diff": compact_diff,
+        }
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
