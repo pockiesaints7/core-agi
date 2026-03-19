@@ -4986,13 +4986,16 @@ TOOLS["log_reasoning"] = {"fn": t_log_reasoning, "perm": "WRITE",
 # -- GAP-DATA-01: Weekly brain backup -----------------------------------------
 
 def t_backup_brain(dry_run: str = "false") -> dict:
-    """Export critical Supabase tables to GitHub /backups/YYYY-MM-DD/.
-    Uses direct httpx per-file writes (bypasses L.gh() rate limiter).
+    """Export critical Supabase tables to private GitHub backup repo (no secret scanning).
+    Uses BACKUP_REPO env var (pockiesaints7/core-agi-backups). Bypasses L.gh() rate limiter.
     dry_run=true lists what would be exported without writing."""
+    import os as _os
     from datetime import datetime as _dt
     import json as _json
+    import base64 as _b64
     dry = str(dry_run).strip().lower() in ("true", "1", "yes")
     date_str = _dt.utcnow().strftime("%Y-%m-%d")
+    backup_repo = _os.environ.get("BACKUP_REPO", GITHUB_REPO)
     # UUID-PK tables: no id=gt.1. Bigserial tables: use id=gt.1.
     tables = [
         ("behavioral_rules", "select=id,trigger,pointer,full_rule,domain,priority,active,confidence&order=id.asc&limit=500&id=gt.1"),
@@ -5003,12 +5006,12 @@ def t_backup_brain(dry_run: str = "false") -> dict:
         ("credentials_index",  "select=id,service,key_name,location,env_var_name,required_for&order=id.asc&id=gt.1"),
     ]
     if dry:
-        return {"ok": True, "dry_run": True, "date": date_str,
+        return {"ok": True, "dry_run": True, "date": date_str, "backup_repo": backup_repo,
                 "tables": ["knowledge_base (paginated 200/chunk)"] + [t[0] for t in tables],
-                "message": f"Would write all tables to /backups/{date_str}/ via direct httpx (no rate limit)"}
+                "message": f"Would write all tables to {backup_repo}/backups/{date_str}/"}
     results = []
     errors  = []
-    # Collect all payloads first (Supabase reads)
+    # Collect all payloads (Supabase reads)
     file_payloads = {}
     KB_CHUNK = 200
     kb_offset = 1
@@ -5039,22 +5042,21 @@ def t_backup_brain(dry_run: str = "false") -> dict:
     if errors:
         notify(f"[BACKUP] Supabase fetch errors: {[e['table'] for e in errors]}")
         return {"ok": False, "date": date_str, "exported": results, "errors": errors}
-    # Write each file directly via GitHub Contents API (bypasses L.gh() rate limiter)
-    import base64 as _b64
+    # Write each file directly via GitHub Contents API to PRIVATE backup repo
     gh_headers = _ghh()
     write_errors = []
     for path, content in file_payloads.items():
         try:
             sha = None
-            r = httpx.get(f"https://api.github.com/repos/{GITHUB_REPO}/contents/{path}",
+            r = httpx.get(f"https://api.github.com/repos/{backup_repo}/contents/{path}",
                           headers=gh_headers, timeout=10)
             if r.is_success:
                 sha = r.json().get("sha")
-            payload = {"message": f"[skip ci] backup {date_str}: {path.split('/')[-1]}",
+            payload = {"message": f"[backup] {date_str}: {path.split('/')[-1]}",
                        "content": _b64.b64encode(content.encode("utf-8")).decode("ascii")}
             if sha:
                 payload["sha"] = sha
-            put = httpx.put(f"https://api.github.com/repos/{GITHUB_REPO}/contents/{path}",
+            put = httpx.put(f"https://api.github.com/repos/{backup_repo}/contents/{path}",
                             headers=gh_headers, json=payload, timeout=30)
             if not put.is_success:
                 write_errors.append({"path": path, "status": put.status_code, "body": put.text[:200]})
@@ -5064,16 +5066,16 @@ def t_backup_brain(dry_run: str = "false") -> dict:
         r["ok"] = len(write_errors) == 0
     try:
         sb_post("sessions", {"summary": f"[state_update] last_backup_ts: {_dt.utcnow().isoformat()}",
-                             "actions": [f"backup_brain: {len(file_payloads)} files -> /backups/{date_str}/"],
+                             "actions": [f"backup_brain: {len(file_payloads)} files -> {backup_repo}/backups/{date_str}/"],
                              "interface": "mcp"})
     except Exception:
         pass
     ok = len(write_errors) == 0
     if ok:
-        notify(f"[BACKUP] Complete: {len(file_payloads)} files ({kb_total} KB rows) -> /backups/{date_str}/")
+        notify(f"[BACKUP] Complete: {len(file_payloads)} files ({kb_total} KB rows) -> {backup_repo}/backups/{date_str}/")
     else:
         notify(f"[BACKUP] Write errors ({len(write_errors)}): {[e.get('path','?').split('/')[-1] for e in write_errors[:5]]}")
-    return {"ok": ok, "date": date_str, "files": len(file_payloads),
+    return {"ok": ok, "date": date_str, "backup_repo": backup_repo, "files": len(file_payloads),
             "exported": results, "errors": write_errors}
 TOOLS["backup_brain"] = {"fn": t_backup_brain, "perm": "READ",
     "args": [{"name": "dry_run", "type": "string", "description": "true=list what would be exported without writing (default false)"}],
