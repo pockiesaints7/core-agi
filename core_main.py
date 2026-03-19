@@ -455,6 +455,10 @@ async def patch_file(body: PatchRequest):
 @app.post("/mcp/sse")
 async def mcp_post(req: Request):
     secret = req.headers.get("X-MCP-Secret", "") or req.query_params.get("secret", "")
+    if not secret:
+        auth = req.headers.get("Authorization", "")
+        if auth.startswith("Bearer "):
+            secret = auth[7:]
     if secret and secret != MCP_SECRET:
         return JSONResponse(
             {"jsonrpc": "2.0", "error": {"code": -32600, "message": "Unauthorized"}},
@@ -486,6 +490,10 @@ async def mcp_post(req: Request):
 @app.get("/mcp/sse")
 async def mcp_sse_get(req: Request):
     secret = req.headers.get("X-MCP-Secret", "") or req.query_params.get("secret", "")
+    if not secret:
+        auth = req.headers.get("Authorization", "")
+        if auth.startswith("Bearer "):
+            secret = auth[7:]
     if secret and secret != MCP_SECRET:
         raise HTTPException(401, "Unauthorized")
     session_id = str(uuid.uuid4())
@@ -517,6 +525,10 @@ async def mcp_sse_get(req: Request):
 async def mcp_messages(req: Request):
     session_id = req.query_params.get("session_id", "")
     secret = req.headers.get("X-MCP-Secret", "") or req.query_params.get("secret", "")
+    if not secret:
+        auth = req.headers.get("Authorization", "")
+        if auth.startswith("Bearer "):
+            secret = auth[7:]
     if secret and secret != MCP_SECRET:
         return JSONResponse({"error": "Unauthorized"}, status_code=401)
     try:
