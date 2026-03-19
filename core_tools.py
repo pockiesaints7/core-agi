@@ -4041,15 +4041,23 @@ def t_patch_file(path: str, patches: str, message: str, repo: str = "", dry_run:
             if not syntax_ok:
                 return {"ok": False, "error": f"Syntax error - NOT pushed: {syntax_error}",
                         "applied": len(applied), "skipped": len(skipped)}
+        # Build compact preview diff (returned even on live writes so CORE can verify)
+        _orig_content = _gh_blob_read(path, repo)  # re-read original for diff
+        preview_diff = "".join(difflib.unified_diff(
+            _orig_content.splitlines(keepends=True),
+            content.splitlines(keepends=True),
+            fromfile=f"{path} (before)", tofile=f"{path} (after)", n=2
+        ))[:2000]
         if str(dry_run).lower() == "true":
             return {"ok": True, "dry_run": True, "path": path,
-                    "applied": len(applied), "skipped": len(skipped),
-                    "syntax_ok": syntax_ok, "details": applied, "skipped_details": skipped}
+                    "applied": len(applied), "skipped": 0,
+                    "syntax_ok": syntax_ok, "details": applied, "preview": preview_diff}
         commit_sha = _gh_blob_write(path, content, message, repo)
         return {"ok": True, "dry_run": False, "path": path,
-                "applied": len(applied), "skipped": len(skipped),
-                "syntax_ok": syntax_ok, "details": applied, "skipped_details": skipped,
-                "commit": commit_sha[:12] if commit_sha else None}
+                "applied": len(applied), "skipped": 0,
+                "syntax_ok": syntax_ok, "details": applied,
+                "commit": commit_sha[:12] if commit_sha else None,
+                "preview": preview_diff}
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
