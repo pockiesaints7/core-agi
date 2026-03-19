@@ -2990,6 +2990,17 @@ def t_redeploy(reason: str = "") -> dict:
         )
         update.raise_for_status()
         notify(f"CORE redeploying\nReason: {reason or 'manual trigger'}\nCommit: {new_sha[:12]}")
+        # Schedule post-deploy sync in background -- runs after Railway finishes building
+        # Uses threading so redeploy returns immediately without blocking
+        import threading as _t
+        def _post_deploy_sync():
+            import time as _time
+            _time.sleep(90)  # wait ~90s for Railway to finish building
+            try:
+                t_sync_system_map(trigger="post_deploy", notify_on_changes="true")
+            except Exception as _se:
+                print(f"[SMAP] post-deploy sync error: {_se}")
+        _t.Thread(target=_post_deploy_sync, daemon=True).start()
         return {"ok": True, "reason": reason, "commit": new_sha[:12]}
     except Exception as e:
         return {"ok": False, "error": str(e)}
