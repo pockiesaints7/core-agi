@@ -6800,3 +6800,235 @@ def _reconcile_skill_versions(rows: list, inserted: list, tombstoned: list) -> N
     except Exception as e:
         print(f"[SMAP] _reconcile_skill_versions error: {e}")
 
+
+
+# =============================================================================
+# SYSTEM MAP INTELLIGENCE LAYER
+# =============================================================================
+# What system_map IS:
+#   CORE's living self-model. Ground truth of every component that makes up CORE:
+#   tools, source files, Supabase tables, GitHub docs, local PC files, external
+#   MCP services. If system_map is wrong, CORE makes wrong assumptions.
+#
+# When to sync:
+#   - After every deploy (auto-wired via t_redeploy)
+#   - Every 6h (background_researcher loop)
+#   - At session_start if drift detected
+#   - Manually via sync_system_map tool
+#
+# What sync does:
+#   - Reconciles all 6 layers: tools, brain tables, executor files,
+#     skeleton docs, interface services, local_pc skill versions
+#   - Updates key_facts (volatile metrics: tool_count, row_count, line_count)
+#   - Scores component health (active/degraded/tombstone)
+#   - Notifies owner if significant drift found
+# =============================================================================
+
+def _update_volatile_key_facts(rows: list) -> list:
+    """Update key_facts for all is_volatile=true rows with live metrics.
+    Currently tracks: tool_count (core_tools.py), line_count (.py files),
+    row_count (brain tables). Extends as new volatiles are registered.
+    Returns list of updated component names.
+    """
+    updated = []
+    live_tool_count = len(TOOLS)
+
+    # Build live line counts for .py files in GitHub repo
+    try:
+        h = _ghh()
+        r = httpx.get(f"https://api.github.com/repos/{GITHUB_REPO}/contents/", headers=h, timeout=10)
+        r.raise_for_status()
+        github_files = {item["name"]: item.get("size", 0) for item in r.json() if item.get("type") == "file"}
+    except Exception:
+        github_files = {}
+
+    for row in rows:
+        if not row.get("is_volatile") or row.get("status") == "tombstone":
+            continue
+        row_id = row.get("id")
+        if not row_id:
+            continue
+        kf = dict(row.get("key_facts") or {})
+        new_kf = dict(kf)
+        changed = False
+        name = row.get("name", "")
+        component = row.get("component", "")
+
+        # core_tools.py -- track live tool_count
+        if name == "core_tools.py" and component == "railway":
+            if kf.get("tool_count") != live_tool_count:
+                new_kf["tool_count"] = live_tool_count
+                new_kf["last_tool_sync"] = datetime.utcnow().isoformat()
+                changed = True
+
+        # Any .py file in GitHub -- track approx line count from file size
+        if name.endswith(".py") and component == "railway" and name in github_files:
+            approx_lines = github_files[name] // 40  # ~40 bytes per line average
+            if abs(kf.get("approx_lines", 0) - approx_lines) > 50:  # only update if diff > 50 lines
+                new_kf["approx_lines"] = approx_lines
+                new_kf["file_size_bytes"] = github_files[name]
+                changed = True
+
+        # Brain tables -- track row_count snapshot
+        if row.get("layer") == "brain" and row.get("item_type") == "table":
+            try:
+                count_r = httpx.get(
+                    f"{SUPABASE_URL}/rest/v1/{name}?select=id&limit=1",
+                    headers=_sbh_count_svc(), timeout=8
+                )
+                row_count = int(count_r.headers.get("content-range", "*/0").split("/")[-1])
+                if kf.get("row_count") != row_count:
+                    new_kf["row_count"] = row_count
+                    new_kf["row_count_ts"] = datetime.utcnow().isoformat()
+                    changed = True
+            except Exception:
+                pass
+
+        if changed:
+            try:
+                sb_patch("system_map", f"id=eq.{row_id}", {
+                    "key_facts": new_kf,
+                    "last_updated": datetime.utcnow().isoformat(),
+                    "updated_by": "sync_system_map",
+                })
+                updated.append(name)
+            except Exception as _ue:
+                print(f"[SMAP] key_facts update failed for {name}: {_ue}")
+
+    return updated
+
+
+def t_sync_system_map(trigger: str = "manual", notify_on_changes: str = "true") -> dict:
+    """Full system map sync -- CORE's self-model maintenance tool.
+
+    PURPOSE: system_map is CORE's ground truth of what it is made of.
+    This tool keeps it accurate so CORE never makes wrong assumptions about
+    what tools exist, what tables are live, what files are active.
+
+    WHEN TO CALL:
+    - After any deploy (auto-called by t_redeploy)
+    - At session_start if system_map_drift > 0 (auto-called by session_start)
+    - When adding/removing MCP servers (manual)
+    - When suspecting system drift (manual)
+
+    WHAT IT DOES:
+    1. Reconciles all 6 layers:
+       - executor/tools    -- diffs TOOLS dict vs registered tools
+       - brain/tables      -- diffs live Supabase tables vs registered tables
+       - executor/files    -- diffs GitHub .py files vs registered files
+       - skeleton/docs     -- diffs GitHub .md/.json files vs registered docs
+       - interface/services-- checks known MCP servers are registered
+       - local_pc/files    -- checks skill file versions, tombstones stale ones
+    2. Updates key_facts volatile metrics (tool_count, row_count, line_count)
+    3. Returns full drift report with insert/tombstone counts per layer
+    4. Notifies owner via Telegram if significant changes detected
+
+    trigger: manual|post_deploy|session_start|scheduled
+    notify_on_changes: true=notify owner if any inserts/tombstones found
+    """
+    _notify = str(notify_on_changes).strip().lower() not in ("false", "0", "no")
+    try:
+        rows = sb_get(
+            "system_map",
+            "select=id,layer,component,item_type,name,role,responsibility,key_facts,is_volatile,status,notes"
+            "&order=layer,component,name",
+            svc=True
+        )
+        if not isinstance(rows, list):
+            return {"ok": False, "error": "system_map query failed"}
+
+        inserted = []
+        tombstoned = []
+        kf_updated = []
+
+        # --- Layer reconciliation ---
+        live_tool_names = set(TOOLS.keys())
+        registered_tools = {
+            row["name"]: row for row in rows
+            if row.get("component") == "railway"
+            and row.get("item_type") == "tool"
+            and row.get("status") != "tombstone"
+        }
+        # Tools: insert missing
+        for tool_name in sorted(live_tool_names - set(registered_tools.keys())):
+            try:
+                desc = TOOLS[tool_name].get("desc", "")
+                perm = TOOLS[tool_name].get("perm", "READ")
+                sb_post_critical("system_map", {
+                    "layer": "executor", "component": "railway", "item_type": "tool",
+                    "name": tool_name, "role": (desc or f"MCP tool: {tool_name}")[:400],
+                    "responsibility": f"perm={perm} -- auto-registered by sync_system_map",
+                    "status": "active", "updated_by": f"sync_{trigger}",
+                    "last_updated": datetime.utcnow().isoformat(),
+                })
+                inserted.append(f"tool:{tool_name}")
+            except Exception as _ie:
+                print(f"[SMAP] tool insert {tool_name}: {_ie}")
+        # Tools: tombstone removed
+        for tool_name in sorted(set(registered_tools.keys()) - live_tool_names):
+            try:
+                sb_patch("system_map", f"id=eq.{registered_tools[tool_name]['id']}", {
+                    "status": "tombstone",
+                    "notes": f"auto-tombstoned by sync_{trigger}: not in TOOLS dict",
+                    "last_updated": datetime.utcnow().isoformat(), "updated_by": f"sync_{trigger}",
+                })
+                tombstoned.append(f"tool:{tool_name}")
+            except Exception as _te:
+                print(f"[SMAP] tool tombstone {tool_name}: {_te}")
+
+        # All other layers via existing reconcilers
+        _reconcile_brain_tables(rows, inserted, tombstoned)
+        _reconcile_executor_files(rows, inserted, tombstoned)
+        _reconcile_skeleton_docs(rows, inserted, tombstoned)
+        _reconcile_interface_services(rows, inserted, tombstoned)
+        _reconcile_skill_versions(rows, inserted, tombstoned)
+
+        # Update volatile key_facts metrics
+        kf_updated = _update_volatile_key_facts(rows)
+
+        # Build drift report
+        drift = {
+            "tools": {"live": len(live_tool_names), "registered": len(registered_tools)},
+            "total_inserted": len(inserted),
+            "total_tombstoned": len(tombstoned),
+            "kf_updated": kf_updated,
+            "inserted": inserted,
+            "tombstoned": tombstoned,
+        }
+        has_changes = bool(inserted or tombstoned or kf_updated)
+
+        # Notify owner if significant drift
+        if _notify and (inserted or tombstoned):
+            msg_parts = [f"[SMAP] system_map sync ({trigger})"]
+            if inserted:   msg_parts.append(f"Inserted ({len(inserted)}): {', '.join(inserted[:8])}{'...' if len(inserted)>8 else ''}")
+            if tombstoned: msg_parts.append(f"Tombstoned ({len(tombstoned)}): {', '.join(tombstoned[:8])}{'...' if len(tombstoned)>8 else ''}")
+            if kf_updated: msg_parts.append(f"key_facts updated: {', '.join(kf_updated[:5])}")
+            notify("\n".join(msg_parts))
+
+        print(f"[SMAP] sync({trigger}): inserted={len(inserted)} tombstoned={len(tombstoned)} kf_updated={len(kf_updated)}")
+        return {
+            "ok": True, "trigger": trigger,
+            "total_components": len([r for r in rows if r.get("status") != "tombstone"]),
+            "has_changes": has_changes,
+            "drift": drift,
+        }
+    except Exception as e:
+        print(f"[SMAP] sync error: {e}")
+        return {"ok": False, "error": str(e)}
+
+
+TOOLS["sync_system_map"] = {"fn": t_sync_system_map, "perm": "WRITE",
+    "args": [
+        {"name": "trigger", "type": "string",
+         "description": "Why this sync is happening: manual|post_deploy|session_start|scheduled"},
+        {"name": "notify_on_changes", "type": "string",
+         "description": "Send Telegram notification if drift found (default: true)"},
+    ],
+    "desc": (
+        "CORE self-model sync. Reconciles ALL 6 system layers against live state: "
+        "executor/tools (TOOLS dict), brain/tables (Supabase), executor/files (GitHub .py), "
+        "skeleton/docs (GitHub .md/.json), interface/services (MCP servers), "
+        "local_pc/skill_versions. Updates key_facts volatile metrics (tool_count, row_count, "
+        "line_count). Call after deploys, when drift detected, or manually. "
+        "NEVER assume system_map is current -- always sync first when making architecture decisions."
+    )}
