@@ -157,7 +157,7 @@ def groq_chat(system: str, user: str, model: str = None, max_tokens: int = 1024)
 
 
 # -- Gemini chat helper with round-robin key rotation -------------------------
-_GEMINI_KEYS = [k.strip() for k in os.getenv("GEMINI_KEYS", "").split(",") if k.strip()]
+_GEMINI_KEYS = [k.strip() for k in os.getenv("GEMINI_KEYS", "").replace(" ", "").split(",") if k.strip()]
 _GEMINI_KEY_INDEX = 0
 _GEMINI_MODEL = "gemini-2.5-flash"
 
