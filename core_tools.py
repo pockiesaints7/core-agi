@@ -1309,6 +1309,42 @@ def t_session_start() -> dict:
                 task_health_warning = th.get("warning")
         except Exception:
             pass
+        # --- TASK-V8: Load behavioral_rules, infrastructure_map, credentials_index ---
+        behavioral_rules_data = []
+        infrastructure_map_data = []
+        credentials_index_data = []
+        migration_needed = False
+        migration_missing = []
+        try:
+            br = t_get_behavioral_rules(domain=detected_domain)
+            if br.get("migration_needed"):
+                migration_needed = True
+                migration_missing.append("behavioral_rules")
+            else:
+                behavioral_rules_data = br.get("rules", [])
+        except Exception:
+            migration_needed = True
+            migration_missing.append("behavioral_rules")
+        try:
+            im = t_get_infrastructure()
+            if im.get("migration_needed"):
+                migration_needed = True
+                migration_missing.append("infrastructure_map")
+            else:
+                infrastructure_map_data = im.get("components", [])
+        except Exception:
+            migration_needed = True
+            migration_missing.append("infrastructure_map")
+        try:
+            ci = t_get_credentials_index()
+            if ci.get("migration_needed"):
+                migration_needed = True
+                migration_missing.append("credentials_index")
+            else:
+                credentials_index_data = ci.get("credentials", [])
+        except Exception:
+            migration_needed = True
+            migration_missing.append("credentials_index")
         return {
             "ok": True,
             "health": health.get("overall", "unknown"),
@@ -1325,6 +1361,11 @@ def t_session_start() -> dict:
             "top_patterns": top_patterns,
             "quality_alert": quality_alert,
             "task_health_warning": task_health_warning,
+            "behavioral_rules": behavioral_rules_data,
+            "infrastructure_map": infrastructure_map_data,
+            "credentials_index": credentials_index_data,
+            "migration_needed": migration_needed,
+            "migration_missing": migration_missing,
             "pending_evolutions": evolutions[:5] if isinstance(evolutions, list) else [],
             "training_pipeline": training,
             "live_tool_count": len(TOOLS),
