@@ -1,0 +1,182 @@
+[
+  {
+    "id": 533,
+    "summary": "[state_update] last_backup_ts: 2026-03-19T10:09:56.300460",
+    "domain": null,
+    "created_at": "2026-03-19T10:09:56.39294+00:00"
+  },
+  {
+    "id": 532,
+    "summary": "[state_update] last_real_signal_ts: 2026-03-19T10:08:57.131250",
+    "domain": null,
+    "created_at": "2026-03-19T10:08:57.22594+00:00"
+  },
+  {
+    "id": 531,
+    "summary": "[state_update] last_real_signal_ts: 2026-03-19T10:03:35.880289",
+    "domain": null,
+    "created_at": "2026-03-19T10:03:35.972716+00:00"
+  },
+  {
+    "id": 530,
+    "summary": "[state_update] last_backup_ts: 2026-03-19T10:03:12.540493",
+    "domain": null,
+    "created_at": "2026-03-19T10:03:12.654026+00:00"
+  },
+  {
+    "id": 529,
+    "summary": "3 tasks closed (GAP-BUG, GAP-DB-08, GAP-DB-01), GAP-DATA-01 deployed pending live test. 3 behavioral rules written. Quality 0.87 -- improving trend.",
+    "domain": null,
+    "created_at": "2026-03-19T09:59:29.247949+00:00"
+  },
+  {
+    "id": 528,
+    "summary": "[state_update] last_backup_ts: 2026-03-19T09:57:02.063572",
+    "domain": null,
+    "created_at": "2026-03-19T09:57:02.187414+00:00"
+  },
+  {
+    "id": 527,
+    "summary": "[state_update] last_real_signal_ts: 2026-03-19T09:56:41.814578",
+    "domain": null,
+    "created_at": "2026-03-19T09:56:41.953877+00:00"
+  },
+  {
+    "id": 526,
+    "summary": "[state_update] last_real_signal_ts: 2026-03-19T09:47:30.816134",
+    "domain": null,
+    "created_at": "2026-03-19T09:47:30.936145+00:00"
+  },
+  {
+    "id": 525,
+    "summary": "TASK-V8 COMPLETE. Full tool audit (109/105/4 dead). S7 gap triage all 96 gaps done. 15 KB entries written. 11 follow-up tasks created. Confidence bug found+logged. V8 skill file confirmed uploaded. All gate criteria met. CORE now fully on V8 architecture.",
+    "domain": null,
+    "created_at": "2026-03-19T09:43:36.746803+00:00"
+  },
+  {
+    "id": 524,
+    "summary": "[state_update] last_real_signal_ts: 2026-03-19T08:59:44.927568",
+    "domain": null,
+    "created_at": "2026-03-19T08:59:45.014984+00:00"
+  },
+  {
+    "id": 523,
+    "summary": "[state_update] last_real_signal_ts: 2026-03-19T08:52:35.524899",
+    "domain": null,
+    "created_at": "2026-03-19T08:52:35.638935+00:00"
+  },
+  {
+    "id": 522,
+    "summary": "[state_update] last_real_signal_ts: 2026-03-19T08:52:06.755429",
+    "domain": null,
+    "created_at": "2026-03-19T08:52:07.217908+00:00"
+  },
+  {
+    "id": 521,
+    "summary": "",
+    "domain": null,
+    "created_at": "2026-03-19T08:29:34.4354+00:00"
+  },
+  {
+    "id": 520,
+    "summary": "[state_update] last_real_signal_ts: 2026-03-19T08:27:04.184787",
+    "domain": null,
+    "created_at": "2026-03-19T08:27:04.671206+00:00"
+  },
+  {
+    "id": 519,
+    "summary": "[state_update] last_real_signal_ts: 2026-03-19T08:26:59.144841",
+    "domain": null,
+    "created_at": "2026-03-19T08:26:59.275977+00:00"
+  },
+  {
+    "id": 518,
+    "summary": "TASK-V8 Steps 1-15 complete (pending owner upload of skill file). All V8 infrastructure live: 5 new tables, probe rows, 23 ALTERs, 31 behavioral rules, 18 KB entries, 11 new MCP tools (tool_count=106), session_start returns V8 fields (migration_needed=false). CORE_AGI_SKILL_V8.md written to C:\\Users\\rnvgg\\.claude-skills\\. Owner must upload to /mnt/skills/user/core-agi/SKILL.md. Next session: S7 Gap Analysis triage (96 gaps).",
+    "domain": null,
+    "created_at": "2026-03-19T07:50:13.574757+00:00"
+  },
+  {
+    "id": 517,
+    "summary": "[state_update] last_real_signal_ts: 2026-03-19T07:44:09.093116",
+    "domain": null,
+    "created_at": "2026-03-19T07:44:09.215152+00:00"
+  },
+  {
+    "id": 516,
+    "summary": "[state_update] last_real_signal_ts: 2026-03-19T07:42:08.339451",
+    "domain": null,
+    "created_at": "2026-03-19T07:42:08.465351+00:00"
+  },
+  {
+    "id": 515,
+    "summary": "TASK-6 Mandatory Verification Gate System \u2014 fully completed. 6.1: t_verify_before_deploy added to core_tools.py (commit a4f50d3, SUCCESS) \u2014 3-gate check, scores 0.0-1.0, blocks if <0.8. 6.2: KB write validator confirmed already live from TASK-27 (contradiction + duplicate detection). 6.3: KB entry core_agi.deployment/mandatory_verification written \u2014 full deploy SOP locked in. Task marked done.",
+    "domain": null,
+    "created_at": "2026-03-19T07:22:54.684204+00:00"
+  },
+  {
+    "id": 514,
+    "summary": "[state_update] last_real_signal_ts: 2026-03-19T07:19:43.182130",
+    "domain": null,
+    "created_at": "2026-03-19T07:19:43.277972+00:00"
+  },
+  {
+    "id": 513,
+    "summary": "TASK-5 Context Collapse Prevention System \u2014 fully completed. Subtask 5.1 (checkpoint middleware) confirmed already live from TASK-28. Subtask 5.2 (t_task_health): fixed UUID PK bug (id=gt.1 removed), wired task_health_warning into session_start. Subtask 5.3 (skill file rewrite guard): KB entry written at core_agi.skill_editing/rewrite_guard. All builds SUCCESS. Task marked done. TASK-V8 registered with blueprint pointer. Changelog logged. Owner notified.",
+    "domain": null,
+    "created_at": "2026-03-19T07:17:45.702639+00:00"
+  },
+  {
+    "id": 512,
+    "summary": "[state_update] last_real_signal_ts: 2026-03-19T06:27:52.404727",
+    "domain": null,
+    "created_at": "2026-03-19T06:27:52.495452+00:00"
+  },
+  {
+    "id": 511,
+    "summary": "[state_update] last_real_signal_ts: 2026-03-19T06:26:35.351598",
+    "domain": null,
+    "created_at": "2026-03-19T06:26:35.45111+00:00"
+  },
+  {
+    "id": 510,
+    "summary": "[state_update] last_real_signal_ts: 2026-03-19T06:24:28.878968",
+    "domain": null,
+    "created_at": "2026-03-19T06:24:28.974595+00:00"
+  },
+  {
+    "id": 509,
+    "summary": "[state_update] last_real_signal_ts: 2026-03-19T06:21:26.050770",
+    "domain": null,
+    "created_at": "2026-03-19T06:21:26.179798+00:00"
+  },
+  {
+    "id": 508,
+    "summary": "Session: Booted V7, reviewed system state. Registered TASK-V8 (CORE AGI V8 Architecture Migration) pointing to blueprint at C:\\Users\\rnvgg\\.claude-skills\\V8\\. Read both V8 files (blueprint + gap analysis). TASK-5 remains in_progress, not touched this session.",
+    "domain": null,
+    "created_at": "2026-03-19T06:12:05.085692+00:00"
+  },
+  {
+    "id": 507,
+    "summary": "[state_update] last_real_signal_ts: 2026-03-19T05:52:20.392455",
+    "domain": null,
+    "created_at": "2026-03-19T05:52:20.888808+00:00"
+  },
+  {
+    "id": 506,
+    "summary": "[state_update] last_real_signal_ts: 2026-03-19T04:52:09.503732",
+    "domain": null,
+    "created_at": "2026-03-19T04:52:09.636229+00:00"
+  },
+  {
+    "id": 505,
+    "summary": "[state_update] last_real_signal_ts: 2026-03-19T03:51:59.882510",
+    "domain": null,
+    "created_at": "2026-03-19T03:52:00.052133+00:00"
+  },
+  {
+    "id": 504,
+    "summary": "[state_update] last_real_signal_ts: 2026-03-19T02:51:49.080978",
+    "domain": null,
+    "created_at": "2026-03-19T02:51:49.196357+00:00"
+  }
+]
