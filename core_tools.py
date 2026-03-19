@@ -6017,6 +6017,22 @@ TOOLS["loop_detect"] = {"fn": t_loop_detect, "perm": "WRITE",
     "desc": "AGI-14: Action loop detection. Tracks actions taken this session by fingerprint. Returns loop_detected if same action attempted before. CORE must change approach if loop detected — never retry blindly."}
 
 
+# --- Gemini diagnostic test --------------------------------------------------
+
+def t_test_gemini():
+    """Test gemini_chat() end-to-end from Railway. Returns response or error."""
+    try:
+        from core_config import gemini_chat, _GEMINI_KEYS, _GEMINI_MODEL
+        key_count = len(_GEMINI_KEYS)
+        result = gemini_chat("you are a test assistant", "reply with just the word OK", max_tokens=10)
+        return {"ok": True, "response": result, "key_count": key_count, "model": _GEMINI_MODEL}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+TOOLS["test_gemini"] = {"fn": t_test_gemini, "perm": "READ", "args": [],
+    "desc": "Diagnostic: test gemini_chat() end-to-end from Railway. Returns response or error."}
+
+
 # --- AGI-01: Cross-Domain Synthesis ------------------------------------------
 
 def t_synthesize_cross_domain():
