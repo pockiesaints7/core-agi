@@ -1,0 +1,312 @@
+[
+  {
+    "id": 2,
+    "trigger": "reasoning_preflight",
+    "pointer": "run cognitive preflight checklist from behavioral_rules(domain=reasoning)",
+    "full_rule": "Before every non-trivial action: run preflight. Non-trivial = any write, deploy, tool call, or multi-step execution.",
+    "domain": "universal",
+    "priority": 1,
+    "active": true,
+    "confidence": 1
+  },
+  {
+    "id": 3,
+    "trigger": "before_any_act",
+    "pointer": "get_behavioral_rules(domain=detected)",
+    "full_rule": "Load domain-specific behavioral rules before touching anything in that domain.",
+    "domain": "universal",
+    "priority": 1,
+    "active": true,
+    "confidence": 1
+  },
+  {
+    "id": 4,
+    "trigger": "before_tool_call",
+    "pointer": "verify_tool_live(tool_name)",
+    "full_rule": "Always test tool availability live before calling it. Never assume availability from system prompt text.",
+    "domain": "universal",
+    "priority": 1,
+    "active": true,
+    "confidence": 1
+  },
+  {
+    "id": 5,
+    "trigger": "before_irreversible_act",
+    "pointer": "confirm_with_owner(action_description)",
+    "full_rule": "Any action that cannot be undone requires explicit owner confirmation first. Examples: delete, drop table, force_close, overwrite production file.",
+    "domain": "universal",
+    "priority": 1,
+    "active": true,
+    "confidence": 1
+  },
+  {
+    "id": 6,
+    "trigger": "during_action",
+    "pointer": "mark_unknown_as_TBC()",
+    "full_rule": "Never infer values not confirmed from source. Mark all unknown fields as [TBC]. Never fill gaps with plausible-sounding data.",
+    "domain": "universal",
+    "priority": 1,
+    "active": true,
+    "confidence": 1
+  },
+  {
+    "id": 7,
+    "trigger": "post_mistake",
+    "pointer": "log_mistake(domain=detected, description, root_cause, fix)",
+    "full_rule": "Log mistake to mistakes table before moving on. Never defer. Domain = area where mistake occurred.",
+    "domain": "universal",
+    "priority": 1,
+    "active": true,
+    "confidence": 1
+  },
+  {
+    "id": 8,
+    "trigger": "post_discovery",
+    "pointer": "add_knowledge(domain=detected, topic, content)",
+    "full_rule": "Log new fact to knowledge_base immediately when discovered. Never defer to session close.",
+    "domain": "universal",
+    "priority": 1,
+    "active": true,
+    "confidence": 1
+  },
+  {
+    "id": 9,
+    "trigger": "session_close",
+    "pointer": "write_hot_reflections() AND update_task_queue() AND log_quality_metrics() AND session_end()",
+    "full_rule": "At session close in order: write hot_reflections, update task status and next_step, log quality score, call session_end, notify owner.",
+    "domain": "universal",
+    "priority": 1,
+    "active": true,
+    "confidence": 1
+  },
+  {
+    "id": 10,
+    "trigger": "post_discovery",
+    "pointer": "add_behavioral_rule() OR add_knowledge() -- NEVER edit skill file",
+    "full_rule": "New rules go to behavioral_rules table. New facts go to knowledge_base. Skill file is NEVER auto-written by CORE.",
+    "domain": "universal",
+    "priority": 1,
+    "active": true,
+    "confidence": 1
+  },
+  {
+    "id": 11,
+    "trigger": "before_auth",
+    "pointer": "read_credentials_index(service=detected) THEN read_file(CREDENTIALS.md)",
+    "full_rule": "Before any auth task: query credentials_index for exact CREDENTIALS.md section, then read that section. Never ask owner. Never guess.",
+    "domain": "auth",
+    "priority": 1,
+    "active": true,
+    "confidence": 1
+  },
+  {
+    "id": 12,
+    "trigger": "on_missing_credential",
+    "pointer": "ask_owner(service=detected)",
+    "full_rule": "If credential not in CREDENTIALS.md and not in credentials_index: ask owner. Never substitute, invent, or use credential from another service.",
+    "domain": "auth",
+    "priority": 1,
+    "active": true,
+    "confidence": 1
+  },
+  {
+    "id": 13,
+    "trigger": "post_new_credential",
+    "pointer": "add to credentials_index(service, key_name, location, env_var_name)",
+    "full_rule": "After any new credential added to CREDENTIALS.md: immediately add pointer row to credentials_index. Keep both in sync.",
+    "domain": "auth",
+    "priority": 2,
+    "active": true,
+    "confidence": 1
+  },
+  {
+    "id": 14,
+    "trigger": "before_ddl",
+    "pointer": "search_kb(domain=postgres_constraints)",
+    "full_rule": "Before any CREATE TABLE or ALTER TABLE: check postgres_constraints KB for reserved words. Check every column name.",
+    "domain": "postgres",
+    "priority": 1,
+    "active": true,
+    "confidence": 1
+  },
+  {
+    "id": 15,
+    "trigger": "before_supabase_write",
+    "pointer": "verify_schema(table=target) AND search_kb(domain=postgres_constraints)",
+    "full_rule": "Before writing to any Supabase table: verify schema exists, check column names against reserved words list.",
+    "domain": "postgres",
+    "priority": 1,
+    "active": true,
+    "confidence": 1
+  },
+  {
+    "id": 16,
+    "trigger": "before_supabase_read",
+    "pointer": "verify_id_gt_1_filter()",
+    "full_rule": "Every Supabase query must include id=gt.1 filter for tables with bigserial PKs. Probe row lives at id=1.",
+    "domain": "postgres",
+    "priority": 1,
+    "active": true,
+    "confidence": 1
+  },
+  {
+    "id": 17,
+    "trigger": "before_code",
+    "pointer": "search_kb(domain=detected) AND list_templates()",
+    "full_rule": "Before writing any code: check KB for domain constraints and script_templates for existing reusable patterns.",
+    "domain": "code",
+    "priority": 2,
+    "active": true,
+    "confidence": 1
+  },
+  {
+    "id": 18,
+    "trigger": "before_adding_tool",
+    "pointer": "read_file(core_tools.py)",
+    "full_rule": "Before adding or editing any MCP tool: read core_tools.py first. Check TOOLS dict registration. Verify function signature pattern.",
+    "domain": "code",
+    "priority": 1,
+    "active": true,
+    "confidence": 1
+  },
+  {
+    "id": 19,
+    "trigger": "before_training_change",
+    "pointer": "read_file(core_train.py)",
+    "full_rule": "Before touching any training logic: read core_train.py first.",
+    "domain": "code",
+    "priority": 1,
+    "active": true,
+    "confidence": 1
+  },
+  {
+    "id": 20,
+    "trigger": "before_routing_change",
+    "pointer": "read_file(core_main.py)",
+    "full_rule": "Before touching routing, startup, or MCP dispatcher: read core_main.py first.",
+    "domain": "code",
+    "priority": 1,
+    "active": true,
+    "confidence": 1
+  },
+  {
+    "id": 21,
+    "trigger": "during_code_write",
+    "pointer": "one_change_at_a_time()",
+    "full_rule": "Never batch unrelated changes in one deploy. One logical change per patch_file call.",
+    "domain": "code",
+    "priority": 2,
+    "active": true,
+    "confidence": 1
+  },
+  {
+    "id": 22,
+    "trigger": "before_deploy",
+    "pointer": "t_verify_before_deploy(operation, target_file) THEN read actual file via gh_read_lines THEN dry_run=true first",
+    "full_rule": "Before any patch_file: (1) call t_verify_before_deploy, (2) read actual file bytes via gh_read_lines, (3) dry_run=true first. Then live patch.",
+    "domain": "railway",
+    "priority": 1,
+    "active": true,
+    "confidence": 1
+  },
+  {
+    "id": 23,
+    "trigger": "post_deploy",
+    "pointer": "build_status() THEN check_logs_if_completed()",
+    "full_rule": "After every deploy: call build_status. If status=completed that means CRASH -- check Railway logs immediately.",
+    "domain": "railway",
+    "priority": 1,
+    "active": true,
+    "confidence": 1
+  },
+  {
+    "id": 24,
+    "trigger": "on_failure",
+    "pointer": "get_behavioral_rules(domain=failure_recovery)",
+    "full_rule": "On any tool failure or unexpected result: load failure_recovery behavioral rules before attempting fix.",
+    "domain": "railway",
+    "priority": 1,
+    "active": true,
+    "confidence": 1
+  },
+  {
+    "id": 25,
+    "trigger": "before_code",
+    "pointer": "write_py_file_to_scripts_dir() THEN run_via_wsl()",
+    "full_rule": "Never use inline Python in PowerShell. Always write .py file to C:\\Temp\\claude_scripts\\ and run via wsl.exe -e bash -c python3.",
+    "domain": "powershell",
+    "priority": 1,
+    "active": true,
+    "confidence": 1
+  },
+  {
+    "id": 26,
+    "trigger": "before_project_doc",
+    "pointer": "project_get(project_id) AND project_context_check(project_id)",
+    "full_rule": "Before drafting or reviewing any project document: load full project KB. Never infer party names, scope, or values from memory.",
+    "domain": "project",
+    "priority": 1,
+    "active": true,
+    "confidence": 1
+  },
+  {
+    "id": 27,
+    "trigger": "reasoning_preflight",
+    "pointer": "check: assumption? query_instead. reversible? if_not_confirm. right_layer? right_problem? identity_drift?",
+    "full_rule": "Preflight: (1) assuming something to query instead? (2) reversible -- if not, confirm. (3) right layer? (4) right problem? (5) identity drift?",
+    "domain": "reasoning",
+    "priority": 1,
+    "active": true,
+    "confidence": 1
+  },
+  {
+    "id": 28,
+    "trigger": "on_tool_silent",
+    "pointer": "check_railway_logs() THEN ping_health()",
+    "full_rule": "If any MCP tool stops responding mid-session: Railway may have redeployed. Check logs. Reconnect via Settings MCP Servers.",
+    "domain": "failure_recovery",
+    "priority": 1,
+    "active": true,
+    "confidence": 1
+  },
+  {
+    "id": 29,
+    "trigger": "on_empty_result",
+    "pointer": "verify_id_gt_1_filter() AND verify_not_tombstone(table_name)",
+    "full_rule": "If Supabase returns empty: verify id=gt.1 filter is present, verify table is not on tombstone list.",
+    "domain": "failure_recovery",
+    "priority": 1,
+    "active": true,
+    "confidence": 1
+  },
+  {
+    "id": 30,
+    "trigger": "on_interrupted_session",
+    "pointer": "sb_query(task_queue, status=in_progress) THEN resume_from_next_step",
+    "full_rule": "If previous session was interrupted: find in_progress task, read next_step field, resume from exactly that point.",
+    "domain": "failure_recovery",
+    "priority": 1,
+    "active": true,
+    "confidence": 1
+  },
+  {
+    "id": 31,
+    "trigger": "session_open",
+    "pointer": "V7 behavior of appending hard rules to skill file is RETIRED in V8. All rules go to behavioral_rules table via t_add_behavioral_rule().",
+    "full_rule": "V7 habit of appending hard rules to skill file is RETIRED in V8. If about to edit skill file: stop, use t_add_behavioral_rule() instead.",
+    "domain": "universal",
+    "priority": 1,
+    "active": true,
+    "confidence": 1
+  },
+  {
+    "id": 32,
+    "trigger": "session_open",
+    "pointer": "verify core-agi tool refs in skill file use prefix core-agi:tool_name -- other MCP servers use their own prefix",
+    "full_rule": "When editing or reviewing the skill file: any tool call that targets the core-agi MCP server specifically MUST use the prefix core-agi:tool_name (e.g. core-agi:session_start, core-agi:log_mistake). Other MCP servers in the config (github:, filesystem:, Windows-MCP:, memory:, etc.) each use their own correct prefix and are not affected by this rule. The issue is bare notation like session_start() with NO prefix -- Claude Desktop cannot determine which MCP server to route to, causing silent failure.",
+    "domain": "universal",
+    "priority": 1,
+    "active": true,
+    "confidence": 1
+  }
+]
