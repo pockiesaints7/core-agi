@@ -233,6 +233,17 @@ def t_add_knowledge(domain="", topic="", instruction="", content="", tags="", co
     except Exception:
         pass  # Non-fatal -- proceed with insert if check fails
     tags_list = [t.strip() for t in tags.split(",")] if tags else []
+    # Normalize confidence to valid enum -- guard against float strings passed from older calls
+    VALID_CONFIDENCE = {"low", "medium", "high", "proven"}
+    if str(confidence) not in VALID_CONFIDENCE:
+        # Try to coerce float->enum
+        try:
+            v = float(confidence)
+            confidence = "proven" if v >= 0.9 else "high" if v >= 0.7 else "medium" if v >= 0.4 else "low"
+            print(f"[SCHEMA] confidence coerced from float {v} -> '{confidence}'")
+        except (TypeError, ValueError):
+            confidence = "medium"
+            print(f"[SCHEMA] confidence invalid, defaulting to 'medium'")
     row = {"domain": domain, "topic": topic, "instruction": instruction or None,
             "content": content or "", "confidence": confidence,
             "tags": tags_list, "source": "mcp_session"}
@@ -240,6 +251,10 @@ def t_add_knowledge(domain="", topic="", instruction="", content="", tags="", co
         row["source_type"] = source_type
     if source_ref:
         row["source_ref"] = source_ref
+    # Schema validation before write
+    errs = _validate_write("knowledge_base", row)
+    if errs:
+        return {"ok": False, "topic": topic, "error": f"Schema violation: {errs}"}
     try:
         r = httpx.post(f"{SUPABASE_URL}/rest/v1/knowledge_base", headers=_sbh(True), json=row, timeout=15)
         if not r.is_success:
