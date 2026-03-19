@@ -754,11 +754,15 @@ def run_cold_processor():
                 base_conf  = min(0.5 + total_freq * 0.05, 0.95)
                 final_conf = round(base_conf * src_mult, 3)
                 kb_content = _groq_kb_content(key, domain, total_freq, src_key)
-                _already_pending = sb_get("evolution_queue",
-                    f"select=id&pattern_key=eq.{key[:200]}&status=eq.pending&limit=1",
+                _already_active = sb_get("evolution_queue",
+                    f"select=id,status&pattern_key=eq.{key[:200]}&status=in.(pending,rejected)&limit=1",
                     svc=True)
-                if _already_pending:
-                    print(f"[COLD] Skipped duplicate evo (pending): {key[:80]}")
+                if _already_active:
+                    _existing_status = _already_active[0].get("status", "pending")
+                    if _existing_status == "rejected":
+                        print(f"[COLD] Skipped previously-rejected evo: {key[:80]}")
+                    else:
+                        print(f"[COLD] Skipped duplicate evo (pending): {key[:80]}")
                     continue
 
                 ok = sb_post_critical("evolution_queue", {
