@@ -1,5 +1,14 @@
 [
   {
+    "id": 5674,
+    "domain": "project:equinix-jk1-2",
+    "topic": "equinix-jk1-2 | RMU + BTU > Commissioning Document RMU > SUBMISSION #1 > 1. MOS Cx L2A RMU.docx",
+    "instruction": null,
+    "content": "File: RMU + BTU\\Commissioning Document RMU\\SUBMISSION #1\\1. MOS Cx L2A RMU.docx\nProject: equinix-jk1-2\nType: .docx\nSize: 1065 KB\n---\nMETHOD OF STATEMENT FOR\nCOMMISSIONING LEVEL 2A MV SWITCHGEAR\nPROJECT TITLE:\nEQUINIX JK1-2 DATA CENTER\nCUSTOMER:\nTBA\nEQUIPMENT:\nMV SWITCHGEAR\nMAIN CONTRACTOR\t: TBA\nSUBCONTRACTOR\t: PT. LS ELECTRIC INDONESIA\nTable of Content\nContent\t2\n1.\tIntroduction\t3\n1.1\tObjective\t3\n1.2\tScope of Work\t3\n1.3\tCx Organization Chart\t4\n1.4\tWork Flow\t5\n2.\tReferences\t6\n3.\tPrecondition\t6\n3.1\tSafety Information Personal\t6\n3.2\tSafety Work\t6\n3.3\tRisk & Mitigation\t7\n3.4\tLOTO (Lock Out Tag Out)\t7\n4.\tTest Instrumentation\t7\n5.\tEquipment Schedule / Tested\t8\n6.\tPre - Commissioning\t8\n7.\tTest Procedures\t9\n10\nCertificate Calibration\t13\nApproval Material\t14\nIntroduction\n1.1 Objective\nThis method of statement is prepared prior to performing the activity for Commissioning Level 2A of MV Switchgear after finish installation. The purpose of this work method statement is to ensure that all panels is carried out in proper, control condition and safe environment. All of the personnel involve in this activity shall read and understand fully this document and agree to obey and follow strictly before starting works.\n1.2 Scope of Work\nCommissioning Level 2 (Cx L2) of MV Switchgear. Installation verification (QA/QC) and static testing.\n1.3 Cx Organization Chart\n1.4 Work Flow\n`\nReferences\n2.1 Asbuilt Drawing\n2.2 Approval Material\nPrecondition\n3.1 Safety Information Personal\nTBA\n3.2 Safety Work\nPrior to start of work, risk assessment highlighting critical safety aspect to the work shall be briefed to workers.\nEnsure that all personnel at site have passed on-line induction exam.\nEnsure work skill for moving work.\nEnsure that all personnel at site have attended the Safety course\nEnsure that all tools and equipment have been inspected.\nHousekeeping in to be done during and after work.\nPersonal Protective Equipment:\nSafety Helmet\nProtective Clothing\nElectric Detectors Warning Device\nSafety Shoes\nSafety Gloves\n3.3 Risk & Mitigation Risk\n3.4 LOTO (Lock Out Tag Out)\nMake sure the voltage source to the incoming side is still o",
+    "confidence": "high",
+    "active": true
+  },
+  {
     "id": 5675,
     "domain": "project:equinix-jk1-2",
     "topic": "equinix-jk1-2 | RMU + BTU > Commissioning Document RMU > SUBMISSION #1 > 2. MOS Cx L2B MVSG.docx",
@@ -1787,15 +1796,6 @@
     "topic": "project parties and scope \u2014 HARD FACTS",
     "instruction": null,
     "content": "EQUINIX JK1-2 \u2014 KEY PARTIES (verified by owner, do not hallucinate):\n- Client: Equinix\n- Main Contractor (GC): JO KIK & ACT (NOT Atoz Teknik Sejahtera \u2014 that name is wrong)\n- Design Consultant: PT Aurecon Indonesia\n- Cx Consultant (Commissioning Agent): CTA (Commtech Asia)\n- Supplier / Subcontractor: PT LS Electric Indonesia (LSEI) \u2014 this is REINVAGNAR's company\n\nLSEI SCOPE \u2014 STRICTLY LIMITED TO:\n- RMU (Ring Main Unit / MV Switchgear)\n- MLTX (Mold/Cast Resin Transformer) \u2014 units 1MLTX_B, 1MLTX_C, 1MLTX_D, 1MLTX_F\n\nOUT OF SCOPE FOR LSEI \u2014 DO NOT include in daily reports or any LSEI documents:\n- CCTV (not LSEI scope)\n- DCOS cable laying (not LSEI scope)\n- UPS, Generator, any other MCE equipment\n- Any other systems not explicitly listed above\n\nWhen drafting or reviewing any LSEI document for this project, only reference RMU and MLTX activities. Any mention of CCTV, DCOS, UPS, or other systems = WRONG scope.",
-    "confidence": "proven",
-    "active": true
-  },
-  {
-    "id": 6454,
-    "domain": "core_agi.project_mode",
-    "topic": "project mode common sense rules -- facts only, no hallucination",
-    "instruction": "Apply these rules to ALL projects before any project-related task. No exceptions.",
-    "content": "PROJECT MODE COMMON SENSE RULES -- apply to every project, always:\n\n1. FACTS ONLY: Never infer party names, technical values, document numbers, revision numbers, dates, quantities, or scope from memory. If not in KB or a document read this session = UNKNOWN. Ask or read source.\n\n2. LOAD KB FIRST: Before any project document work, call project_get. Before any project question, call project_search. KB + documents = source of truth. Memory = unreliable.\n\n3. SCOPE DISCIPLINE: Only include confirmed scope. If activity not confirmed in KB or by owner = exclude. Ask when in doubt. Never pad a document with plausible-sounding out-of-scope content.\n\n4. PARTY NAMES ARE SACRED: Every party name must come from KB. Never substitute, abbreviate, or infer. Wrong party name in a formal document = serious professional error.\n\n5. DOCUMENT INTEGRITY: Flag errors to owner, do not silently correct. Mark unknown fields as [TBC]. Never add unrequested content. Revision numbers, submission dates, approval status = KB or owner only.\n\n6. TECHNICAL VALUES: Equipment ratings, specifications, cable sizes, settings, parameters = from approved documents only. Never round, estimate, or copy from reference project without explicit confirmation.\n\n7. WHEN UNCERTAIN: Say so. \"I don't have this in KB -- can you confirm?\" is the correct response. Wrong fact in formal document = rework, delays, loss of trust. Silence is better than guessing.",
     "confidence": "proven",
     "active": true
   }
