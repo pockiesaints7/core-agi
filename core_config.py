@@ -161,10 +161,11 @@ _GEMINI_KEYS = [k.strip() for k in os.getenv("GEMINI_KEYS", "").replace(" ", "")
 _GEMINI_KEY_INDEX = 0
 _GEMINI_MODEL = "gemini-2.5-flash"
 
-def gemini_chat(system: str, user: str, max_tokens: int = 2048) -> str:
+def gemini_chat(system: str, user: str, max_tokens: int = 2048, json_mode: bool = False) -> str:
     """Gemini chat with round-robin key rotation and 429 fallback across all keys.
     Default max_tokens=2048 -- gemini-2.5-flash is a thinking model that uses tokens
-    for internal reasoning before output. Low limits cause empty content responses."""
+    for internal reasoning before output. Low limits cause empty content responses.
+    json_mode=True: sets responseMimeType=application/json to force structured JSON output."""
     global _GEMINI_KEY_INDEX
     if not _GEMINI_KEYS:
         raise RuntimeError("GEMINI_KEYS env var not set")
@@ -180,7 +181,8 @@ def gemini_chat(system: str, user: str, max_tokens: int = 2048) -> str:
                 params={"key": key},
                 headers={"Content-Type": "application/json"},
                 json={"contents": [{"parts": [{"text": prompt}]}],
-                      "generationConfig": {"maxOutputTokens": max_tokens}},
+                      "generationConfig": {"maxOutputTokens": max_tokens,
+                                           **({"responseMimeType": "application/json"} if json_mode else {})}},
                 timeout=30,
             )
             if r.status_code == 429:
