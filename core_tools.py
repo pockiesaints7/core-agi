@@ -5074,7 +5074,7 @@ def t_maintenance_purge(table: str = "hot_reflections", older_than_days: int = 1
         count_filter = f"created_at=lt.{cutoff}"
         if table == "hot_reflections":
             count_filter += "&processed=eq.true"
-        rows = sb_get(table, count_filter)
+        rows = sb_get(table, count_filter + "&select=id", svc=True)
         count = len(rows) if isinstance(rows, list) else 0
     except Exception as e:
         return {"ok": False, "error": f"Count query failed: {str(e)}"}
