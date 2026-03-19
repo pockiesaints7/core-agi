@@ -1,0 +1,1802 @@
+[
+  {
+    "id": 2406,
+    "domain": "backlog",
+    "topic": "[BACKLOG-3] Runway Estimation Calculator",
+    "instruction": null,
+    "content": "type=new_tool effort=medium impact=medium domain=finance\nDevelop a tool to calculate the optimal runway for startups based on industry benchmarks and market trends.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2407,
+    "domain": "backlog",
+    "topic": "[BACKLOG-5] Emotion-Driven Fundraising Strategy",
+    "instruction": null,
+    "content": "type=logic_improvement effort=low impact=high domain=finance\nImprove the 'fundraising strategy' task to consider the emotional aspects of pitching and building relationships with investors.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2408,
+    "domain": "backlog",
+    "topic": "[BACKLOG-4] Real-time Market Data Integration",
+    "instruction": null,
+    "content": "type=missing_data effort=high impact=high domain=finance\n Integrate real-time market data to provide more accurate and up-to-date financial insights and recommendations.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2410,
+    "domain": "backlog",
+    "topic": "[BACKLOG-4] Integrate symptom checking with medication interaction check",
+    "instruction": null,
+    "content": "type=logic_improvement effort=high impact=high domain=medical\nAllow CORE to combine the two separate tasks and provide a comprehensive diagnosis and recommendation. Required new logic to integrate domain knowledge and expert reasoning.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2411,
+    "domain": "backlog",
+    "topic": "[BACKLOG-3] Add medical ontology",
+    "instruction": null,
+    "content": "type=new_kb effort=high impact=high domain=medical\nExtend the existing knowledge base with a medical ontology to support more sophisticated medical diagnoses and explanations. This will enable CORE to better understand medical concepts and relationships.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2412,
+    "domain": "backlog",
+    "topic": "[BACKLOG-4] Optimize knowledge retrieval for medical domain",
+    "instruction": null,
+    "content": "type=performance effort=medium impact=medium domain=medical\nTune the indexing and retrieval mechanisms for the medical knowledge base to improve query performance and reduce response times for medical tasks. This will make CORE more responsive and useful for practitioners.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2413,
+    "domain": "backlog",
+    "topic": "[BACKLOG-5] Medication recommendation",
+    "instruction": null,
+    "content": "type=new_tool effort=high impact=high domain=medical\nDevelop a new tool that enables CORE to recommend medications based on a patient's medical history, symptoms, and diagnosis. This will require new logic and integration with the medical knowledge base and ontology.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2414,
+    "domain": "backlog",
+    "topic": "[BACKLOG-2] Clinical decision support",
+    "instruction": null,
+    "content": "type=new_tool effort=medium impact=high domain=medical\nCreate a new tool that provides clinical decision support for medical practitioners, enabling them to navigate complex medical decisions and recommendations. This will require new logic and integration with the medical knowledge base and ontology.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2416,
+    "domain": "backlog",
+    "topic": "[BACKLOG-5] Data Science Principles and Algorithms",
+    "instruction": null,
+    "content": "type=new_kb effort=high impact=high domain=data\nExpand the knowledge base to include a comprehensive collection of data science concepts, algorithms, and techniques, such as clustering, decision trees, and regression analysis.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2417,
+    "domain": "backlog",
+    "topic": "[BACKLOG-2] Integration of Data Cleansing Techniques",
+    "instruction": null,
+    "content": "type=logic_improvement effort=low impact=low domain=data\nUpdate the anomaly detection and data cleaning workflows to incorporate industry-standard data cleansing techniques, such as handling missing values, encoding categorical variables, and data normalization.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2418,
+    "domain": "backlog",
+    "topic": "[BACKLOG-4] Optimize Search Efficiency in Knowledge Base",
+    "instruction": null,
+    "content": "type=performance effort=medium impact=medium domain=data\nImprove the search algorithm in the knowledge base to reduce query latency and increase search efficiency for large datasets, enabling faster retrieval of relevant information.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2419,
+    "domain": "backlog",
+    "topic": "[BACKLOG-1] A/B Test Analysis Templates",
+    "instruction": null,
+    "content": "type=missing_data effort=low impact=medium domain=data\nCreate a set of pre-built templates and examples for A/B test analysis to guide users in collecting and interpreting test results, filling a gap in available resources and expertise.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2420,
+    "domain": "backlog",
+    "topic": "[BACKLOG-5] Brand Voice Knowledge",
+    "instruction": null,
+    "content": "type=new_kb effort=medium impact=high domain=creative\nCreate a knowledge base entry for brand voice to assist in tasks beyond 'brand voice guide'.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2421,
+    "domain": "backlog",
+    "topic": "[BACKLOG-4] Domain-Based Routing",
+    "instruction": null,
+    "content": "type=logic_improvement effort=high impact=high domain=creative\nEnhance routing to handle tasks with specific domains, like creative tasks requiring different expertise or emotions.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2422,
+    "domain": "backlog",
+    "topic": "[BACKLOG-3] Emotion-Aware Generation",
+    "instruction": null,
+    "content": "type=new_tool effort=high impact=medium domain=creative\nDevelop a tool that generates content based on the specified emotion, improving the quality of output.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2424,
+    "domain": "backlog",
+    "topic": "[BACKLOG-1] Product Description Template",
+    "instruction": null,
+    "content": "type=new_tool effort=low impact=low domain=creative\nCreate a tool for generating product descriptions using a customizable template.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2425,
+    "domain": "backlog",
+    "topic": "[BACKLOG-5] Code Syntax Knowledge Base",
+    "instruction": null,
+    "content": "type=new_kb effort=high impact=high domain=code\nImplement a knowledge base for code syntax, covering programming languages, frameworks, and libraries to improve accuracy in code-related tasks.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2426,
+    "domain": "backlog",
+    "topic": "[BACKLOG-4] Domain-Based Archetype Mapping",
+    "instruction": null,
+    "content": "type=logic_improvement effort=high impact=medium domain=code\nDevelop a more sophisticated mapping between tasks and archetypes, incorporating domain expertise to improve routing accuracy and task assignment.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2427,
+    "domain": "backlog",
+    "topic": "[BACKLOG-3] Code Execution Simulator",
+    "instruction": null,
+    "content": "type=new_tool effort=medium impact=medium domain=code\nCreate a tool to simulate code execution, allowing CORE to explore code behavior and predict potential errors, improving debugging and optimization tasks.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2428,
+    "domain": "backlog",
+    "topic": "[BACKLOG-5] Developer Feedback Collection",
+    "instruction": null,
+    "content": "type=missing_data effort=low impact=high domain=code\nImplement a mechanism to collect feedback from developers on CORE's performance and accuracy in code-related tasks, enabling data-driven improvement and refinement.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2429,
+    "domain": "backlog",
+    "topic": "[BACKLOG-4] Stake-Based Task Prioritization",
+    "instruction": null,
+    "content": "type=logic_improvement effort=high impact=medium domain=code\nDevelop a logic module to prioritize tasks based on stake levels, ensuring that high-stakes tasks are addressed promptly and efficiently.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2430,
+    "domain": "backlog",
+    "topic": "[BACKLOG-4] Customer Churn Prevention Strategies",
+    "instruction": null,
+    "content": "type=new_kb effort=high impact=high domain=business\nImplement a knowledge base entry with effective strategies to reduce customer churn, including data-driven examples and case studies.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2431,
+    "domain": "backlog",
+    "topic": "[BACKLOG-3] Churn Prediction Model",
+    "instruction": null,
+    "content": "type=new_tool effort=high impact=high domain=business\nDevelop a machine learning-based tool to predict customer churn based on historical data and real-time metrics, providing actionable insights to business owners.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2432,
+    "domain": "backlog",
+    "topic": "[BACKLOG-5] Automated Hiring Process",
+    "instruction": null,
+    "content": "type=logic_improvement effort=medium impact=high domain=business\nEnhance the hiring process by implementing automated workflows for candidate screening, interviews, and onboarding, reducing manual effort and improving time-to-hire.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2433,
+    "domain": "backlog",
+    "topic": "[BACKLOG-2] Market Expansion Roadmaps",
+    "instruction": null,
+    "content": "type=new_kb effort=medium impact=medium domain=business\nCreate a knowledge base entry with templated market expansion roadmaps, including market research, competition analysis, and strategic planning guidelines.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2434,
+    "domain": "backlog",
+    "topic": "[BACKLOG-1] Optimize KB Search",
+    "instruction": null,
+    "content": "type=performance effort=low impact=medium domain=business\nImprove the search functionality of the knowledge base to provide faster and more accurate results, reducing the time spent by business owners on searching for related information.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2435,
+    "domain": "backlog",
+    "topic": "[BACKLOG-5] Optimize routing engine",
+    "instruction": null,
+    "content": "type=performance effort=high impact=high domain=code\nReduce latency by implementing caching and lazy loading of architecture and domain models. Optimize algorithm for determining archetypes and domains.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2436,
+    "domain": "backlog",
+    "topic": "[BACKLOG-5] Knowledge Base for Code Domain",
+    "instruction": null,
+    "content": "type=new_kb effort=high impact=high domain=code\nCreate specific knowledge base entries for common code-related concepts, such as design patterns, REST API best practices, and coding standards.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2437,
+    "domain": "backlog",
+    "topic": "[BACKLOG-3] Code Review and Refactoring Tool",
+    "instruction": null,
+    "content": "type=new_tool effort=high impact=medium domain=code\nDevelop a tool that can analyze code, identify areas for refactoring, and suggest improvements. Integrate with existing tools to automate refactoring processes.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2438,
+    "domain": "backlog",
+    "topic": "[BACKLOG-2] Improve Decision Making for Creative Tasks",
+    "instruction": null,
+    "content": "type=logic_improvement effort=medium impact=high domain=code\nEnhance core's ability to evaluate and generate creative ideas by incorporating algorithms for idea generation, such as the incubation period and idea association networks.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2439,
+    "domain": "backlog",
+    "topic": "[BACKLOG-1] Incorporate Code Metrics",
+    "instruction": null,
+    "content": "type=missing_data effort=low impact=medium domain=code\nAdd support for code metrics such as cyclomatic complexity, code coverage, and lines of code, allowing for more informed decision making and analysis.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2440,
+    "domain": "backlog",
+    "topic": "[BACKLOG-3] Integration with medical ontologies",
+    "instruction": null,
+    "content": "type=new_tool effort=high impact=high domain=medical\nIntegrate CORE with medical ontologies like ICD-10, SNOMED-CT, or RadLex to enhance its medical knowledge and consistency.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2441,
+    "domain": "backlog",
+    "topic": "[BACKLOG-2] Medical knowledge updates",
+    "instruction": null,
+    "content": "type=new_kb effort=medium impact=medium domain=medical\nExpand and maintain a comprehensive medical knowledge base, including the latest treatments, diagnoses, and medical research.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2442,
+    "domain": "backlog",
+    "topic": "[BACKLOG-4] Enhanced symptom analysis",
+    "instruction": null,
+    "content": "type=logic_improvement effort=high impact=high domain=medical\nImprove CORE's symptom analysis capabilities by integrating machine learning models or natural language processing techniques to better understand and diagnose medical conditions.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2443,
+    "domain": "backlog",
+    "topic": "[BACKLOG-1] Medical literature search",
+    "instruction": null,
+    "content": "type=new_tool effort=medium impact=medium domain=medical\nDevelop a tool that enables CORE to search and retrieve relevant medical literature from trusted sources like PubMed, Google Scholar, or Scopus.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2444,
+    "domain": "backlog",
+    "topic": "[BACKLOG-5] Patient-specific data integration",
+    "instruction": null,
+    "content": "type=missing_data effort=high impact=high domain=medical\nIntegrate CORE with electronic health records or other patient data systems to provide more accurate and personalized medical advice.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2445,
+    "domain": "backlog",
+    "topic": "[BACKLOG-3] Context-aware Task Routing",
+    "instruction": null,
+    "content": "type=logic_improvement effort=high impact=medium domain=business\nImplement task routing logic to consider domain-specific expertise and emotion-based context, improving task allocation accuracy and user experience",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2446,
+    "domain": "backlog",
+    "topic": "[BACKLOG-2] Business Domain Knowledge Graph",
+    "instruction": null,
+    "content": "type=new_kb effort=medium impact=high domain=business\nExpand KB with specialized business knowledge, including market trends, finance models, and performance metrics to enhance AGI's expertise and decision-making capabilities",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2447,
+    "domain": "backlog",
+    "topic": "[BACKLOG-5] Optimize Search Efficiency",
+    "instruction": null,
+    "content": "type=performance effort=low impact=low domain=business\nImprove search query performance by indexing and caching relevant knowledge graph data, reducing search latency and enhancing AGI's response time",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2448,
+    "domain": "backlog",
+    "topic": "[BACKLOG-1] Enterprise Performance Metrics",
+    "instruction": null,
+    "content": "type=missing_data effort=high impact=high domain=business\nAdd metrics for evaluating business performance, such as customer satisfaction, employee engagement, and return on investment to enable comprehensive analysis and decision-making",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2449,
+    "domain": "backlog",
+    "topic": "[BACKLOG-4] Decision Support Framework",
+    "instruction": null,
+    "content": "type=new_tool effort=medium impact=medium domain=business\nDevelop a decision support tool that integrates AGI's knowledge and expertise to provide actionable recommendations and scenarios for business leaders, enhancing decision-making quality and confidence",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2450,
+    "domain": "backlog",
+    "topic": "[BACKLOG-5] Domain-Specific Business Knowledge Base",
+    "instruction": null,
+    "content": "type=new_kb effort=high impact=high domain=business\nExpand the knowledge base to include industry-specific business terminologies, frameworks, and models to enhance business-related task resolution. Populate the KB with relevant concepts from finance, marketing, and human resources.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2451,
+    "domain": "backlog",
+    "topic": "[BACKLOG-3] Financial Projections Tool",
+    "instruction": null,
+    "content": "type=new_tool effort=medium impact=medium domain=business\nDevelop a tool that enables CORE to generate financial projections and forecasts based on historical data and business growth patterns, enhancing its ability to assist with 'improve cash flow' and related tasks.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2452,
+    "domain": "backlog",
+    "topic": "[BACKLOG-4] Enhanced Churn Prediction and Prevention",
+    "instruction": null,
+    "content": "type=logic_improvement effort=high impact=medium domain=business\nImprove the logic underlying the 'reduce churn' task to incorporate machine learning algorithms and customer behavior analysis, allowing CORE to identify potential churn risks and recommend proactive measures.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2453,
+    "domain": "backlog",
+    "topic": "[BACKLOG-2] Market Research and Trend Analysis",
+    "instruction": null,
+    "content": "type=missing_data effort=medium impact=medium domain=business\nIntegrate a market research tool to gather industry data, trends, and insights, empowering CORE to make more informed decisions when performing tasks like 'expand to new market'.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2454,
+    "domain": "backlog",
+    "topic": "[BACKLOG-1] Knowledge Base Indexing Enhancement",
+    "instruction": null,
+    "content": "type=performance effort=low impact=low domain=business\nOptimize the knowledge base indexing mechanism to improve query performance and reduce lookup times, increasing CORE's overall efficiency and effectiveness.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2455,
+    "domain": "backlog",
+    "topic": "[BACKLOG-4] Integrate archetype-based task routing",
+    "instruction": null,
+    "content": "type=logic_improvement effort=high impact=high domain=code\nRefactor routing to utilize archetype information, enabling more accurate task matching and assignment. This will also facilitate future additions of archetypes and more sophisticated routing logic.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2456,
+    "domain": "backlog",
+    "topic": "[BACKLOG-3] Expertise-based knowledge repository",
+    "instruction": null,
+    "content": "type=new_kb effort=high impact=high domain=code\nCreate a separate KB section for expertise-based knowledge, allowing for efficient storage and retrieval of expertise-level information. This will enhance CORE's capacity for domain-specific knowledge and expertise.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2457,
+    "domain": "backlog",
+    "topic": "[BACKLOG-5] Optimize search_kb function",
+    "instruction": null,
+    "content": "type=performance effort=medium impact=medium domain=code\nImprove the search_kb function's performance by optimizing indexing and search algorithms, reducing the time required for knowledge retrieval. This will enable faster and more efficient knowledge-based decisions.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2458,
+    "domain": "backlog",
+    "topic": "[BACKLOG-2] Task-specific explanation tool",
+    "instruction": null,
+    "content": "type=new_tool effort=high impact=medium domain=code\nDevelop a tool that generates task-specific explanations, enabling CORE to provide clear and concise explanations for errors or uncertain situations. This will enhance user understanding and trust in CORE's decisions.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2459,
+    "domain": "backlog",
+    "topic": "[BACKLOG-4] Incorporate knowledge graph data into KB",
+    "instruction": null,
+    "content": "type=missing_data effort=high impact=high domain=code\nIntegrate knowledge graph data into the knowledge base, facilitating more sophisticated knowledge-based decisions and enabling CORE to identify relationships between entities and concepts. This will significantly enhance CORE's knowledge and understanding of the domain.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2460,
+    "domain": "backlog",
+    "topic": "[BACKLOG-4] Improve archetype routing for task ambiguity",
+    "instruction": null,
+    "content": "type=logic_improvement effort=high impact=medium domain=academic\nRefactor routing logic to handle task ambiguities, e.g., multiple possible archetypes assigned to a single task.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2461,
+    "domain": "backlog",
+    "topic": "[BACKLOG-5] Enhance domain-specific knowledge in statistics",
+    "instruction": null,
+    "content": "type=new_kb effort=medium impact=high domain=academic\nInclusion of specific statistical methods and their applications to improve explaining statistical methods and summarizing research papers with a focus on statistical methods.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2462,
+    "domain": "backlog",
+    "topic": "[BACKLOG-3] Optimize search_knowledge retrieval",
+    "instruction": null,
+    "content": "type=performance effort=low impact=medium domain=academic\nTuning indexing and querying of the knowledge base for faster retrieval of relevant knowledge entries.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2463,
+    "domain": "backlog",
+    "topic": "[BACKLOG-4] Literature review assistant",
+    "instruction": null,
+    "content": "type=new_tool effort=high impact=medium domain=academic\nDevelopment of a tool that assists in identifying key literature for a literature review, possibly including semantic search and entity disambiguation features.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2464,
+    "domain": "backlog",
+    "topic": "[BACKLOG-3] Efficient memory management",
+    "instruction": null,
+    "content": "type=performance effort=high impact=high domain=academic\nImplementation of efficient memory management techniques to reduce memory overhead and prevent potential crashes due to resource exhaustion.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2465,
+    "domain": "backlog",
+    "topic": "[BACKLOG-4] Context-sensitive task routing",
+    "instruction": null,
+    "content": "type=logic_improvement effort=medium impact=high domain=academic\nIntegrate task-specific context into routing logic to ensure accurate task assignment.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2466,
+    "domain": "backlog",
+    "topic": "[BACKLOG-3] Academic domain knowledge database",
+    "instruction": null,
+    "content": "type=new_kb effort=high impact=high domain=academic\nExpand knowledge base with domain-specific information, concepts, and relationships to improve academic task understanding and performance.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2467,
+    "domain": "backlog",
+    "topic": "[BACKLOG-2] Thesis planning and organization tools",
+    "instruction": null,
+    "content": "type=new_tool effort=high impact=medium domain=academic\nDevelop tools to support researchers in planning, organizing, and structuring their thesis, including outline generation, argumentation mapping, and bibliography management.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2469,
+    "domain": "backlog",
+    "topic": "[BACKLOG-1] Expertise level assessment",
+    "instruction": null,
+    "content": "type=missing_data effort=low impact=medium domain=academic\nDevelop a mechanism to accurately assess the expertise level of users, ensuring that tasks are assigned according to their knowledge and experience levels.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2470,
+    "domain": "backlog",
+    "topic": "[BACKLOG-4] Creative Domain Template",
+    "instruction": null,
+    "content": "type=new_kb effort=medium impact=high domain=creative\nCreate a new KB entry template for A3 archetypes in the creative domain to standardize knowledge and make it accessible for similar tasks.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2471,
+    "domain": "backlog",
+    "topic": "[BACKLOG-3] Task Emotion Resolver",
+    "instruction": null,
+    "content": "type=new_tool effort=medium impact=medium domain=creative\nDevelop a new tool to recognize and resolve task emotions (e.g., 'write product description' - neutral, 'social media plan' - anxious) to provide more accurate advice and improve human-AI collaboration.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2472,
+    "domain": "backlog",
+    "topic": "[BACKLOG-5] Domain Routing Optimization",
+    "instruction": null,
+    "content": "type=logic_improvement effort=high impact=high domain=creative\nRe-evaluate the task routing logic to optimize the selection of archetypes, domains, and expertise, ensuring the most relevant KB entries are accessed, especially for creative tasks.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2473,
+    "domain": "backlog",
+    "topic": "[BACKLOG-1] KB Knowledge Map Visualization",
+    "instruction": null,
+    "content": "type=missing_data effort=low impact=low domain=creative\nCreate a graphical representation of the KB knowledge map to enhance navigation, organization, and understanding of existing knowledge, focusing on the creative domain.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2474,
+    "domain": "backlog",
+    "topic": "[BACKLOG-2] Creative Expertise Estimator",
+    "instruction": null,
+    "content": "type=new_tool effort=medium impact=medium domain=creative\nDevelop a new tool to estimate expertise levels (e.g., expertise = 4) for creative tasks, taking into account factors like domain knowledge, archetype, and emotional complexity.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2475,
+    "domain": "backlog",
+    "topic": "[BACKLOG-4] Archetype Knowledge Aggregator",
+    "instruction": null,
+    "content": "type=new_tool effort=medium impact=high domain=creative\nCreate a new tool to aggregate relevant KB entries for A3 archetypes in the creative domain, enhancing knowledge consistency and accuracy across related tasks.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2476,
+    "domain": "backlog",
+    "topic": "[BACKLOG-5] KB Knowledge Retrieval Optimization",
+    "instruction": null,
+    "content": "type=performance effort=high impact=high domain=creative\nOptimize KB knowledge retrieval strategies to reduce the latency and improve the response time for creative tasks, considering the large number of available KB entries (1983).",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2477,
+    "domain": "backlog",
+    "topic": "[BACKLOG-1] Task Emotion Dataset",
+    "instruction": null,
+    "content": "type=missing_data effort=low impact=low domain=creative\nCollect and create a dataset of human-created task emotion labels (e.g., neutral, anxious, excited) to improve the performance of the Task Emotion Resolver tool.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2478,
+    "domain": "backlog",
+    "topic": "[BACKLOG-4] Business Templates",
+    "instruction": null,
+    "content": "type=new_kb effort=high impact=high domain=business\nCreate a knowledge base of templates for common business tasks, such as pitch decks, business plans, and financial projections.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2480,
+    "domain": "backlog",
+    "topic": "[BACKLOG-5] Route Optimization",
+    "instruction": null,
+    "content": "type=performance effort=medium impact=high domain=business\nOptimize the routing mechanism to reduce latency and improve overall performance, allowing the AGI to process tasks more efficiently and effectively.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2481,
+    "domain": "backlog",
+    "topic": "[BACKLOG-2] Scenario Planning",
+    "instruction": null,
+    "content": "type=new_tool effort=high impact=medium domain=business\nDevelop a new tool that enables the AGI to simulate different business scenarios, such as market trends, customer behavior, and financial projections, to help entrepreneurs and business owners make informed decisions.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2482,
+    "domain": "backlog",
+    "topic": "[BACKLOG-1] Industry-Specific Knowledge",
+    "instruction": null,
+    "content": "type=missing_data effort=low impact=low domain=business\nUpdate the knowledge base to include industry-specific information, such as regulatory requirements, best practices, and market trends, to enhance the AGI's ability to provide tailored advice to business owners.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2483,
+    "domain": "backlog",
+    "topic": "[BACKLOG-4] Integration of academic domain knowledge",
+    "instruction": null,
+    "content": "type=new_kb effort=high impact=medium domain=academic\nExpand the knowledge base to include more specific domain knowledge for the academic domain such as research methods, theories, and notable researchers.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2484,
+    "domain": "backlog",
+    "topic": "[BACKLOG-3] Argument structure recognition",
+    "instruction": null,
+    "content": "type=logic_improvement effort=medium impact=high domain=academic\nImprove the AI's ability to recognize and analyze thesis argument structures, enabling it to provide more informative and relevant output.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2485,
+    "domain": "backlog",
+    "topic": "[BACKLOG-2] New command: Summarize research paper",
+    "instruction": null,
+    "content": "type=telegram_command effort=low impact=medium domain=academic\nCreate a new Telegram command that utilizes the existing summarization tool to automatically summarize research papers for users.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2486,
+    "domain": "backlog",
+    "topic": "[BACKLOG-5] Topic classification tool",
+    "instruction": null,
+    "content": "type=new_tool effort=high impact=high domain=academic\nDevelop a tool that automatically classifies topics within the academic domain, enabling CORE to better understand the context of user queries.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2487,
+    "domain": "backlog",
+    "topic": "[BACKLOG-4] Gathering relevant academic datasets",
+    "instruction": null,
+    "content": "type=missing_data effort=high impact=medium domain=academic\nAcquire and integrate relevant academic datasets, such as research paper abstracts and thesis topics, to improve CORE's understanding of the academic domain.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2488,
+    "domain": "backlog",
+    "topic": "[BACKLOG-4] Legal Domain Knowledge",
+    "instruction": null,
+    "content": "type=new_kb effort=high impact=high domain=legal\nAdd 1000+ entries on legal terminology, precedents, and best practices.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2489,
+    "domain": "backlog",
+    "topic": "[BACKLOG-3] Clause Analysis Tool",
+    "instruction": null,
+    "content": "type=new_tool effort=high impact=medium domain=legal\nDevelop a tool to analyze and provide insights on contract clauses.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2490,
+    "domain": "backlog",
+    "topic": "[BACKLOG-2] Reasoning for Business Cases",
+    "instruction": null,
+    "content": "type=logic_improvement effort=medium impact=medium domain=legal\nRefine CORE's logic to handle business-specific reasoning, such as evaluating startup funding options and IP protection strategies.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2491,
+    "domain": "backlog",
+    "topic": "[BACKLOG-5] Country-Specific Legal Requirements",
+    "instruction": null,
+    "content": "type=missing_data effort=low impact=high domain=legal\nGather and integrate information on country-specific laws, regulations, and requirements.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2493,
+    "domain": "backlog",
+    "topic": "[BACKLOG-4] Domain-specific statistical methods",
+    "instruction": null,
+    "content": "type=new_kb effort=medium impact=high domain=academic\nIntegrate knowledge of commonly used statistical methods in academic research to better address task requests like 'explain statistical method'.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2494,
+    "domain": "backlog",
+    "topic": "[BACKLOG-3] Anarchitect support for domain-specific expertise",
+    "instruction": null,
+    "content": "type=logic_improvement effort=medium impact=medium domain=academic\nEnhance the archetype system to accommodate for expertise in specific domains, enabling CORE to better address tasks like 'thesis argument structure' which require domain-specific knowledge.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2495,
+    "domain": "backlog",
+    "topic": "[BACKLOG-5] Research paper understanding module",
+    "instruction": null,
+    "content": "type=new_tool effort=high impact=high domain=academic\nDevelop a module that enables CORE to extract key concepts, structure, and relationships from a research paper to improve performance in tasks like 'summarize research paper'.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2496,
+    "domain": "backlog",
+    "topic": "[BACKLOG-2] Emotion and stakes consideration",
+    "instruction": null,
+    "content": "type=logic_improvement effort=low impact=medium domain=academic\nIntegrate consideration for emotion and stakes in the task routing and response generation process to improve performance in tasks with complex requirements, such as 'thesis argument structure'.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2498,
+    "domain": "backlog",
+    "topic": "[BACKLOG-5] Analyze task stakes and adjust response",
+    "instruction": null,
+    "content": "type=logic_improvement effort=medium impact=high domain=business\nIntegrate a system to analyze task stakes and adapt response accordingly to provide more tailored support",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2499,
+    "domain": "backlog",
+    "topic": "[BACKLOG-4] Product/Service Price Model Creation",
+    "instruction": null,
+    "content": "type=new_tool effort=high impact=high domain=business\nDevelop a tool to help users create price models for their products, considering factors like production costs, market demand, and competition",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2500,
+    "domain": "backlog",
+    "topic": "[BACKLOG-3] Business Market Dynamics and Trends",
+    "instruction": null,
+    "content": "type=new_kb effort=medium impact=medium domain=business\nEnrich the knowledge base with relevant data on market dynamics, trends, and shifts to better assist users in market-related tasks",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2501,
+    "domain": "backlog",
+    "topic": "[BACKLOG-2] Optimize routing for high-stakes tasks",
+    "instruction": null,
+    "content": "type=performance effort=low impact=high domain=business\nImplement optimizations to ensure CORE efficiently routes high-stakes tasks to relevant archetypes, reducing the chances of a catastrophic mistake",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2502,
+    "domain": "backlog",
+    "topic": "[BACKLOG-1] Gather expert opinions on new business tools and platforms",
+    "instruction": null,
+    "content": "type=missing_data effort=medium impact=medium domain=business\nAcquire knowledge from industry experts on the effectiveness of emerging tools and platforms, enabling CORE to provide informed advice to users",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2503,
+    "domain": "backlog",
+    "topic": "[BACKLOG-5] Domain-specific expert knowledge (finance)",
+    "instruction": null,
+    "content": "type=new_kb effort=high impact=high domain=finance\nIncorporate financial expert knowledge into the KB, including tax laws, financial models, and economic concepts.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2504,
+    "domain": "backlog",
+    "topic": "[BACKLOG-4] Unit economics model",
+    "instruction": null,
+    "content": "type=logic_improvement effort=high impact=high domain=finance\nDevelop a unit economics model to evaluate the revenue and costs of business units, taking into account the general domain knowledge.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2505,
+    "domain": "backlog",
+    "topic": "[BACKLOG-3] Runway calculation tool",
+    "instruction": null,
+    "content": "type=new_tool effort=medium impact=medium domain=finance\nCreate a tool to calculate the runway for startup companies based on their current cash reserves and projected burn rates.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2506,
+    "domain": "backlog",
+    "topic": "[BACKLOG-2] Tax optimization reasoning",
+    "instruction": null,
+    "content": "type=logic_improvement effort=high impact=medium domain=finance\nEnhance the tax optimization reasoning module to consider the nuances of different tax laws and regulations.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2508,
+    "domain": "backlog",
+    "topic": "[BACKLOG-4] Domain-aware Content Creation Tools",
+    "instruction": null,
+    "content": "type=new_tool effort=high impact=high domain=creative\nIntegrate tools specific to creative tasks, such as content calendar and brand voice guide, to enhance output.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2510,
+    "domain": "backlog",
+    "topic": "[BACKLOG-2] Emotion-aware Writing Assistant",
+    "instruction": null,
+    "content": "type=new_tool effort=medium impact=medium domain=creative\nDevelop a tool to assist in writing with the correct tone and style for a specific audience and task, including writing a product description.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2512,
+    "domain": "backlog",
+    "topic": "[BACKLOG-5] Domain-specific Code Examples KB",
+    "instruction": null,
+    "content": "type=new_kb effort=high impact=high domain=code\nCreate a KB module specifically for storing and retrieving code examples across various programming languages, to facilitate better code generation and debugging capabilities.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2513,
+    "domain": "backlog",
+    "topic": "[BACKLOG-4] Code Linter Tool",
+    "instruction": null,
+    "content": "type=new_tool effort=high impact=medium domain=code\nDevelop a tool to lint and validate user-submitted code, providing instant feedback on syntax errors, coding standards, and potential performance issues.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2514,
+    "domain": "backlog",
+    "topic": "[BACKLOG-3] Improve Code Generation for Specific Task Types",
+    "instruction": null,
+    "content": "type=logic_improvement effort=medium impact=medium domain=code\nTune the existing code generation capabilities to specifically address tasks like 'design REST API' and 'debug this python function', by integrating domain-specific expertise and adapting to evolving technology trends.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2515,
+    "domain": "backlog",
+    "topic": "[BACKLOG-2] Integrate Stack Overflow Data",
+    "instruction": null,
+    "content": "type=missing_data effort=high impact=high domain=code\nIncorporate Stack Overflow's vast repository of code examples and Q&A to enhance CORE's knowledge base, improve code generation, and provide more accurate answers to code-related queries.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2516,
+    "domain": "backlog",
+    "topic": "[BACKLOG-1] Optimize Code Response Time",
+    "instruction": null,
+    "content": "type=performance effort=low impact=low domain=code\nTune CORE's processing and execution mechanisms to significantly reduce response times for code-related tasks, ensuring users receive their results promptly and efficiently.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2517,
+    "domain": "backlog",
+    "topic": "[BACKLOG-3] Enhance Task Archetype Identification",
+    "instruction": null,
+    "content": "type=logic_improvement effort=high impact=high domain=academic\nImprove CORE's ability to accurately identify task archetypes based on inputs, reducing errors and increasing efficiency.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2518,
+    "domain": "backlog",
+    "topic": "[BACKLOG-2] Academic Paper Summarization Engine",
+    "instruction": null,
+    "content": "type=new_tool effort=high impact=medium domain=academic\nDevelop a dedicated tool for automatically summarizing research papers, leveraging advancements in natural language processing and information retrieval.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2519,
+    "domain": "backlog",
+    "topic": "[BACKLOG-4] Integrate Expertise Levels with Domain-Specific Knowledge",
+    "instruction": null,
+    "content": "type=logic_improvement effort=medium impact=high domain=academic\nEnhance CORE's ability to incorporate expertise levels into its knowledge retrieval, enabling more accurate and relevant responses in various domains.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2520,
+    "domain": "backlog",
+    "topic": "[BACKLOG-1] Academic Domain Knowledge Database Expansion",
+    "instruction": null,
+    "content": "type=missing_data effort=low impact=high domain=academic\nExpand CORE's knowledge database to include more specialized information in the academic domain, addressing current knowledge gaps.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2521,
+    "domain": "backlog",
+    "topic": "[BACKLOG-5] KB Entry Indexing and Retrieval Optimization",
+    "instruction": null,
+    "content": "type=performance effort=high impact=high domain=academic\nOptimize CORE's knowledge indexing and retrieval processes to improve performance and efficiency when handling a large knowledge base.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2522,
+    "domain": "backlog",
+    "topic": "[BACKLOG-4] Finance Tax Database",
+    "instruction": null,
+    "content": "type=new_kb effort=high impact=high domain=finance\nCreate a specialized KB for finance tax-related data to enhance accuracy and speed for tasks like tax optimization.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2523,
+    "domain": "backlog",
+    "topic": "[BACKLOG-3] Task-Specific Expertise Weighting",
+    "instruction": null,
+    "content": "type=logic_improvement effort=medium impact=_medium domain=finance\nAdjust archetype expertise weightings to better suit finance-specific tasks like tax optimization and runway calculation.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2524,
+    "domain": "backlog",
+    "topic": "[BACKLOG-2] Tax Optimization Calculator",
+    "instruction": null,
+    "content": "type=new_tool effort=high impact=high domain=finance\nCreate a custom tool for calculating tax optimizations by incorporating finance-specific tax laws and regulations.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2525,
+    "domain": "backlog",
+    "topic": "[BACKLOG-5] Improved Domain Route Efficiency",
+    "instruction": null,
+    "content": "type=performance effort=low impact=high domain=finance\nOptimize the routing system to prioritize finance-related tasks and avoid unnecessary general-domain route evaluations.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2526,
+    "domain": "backlog",
+    "topic": "[BACKLOG-1] Tax Laws and Regulations",
+    "instruction": null,
+    "content": "type=missing_data effort=medium impact=medium domain=finance\nUpdate or add KB entries for current tax laws and regulations in various regions to enhance the accuracy of tax optimization.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2527,
+    "domain": "backlog",
+    "topic": "[BACKLOG-5] Academic Domain Expertise",
+    "instruction": null,
+    "content": "type=logic_improvement effort=high impact=high domain=academic\nEnhance CORE's ability to adapt to various academic domains by integrating more specific knowledge bases and refining the expertise system for nuanced responses in academic contexts.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2528,
+    "domain": "backlog",
+    "topic": "[BACKLOG-4] Thesis Argument Structure Knowledge Base",
+    "instruction": null,
+    "content": "type=new_kb effort=medium impact=medium domain=academic\nCreate a dedicated knowledge base specifically designed to understand and generate the structure of thesis arguments, enabling CORE to provide accurate and informative responses on this topic.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2530,
+    "domain": "backlog",
+    "topic": "[BACKLOG-2] Contextualized Summarization Tool",
+    "instruction": null,
+    "content": "type=new_tool effort=high impact=high domain=academic\nDesign a new tool that enables CORE to provide high-quality summaries of research papers, considering the nuances of academic writing and the importance of context in summarization tasks.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2531,
+    "domain": "backlog",
+    "topic": "[BACKLOG-1] Adaptive Emotion Handling",
+    "instruction": null,
+    "content": "type=logic_improvement effort=medium impact=medium domain=academic\nRefine CORE's emotion handling system to better adapt to different emotional contexts and requirements in tasks, ensuring that the responses are empathetic and relevant to the user's emotional state.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2532,
+    "domain": "backlog",
+    "topic": "[BACKLOG-1] Gaps in KB Entries",
+    "instruction": null,
+    "content": "type=missing_data effort=low impact=low domain=academic\nUpdate and augment the existing knowledge base to address missing entries and knowledge gaps, ensuring that CORE has a comprehensive and accurate understanding of various topics, concepts, and terminology across the academic domain.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2533,
+    "domain": "backlog",
+    "topic": "[BACKLOG-3] Emotion and Stakes Data for General Domain Tasks",
+    "instruction": null,
+    "content": "type=missing_data effort=medium impact=medium domain=creative\nAdd emotion and stakes data to KB entries for 'write product description' and 'email newsletter' tasks.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2534,
+    "domain": "backlog",
+    "topic": "[BACKLOG-4] Creative Domain Knowledge Graph",
+    "instruction": null,
+    "content": "type=new_tool effort=high impact=high domain=creative\nDevelop a knowledge graph specifically designed for the creative domain to enhance performance on tasks like 'content calendar'.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2535,
+    "domain": "backlog",
+    "topic": "[BACKLOG-2] Product Description Templates",
+    "instruction": null,
+    "content": "type=new_kb effort=low impact=medium domain=creative\nCreate a KB entry for product description templates to aid in 'write product description' tasks.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2536,
+    "domain": "backlog",
+    "topic": "[BACKLOG-1] Route Task with Default Archetype",
+    "instruction": null,
+    "content": "type=logic_improvement effort=low impact=low domain=creative\nUpdate routing to assign a default archetype (e.g., A3) for tasks without a specified archetype.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2537,
+    "domain": "backlog",
+    "topic": "[BACKLOG-5] Optimize KB Search for Large KB Sizes",
+    "instruction": null,
+    "content": "type=performance effort=high impact=high domain=creative\nImprove the search functionality to handle the current KB size of 2039 entries for faster query execution.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2538,
+    "domain": "backlog",
+    "topic": "[BACKLOG-3] Creative Task Suggestions",
+    "instruction": null,
+    "content": "type=new_tool effort=medium impact=medium domain=creative\nDevelop a tool to suggest creative tasks based on the task's archetype, domain, and expertise levels.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2539,
+    "domain": "backlog",
+    "topic": "[BACKLOG-4] Domain-specific archetypes",
+    "instruction": null,
+    "content": "type=new_kb effort=high impact=high domain=code\nAdd additional archetypes tailored to specific domains (e.g., A1-A9) to improve task routing and expertise estimation",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2540,
+    "domain": "backlog",
+    "topic": "[BACKLOG-3] Refine expertise estimation model",
+    "instruction": null,
+    "content": "type=logic_improvement effort=medium impact=medium domain=code\nImprove expertise estimation algorithm to reduce errors in task routing and provide better suggestions",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2541,
+    "domain": "backlog",
+    "topic": "[BACKLOG-1] Add 'get kb stats' command",
+    "instruction": null,
+    "content": "type=telegram_command effort=low impact=low domain=code\nIntroduce a Telegram command to display KB entry statistics, providing insights into its overall quality and relevance",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2542,
+    "domain": "backlog",
+    "topic": "[BACKLOG-4] Task prioritization tool",
+    "instruction": null,
+    "content": "type=new_tool effort=high impact=high domain=code\nDevelop a tool to calculate task priorities based on user requirements, domain-specific factors, and historical data",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2543,
+    "domain": "backlog",
+    "topic": "[BACKLOG-2] Enhance domain understanding model",
+    "instruction": null,
+    "content": "type=logic_improvement effort=medium impact=medium domain=code\nImprove the model's ability to understand domain-specific concepts, relationships, and terminology to enhance task suggestions and completion",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2544,
+    "domain": "backlog",
+    "topic": "[BACKLOG-5] Optimize routing algorithm for large KB entries",
+    "instruction": null,
+    "content": "type=performance effort=high impact=high domain=code\nImprove the efficiency of the task routing algorithm to handle growing KB entries and reduce processing time",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2545,
+    "domain": "backlog",
+    "topic": "[BACKLOG-4] Domain-specific archetype categorization",
+    "instruction": null,
+    "content": "type=logic_improvement effort=high impact=high domain=academic\nImplement a system to map tasks to archetype categories that are tailored to the academic domain. This will improve task routing accuracy and reduce the need for manual archetype determination.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2546,
+    "domain": "backlog",
+    "topic": "[BACKLOG-3] Expanded statistical methods knowledge base",
+    "instruction": null,
+    "content": "type=new_kb effort=medium impact=medium domain=academic\nCreate a dedicated KB entry for statistical methods, including descriptions, formulas, and examples. This will improve CORE's ability to provide accurate explanations for statistical methods.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2547,
+    "domain": "backlog",
+    "topic": "[BACKLOG-2] Academic domain-specific literature search",
+    "instruction": null,
+    "content": "type=new_tool effort=high impact=high domain=academic\nDevelop a tool that enables CORE to search academic literature databases and retrieve relevant references, abstracts, or full papers. This will enhance CORE's ability to produce high-quality literature reviews.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2548,
+    "domain": "backlog",
+    "topic": "[BACKLOG-1] Automated thesis outline generation",
+    "instruction": null,
+    "content": "type=new_tool effort=high impact=high domain=academic\nCreate a tool that takes a thesis argument structure and generates a detailed outline, including sections, sub-sections, and key points. This will help CORE assist users in structuring their thesis more efficiently.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2549,
+    "domain": "backlog",
+    "topic": "[BACKLOG-5] Optimize knowledge retrieval and processing",
+    "instruction": null,
+    "content": "type=performance effort=low impact=low domain=academic\nIdentify and eliminate bottlenecks in CORE's knowledge retrieval and processing systems to improve response times and overall performance, especially for high-expertise tasks.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2550,
+    "domain": "backlog",
+    "topic": "[BACKLOG-5] Emotion-based Creative Archetypes",
+    "instruction": null,
+    "content": "type=new_kb effort=high impact=high domain=creative\nCreate new KB entry to store emotion-based archetype characteristics for the creative domain. This will enhance CORE's ability to adapt to emotional nuances in creative tasks.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2551,
+    "domain": "backlog",
+    "topic": "[BACKLOG-3] Emotion-driven Task Prioritization",
+    "instruction": null,
+    "content": "type=new_tool effort=medium impact=medium domain=creative\nDevelop a new tool to prioritize tasks based on emotional stakes and the expert's emotional involvement. This will help CORE to better understand the emotional context of tasks.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2552,
+    "domain": "backlog",
+    "topic": "[BACKLOG-4] Creative Domain-specific Expertise Mapping",
+    "instruction": null,
+    "content": "type=new_tool effort=high impact=medium domain=creative\nCreate a new tool to map expertise levels to creative tasks, taking into account the domain's specific requirements and the task's complexity. This will improve CORE's ability to assign suitable tasks to experts.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2553,
+    "domain": "backlog",
+    "topic": "[BACKLOG-2] Improved Task Routing",
+    "instruction": null,
+    "content": "type=logic_improvement effort=low impact=low domain=creative\nEnhance the task routing logic to better match tasks with suitable archetypes and domains. This will lead to more efficient and accurate task assignment.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2554,
+    "domain": "backlog",
+    "topic": "[BACKLOG-5] Social Media Strategy Knowledge Base",
+    "instruction": null,
+    "content": "type=missing_data effort=high impact=high domain=creative\nCreate new KB entries to store knowledge and expertise related to social media strategy. This will enable CORE to better understand the nuances of social media and provide more accurate responses.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2555,
+    "domain": "backlog",
+    "topic": "[BACKLOG-5] Update medication knowledge base",
+    "instruction": null,
+    "content": "type=new_kb effort=high impact=high domain=medical\nIntegrate latest pharmaceutical research and clinical trials into the knowledge base to enhance medication interaction checks and treatment suggestions.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2556,
+    "domain": "backlog",
+    "topic": "[BACKLOG-4] Integrate symptom checker with medical history",
+    "instruction": null,
+    "content": "type=logic_improvement effort=medium impact=high domain=medical\nEnable CORE to consider patient medical history when suggesting treatment options and checking medication interactions.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2557,
+    "domain": "backlog",
+    "topic": "[BACKLOG-3] Medical decision support system",
+    "instruction": null,
+    "content": "type=new_tool effort=high impact=very_high domain=medical\nDevelop a tool that allows doctors to input patient data and receive evidence-based recommendations for treatment and medication.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2558,
+    "domain": "backlog",
+    "topic": "[BACKLOG-1] Integrate electronic health records API",
+    "instruction": null,
+    "content": "type=missing_data effort=medium impact=medium domain=medical\nAllow CORE to access patient data from electronic health records to improve accuracy and completeness of medical responses.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2559,
+    "domain": "backlog",
+    "topic": "[BACKLOG-2] Optimize response time for critical tasks",
+    "instruction": null,
+    "content": "type=performance effort=medium impact=high domain=medical\nTune CORE's infrastructure and workflow to ensure timely responses for high-stakes medical tasks such as medication interaction checks.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2560,
+    "domain": "backlog",
+    "topic": "[BACKLOG-4] Code Snippet Analysis Tool",
+    "instruction": null,
+    "content": "type=new_tool effort=high impact=high domain=code\nDevelop a tool to analyze and provide suggestions for optimization of code snippets.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2561,
+    "domain": "backlog",
+    "topic": "[BACKLOG-3] Integrate Architecture Knowledge",
+    "instruction": null,
+    "content": "type=logic_improvement effort=medium impact=medium domain=code\nImprove CORE's ability to reason about architecture decisions and provide insights based on general knowledge.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2562,
+    "domain": "backlog",
+    "topic": "[BACKLOG-5] Code Optimization Techniques",
+    "instruction": null,
+    "content": "type=new_kb effort=high impact=high domain=code\nCreate a knowledge base of proven code optimization techniques and tools to improve CORE's code review capabilities.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2563,
+    "domain": "backlog",
+    "topic": "[BACKLOG-2] Emotion-Based Task Routing",
+    "instruction": null,
+    "content": "type=missing_data effort=medium impact=low domain=code\nCollect and integrate data to enable CORE to route tasks based on the emotional state of the user for more effective task allocation.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2564,
+    "domain": "backlog",
+    "topic": "[BACKLOG-1] Indexing KB for Faster Search",
+    "instruction": null,
+    "content": "type=performance effort=low impact=low domain=code\nImplement efficient indexing mechanisms to speed up keyword-based searches in the knowledge base.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2565,
+    "domain": "backlog",
+    "topic": "[BACKLOG-3] GDPR Compliance Task Specialization",
+    "instruction": null,
+    "content": "type=logic_improvement effort=medium impact=high domain=legal\nIntegrate GDPR-specific knowledge into CORE's logic for more accurate compliance checklists.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2566,
+    "domain": "backlog",
+    "topic": "[BACKLOG-4] Domain-Specific Business IP Knowledge Base",
+    "instruction": null,
+    "content": "type=new_kb effort=high impact=medium domain=legal\nCreate a dedicated knowledge base for startup IP protection, covering common issues and strategies.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2567,
+    "domain": "backlog",
+    "topic": "[BACKLOG-2] Missing Terms of Service and Service Agreements",
+    "instruction": null,
+    "content": "type=missing_data effort=medium impact=medium domain=legal\nIncorporate a dataset of standard terms of service and service agreements to enhance CORE's understanding.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2568,
+    "domain": "backlog",
+    "topic": "[BACKLOG-5] Knowledge Base Query Optimization for Legal Tasks",
+    "instruction": null,
+    "content": "type=performance effort=high impact=high domain=legal\nImprove query efficiency for legal knowledge to ensure fast and accurate responses to tasks.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2569,
+    "domain": "backlog",
+    "topic": "[BACKLOG-1] IP Risk Assessment Tool",
+    "instruction": null,
+    "content": "type=new_tool effort=low impact=high domain=legal\nDevelop a dedicated tool for entrepreneurs to assess potential IP risks and receive recommendations.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2570,
+    "domain": "backlog",
+    "topic": "[BACKLOG-5] Incorporate Archetype-based Knowledge Retrieval",
+    "instruction": null,
+    "content": "type=logic_improvement effort=high impact=high domain=code\nModify search_kb to prioritize knowledge based on task's archetype, increasing relevance and efficiency.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2571,
+    "domain": "backlog",
+    "topic": "[BACKLOG-3] Expertise-based Knowledge Creation",
+    "instruction": null,
+    "content": "type=new_kb effort=medium impact=medium domain=code\nIntroduce a new knowledge management system where expertise levels influence the creation and storage of knowledge entries.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2572,
+    "domain": "backlog",
+    "topic": "[BACKLOG-4] Task Domain Classification",
+    "instruction": null,
+    "content": "type=new_tool effort=high impact=high domain=code\nDevelop a new tool that accurately and quickly categorizes tasks across different domains, ensuring CORE can provide relevant expertise and knowledge.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2573,
+    "domain": "backlog",
+    "topic": "[BACKLOG-2] Optimize Search Functionality",
+    "instruction": null,
+    "content": "type=performance effort=high impact=medium domain=code\nImprove search functionality by indexing knowledge entries more efficiently, reducing search latency and improving usability for developers.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2574,
+    "domain": "backlog",
+    "topic": "[BACKLOG-5] Knowledge Entry Metadata",
+    "instruction": null,
+    "content": "type=missing_data effort=medium impact=high domain=code\nEnhance knowledge entries with additional metadata, such as domain, expertise, and stakes information, to enable more accurate task routing and expertise-based knowledge retrieval.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2575,
+    "domain": "backlog",
+    "topic": "[BACKLOG-4] Enhance Trend Visualization",
+    "instruction": null,
+    "content": "type=logic_improvement effort=high impact=high domain=data\nImplement a more sophisticated data visualization tool, allowing CORE to better recognize patterns and anomalies in datasets.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2576,
+    "domain": "backlog",
+    "topic": "[BACKLOG-3] Domain Knowledge for Data",
+    "instruction": null,
+    "content": "type=new_kb effort=medium impact=high domain=data\nExpand CORE's knowledge base to include specific domain knowledge and terminology for the data domain, enabling more accurate and relevant answers.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2577,
+    "domain": "backlog",
+    "topic": "[BACKLOG-5] Missing Expertise Information",
+    "instruction": null,
+    "content": "type=missing_data effort=low impact=low domain=data\nUpdate the expertise level for tasks in the data domain to accurately reflect CORE's strengths and weaknesses, enabling more informed decision-making.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2578,
+    "domain": "backlog",
+    "topic": "[BACKLOG-2] Data Preprocessing Assistant",
+    "instruction": null,
+    "content": "type=new_tool effort=medium impact=medium domain=data\nDevelop a tool that assists CORE in cleaning and preprocessing messy datasets, saving time and increasing accuracy.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2579,
+    "domain": "backlog",
+    "topic": "[BACKLOG-1] Data Analysis Command",
+    "instruction": null,
+    "content": "type=telegram_command effort=low impact=low domain=data\nCreate a command that triggers the A/B test analysis and visualization tasks, streamlining the process for users.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2580,
+    "domain": "backlog",
+    "topic": "[BACKLOG-4] Industry-Specific Business Knowledge",
+    "instruction": null,
+    "content": "type=new_kb effort=high impact=high domain=business\nCreate a knowledge base with industry-specific business insights, regulations, and market trends to enhance CORE's general advice on business-related tasks.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2581,
+    "domain": "backlog",
+    "topic": "[BACKLOG-3] Pitch Generator",
+    "instruction": null,
+    "content": "type=new_tool effort=medium impact=medium domain=business\nDevelop a tool that generates a business pitch based on the task requirements, using natural language processing and the existing knowledge base.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2582,
+    "domain": "backlog",
+    "topic": "[BACKLOG-5] Task-Specific Domain Reasoning",
+    "instruction": null,
+    "content": "type=logic_improvement effort=high impact=high domain=business\nEnhance CORE's logic to reason about specific business domains (e.g., finance, marketing) and provide more accurate and relevant advice for tasks like 'improve cash flow'.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2584,
+    "domain": "backlog",
+    "topic": "[BACKLOG-1] Task-Specific Stakes and Emotions Data",
+    "instruction": null,
+    "content": "type=missing_data effort=low impact=low domain=business\nCollect and integrate data on task-specific stakes and emotions to enhance CORE's decision-making and advice for tasks like 'write investor pitch'.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2585,
+    "domain": "backlog",
+    "topic": "[BACKLOG-5] Data Cleansing Tool",
+    "instruction": null,
+    "content": "type=new_tool effort=high impact=high domain=data\nDevelop a dedicated tool for efficiently cleaning messy datasets, including data normalization and handling missing values.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2586,
+    "domain": "backlog",
+    "topic": "[BACKLOG-4] Data Analysis Techniques Knowledge Base",
+    "instruction": null,
+    "content": "type=new_kb effort=medium impact=medium domain=data\nCreate a comprehensive knowledge base for various A/B testing and data analysis techniques to improve CORE's decision-making and recommendation capabilities.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2587,
+    "domain": "backlog",
+    "topic": "[BACKLOG-5] Automated Data Visualization",
+    "instruction": null,
+    "content": "type=logic_improvement effort=high impact=high domain=data\nEnhance CORE's logic to generate relevant visualizations for trend identification and analysis, reducing the need for manual effort.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2588,
+    "domain": "backlog",
+    "topic": "[BACKLOG-3] Data Preprocessing Knowledge Base",
+    "instruction": null,
+    "content": "type=missing_data effort=medium impact=medium domain=data\nDevelop a knowledge base for essential data preprocessing steps, including data transformation, handling outliers, and encoding categorical variables.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2589,
+    "domain": "backlog",
+    "topic": "[BACKLOG-4] Data Integration Platform",
+    "instruction": null,
+    "content": "type=new_tool effort=high impact=medium domain=data\nCreate a tool for seamless integration with various data sources and platforms, enabling CORE to access and process diverse datasets efficiently.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2590,
+    "domain": "backlog",
+    "topic": "[BACKLOG-3] Add trend visualization logic",
+    "instruction": null,
+    "content": "type=logic_improvement effort=high impact=medium domain=data\nImplement data transformation, plotting algorithms and integration with existing tools like get_state and update_state to enable data visualization.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2591,
+    "domain": "backlog",
+    "topic": "[BACKLOG-2] Create A/B testing analysis and anomaly detection framework",
+    "instruction": null,
+    "content": "type=new_tool effort=medium impact=high domain=data\nDevelop a tool that can analyze A/B test results, perform statistical analysis, identify trends, and detect anomalies using machine learning algorithms. This framework should integrate with existing tools like sb_query and get_state.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2592,
+    "domain": "backlog",
+    "topic": "[BACKLOG-5] Knowledge Base entries for data analytics",
+    "instruction": null,
+    "content": "type=new_kb effort=medium impact=high domain=data\nCreate and populate the Knowledge Base with entries related to data analytics, A/B testing, and anomaly detection. This will enable the CORE system to make informed decisions and provide accurate responses to related queries.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2593,
+    "domain": "backlog",
+    "topic": "[BACKLOG-1] Improve routing for data-related tasks",
+    "instruction": null,
+    "content": "type=logic_improvement effort=low impact=medium domain=data\nAdjust the routing architecture to better match data-related tasks to the right archetype, domain, and expertise level. This will improve the accuracy and efficiency of task execution.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2594,
+    "domain": "backlog",
+    "topic": "[BACKLOG-4] Anomaly detection and alerting system",
+    "instruction": null,
+    "content": "type=new_tool effort=high impact=high domain=data\nDevelop a tool that can monitor system performance, detect anomalies, and send alerts to the owner or relevant stakeholders. This will enable proactive issue resolution and improve overall system reliability.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2595,
+    "domain": "backlog",
+    "topic": "[BACKLOG-4] Contextual Symptom Checker",
+    "instruction": null,
+    "content": "type=logic_improvement effort=high impact=high domain=medical\nAdd contextual analysis to symptom checker to narrow down possible diagnoses based on user's medical history and current conditions.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2596,
+    "domain": "backlog",
+    "topic": "[BACKLOG-3] Medical Procedure Knowledge Base",
+    "instruction": null,
+    "content": "type=new_kb effort=medium impact=high domain=medical\nDevelop a KB entry for medical procedures, including detailed steps, potential complications, and follow-up care.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2597,
+    "domain": "backlog",
+    "topic": "[BACKLOG-2] Treatment Plan Generator",
+    "instruction": null,
+    "content": "type=new_tool effort=high impact=high domain=medical\nCreate a tool that can generate personalized treatment plans based on the patient's condition, medical history, and available treatment options.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2598,
+    "domain": "backlog",
+    "topic": "[BACKLOG-5] Lack of Medical Expertise in General Domain",
+    "instruction": null,
+    "content": "type=missing_data effort=medium impact=high domain=medical\nCurrent medical expertise in general domain is inadequate, leading to poor performance in symptom checker and second opinion research tasks.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2599,
+    "domain": "backlog",
+    "topic": "[BACKLOG-1] Medical Literature Search",
+    "instruction": null,
+    "content": "type=new_tool effort=medium impact=high domain=medical\nDevelop a tool to efficiently search medical literature for relevant studies and case reports.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2600,
+    "domain": "backlog",
+    "topic": "[BACKLOG-5] Enhance Domain Routing",
+    "instruction": null,
+    "content": "type=logic_improvement effort=high impact=high domain=code\nImplement a more sophisticated routing system to accurately map tasks to archetypes, domains, and expertise levels.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2601,
+    "domain": "backlog",
+    "topic": "[BACKLOG-4] Code Snippets and Examples",
+    "instruction": null,
+    "content": "type=new_kb effort=medium impact=medium domain=code\nCreate KB entries for common code snippets and examples across various programming languages to aid in code-related tasks.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2602,
+    "domain": "backlog",
+    "topic": "[BACKLOG-1] Code Refactoring Tool",
+    "instruction": null,
+    "content": "type=new_tool effort=high impact=high domain=code\nDevelop a tool that can refactor async code and provide optimized async code implementations.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2603,
+    "domain": "backlog",
+    "topic": "[BACKLOG-2] Programming Language Knowledge",
+    "instruction": null,
+    "content": "type=missing_data effort=medium impact=medium domain=code\nAcquire knowledge of various programming languages, including their syntax, semantics, and best practices, to improve code-related tasks.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2604,
+    "domain": "backlog",
+    "topic": "[BACKLOG-3] Optimize Search Kb",
+    "instruction": null,
+    "content": "type=performance effort=low impact=low domain=code\nImprove the efficiency of the search_kb tool to handle the large KB entries (2105) and provide faster results.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2605,
+    "domain": "backlog",
+    "topic": "[BACKLOG-4] Enhance financial model construction",
+    "instruction": null,
+    "content": "type=logic_improvement effort=high impact=high domain=finance\nImplement domain-specific mathematical and statistical techniques to improve financial model construction accuracy and speed.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2606,
+    "domain": "backlog",
+    "topic": "[BACKLOG-3] Financial terms and concepts",
+    "instruction": null,
+    "content": "type=new_kb effort=medium impact=high domain=finance\nExpand knowledge base with definitions, explanations, and examples of key financial terms and concepts.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2607,
+    "domain": "backlog",
+    "topic": "[BACKLOG-2] Financial data ingestion",
+    "instruction": null,
+    "content": "type=new_tool effort=high impact=medium domain=finance\nDevelop a tool to import and process external financial data from various sources, such as APIs or CSV files.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2608,
+    "domain": "backlog",
+    "topic": "[BACKLOG-5] Optimize knowledge retrieval",
+    "instruction": null,
+    "content": "type=performance effort=high impact=high domain=finance\nImprove search efficiency and reduce latency when querying the knowledge base, especially for large datasets.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2609,
+    "domain": "backlog",
+    "topic": "[BACKLOG-1] Fundraising strategy knowledge",
+    "instruction": null,
+    "content": "type=missing_data effort=medium impact=medium domain=finance\nAcquire and integrate knowledge about various fundraising strategies, including equity and debt financing, crowdfunding, and grants.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2611,
+    "domain": "backlog",
+    "topic": "[BACKLOG-4] Runway Calculation Expertise",
+    "instruction": null,
+    "content": "type=logic_improvement effort=medium impact=medium domain=finance\nEnhance the model's understanding of runway calculation, considering factors like market fluctuations, cash flow, and funding options.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2612,
+    "domain": "backlog",
+    "topic": "[BACKLOG-3] Fundraising Model Trainer",
+    "instruction": null,
+    "content": "type=new_tool effort=high impact=medium domain=finance\nDevelop a tool to train and fine-tune the model's fundraising strategy expertise, incorporating real-world data and best practices.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2613,
+    "domain": "backlog",
+    "topic": "[BACKLOG-2] Domain-Specific Routing",
+    "instruction": null,
+    "content": "type=logic_improvement effort=low impact=medium domain=finance\nImplement more sophisticated routing to direct tasks to the most relevant domain and expertise, ensuring accurate and relevant responses.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2614,
+    "domain": "backlog",
+    "topic": "[BACKLOG-4] Real-World Data Integration",
+    "instruction": null,
+    "content": "type=missing_data effort=high impact=high domain=finance\nIntegrate real-world financial data from reputable sources to improve the model's understanding of market trends, regulations, and industry practices.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2615,
+    "domain": "backlog",
+    "topic": "[BACKLOG-5] Domain-specific business knowledge",
+    "instruction": null,
+    "content": "type=new_kb effort=high impact=high domain=business\nAdd KB entries covering business concepts, such as revenue models, growth strategies, and market analysis.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2616,
+    "domain": "backlog",
+    "topic": "[BACKLOG-4] Competitor analysis",
+    "instruction": null,
+    "content": "type=new_tool effort=medium impact=medium domain=business\nDevelop a tool to analyze competitors' products, pricing, and marketing strategies, and incorporate this information into business recommendations.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2617,
+    "domain": "backlog",
+    "topic": "[BACKLOG-3] Dynamic task routing",
+    "instruction": null,
+    "content": "type=logic_improvement effort=high impact=medium domain=business\nUpdate routing logic to consider task specifics, such as industry, product type, and business goals, to provide more accurate task assignments.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
+    "id": 2618,
+    "domain": "backlog",
+    "topic": "[BACKLOG-2] Business metric tracking",
+    "instruction": null,
+    "content": "type=new_tool effort=medium impact=medium domain=business\nCreate a tool to track and analyze business metrics, such as customer acquisition cost, customer lifetime value, and churn rate, to provide data-driven insights.",
+    "confidence": "medium",
+    "active": true
+  }
+]
