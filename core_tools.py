@@ -2350,11 +2350,6 @@ def t_run_template(name: str, params: str = "") -> dict:
         return {"ok": False, "error": str(e)}
 
 
-def t_mine_kb(max_batches: str = "50", force: str = "false") -> dict:
-    """DEPRECATED 2026-03-14 - backlog table dropped. KB mining replaced by cold processor pipeline."""
-    return {"ok": False, "deprecated": True, "reason": "backlog table dropped - use evolution_queue pipeline instead"}
-
-
 def t_redeploy(reason: str = "") -> dict:
     """Trigger Railway redeploy via empty GitHub commit."""
     try:
@@ -2416,16 +2411,6 @@ def t_logs(limit: str = "10", keyword: str = "") -> dict:
                 "note": "For live stdout logs, check Railway dashboard"}
     except Exception as e:
         return {"ok": False, "error": str(e)}
-
-
-def t_get_backlog(status: str = "pending", limit: int = 20, min_priority: int = 1, type: str = ""):
-    """DEPRECATED 2026-03-14 - backlog table dropped. Use task_queue instead."""
-    return {"ok": False, "deprecated": True, "reason": "backlog table dropped - use task_queue instead"}
-
-
-def t_backlog_update(title: str, status: str, result: str = ""):
-    """DEPRECATED 2026-03-14 - backlog table dropped. Use task_queue instead."""
-    return {"ok": False, "deprecated": True, "reason": "backlog table dropped - use task_queue instead"}
 
 
 def t_changelog_add(version: str = "", component: str = "", summary: str = "",
@@ -2863,27 +2848,6 @@ def t_project_update_index(project_id: str = "", last_indexed: str = "") -> dict
         ts = last_indexed or datetime.utcnow().isoformat()
         ok = sb_patch("projects", f"project_id=eq.{project_id}", {"last_indexed": ts})
         return {"ok": bool(ok), "project_id": project_id, "last_indexed": ts}
-    except Exception as e:
-        return {"ok": False, "error": str(e)}
-
-
-def t_read_image_file(file_path: str = "", project_id: str = "", topic: str = "", prompt: str = "") -> dict:
-    """Extract text/data from an image file (JPG/PNG) using Claude vision API.
-    Reads the image from the local filesystem path (via base64 URL or direct read),
-    sends to Claude claude-haiku-4-5 with a vision prompt, returns extracted text.
-    If project_id + topic provided, auto-saves to project KB.
-    prompt: custom instruction for extraction (default: extract all text and data visible in image).
-    """
-    try:
-        import base64, mimetypes
-        if not file_path:
-            return {"ok": False, "error": "file_path required"}
-        # Read image bytes -- file_path is a UNC/local path accessible to the caller
-        # Since this runs on Railway, the file must be passed as base64 content OR
-        # as a publicly accessible URL. If file_path starts with http, use as URL.
-        # Otherwise, Railway cannot access local Windows filesystem directly.
-        # This tool is designed to be called with content= param when running from Desktop.
-        return {"ok": False, "error": "t_read_image_file requires content param -- see t_read_image_content"}
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
