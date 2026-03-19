@@ -159,7 +159,7 @@ def groq_chat(system: str, user: str, model: str = None, max_tokens: int = 1024)
 # -- Gemini chat helper with round-robin key rotation -------------------------
 _GEMINI_KEYS = [k.strip() for k in os.getenv("GEMINI_KEYS", "").replace(" ", "").split(",") if k.strip()]
 _GEMINI_KEY_INDEX = 0
-_GEMINI_MODEL = "gemini-2.5-flash"
+_GEMINI_MODEL = "gemini-2.5-flash-lite"  # 1000 RPD vs 250 RPD on flash; lower thinking overhead
 
 def gemini_chat(system: str, user: str, max_tokens: int = 2048, json_mode: bool = False) -> str:
     """Gemini chat with round-robin key rotation and 429 fallback across all keys.
@@ -181,8 +181,17 @@ def gemini_chat(system: str, user: str, max_tokens: int = 2048, json_mode: bool 
                 params={"key": key},
                 headers={"Content-Type": "application/json"},
                 json={"contents": [{"parts": [{"text": prompt}]}],
-                      "generationConfig": {"maxOutputTokens": max_tokens,
-                                           **({"responseMimeType": "application/json"} if json_mode else {})}},
+                      "generationConfig": {
+                          "maxOutputTokens": max_tokens,
+                          "temperature": 0.1,
+                          **({"responseMimeType": "application/json"} if json_mode else {})
+                      },
+                      "safetySettings": [
+                          {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
+                          {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
+                          {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
+                          {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"}
+                      ]},
                 timeout=30,
             )
             if r.status_code == 429:
