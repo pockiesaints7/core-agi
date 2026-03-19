@@ -5827,7 +5827,7 @@ def t_impact_model(action: str = "", current_state: str = ""):
         return {"ok": False, "error": "action is required"}
     try:
         infra = sb_get("infrastructure_map", "status=eq.active&id=gt.1", svc=True) or []
-        pending_tasks = sb_get("task_queue", "status=eq.pending&order=priority.desc&limit=5&id=gt.1", svc=True) or []
+        pending_tasks = sb_get("task_queue", "status=eq.pending&order=priority.desc&limit=5", svc=True) or []
         return {
             "ok": True,
             "action": action,
