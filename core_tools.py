@@ -4497,3 +4497,6 @@ def t_task_health() -> dict:
     except Exception as e:
         return {"ok": False, "error": str(e), "error_code": "exception", "retry_hint": True}
 
+
+TOOLS["task_health"] = {"fn": t_task_health, "perm": "READ", "args": [],
+                         "desc": "TASK-5.2: Check task_queue for stale/abandoned tasks. Flags: in_progress >24hr, pending >7d. Returns stale_in_progress, stale_pending, total_stale, warning. Call at session_start to surface abandoned work before starting new tasks."}
