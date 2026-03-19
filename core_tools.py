@@ -6690,3 +6690,113 @@ def t_synthesize_cross_domain():
 TOOLS["synthesize_cross_domain"] = {"fn": t_synthesize_cross_domain, "perm": "WRITE",
     "args": [],
     "desc": "AGI-01: Manual trigger for weekly cross-domain synthesis. Reads top patterns per domain, finds structural similarities via Groq, writes insights to knowledge_base(domain=synthesis). Also runs automatically every Wednesday."}
+
+
+# -- interface MCP server reconciliation (16.D) --------------------------------
+def _reconcile_interface_services(rows: list, inserted: list, tombstoned: list) -> None:
+    """Auto-sync interface layer: ensure all known external MCP servers are tracked.
+    This is a declarative manifest -- interface services don't auto-appear/disappear
+    like files do. We register known servers and flag unknown ones as degraded.
+    Called from t_system_map_scan(trigger='session_end') only.
+    """
+    # Canonical interface manifest -- update here when MCP servers are added/removed
+    _INTERFACE_MANIFEST = {
+        "zapier_mcp":          {"component": "zapier",           "role": "Zapier MCP bridge -- 164 tools (Gmail,GCal,Sheets,Docs,Drive,Notion,Todoist,GitHub,Webhooks)"},
+        "desktop_commander":   {"component": "desktop_commander","role": "Local PC filesystem + process control -- 24 tools"},
+        "windows_mcp":         {"component": "windows_mcp",      "role": "Windows OS automation -- 17 tools (PowerShell,App,Click,Type,Clipboard,Screenshot)"},
+        "github_mcp":          {"component": "github_mcp",       "role": "GitHub API direct -- 26 tools (issues,PRs,commits,file_contents,branches)"},
+        "filesystem_mcp":      {"component": "filesystem_mcp",   "role": "Local filesystem R/W -- 14 tools. Allowed: C:/, E:/, F:/"},
+        "memory_mcp":          {"component": "memory_mcp",       "role": "Knowledge graph -- 9 tools (entities, relations, observations)"},
+        "puppeteer_mcp":       {"component": "puppeteer_mcp",    "role": "Browser automation -- 7 tools (navigate, click, fill, screenshot, evaluate)"},
+        "sqlite_mcp":          {"component": "sqlite_mcp",       "role": "SQLite local DB -- 6 tools (read_query, write_query, create_table)"},
+        "pdf_tools_mcp":       {"component": "pdf_tools_mcp",    "role": "PDF fill/analyze/extract -- 11 tools"},
+        "telegram":            {"component": "telegram",         "role": "Owner notification channel -- async events + Telegram bot"},
+        "groq":                {"component": "groq",             "role": "LLM inference -- llama-3.3-70b + llama-3.1-8b-instant"},
+        "claude.ai":           {"component": "claude",           "role": "Primary interface -- claude.ai / Claude Desktop MCP client"},
+    }
+    try:
+        registered_interface = {
+            row["name"]: row
+            for row in rows
+            if row.get("layer") == "interface"
+            and row.get("item_type") == "service"
+            and row.get("status") != "tombstone"
+        }
+        for svc_name, meta in _INTERFACE_MANIFEST.items():
+            if svc_name not in registered_interface:
+                try:
+                    sb_post_critical("system_map", {
+                        "layer": "interface",
+                        "component": meta["component"],
+                        "item_type": "service",
+                        "name": svc_name,
+                        "role": meta["role"],
+                        "responsibility": "auto-registered by interface reconciliation",
+                        "status": "active",
+                        "updated_by": "session_end_auto",
+                        "last_updated": datetime.utcnow().isoformat(),
+                    })
+                    inserted.append(f"interface:{svc_name}")
+                    print(f"[SMAP] interface inserted: {svc_name}")
+                except Exception as _ie:
+                    print(f"[SMAP] interface insert {svc_name} failed: {_ie}")
+    except Exception as e:
+        print(f"[SMAP] _reconcile_interface_services error: {e}")
+
+
+# -- local_pc skill file version reconciliation (16.E) -------------------------
+def _reconcile_skill_versions(rows: list, inserted: list, tombstoned: list) -> None:
+    """Auto-sync local_pc skill file entries: ensure current V8 is active,
+    older versions (V3-V7) are tombstoned, no stale actives accumulate.
+    Called from t_system_map_scan(trigger='session_end') only.
+    """
+    _SKILL_CURRENT = "CORE_AGI_SKILL_V8.md"
+    _SKILL_STALE_PATTERN = "CORE_AGI_SKILL_V"  # prefix for all versioned skill files
+
+    try:
+        skill_rows = {
+            row["name"]: row
+            for row in rows
+            if row.get("layer") == "local_pc"
+            and row.get("item_type") == "file"
+            and _SKILL_STALE_PATTERN in row.get("name", "")
+            and row.get("status") != "tombstone"
+        }
+
+        # Ensure current skill is registered and active
+        if _SKILL_CURRENT not in skill_rows:
+            try:
+                sb_post_critical("system_map", {
+                    "layer": "local_pc",
+                    "component": "local_pc",
+                    "item_type": "file",
+                    "name": _SKILL_CURRENT,
+                    "role": "PRIMARY active skill file -- CORE identity + boot sequence",
+                    "responsibility": "Loaded by Claude Desktop at session open. Current version.",
+                    "status": "active",
+                    "updated_by": "session_end_auto",
+                    "last_updated": datetime.utcnow().isoformat(),
+                })
+                inserted.append(f"local_pc:{_SKILL_CURRENT}")
+                print(f"[SMAP] skill inserted: {_SKILL_CURRENT}")
+            except Exception as _ie:
+                print(f"[SMAP] skill insert {_SKILL_CURRENT} failed: {_ie}")
+
+        # Tombstone all non-current skill versions
+        for sname, row in skill_rows.items():
+            if sname != _SKILL_CURRENT:
+                try:
+                    sb_patch("system_map", f"id=eq.{row['id']}", {
+                        "status": "tombstone",
+                        "notes": f"auto-tombstoned: superseded by {_SKILL_CURRENT}",
+                        "last_updated": datetime.utcnow().isoformat(),
+                        "updated_by": "session_end_auto",
+                    })
+                    tombstoned.append(f"local_pc:{sname}")
+                    print(f"[SMAP] skill tombstoned: {sname}")
+                except Exception as _te:
+                    print(f"[SMAP] skill tombstone {sname} failed: {_te}")
+
+    except Exception as e:
+        print(f"[SMAP] _reconcile_skill_versions error: {e}")
+
