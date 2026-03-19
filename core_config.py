@@ -154,3 +154,39 @@ def groq_chat(system: str, user: str, model: str = None, max_tokens: int = 1024)
     )
     r.raise_for_status()
     return r.json()["choices"][0]["message"]["content"].strip()
+
+
+# -- Gemini chat helper with round-robin key rotation -------------------------
+_GEMINI_KEYS = [k.strip() for k in os.getenv("GEMINI_KEYS", "").split(",") if k.strip()]
+_GEMINI_KEY_INDEX = 0
+_GEMINI_MODEL = "gemini-2.0-flash"
+
+def gemini_chat(system: str, user: str, max_tokens: int = 1024) -> str:
+    """Gemini chat with round-robin key rotation and 429 fallback across all keys."""
+    global _GEMINI_KEY_INDEX
+    if not _GEMINI_KEYS:
+        raise RuntimeError("GEMINI_KEYS env var not set")
+    attempts = len(_GEMINI_KEYS)
+    last_err = None
+    for _ in range(attempts):
+        key = _GEMINI_KEYS[_GEMINI_KEY_INDEX % len(_GEMINI_KEYS)]
+        _GEMINI_KEY_INDEX = (_GEMINI_KEY_INDEX + 1) % len(_GEMINI_KEYS)
+        try:
+            prompt = f"{system}\n\n{user}" if system else user
+            r = httpx.post(
+                f"https://generativelanguage.googleapis.com/v1beta/models/{_GEMINI_MODEL}:generateContent",
+                params={"key": key},
+                headers={"Content-Type": "application/json"},
+                json={"contents": [{"parts": [{"text": prompt}]}],
+                      "generationConfig": {"maxOutputTokens": max_tokens}},
+                timeout=30,
+            )
+            if r.status_code == 429:
+                last_err = f"429 on key index {(_GEMINI_KEY_INDEX - 1) % len(_GEMINI_KEYS)}"
+                continue  # try next key
+            r.raise_for_status()
+            return r.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
+        except Exception as e:
+            last_err = str(e)
+            continue
+    raise RuntimeError(f"All {attempts} Gemini keys exhausted. Last error: {last_err}")
