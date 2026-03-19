@@ -1,5 +1,47 @@
 [
   {
+    "id": 543,
+    "summary": "[state_update] last_real_signal_ts: 2026-03-19T10:50:33.250156",
+    "domain": null,
+    "created_at": "2026-03-19T10:50:33.336917+00:00"
+  },
+  {
+    "id": 542,
+    "summary": "[state_update] last_real_signal_ts: 2026-03-19T10:44:38.304435",
+    "domain": null,
+    "created_at": "2026-03-19T10:44:38.390065+00:00"
+  },
+  {
+    "id": 541,
+    "summary": "[state_update] last_real_signal_ts: 2026-03-19T10:38:27.833157",
+    "domain": null,
+    "created_at": "2026-03-19T10:38:27.944858+00:00"
+  },
+  {
+    "id": 540,
+    "summary": "[state_update] last_backup_ts: 2026-03-19T10:34:02.191578",
+    "domain": null,
+    "created_at": "2026-03-19T10:34:02.269472+00:00"
+  },
+  {
+    "id": 539,
+    "summary": "[state_update] last_real_signal_ts: 2026-03-19T10:33:24.299767",
+    "domain": null,
+    "created_at": "2026-03-19T10:33:24.378379+00:00"
+  },
+  {
+    "id": 538,
+    "summary": "[state_update] last_backup_ts: 2026-03-19T10:28:12.299920",
+    "domain": null,
+    "created_at": "2026-03-19T10:28:12.373613+00:00"
+  },
+  {
+    "id": 537,
+    "summary": "[state_update] last_backup_ts: 2026-03-19T10:23:39.974106",
+    "domain": null,
+    "created_at": "2026-03-19T10:23:40.055888+00:00"
+  },
+  {
     "id": 536,
     "summary": "[state_update] last_real_signal_ts: 2026-03-19T10:22:41.870176",
     "domain": null,
@@ -136,47 +178,5 @@
     "summary": "[state_update] last_real_signal_ts: 2026-03-19T07:19:43.182130",
     "domain": null,
     "created_at": "2026-03-19T07:19:43.277972+00:00"
-  },
-  {
-    "id": 513,
-    "summary": "TASK-5 Context Collapse Prevention System \u2014 fully completed. Subtask 5.1 (checkpoint middleware) confirmed already live from TASK-28. Subtask 5.2 (t_task_health): fixed UUID PK bug (id=gt.1 removed), wired task_health_warning into session_start. Subtask 5.3 (skill file rewrite guard): KB entry written at core_agi.skill_editing/rewrite_guard. All builds SUCCESS. Task marked done. TASK-V8 registered with blueprint pointer. Changelog logged. Owner notified.",
-    "domain": null,
-    "created_at": "2026-03-19T07:17:45.702639+00:00"
-  },
-  {
-    "id": 512,
-    "summary": "[state_update] last_real_signal_ts: 2026-03-19T06:27:52.404727",
-    "domain": null,
-    "created_at": "2026-03-19T06:27:52.495452+00:00"
-  },
-  {
-    "id": 511,
-    "summary": "[state_update] last_real_signal_ts: 2026-03-19T06:26:35.351598",
-    "domain": null,
-    "created_at": "2026-03-19T06:26:35.45111+00:00"
-  },
-  {
-    "id": 510,
-    "summary": "[state_update] last_real_signal_ts: 2026-03-19T06:24:28.878968",
-    "domain": null,
-    "created_at": "2026-03-19T06:24:28.974595+00:00"
-  },
-  {
-    "id": 509,
-    "summary": "[state_update] last_real_signal_ts: 2026-03-19T06:21:26.050770",
-    "domain": null,
-    "created_at": "2026-03-19T06:21:26.179798+00:00"
-  },
-  {
-    "id": 508,
-    "summary": "Session: Booted V7, reviewed system state. Registered TASK-V8 (CORE AGI V8 Architecture Migration) pointing to blueprint at C:\\Users\\rnvgg\\.claude-skills\\V8\\. Read both V8 files (blueprint + gap analysis). TASK-5 remains in_progress, not touched this session.",
-    "domain": null,
-    "created_at": "2026-03-19T06:12:05.085692+00:00"
-  },
-  {
-    "id": 507,
-    "summary": "[state_update] last_real_signal_ts: 2026-03-19T05:52:20.392455",
-    "domain": null,
-    "created_at": "2026-03-19T05:52:20.888808+00:00"
   }
 ]
