@@ -1,5 +1,14 @@
 [
   {
+    "id": 1344,
+    "domain": "backlog",
+    "topic": "[BACKLOG-1] Python debugger",
+    "instruction": null,
+    "content": "type=missing_data effort=low impact=low domain=code\nEnhance the knowledge base with information about common Python debuggers and their usage.",
+    "confidence": "medium",
+    "active": true
+  },
+  {
     "id": 1345,
     "domain": "backlog",
     "topic": "[BACKLOG-4] Academic Paper Summarization Tool",
@@ -1787,15 +1796,6 @@
     "topic": "[BACKLOG-4] Advanced paper summarization",
     "instruction": null,
     "content": "type=new_tool effort=high impact=high domain=academic\nDevelop a dedicated tool to summarize research papers with a focus on accuracy, conciseness, and user-control over the generated summary.",
-    "confidence": "medium",
-    "active": true
-  },
-  {
-    "id": 1555,
-    "domain": "backlog",
-    "topic": "[BACKLOG-1] User preferences and feedback collection",
-    "instruction": null,
-    "content": "type=missing_data effort=low impact=high domain=academic\nImplement mechanisms to collect and store user preferences (e.g., text format, tone) and feedback (e.g., ratings, comments) to improve the overall user experience and refine task-specific performance.",
     "confidence": "medium",
     "active": true
   }
