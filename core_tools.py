@@ -20,10 +20,10 @@ from datetime import datetime, timedelta
 import httpx
 
 from core_config import (
-    GITHUB_REPO, GROQ_FAST, GROQ_MODEL, KB_MINE_BATCH_SIZE, KB_MINE_RATIO_THRESHOLD,
+    GITHUB_REPO, KB_MINE_BATCH_SIZE, KB_MINE_RATIO_THRESHOLD,
     COLD_HOT_THRESHOLD, COLD_KB_GROWTH_THRESHOLD, PATTERN_EVO_THRESHOLD,
     KNOWLEDGE_AUTO_CONFIDENCE, MCP_PROTOCOL_VERSION, SUPABASE_URL, SUPABASE_REF,
-    L, groq_chat, sb_get, sb_post, sb_post_critical, sb_patch, sb_upsert, sb_delete,
+    L, gemini_chat, sb_get, sb_post, sb_post_critical, sb_patch, sb_upsert, sb_delete,
 )
 from core_config import _sbh, _sbh_count_svc
 from core_github import _ghh, _gh_blob_read, _gh_blob_write, gh_read, gh_write, notify
@@ -1020,11 +1020,9 @@ Output ONLY valid JSON, no preamble."""
             f"Generate the evolution brief for this session."
         )
 
-        raw = groq_chat(system, user, model=GROQ_MODEL, max_tokens=2000)
-        raw = raw.strip()
-        if raw.startswith("```"): raw = "\n".join(raw.split("\n")[1:])
-        if raw.endswith("```"): raw = "\n".join(raw.split("\n")[:-1])
-        brief = json.loads(raw.strip())
+        raw = gemini_chat(system, user, max_tokens=2000, json_mode=True)
+        raw = raw.strip().lstrip("```json").lstrip("```").rstrip("```").strip()
+        brief = json.loads(raw)
 
         for tpl in brief.get("templates_proposed", []):
             try:
@@ -1047,7 +1045,7 @@ Output ONLY valid JSON, no preamble."""
         }
 
     except json.JSONDecodeError as e:
-        return {"ok": False, "error": f"Groq returned invalid JSON: {e}"}
+        return {"ok": False, "error": f"Gemini returned invalid JSON: {e}"}
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
@@ -2212,8 +2210,8 @@ def t_ask(question: str, domain: str = ""):
     user += "Answer:"
     model = GROQ_MODEL if (len(kb_results) > 3 or len(question) > 200) else GROQ_FAST
     try:
-        answer = groq_chat(system, user, model=model, max_tokens=512)
-        return {"ok": True, "answer": answer, "kb_hits": len(kb_results), "model": model, "question": question}
+        answer = gemini_chat(system, user, max_tokens=512)
+        return {"ok": True, "answer": answer, "kb_hits": len(kb_results), "model": "gemini-2.5-flash-lite", "question": question}
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
