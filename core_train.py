@@ -22,13 +22,12 @@ from datetime import datetime, timedelta
 import httpx
 
 from core_config import (
-    GROQ_MODEL, GROQ_FAST,
     SUPABASE_URL,
     COLD_HOT_THRESHOLD, COLD_TIME_THRESHOLD, COLD_KB_GROWTH_THRESHOLD,
     PATTERN_EVO_THRESHOLD, KNOWLEDGE_AUTO_CONFIDENCE,
     KB_MINE_BATCH_SIZE, KB_MINE_RATIO_THRESHOLD,
     sb_get, sb_post, sb_post_critical, sb_patch, sb_upsert, _sbh_count_svc,
-    groq_chat, gemini_chat,
+    gemini_chat,
 )
 from core_github import notify, gh_write
 
@@ -190,8 +189,9 @@ def auto_hot_reflection(session_data: dict):
                 f"Respond ONLY as JSON: "
                 f'{{"patterns": ["..."], "quality": 0.8, "gaps": "..or null"}}'
             )
-            raw = groq_chat(system="You are CORE's pattern extraction engine. Return only valid JSON.", user=prompt, model=GROQ_FAST, max_tokens=500)
-            parsed = json.loads(raw.strip().lstrip("```json").rstrip("```").strip())
+            raw = gemini_chat(system="You are CORE's pattern extraction engine. Return only valid JSON.", user=prompt, max_tokens=500, json_mode=True)
+            raw_clean = raw.strip().lstrip("```json").lstrip("```").rstrip("```").strip()
+            parsed = json.loads(raw_clean)
             groq_patterns = [p for p in parsed.get("patterns", []) if isinstance(p, str) and len(p) > 5][:5]
             seen = set(p.lower() for p in new_patterns)
             for p in groq_patterns:
@@ -310,9 +310,9 @@ def _reconcile_gaps(hots: list) -> int:
         )
         deduped = None
         try:
-            raw = groq_chat(
+            raw = gemini_chat(
                 system="You are CORE's gap reconciliation engine. Respond only with valid JSON array. No preamble.",
-                user=prompt, model=GROQ_MODEL, max_tokens=600,
+                user=prompt, max_tokens=600, json_mode=True,
             )
             parsed = json.loads(raw.strip())
             if isinstance(parsed, list):
@@ -391,9 +391,9 @@ def _groq_synthesize_cold(hots: list, batch_counts: Counter, batch_domain: dict)
             f"  \"summary\": \"3-5 sentence plain text synthesis combining all above\"\n"
             f"}}\n"
         )
-        raw = groq_chat(
+        raw = gemini_chat(
             system="You are CORE's cold processor synthesis engine. Respond only with valid JSON. No preamble.",
-            user=prompt, model=GROQ_MODEL, max_tokens=500,
+            user=prompt, max_tokens=500, json_mode=True,
         )
         try:
             parsed = json.loads(raw.strip())
@@ -430,7 +430,7 @@ def _groq_kb_content(pattern_key: str, domain: str, frequency: int, src_key: str
             f"4. Any known exceptions\n"
             f"Max 200 words. No markdown headers. Plain paragraphs only."
         )
-        content = groq_chat(system="You are CORE's knowledge synthesis engine. Write clear actionable KB content.", user=prompt, model=GROQ_FAST, max_tokens=350)
+        content = gemini_chat(system="You are CORE's knowledge synthesis engine. Write clear actionable KB content.", user=prompt, max_tokens=350)
         content = content.strip()
         if len(content) > 30:
             return content
@@ -1043,15 +1043,13 @@ Output ONLY valid JSON, no preamble."""
                 f"RECENT MISTAKES (since last processed, {len(mistakes)} entries):\n{mistakes_text}\n\n"
                 f"Extract behavioral directives from this recent activity. Focus on what CORE should do differently.")
 
-        raw = groq_chat(system, user, model=GROQ_MODEL, max_tokens=800)
-        raw = raw.strip()
-        if raw.startswith("```"): raw = raw.split("```")[1]
-        if raw.startswith("json"): raw = raw[4:]
-        result = json.loads(raw.strip())
+        raw = gemini_chat(system, user, max_tokens=800, json_mode=True)
+        raw = raw.strip().lstrip("```json").lstrip("```").rstrip("```").strip()
+        result = json.loads(raw)
 
         patterns = result.get("patterns", [])
         if not patterns:
-            print("[RESEARCH/REAL] Groq returned no patterns")
+            print("[RESEARCH/REAL] Gemini returned no patterns")
             return False
 
         _gaps_raw = result.get("gaps") or None
@@ -1174,15 +1172,13 @@ Output ONLY valid JSON, no preamble."""
             task_summary = "Simulated 1M user population batch"
             print("[RESEARCH/SIM] Running default 1M user simulation")
 
-        raw = groq_chat(system, user, model=GROQ_MODEL, max_tokens=900)
-        raw = raw.strip()
-        if raw.startswith("```"): raw = raw.split("```")[1]
-        if raw.startswith("json"): raw = raw[4:]
-        result = json.loads(raw.strip())
+        raw = gemini_chat(system, user, max_tokens=900, json_mode=True)
+        raw = raw.strip().lstrip("```json").lstrip("```").rstrip("```").strip()
+        result = json.loads(raw)
 
         patterns = result.get("patterns", [])
         if not patterns:
-            print("[RESEARCH/SIM] Groq returned no patterns")
+            print("[RESEARCH/SIM] Gemini returned no patterns")
             return False
 
         _sim_gaps_raw = result.get("gaps") or None
@@ -1318,7 +1314,7 @@ def _groq_cluster_patterns(batch_counts: "Counter", batch_domain: dict, batch_so
             "Example: {\"1\": \"canonical text\", \"2\": \"canonical text\", \"3\": \"different rule\"}\n"
             "No preamble. No markdown. Pure JSON only."
         )
-        raw = groq_chat(system="You are CORE's pattern clustering engine. Return only valid JSON.", user=prompt, model=GROQ_MODEL, max_tokens=2000)
+        raw = gemini_chat(system="You are CORE's pattern clustering engine. Return only valid JSON.", user=prompt, max_tokens=2000, json_mode=True)
         raw = raw.strip().lstrip("```json").lstrip("```").rstrip("```").strip()
         mapping_by_num = json.loads(raw)
 
