@@ -405,19 +405,18 @@ def t_search_kb(query="", domain="", limit=10):
         q = query.strip().replace("'", "").replace('"', "")
         qs += f"&or=(content.ilike.*{q}*,topic.ilike.*{q}*,instruction.ilike.*{q}*)"
     rows = sb_get("knowledge_base", qs)
-    # AGI-05: fire-and-forget access tracking -- never blocks return
+    # C.2: batch access tracking -- single UPDATE via id=in.(...) instead of N individual patches
     try:
         if rows:
             now_ts = datetime.utcnow().isoformat()
-            for r in rows:
-                rid = r.get("id")
-                if rid and rid != 1:
-                    try:
-                        sb_patch("knowledge_base", f"id=eq.{rid}",
-                                 {"last_accessed": now_ts,
-                                  "access_count": (r.get("access_count") or 0) + 1})
-                    except Exception:
-                        pass
+            ids = [str(r["id"]) for r in rows if r.get("id") and r["id"] != 1]
+            if ids:
+                id_list = ",".join(ids)
+                try:
+                    sb_patch("knowledge_base", f"id=in.({id_list})",
+                             {"last_accessed": now_ts})
+                except Exception:
+                    pass  # access tracking is best-effort
     except Exception:
         pass
     return rows
@@ -425,7 +424,8 @@ def t_search_kb(query="", domain="", limit=10):
 def t_get_mistakes(domain="", limit=10):
     try: lim = int(limit) if limit else 10
     except: lim = 10
-    qs = f"select=domain,context,what_failed,correct_approach,severity,root_cause,how_to_avoid&order=created_at.desc&limit={lim}"
+    # C.3: add id=gt.1 filter (consistent with all other bigserial table queries)
+    qs = f"select=domain,context,what_failed,correct_approach,severity,root_cause,how_to_avoid&order=created_at.desc&limit={lim}&id=gt.1"
     if domain and domain not in ("all", ""): qs += f"&domain=eq.{domain}"
     return sb_get("mistakes", qs, svc=True)
 
@@ -1171,9 +1171,11 @@ def t_listen_result() -> dict:
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
-def t_list_evolutions(status="pending"):
+def t_list_evolutions(status="pending", limit="20"):
+    # C.5: accept limit param (was hardcoded 20)
+    lim = int(limit) if limit else 20
     rows = sb_get("evolution_queue",
-                  f"select=id,status,change_type,change_summary,confidence,pattern_key,created_at&status=eq.{status}&id=gt.1&order=created_at.desc&limit=20",
+                  f"select=id,status,change_type,change_summary,confidence,pattern_key,created_at&status=eq.{status}&id=gt.1&order=created_at.desc&limit={lim}",
                   svc=True)
     return {"evolutions": rows, "count": len(rows)}
 
@@ -2758,11 +2760,13 @@ def t_stats():
 def t_search_mistakes(query: str = "", domain: str = "", limit: int = 10):
     try:
         lim = int(limit) if limit else 10
-        qs = f"select=domain,context,what_failed,correct_approach,root_cause,severity&order=created_at.desc&limit={lim}"
+        # C.4: add id=gt.1, expand search to root_cause+how_to_avoid fields
+        qs = f"select=domain,context,what_failed,correct_approach,root_cause,how_to_avoid,severity&order=created_at.desc&limit={lim}&id=gt.1"
         if domain and domain not in ("all", ""): qs += f"&domain=eq.{domain}"
         if query:
             q = query.strip().replace("'", "").replace('"', "")
-            qs += f"&or=(what_failed.ilike.*{q}*,context.ilike.*{q}*,correct_approach.ilike.*{q}*)"
+            qs += (f"&or=(what_failed.ilike.*{q}*,context.ilike.*{q}*,"
+                   f"correct_approach.ilike.*{q}*,root_cause.ilike.*{q}*,how_to_avoid.ilike.*{q}*)")
         results = sb_get("mistakes", qs, svc=True)
         return {"ok": True, "count": len(results), "mistakes": results}
     except Exception as e:
