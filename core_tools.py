@@ -591,13 +591,22 @@ def t_read_file(path, repo="", start_line="", end_line=""):
             lines = lines[s:e]
             raw = "".join(lines)
         truncated = len(raw) > 8000
-        return {"ok": True, "content": raw[:8000], "total_line_count": total, "truncated": truncated}
+        result = {"ok": True, "content": raw[:8000], "total_line_count": total, "truncated": truncated}
+        # D.2: prominent truncation warning -- CORE must not use truncated content for patches
+        if truncated:
+            result["truncation_warning"] = (
+                "TRUNCATED at 8000 chars. Do NOT use this output to build old_str for patches -- "
+                "content is incomplete. Use gh_read_lines(start_line, end_line) to get the exact "
+                "section you need before patching."
+            )
+        return result
     except Exception as e: return {"ok": False, "error": str(e)}
 
 def t_write_file(path="", content="", message="", repo=""):
     """Write file to GitHub repo - FULL OVERWRITE. Use for NEW files only.
     GUARD: blocked for core_main.py and core_tools.py - use patch_file or gh_search_replace for surgical edits."""
-    blocked = {"core_main.py", "core_tools.py"}
+    # D.4: expand blocked set -- core_train.py and core_config.py also critical, full overwrite risk
+    blocked = {"core_main.py", "core_tools.py", "core_train.py", "core_config.py"}
     clean_path = path.strip().lstrip("/")
     if (repo or GITHUB_REPO) == GITHUB_REPO and clean_path in blocked:
         return {
@@ -3958,6 +3967,19 @@ def t_append_to_file(path: str, content_to_append: str, message: str, repo: str 
         import subprocess, tempfile as _tmpfile
         repo = repo or GITHUB_REPO
         existing = _gh_blob_read(path, repo)
+        # D.1: duplicate content guard -- block if first 80 chars already exist in file
+        _first80 = content_to_append.strip()[:80]
+        if _first80 and _first80 in existing:
+            # Find approximate line number of existing occurrence
+            _lines = existing.splitlines()
+            _dup_line = next((i+1 for i, l in enumerate(_lines) if _first80[:40] in l), None)
+            return {
+                "ok": False,
+                "error": "DUPLICATE_APPEND_BLOCKED",
+                "hint": f"Content already exists in {path}"
+                        + (f" near line {_dup_line}" if _dup_line else "") +
+                        ". Use gh_read_lines to verify before appending."
+            }
         new_content = existing + content_to_append
         # Syntax check for .py files
         if path.endswith(".py"):
