@@ -196,6 +196,7 @@ def gemini_chat(system: str, user: str, max_tokens: int = 2048, json_mode: bool 
             )
             if r.status_code == 429:
                 last_err = f"429 on key index {(_GEMINI_KEY_INDEX - 1) % len(_GEMINI_KEYS)}"
+                time.sleep(2)
                 continue  # try next key
             r.raise_for_status()
             resp_json = r.json()
