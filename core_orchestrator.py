@@ -1021,6 +1021,8 @@ def _agentic_loop(cid: str, user_message: str,
     results_buffer: list = []
 
     while tool_call_count < MAX_TOOL_CALLS:
+        if tool_call_count > 0:
+            time.sleep(3)
         _tg_typing(cid)
 
         # Build user content for this loop iteration
