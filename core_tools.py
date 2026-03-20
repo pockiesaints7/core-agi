@@ -7144,3 +7144,496 @@ TOOLS["sync_system_map"] = {"fn": t_sync_system_map, "perm": "WRITE",
         "line_count). Call after deploys, when drift detected, or manually. "
         "NEVER assume system_map is current -- always sync first when making architecture decisions."
     )}
+
+
+
+def t_tool_health_scan(force: str = "false") -> dict:
+    """PHASE-M/M.1: Scan all CORE tools and classify each as healthy/degraded/broken/untested.
+
+    Pulls tool_stats for every tool in TOOLS dict (last 30 days).
+    Classification:
+      broken:    fail_rate >= 0.5 OR last_error contains hard exception keywords
+      degraded:  0.2 <= fail_rate < 0.5
+      untested:  0 calls in tool_stats
+      healthy:   fail_rate < 0.2 and has been called
+
+    Updates system_map status per tool. Auto-queues improvement proposals for broken tools
+    into evolution_queue as change_type=code. Notifies owner with summary.
+    force=true: re-scan even if last scan < 6h ago.
+    """
+    try:
+        _force = str(force).lower() in ("true", "1", "yes")
+
+        # Rate-limit: skip if last scan < 6h ago (unless forced)
+        if not _force:
+            try:
+                last_rows = sb_get("sessions",
+                    "select=summary&summary=like.*tool_health_scan_ts*&order=id.desc&limit=1",
+                    svc=True) or []
+                if last_rows:
+                    import re as _re2
+                    m = _re2.search(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}", last_rows[0].get("summary", ""))
+                    if m:
+                        last_ts = datetime.fromisoformat(m.group())
+                        if (datetime.utcnow() - last_ts).total_seconds() < 21600:
+                            return {"ok": True, "skipped": True,
+                                    "reason": "last scan < 6h ago -- pass force=true to override"}
+            except Exception:
+                pass
+
+        # Pull all tool_stats rows
+        stats_rows = sb_get("tool_stats",
+            "select=tool_name,total_calls,success_count,fail_count,fail_rate,last_error,last_called"
+            "&order=fail_rate.desc",
+            svc=True) or []
+        stats_by_name = {r["tool_name"]: r for r in stats_rows}
+
+        all_tool_names = sorted(TOOLS.keys())
+        results = []
+        broken_tools = []
+        degraded_tools = []
+        untested_tools = []
+        healthy_tools = []
+        proposals_queued = 0
+        _HARD_ERR_KW = ["Exception", "Error", "Traceback", "AttributeError",
+                        "KeyError", "TypeError", "ValueError", "NoneType", "not found"]
+
+        for tool_name in all_tool_names:
+            stat = stats_by_name.get(tool_name)
+            if not stat or (stat.get("total_calls") or 0) == 0:
+                classification = "untested"
+                untested_tools.append(tool_name)
+            else:
+                fr = float(stat.get("fail_rate") or 0)
+                last_err = str(stat.get("last_error") or "")
+                has_hard_error = any(kw in last_err for kw in _HARD_ERR_KW)
+                if fr >= 0.5 or (fr >= 0.3 and has_hard_error):
+                    classification = "broken"
+                    broken_tools.append(tool_name)
+                elif fr >= 0.2:
+                    classification = "degraded"
+                    degraded_tools.append(tool_name)
+                else:
+                    classification = "healthy"
+                    healthy_tools.append(tool_name)
+
+            results.append({
+                "tool": tool_name,
+                "status": classification,
+                "fail_rate": float((stat or {}).get("fail_rate") or 0),
+                "total_calls": int((stat or {}).get("total_calls") or 0),
+                "last_error": str((stat or {}).get("last_error") or "")[:120],
+            })
+
+        # Update system_map status per tool
+        for r in results:
+            try:
+                sm_rows = sb_get("system_map",
+                    f"select=id&name=eq.{r['tool']}&item_type=eq.tool&status=neq.tombstone",
+                    svc=True) or []
+                if sm_rows:
+                    sb_patch("system_map", f"id=eq.{sm_rows[0]['id']}", {
+                        "status": "active" if r["status"] in ("healthy", "untested") else r["status"],
+                        "notes": f"health_scan:{r['status']} fail={r['fail_rate']:.2f} {r['last_error'][:60]}",
+                        "last_updated": datetime.utcnow().isoformat(),
+                        "updated_by": "tool_health_scan",
+                    })
+            except Exception:
+                pass
+
+        # Auto-queue improvement proposals for broken tools (skip if already pending)
+        for tool_name in broken_tools:
+            try:
+                existing = sb_get("evolution_queue",
+                    f"select=id&status=eq.pending&pattern_key=eq.broken_tool:{tool_name}",
+                    svc=True) or []
+                if not existing:
+                    stat = stats_by_name.get(tool_name, {})
+                    sb_post("evolution_queue", {
+                        "change_type": "code",
+                        "change_summary": (
+                            f"[AUTO] {tool_name} broken: "
+                            f"fail_rate={float(stat.get('fail_rate',0)):.2f}, "
+                            f"last_error={str(stat.get('last_error',''))[:150]}"
+                        ),
+                        "pattern_key": f"broken_tool:{tool_name}",
+                        "confidence": 0.9,
+                        "status": "pending",
+                        "source": "tool_health_scan",
+                        "impact": "high",
+                        "recommendation": f"Run tool_improve(tool_name='{tool_name}') to get code fix",
+                        "created_at": datetime.utcnow().isoformat(),
+                    })
+                    proposals_queued += 1
+            except Exception:
+                pass
+
+        # Persist scan timestamp for rate-limiting
+        try:
+            sb_post("sessions", {
+                "summary": f"[state_update] tool_health_scan_ts: {datetime.utcnow().isoformat()[:16]}",
+                "actions": [f"tool_health_scan: {len(broken_tools)}b {len(degraded_tools)}d {len(untested_tools)}u {len(healthy_tools)}h"],
+                "interface": "mcp",
+            })
+        except Exception:
+            pass
+
+        # Notify owner if attention needed
+        if broken_tools or degraded_tools:
+            parts = ["[HEALTH SCAN] Tool Health Report"]
+            if broken_tools:
+                parts.append(f"BROKEN ({len(broken_tools)}): {', '.join(broken_tools[:8])}")
+            if degraded_tools:
+                parts.append(f"DEGRADED ({len(degraded_tools)}): {', '.join(degraded_tools[:8])}")
+            parts.append(f"Healthy: {len(healthy_tools)} | Untested: {len(untested_tools)}")
+            if proposals_queued:
+                parts.append(f"Queued {proposals_queued} improvement proposals -> evolution_queue")
+            notify("\n".join(parts))
+
+        return {
+            "ok": True,
+            "scanned": len(all_tool_names),
+            "broken": broken_tools,
+            "degraded": degraded_tools,
+            "untested_count": len(untested_tools),
+            "healthy_count": len(healthy_tools),
+            "proposals_queued": proposals_queued,
+            "summary": (
+                f"{len(broken_tools)} broken, {len(degraded_tools)} degraded, "
+                f"{len(untested_tools)} untested, {len(healthy_tools)} healthy "
+                f"out of {len(all_tool_names)} total tools"
+            ),
+        }
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+TOOLS["tool_health_scan"] = {
+    "fn": t_tool_health_scan,
+    "perm": "WRITE",
+    "args": [
+        {"name": "force", "type": "string",
+         "description": "true=force scan even if last scan < 6h ago (default: false)"},
+    ],
+    "desc": (
+        "PHASE-M: Daily tool health scan. Classifies all CORE tools as healthy/degraded/broken/untested "
+        "using tool_stats fail_rate + last_error. broken=fail_rate>=0.5, degraded>=0.2, untested=0 calls. "
+        "Updates system_map status. Auto-queues improvement proposals for broken tools. "
+        "Notifies owner. Rate-limited to once per 6h (pass force=true to override). "
+        "Use tool_improve(tool_name=X) to get root_cause + code fix for any broken tool."
+    ),
+}
+
+
+def t_tool_improve(tool_name: str = "") -> dict:
+    """PHASE-M/M.2: Root-cause analysis + code fix proposal for a broken/degraded tool.
+
+    Fetches full context: function source + tool_stats + mistakes + KB + system_map.
+    Calls Groq to generate: root_cause, code_fix (old_str/new_str), test_description.
+    Writes proposal to evolution_queue as change_type=code.
+    Owner approves via check_evolutions + approve_evolution. NEVER auto-applied.
+    """
+    if not tool_name:
+        return {"ok": False, "error": "tool_name is required (e.g. 'debug_fn' or 't_debug_fn')"}
+
+    clean_name = tool_name[2:] if tool_name.startswith("t_") else tool_name
+    fn_name = f"t_{clean_name}"
+
+    try:
+        # 1. Read function source
+        fn_source = ""
+        source_file = ""
+        for mod_file in ["core_tools.py", "core_train.py", "core_config.py",
+                         "core_github.py", "core_main.py"]:
+            result = t_core_py_fn(fn_name, file=mod_file)
+            if result.get("ok"):
+                fn_source = result.get("source", "")
+                source_file = mod_file
+                break
+        if not fn_source:
+            return {"ok": False, "error": f"{fn_name} not found in any CORE module",
+                    "tool_name": clean_name}
+
+        # 2. tool_stats
+        stat_rows = sb_get("tool_stats",
+            f"select=total_calls,fail_count,fail_rate,last_error,last_called"
+            f"&tool_name=eq.{clean_name}",
+            svc=True) or []
+        stat = stat_rows[0] if stat_rows else {}
+
+        # 3. Mistakes mentioning this tool
+        mistakes = sb_get("mistakes",
+            f"select=what_failed,root_cause,correct_approach,severity"
+            f"&or=(context.ilike.*{clean_name[:25]}*,what_failed.ilike.*{clean_name[:25]}*)"
+            f"&order=created_at.desc&limit=5&id=gt.1",
+            svc=True) or []
+
+        # 4. KB entries
+        kb = t_search_kb(query=clean_name, limit=4) or []
+
+        # 5. System map notes
+        sm = sb_get("system_map",
+            f"select=role,status,notes&name=eq.{clean_name}&item_type=eq.tool",
+            svc=True) or []
+        sm_entry = sm[0] if sm else {}
+
+        system = (
+            "You are CORE's self-improvement engine. Analyze a broken Python function and produce a fix.\n"
+            "Output ONLY valid JSON:\n"
+            "{\n"
+            '  "root_cause": "precise 1-2 sentence technical diagnosis",\n'
+            '  "code_fix": {"description": "what changes", "old_str": "exact code to replace", "new_str": "replacement"} or null if no code fix needed,\n'
+            '  "test_description": "how to verify the fix",\n'
+            '  "confidence": 0.0-1.0,\n'
+            '  "severity": "critical|high|medium|low"\n'
+            "}\n"
+            "For old_str: copy verbatim from the function source -- must be a unique substring."
+        )
+
+        mistake_text = "\n".join(
+            f"- [{m.get('severity','?')}] {m.get('what_failed','')[:100]}"
+            for m in mistakes
+        ) or "none"
+        kb_text = "\n".join(
+            f"- {k.get('topic','')}: {str(k.get('content',''))[:120]}"
+            for k in kb
+        ) or "none"
+
+        user = (
+            f"TOOL: {fn_name} (in {source_file})\n"
+            f"fail_rate={stat.get('fail_rate','?')} calls={stat.get('total_calls',0)} "
+            f"failures={stat.get('fail_count',0)}\n"
+            f"last_error: {str(stat.get('last_error','none'))[:300]}\n\n"
+            f"SOURCE:\n{fn_source[:3000]}\n\n"
+            f"RELATED MISTAKES:\n{mistake_text}\n\n"
+            f"KB:\n{kb_text}\n\n"
+            f"SYSTEM MAP: status={sm_entry.get('status','?')} notes={str(sm_entry.get('notes',''))[:150]}\n\n"
+            "Diagnose root_cause and produce code_fix."
+        )
+
+        raw = groq_chat(system, user, max_tokens=1500)
+        raw = raw.strip().lstrip("```json").lstrip("```").rstrip("```").strip()
+        import json as _j2
+        proposal = _j2.loads(raw)
+
+        diff_blob = _j2.dumps({
+            "tool_name": clean_name,
+            "fn_name": fn_name,
+            "source_file": source_file,
+            "code_fix": proposal.get("code_fix"),
+            "test_description": proposal.get("test_description"),
+            "generated_by": "tool_improve",
+        })
+
+        evo_ok = sb_post("evolution_queue", {
+            "change_type": "code",
+            "change_summary": f"[tool_improve] {fn_name}: {str(proposal.get('root_cause',''))[:200]}",
+            "diff_content": diff_blob,
+            "pattern_key": f"tool_improve:{clean_name}",
+            "confidence": float(proposal.get("confidence", 0.7)),
+            "status": "pending",
+            "source": "tool_improve",
+            "impact": proposal.get("severity", "medium"),
+            "recommendation": (
+                f"Apply code_fix to {fn_name} in {source_file}. "
+                f"Test: {str(proposal.get('test_description',''))[:150]}"
+            ),
+            "created_at": datetime.utcnow().isoformat(),
+        })
+
+        evo_id = None
+        if evo_ok:
+            new_evo = sb_get("evolution_queue",
+                f"select=id&pattern_key=eq.tool_improve:{clean_name}&order=id.desc&limit=1",
+                svc=True) or []
+            evo_id = new_evo[0]["id"] if new_evo else None
+
+        notify(
+            f"[TOOL IMPROVE] {fn_name}\n"
+            f"Root: {str(proposal.get('root_cause',''))[:150]}\n"
+            f"Confidence: {proposal.get('confidence','?')}\n"
+            f"Evo #{evo_id} pending owner approval"
+        )
+
+        return {
+            "ok": True,
+            "tool_name": clean_name,
+            "fn_name": fn_name,
+            "source_file": source_file,
+            "root_cause": proposal.get("root_cause"),
+            "code_fix": proposal.get("code_fix"),
+            "test_description": proposal.get("test_description"),
+            "confidence": proposal.get("confidence"),
+            "severity": proposal.get("severity"),
+            "evolution_id": evo_id,
+            "instruction": (
+                f"Review evolution #{evo_id}. "
+                "If code_fix.old_str/new_str looks correct, call approve_evolution. "
+                "NEVER auto-apply code evolutions -- owner review required."
+            ),
+        }
+    except Exception as e:
+        return {"ok": False, "error": str(e), "tool_name": clean_name}
+
+
+TOOLS["tool_improve"] = {
+    "fn": t_tool_improve,
+    "perm": "WRITE",
+    "args": [
+        {"name": "tool_name", "type": "string",
+         "description": "Tool to analyze (e.g. 'debug_fn'). t_ prefix optional."},
+    ],
+    "desc": (
+        "PHASE-M: Generate root_cause + code fix for any broken/degraded CORE tool. "
+        "Reads source + fail history + mistakes + KB, calls Groq for diagnosis. "
+        "Writes evolution_queue entry (change_type=code) for owner approval. "
+        "NEVER auto-applied. Owner reviews via check_evolutions then approve_evolution. "
+        "Returns: root_cause, code_fix (old_str/new_str), test_description, evolution_id."
+    ),
+}
+
+
+def t_load_arch_context(domain: str = "general") -> dict:
+    """PHASE-M/M.5: Load full architectural context before any code write or architecture decision.
+
+    HARD RULE: Call this before creating new tools, making architecture changes,
+    or starting any major patch session. CORE must never write code from memory.
+
+    Loads in one call:
+      1. system_map snapshot (layer counts, live tool count)
+      2. _SB_SCHEMA table list (what tables exist, pk types, fat columns)
+      3. TOOLS stats (total, perm distribution, deprecated tools)
+      4. Active behavioral rules for the domain (top 20 by priority)
+      5. Last 5 cold_reflection summaries
+      6. Open tasks (pending + in_progress)
+    """
+    try:
+        # 1. System map
+        sm_rows = sb_get("system_map",
+            "select=layer,component,item_type,name,status,key_facts"
+            "&status=neq.tombstone&order=layer,component,name",
+            svc=True) or []
+        layer_summary: dict = {}
+        live_tool_count = len(TOOLS)  # authoritative: TOOLS dict
+        for row in sm_rows:
+            key = f"{row.get('layer','?')}/{row.get('item_type','?')}"
+            layer_summary[key] = layer_summary.get(key, 0) + 1
+            kf = row.get("key_facts") or {}
+            if row.get("name") == "core_tools.py" and kf.get("tool_count"):
+                live_tool_count = kf["tool_count"]
+
+        # 2. Schema tables from _SB_SCHEMA
+        schema_summary = {}
+        try:
+            for tname, tdef in _SB_SCHEMA.get("tables", {}).items():
+                schema_summary[tname] = {
+                    "pk_type": tdef.get("pk_type", "?"),
+                    "fat_columns": tdef.get("fat_columns", []),
+                    "tombstone": tdef.get("tombstone", False),
+                }
+        except Exception as _se:
+            schema_summary = {"error": str(_se)}
+
+        # 3. TOOLS stats
+        perm_dist: dict = {}
+        deprecated = []
+        for tname, tdef in TOOLS.items():
+            perm = tdef.get("perm", "READ")
+            perm_dist[perm] = perm_dist.get(perm, 0) + 1
+            if "DEPRECATED" in str(tdef.get("desc", "")).upper():
+                deprecated.append(tname)
+        tools_context = {
+            "total": len(TOOLS),
+            "live": len(TOOLS) - len(deprecated),
+            "deprecated": deprecated,
+            "perm_distribution": perm_dist,
+        }
+
+        # 4. Behavioral rules
+        rules = sb_get("behavioral_rules",
+            f"select=trigger,pointer,full_rule,priority,confidence"
+            f"&active=eq.true"
+            f"&or=(domain=eq.{domain},domain=eq.universal)"
+            f"&order=priority.desc&limit=20&id=gt.1",
+            svc=True) or []
+
+        # 5. Recent cold_reflections
+        cold = sb_get("cold_reflections",
+            "select=created_at,patterns_found,evolutions_queued,summary_text"
+            "&order=id.desc&limit=5",
+            svc=True) or []
+
+        # 6. Open tasks
+        tasks = sb_get("task_queue",
+            "select=id,task,status,priority&status=in.(pending,in_progress)"
+            "&order=priority.desc&limit=15",
+            svc=True) or []
+        task_list = []
+        for t in tasks:
+            raw = t.get("task", "")
+            title = raw[:100] if isinstance(raw, str) else str(raw)[:100]
+            task_list.append({
+                "id": str(t.get("id", ""))[:8],
+                "status": t.get("status"),
+                "priority": t.get("priority"),
+                "title": title,
+            })
+
+        return {
+            "ok": True,
+            "domain": domain,
+            "system_map": {
+                "total_active": len(sm_rows),
+                "layer_breakdown": layer_summary,
+                "live_tool_count": live_tool_count,
+            },
+            "schema_tables": schema_summary,
+            "tools": tools_context,
+            "behavioral_rules": [
+                {
+                    "trigger": r.get("trigger"),
+                    "pointer": r.get("pointer"),
+                    "rule_preview": str(r.get("full_rule", ""))[:200],
+                    "priority": r.get("priority"),
+                    "confidence": r.get("confidence"),
+                }
+                for r in rules
+            ],
+            "recent_cold_reflections": [
+                {
+                    "date": str(c.get("created_at", ""))[:10],
+                    "patterns_found": c.get("patterns_found"),
+                    "evolutions_queued": c.get("evolutions_queued"),
+                    "summary": str(c.get("summary_text", ""))[:200],
+                }
+                for c in cold
+            ],
+            "open_tasks": task_list,
+            "instruction": (
+                "Full architectural context loaded. Before writing any code: "
+                "(1) check schema_tables for table structure and fat columns, "
+                "(2) check tools.deprecated before referencing any tool by name, "
+                "(3) check behavioral_rules for constraints on your domain, "
+                "(4) check open_tasks to avoid duplicating planned work. "
+                "Context is live from Supabase -- not from memory."
+            ),
+        }
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+TOOLS["load_arch_context"] = {
+    "fn": t_load_arch_context,
+    "perm": "READ",
+    "args": [
+        {"name": "domain", "type": "string",
+         "description": "Domain for behavioral rules filter (default: general)"},
+    ],
+    "desc": (
+        "PHASE-M: Load full architectural context before any code write or architecture decision. "
+        "Returns: system_map snapshot, schema_tables (_SB_SCHEMA), TOOLS stats (total/deprecated), "
+        "active behavioral rules for domain, last 5 cold_reflections, open tasks. "
+        "HARD RULE: call before any new tool creation, architecture change, or major patch session. "
+        "CORE must never write code from memory -- always load live context first."
+    ),
+}
