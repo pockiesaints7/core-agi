@@ -3318,7 +3318,21 @@ def t_build_status() -> dict:
         except Exception as re:
             railway_error = str(re)
 
-        # Secondary: last 3 GitHub commits with Railway status callbacks
+        # G.4: short-circuit -- if Railway GQL returned terminal status, skip 3 GitHub API calls
+        _TERMINAL = {"SUCCESS", "FAILED", "CRASHED", "REMOVED"}
+        _rw_status = (railway_deploy or {}).get("status", "")
+        if railway_deploy and _rw_status in _TERMINAL:
+            return {
+                "ok": True,
+                "latest": railway_deploy,
+                "railway_live": railway_deploy,
+                "railway_error": railway_error,
+                "recent": [],
+                "summary": f"Latest: {_rw_status} -- {railway_deploy.get('commit_msg', '?')}",
+                "source": "railway_graphql_only",
+            }
+
+        # Secondary: last 3 GitHub commits with Railway status callbacks (only if Railway GQL is unclear)
         h = _ghh()
         gh_r = httpx.get(f"https://api.github.com/repos/{GITHUB_REPO}/commits?per_page=3", headers=h, timeout=8)
         gh_r.raise_for_status()
@@ -3346,7 +3360,6 @@ def t_build_status() -> dict:
                            "updated_at": st.get("updated_at", ""), "time_since": time_since})
 
         latest_gh = recent[0] if recent else {}
-        # Prefer Railway GraphQL for latest status, fall back to GitHub
         latest = railway_deploy or latest_gh
         state = (railway_deploy or {}).get("status") or latest_gh.get("state", "?")
         msg = (railway_deploy or latest_gh).get("commit_msg", "?")
@@ -3356,7 +3369,7 @@ def t_build_status() -> dict:
             "railway_live": railway_deploy,
             "railway_error": railway_error,
             "recent": recent,
-            "summary": f"Latest: {state} â€” {msg}"
+            "summary": f"Latest: {state} -- {msg}",
         }
     except Exception as e:
         return {"ok": False, "error": str(e)}
