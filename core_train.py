@@ -27,7 +27,7 @@ from core_config import (
     PATTERN_EVO_THRESHOLD, KNOWLEDGE_AUTO_CONFIDENCE,
     KB_MINE_BATCH_SIZE, KB_MINE_RATIO_THRESHOLD,
     sb_get, sb_post, sb_post_critical, sb_patch, sb_upsert, _sbh_count_svc,
-    gemini_chat,
+    gemini_chat, groq_chat, GROQ_MODEL,
 )
 from core_github import notify, gh_write
 
@@ -1554,25 +1554,31 @@ def _run_rarl_epoch() -> bool:
         "Mark uncertain reasoning [CONJECTURE]. Output ONLY valid JSON."
     )
     _json_schema = (
-        '{"research_goal":"one sentence",'
-        '"hypothesis":"2-4 sentences",'
-        '"core_mechanism":"4-6 sentences",'
-        '"pseudocode":"15-25 lines Python style",'
-        '"mutation_applied":"SynapticPruning|TopologyExpansion|ModularDuplication|CrossDomainGrafting|MemoryAugmentation|LearningRuleMutation|DynamicRoutingMutation|WorldModelIntegration|NeuroSymbolicIntegration|SparseExpertRouting|Novel",'
-        '"theory_analysis":"2-3 sentences with [CONJECTURE] markers",'
-        '"experiment_design":"benchmarks compute estimate success criteria",'
-        '"critic_failures":["specific failure 1","specific failure 2","specific failure 3"],'
-        '"mitigation":"how failures are addressed",'
-        '"benchmark_score":0.0,"transfer_score":0.0,"stability_score":0.0,'
-        '"sample_efficiency":0.0,"reasoning_depth":0.0,'
-        '"complexity_penalty":1.0,"compute_cost":1.0,"inference_latency":1.0,'
-        '"discovery_score":0.0,"beats_champion":false,'
-        f'"arch_id":"DescriptiveName_v{epoch_number}",'
-        '"compressed_insight":"one specific sentence distinct from prior KB",'
-        '"next_direction":"specific next epoch direction",'
-        '"insight_for_core":"one actionable change to core_tools.py/core_train.py/behavioral_rules/schema",'
-        '"meta_learning_note":"one concrete RARL methodology improvement",'
-        '"prompt_evolution_note":"one change to improve evolution_queue quality or null"}'
+        '{"research_goal":"<one sentence confirming goal>",'
+        '"hypothesis":"<2-4 sentence architectural hypothesis>",'
+        '"core_mechanism":"<4-6 sentence technical description>",'
+        '"pseudocode":"<15-25 lines Python style>",'
+        '"mutation_applied":"<one of: SynapticPruning|TopologyExpansion|ModularDuplication|CrossDomainGrafting|MemoryAugmentation|LearningRuleMutation|DynamicRoutingMutation|WorldModelIntegration|NeuroSymbolicIntegration|SparseExpertRouting|Novel>",'
+        '"theory_analysis":"<2-3 sentences with [CONJECTURE] markers>",'
+        '"experiment_design":"<real benchmarks, compute estimate in GPU-hours, numeric success criteria>",'
+        '"critic_failures":["<specific technical failure 1>","<specific technical failure 2>","<specific technical failure 3>"],'
+        '"mitigation":"<how failures are addressed>",'
+        '"benchmark_score":<REAL float 0.0-3.0 — your estimate of benchmark performance>,'
+        '"transfer_score":<REAL float 0.0-3.0 — cross-domain transfer ability>,'
+        '"stability_score":<REAL float 0.0-3.0 — training stability>,'
+        '"sample_efficiency":<REAL float 0.0-3.0 — learning from limited data>,'
+        '"reasoning_depth":<REAL float 0.0-3.0 — multi-step reasoning depth>,'
+        '"complexity_penalty":<REAL float 0.5-3.0 — implementation complexity cost>,'
+        '"compute_cost":<REAL float 0.5-3.0 — training/inference cost>,'
+        '"inference_latency":<REAL float 0.5-3.0 — response speed penalty>,'
+        '"discovery_score":<REAL float — compute DS = sum(numerators)/sum(denominators)>,'
+        '"beats_champion":<true if DS > ' + f'{ds_before:.3f}' + ', else false>,'
+        f'"arch_id":"<DescriptiveName_v{epoch_number} — e.g. SparseGating_MemAug_v{epoch_number}>",'
+        '"compressed_insight":"<one specific sentence distinct from prior KB — name the mechanism>",'
+        '"next_direction":"<specific next epoch direction — what mechanism to explore next>",'
+        '"insight_for_core":"<one actionable change to core_tools.py/core_train.py/behavioral_rules/schema — be specific>",'
+        '"meta_learning_note":"<one concrete RARL methodology improvement>",'
+        '"prompt_evolution_note":"<one change to improve evolution_queue quality, or null>"}'
     )
     _usr = (
         f"EPOCH: {epoch_number}\n"
