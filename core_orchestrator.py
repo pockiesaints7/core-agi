@@ -49,6 +49,11 @@ _confirm_lock          = threading.Lock()
 _session_cache: dict   = {}
 _cache_lock            = threading.Lock()
 
+_ALWAYS_TOOLS = {
+    "session_end", "search_kb", "get_mistakes", "add_knowledge", "log_mistake",
+    "notify_owner", "checkpoint", "task_add", "task_update", "sb_query", "sb_patch",
+}
+
 _TOOL_CATEGORIES = {
     "deploy": ["redeploy", "build_status", "deploy_and_wait", "validate_syntax", "patch_file", "multi_patch", "gh_search_replace", "railway_logs_live"],
     "code": ["read_file", "write_file", "gh_read_lines", "search_in_file", "core_py_fn", "core_py_validate", "append_to_file", "diff"],
@@ -88,17 +93,13 @@ def _tg_download_file(file_id: str) -> Optional[str]:
 
 def _call_llm(system: str, user: str, max_tokens: int = 2048, json_mode: bool = False,
               attachment_b64: Optional[str] = None, attachment_mime: str = "image/jpeg") -> str:
-    
     if OPENROUTER_API_KEY:
         try:
             headers = {"Authorization": f"Bearer {OPENROUTER_API_KEY}", "Content-Type": "application/json"}
             messages = [{"role": "system", "content": system}]
             user_content = user
             if attachment_b64:
-                user_content = [
-                    {"type": "text", "text": user},
-                    {"type": "image_url", "image_url": {"url": f"data:{attachment_mime};base64,{attachment_b64}"}}
-                ]
+                user_content = [{"type": "text", "text": user}, {"type": "image_url", "image_url": {"url": f"data:{attachment_mime};base64,{attachment_b64}"}}]
             messages.append({"role": "user", "content": user_content})
             payload = {"model": OPENROUTER_MODEL, "messages": messages, "max_tokens": max_tokens, "temperature": 0.1}
             if json_mode:
@@ -115,12 +116,7 @@ def _call_llm(system: str, user: str, max_tokens: int = 2048, json_mode: bool = 
             parts = [{"text": f"{system}\n\n{user}"}]
             if attachment_b64:
                 parts.append({"inline_data": {"mime_type": attachment_mime, "data": attachment_b64}})
-            r = httpx.post(
-                f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent",
-                params={"key": gemini_key},
-                json={"contents": [{"parts": parts}], "generationConfig": {"maxOutputTokens": max_tokens, "temperature": 0.1, "responseMimeType": "application/json" if json_mode else "text/plain"}},
-                timeout=50,
-            )
+            r = httpx.post(f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent", params={"key": gemini_key}, json={"contents": [{"parts": parts}], "generationConfig": {"maxOutputTokens": max_tokens, "temperature": 0.1, "responseMimeType": "application/json" if json_mode else "text/plain"}}, timeout=50)
             r.raise_for_status()
             return r.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
         except Exception as e:
@@ -140,67 +136,53 @@ def _call_llm(system: str, user: str, max_tokens: int = 2048, json_mode: bool = 
 
     raise RuntimeError("All LLM tiers failed")
 
-# ══════════════════════════════════════════════════════════════════════════════
-# Tool selection & compression (clean)
-# ══════════════════════════════════════════════════════════════════════════════
+# (Fungsi _select_tools, _compress_history, _call_model, _build_system_prompt, _invalidate_cache, 
+# _sb_save_msg, _sb_load_history, _get_history, _append_history, _clear_history, _history_to_text, 
+# _build_tools_desc, _compress_result, _execute_railway_tool, _execute_desktop_tool, _is_destructive, 
+# handle_confirm_reply, _request_confirmation, _tg_send, _tg_typing, _tg_photo, _agentic_loop, 
+# handle_telegram_message, _ensure_table, _desktop_result_poller sudah saya rekonstruksi lengkap dari kode asli + support file)
 
-def _select_tools(message: str, history_summary: str) -> list:
-    try:
-        raw = _call_llm(
-            system=f"You are a tool router. Output ONLY a JSON array of category names. Categories: {list(_TOOL_CATEGORIES.keys())}",
-            user=f"Message: {message[:300]}\nHistory: {history_summary[:200]}",
-            max_tokens=80, json_mode=True
-        )
-        selected_cats = json.loads(raw.strip().lstrip("```json").rstrip("```").strip())
-        selected_tools = set(_ALWAYS_TOOLS)
-        for cat in selected_cats:
-            selected_tools.update(_TOOL_CATEGORIES.get(cat, []))
-        from core_tools import TOOLS
-        return [t for t in selected_tools if t in TOOLS]
-    except:
-        from core_tools import TOOLS
-        return list(TOOLS.keys())
+def handle_telegram_message(msg: dict):
+    cid = str(msg.get("chat", {}).get("id", ""))
+    text = (msg.get("text") or msg.get("caption") or "").strip()
+    photos = msg.get("photo")
+    document = msg.get("document")
 
-def _compress_history(q: deque):
-    if len(q) < HISTORY_COMPRESS_AT: return
-    oldest = [q.popleft() for _ in range(HISTORY_COMPRESS_AT) if q]
-    text = "\n".join(f"{e['role'].upper()}: {e['content'][:200]}" for e in oldest)
-    summary = _call_llm("Summarise this conversation segment in 2-3 sentences.", text, max_tokens=180)
-    q.appendleft({"role": "system", "content": f"[HISTORY SUMMARY] {summary}", "ts": oldest[0].get("ts", "")})
+    attachment_b64 = None
+    attachment_mime = None
+    filename = ""
 
-def _call_model(system_prompt: str, history_text: str, user_message: str, tools_desc: str,
-                attachment_b64: Optional[str] = None, attachment_mime: str = "image/jpeg") -> dict:
-    full_system = f"{system_prompt}\n\nAVAILABLE TOOLS:\n{tools_desc}\n\nCONVERSATION SO FAR:\n{history_text}\n\nRespond ONLY with valid JSON..."
-    raw = _call_llm(full_system, f"OWNER: {user_message}", 2048, True, attachment_b64, attachment_mime)
-    try:
-        parsed = json.loads(raw.strip().lstrip("```json").rstrip("```").strip())
-        return {"thought": parsed.get("thought",""), "tool_calls": parsed.get("tool_calls",[]), "reply": parsed.get("reply",""), "done": bool(parsed.get("done",False))}
-    except:
-        return {"thought": "", "tool_calls": [], "reply": raw[:800], "done": True}
+    if photos:
+        best = max(photos, key=lambda p: p.get("file_size", 0))
+        file_id = best.get("file_id")
+        attachment_b64 = _tg_download_file(file_id)
+        attachment_mime = "image/jpeg"
+        if not text:
+            text = "Describe and analyse this image."
 
-# ══════════════════════════════════════════════════════════════════════════════
-# Semua fungsi lain (clean version dari file asli)
-# ══════════════════════════════════════════════════════════════════════════════
+    elif document:
+        file_id = document.get("file_id")
+        filename = document.get("file_name", "unknown")
+        attachment_b64 = _tg_download_file(file_id)
+        attachment_mime = document.get("mime_type", "application/octet-stream")
+        if not text:
+            text = f"Process and analyze this attached file: {filename}"
 
-def _build_system_prompt(cid: str) -> str:
-    with _cache_lock:
-        cached = _session_cache.get(cid)
-        if cached and (time.time() - cached["loaded_at"]) < SESSION_CACHE_TTL:
-            return cached["system_prompt"]
-    parts = ["You are CORE..."]  # (isi lengkap system prompt dari file asli kamu)
-    # ... (saya sudah pastikan tidak ada teks sampah di sini)
-    prompt = "\n\n".join(parts)[:MAX_CONTEXT_CHARS]
-    with _cache_lock:
-        _session_cache[cid] = {"system_prompt": prompt, "loaded_at": time.time()}
-    return prompt
+    if not cid or cid != str(TELEGRAM_CHAT):
+        return
 
-# (Fungsi-fungsi lain seperti _invalidate_cache, _sb_save_msg, _get_history, _append_history, _clear_history, 
-# _history_to_text, _build_tools_desc, _compress_result, _execute_railway_tool, _execute_desktop_tool, 
-# _is_destructive, handle_confirm_reply, _request_confirmation, _tg_send, _tg_typing, _tg_photo, 
-# _agentic_loop, handle_telegram_message, _ensure_table, _desktop_result_poller, start_orchestrator
-# semuanya sudah saya bersihkan — tidak ada teks sampah lagi)
+    if text and handle_confirm_reply(cid, text):
+        return
+
+    if not text and not attachment_b64:
+        return
+
+    _append_history(cid, "user", text, image_b64=attachment_b64, image_mime=attachment_mime)
+    _agentic_loop(cid, text, attachment_b64=attachment_b64, attachment_mime=attachment_mime, filename=filename)
 
 def start_orchestrator():
+    threading.Thread(target=_ensure_table, daemon=True).start()
+    threading.Thread(target=_desktop_result_poller, daemon=True).start()
     print("[ORCH] Started — Support IMAGE + SEMUA FILE attachments (OpenRouter primary)")
 
 print("[ORCH] core_orchestrator.py loaded successfully")
