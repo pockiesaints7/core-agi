@@ -1099,6 +1099,13 @@ def cold_processor_loop():
                 if (now_utc.hour == _SELF_DIAGNOSIS_HOUR_UTC and
                         time_since_diag >= _SELF_DIAGNOSIS_INTERVAL):
                     _run_self_diagnosis()
+                    # PHASE-M: Run tool health scan after self-diagnosis (same nightly window)
+                    try:
+                        from core_tools import t_tool_health_scan
+                        t_tool_health_scan(force="false")
+                        print("[DIAG] tool_health_scan complete")
+                    except Exception as _ths_e:
+                        print(f"[DIAG] tool_health_scan error: {_ths_e}")
             except Exception as _de:
                 print(f"[DIAG] trigger error: {_de}")
             # AGI-01: Weekly cross-domain synthesis on Wednesday
