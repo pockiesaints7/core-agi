@@ -34,6 +34,7 @@ from core_config import (
 from core_github import gh_read, gh_write, notify, set_webhook
 from core_train import cold_processor_loop, background_researcher
 from core_tools import TOOLS, handle_jsonrpc
+from core_orchestrator import handle_telegram_message, start_orchestrator
 
 # ---------------------------------------------------------------------------
 # Shared helpers (used by routes + tools — defined here, imported by core_tools)
@@ -814,7 +815,7 @@ async def webhook(req: Request):
 def handle_msg(msg):
     cid  = str(msg.get("chat", {}).get("id", ""))
     text = msg.get("text", "").strip()
-    if not text:
+    if not text and not msg.get("photo") and not msg.get("caption"):
         return
     # Strip bot username suffix from commands (e.g. /status@reinvagnarbot -> /status)
     if text.startswith("/") and "@" in text:
@@ -923,7 +924,7 @@ def handle_msg(msg):
                 notify(f"Could not prepare: {ids}. Check project IDs with /project list.", cid)
 
     else:
-        notify("Commands: /status | /tstatus | /project. Full interface \u2192 Claude Desktop.", cid)
+        threading.Thread(target=handle_telegram_message, args=(msg,), daemon=True).start()
 
 
 # ---------------------------------------------------------------------------
@@ -969,6 +970,7 @@ def on_start():
     threading.Thread(target=cold_processor_loop, daemon=True).start()
     # self_sync_check disabled -- CORE_SELF.md is tombstoned, superseded by system_map
     threading.Thread(target=background_researcher, daemon=True).start()
+    start_orchestrator()
     counts = get_system_counts()
     resume = get_resume_task()
     evo_pending  = counts.get('evolution_pending', 0)
