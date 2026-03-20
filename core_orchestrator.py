@@ -1068,8 +1068,26 @@ def _agentic_loop(cid: str, user_message: str,
                 image_mime    = image_mime,
             )
         except Exception as e:
-            _tg_send(cid, f"❌ Model error: {str(e)[:300]}")
-            return
+            err = str(e)
+            if "429" in err or "exhausted" in err.lower():
+                # Fallback: wait 60s then retry once
+                _tg_send(cid, "⏳ Gemini rate limited, menunggu 60s...")
+                time.sleep(60)
+                try:
+                    response = _call_model(
+                        system_prompt=system_prompt,
+                        history_text=history_text,
+                        user_message=current_user,
+                        tools_desc=tools_desc,
+                        image_b64=image_b64 if tool_call_count == 0 else None,
+                        image_mime=image_mime,
+                    )
+                except Exception as e2:
+                    _tg_send(cid, f"❌ Model error: {str(e2)[:300]}")
+                    return
+            else:
+                _tg_send(cid, f"❌ Model error: {err[:300]}")
+                return
 
         thought    = response.get("thought", "")
         tool_calls = response.get("tool_calls", [])
