@@ -403,7 +403,11 @@ def t_search_kb(query="", domain="", limit=10):
         qs += f"&domain=eq.{domain}"
     if query:
         q = query.strip().replace("'", "").replace('"', "")
-        qs += f"&or=(content.ilike.*{q}*,topic.ilike.*{q}*,instruction.ilike.*{q}*)"
+        words = q.split()
+        # I.3: multi-word queries -- use first keyword as primary ilike filter
+        # Full phrase ilike only matches if all words appear consecutively, which misses many hits
+        primary = words[0] if words else q
+        qs += f"&or=(content.ilike.*{primary}*,topic.ilike.*{primary}*,instruction.ilike.*{primary}*)"
     rows = sb_get("knowledge_base", qs)
     # C.2: batch access tracking -- single UPDATE via id=in.(...) instead of N individual patches
     try:
@@ -1034,7 +1038,15 @@ def t_training_status():
     except Exception as e:
         return {"status": "error", "error": str(e)}
 
-def t_trigger_cold_processor(): return run_cold_processor()
+def t_trigger_cold_processor():
+    # H.4: size guard -- run_cold_processor() can return large patterns/evolutions arrays
+    result = run_cold_processor()
+    if isinstance(result, dict):
+        for _k in ("patterns", "evolutions", "hot_items", "items"):
+            if _k in result and isinstance(result[_k], list) and len(result[_k]) > 10:
+                result[_k] = result[_k][:10]
+                result[f"{_k}_truncated"] = True
+    return result
 
 def t_backfill_patterns(batch_size: str = "20") -> dict:
     """TASK-20: Backfill pattern_frequency -> knowledge_base directly via Groq.
@@ -2560,6 +2572,14 @@ def t_railway_env_set(key: str, value: str) -> dict:
     Triggers a redeploy automatically after setting.
     key: env var name (e.g. GROQ_API_KEY). value: new value.
     """
+    # G.6: known Railway env var set for key validation
+    _KNOWN_KEYS = {
+        "GROQ_API_KEY", "SUPABASE_URL", "SUPABASE_SERVICE_KEY", "SUPABASE_ANON_KEY",
+        "SUPABASE_KEY", "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID", "GITHUB_PAT",
+        "GITHUB_TOKEN", "MCP_SECRET", "RAILWAY_TOKEN", "BACKUP_REPO",
+        "RAILWAY_PUBLIC_DOMAIN", "BINANCE_API_KEY", "BINANCE_SECRET_KEY",
+        "GEMINI_API_KEY", "GEMINI_API_KEY_2", "GEMINI_API_KEY_3",
+    }
     try:
         if not key or not value:
             return {"ok": False, "error": "key and value are required"}
@@ -2578,7 +2598,10 @@ def t_railway_env_set(key: str, value: str) -> dict:
         success = data.get("variableUpsert", False)
         if success:
             notify(f"Railway env var set: <b>{key}</b> updated. Redeploy required to take effect.")
-        return {"ok": success, "key": key, "note": "Redeploy required for changes to take effect"}
+        result = {"ok": success, "key": key, "note": "Redeploy required for changes to take effect"}
+        if key not in _KNOWN_KEYS:
+            result["warning"] = f"'{key}' is not in the known Railway env var set -- verify the key name is correct"
+        return result
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
@@ -4511,13 +4534,26 @@ def _predict_failure(operation: str = "", context: str = "", domain: str = "", s
                     "severity": row.get("severity", "medium"),
                 })
 
-        # Build causal chain: predicted_failure_modes
-        # Probability derived from: high=0.7, medium=0.45, low=0.2; recency boost if recent
-        _sev_prob = {"high": 0.70, "medium": 0.45, "low": 0.20}
+        # F.4: Calibrated probability -- blends static severity with learned accuracy from causal_predictions
+        _sev_base = {"high": 0.70, "medium": 0.45, "low": 0.20, "critical": 0.85}
+        try:
+            past = sb_get("causal_predictions",
+                f"select=was_correct&operation=eq.{operation[:60]}&was_correct=not.is.null&limit=20",
+                svc=True) or []
+            if len(past) >= 3:
+                acc = sum(1 for p in past if p.get("was_correct")) / len(past)
+                _calib = 0.7 + 0.3 * acc  # 70% static + 30% learned
+            else:
+                _calib = 1.0
+        except Exception:
+            _calib = 1.0
+        _recency_cutoff = (datetime.utcnow() - timedelta(days=7)).isoformat()
         predicted_failure_modes = []
         for row in rows[:5]:
             sev = row.get("severity", "medium")
-            prob = _sev_prob.get(sev, 0.45)
+            base = _sev_base.get(sev, 0.45)
+            recent = (row.get("created_at") or "") > _recency_cutoff
+            prob = min(0.95, round((base + (0.1 if recent else 0.0)) * _calib, 2))
             predicted_failure_modes.append({
                 "mode": (row.get("what_failed") or "")[:120],
                 "probability": prob,
@@ -4525,6 +4561,7 @@ def _predict_failure(operation: str = "", context: str = "", domain: str = "", s
                 "prevention": (row.get("how_to_avoid") or "")[:200],
                 "domain": row.get("domain", ""),
                 "severity": sev,
+                "recent": recent,
             })
 
         top = rows[0] if rows else None
@@ -6035,14 +6072,16 @@ def t_action_gate(action: str = "", owner_token: str = ""):
         classification = "reversible_write"
     else:
         classification = "read"
-    blocked = classification == "irreversible" and not owner_token
+    # F.7: require literal phrase -- any non-empty string previously bypassed this (security theater)
+    _valid_token = (owner_token == "OWNER_CONFIRMED")
+    blocked = classification == "irreversible" and not _valid_token
     return {
         "ok": True,
         "action": action,
         "classification": classification,
         "blocked": blocked,
-        "message": "Owner token required for irreversible action" if blocked else "Proceed",
-        "requires_owner_token": classification == "irreversible"
+        "message": "BLOCKED: pass owner_token='OWNER_CONFIRMED' to proceed" if blocked else "Proceed",
+        "requires_owner_token": classification == "irreversible",
     }
 
 TOOLS["action_gate"] = {"fn": t_action_gate, "perm": "READ",
@@ -6059,8 +6098,9 @@ def t_assert_source(value: str = "", declared_source: str = "memory", field_name
     Returns flagged=True if source=memory — forces CORE to query instead."""
     if not value:
         return {"ok": False, "error": "value is required"}
-    TRUSTED_SOURCES = {"session_query", "owner_input", "skill_file"}
-    UNTRUSTED_SOURCES = {"memory"}
+    # F.8: skill_file on owner PC, not accessible from Railway -- same reliability risk as memory
+    TRUSTED_SOURCES = {"session_query", "owner_input"}
+    UNTRUSTED_SOURCES = {"memory", "skill_file"}
     flagged = declared_source in UNTRUSTED_SOURCES
     return {
         "ok": True,
