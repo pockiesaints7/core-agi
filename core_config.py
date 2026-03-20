@@ -159,16 +159,53 @@ def groq_chat(system: str, user: str, model: str = None, max_tokens: int = 1024)
 # -- Gemini chat helper with round-robin key rotation -------------------------
 _GEMINI_KEYS = [k.strip() for k in os.getenv("GEMINI_KEYS", "").replace(" ", "").split(",") if k.strip()]
 _GEMINI_KEY_INDEX = 0
-_GEMINI_MODEL = "gemini-2.5-flash-lite"  # 1000 RPD vs 250 RPD on flash; lower thinking overhead
+_GEMINI_MODEL = "gemini-2.5-flash-lite"
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API", "")
+OPENROUTER_MODEL   = os.getenv("OPENROUTER_MODEL", "google/gemini-2.5-flash-lite")
 
 def gemini_chat(system: str, user: str, max_tokens: int = 2048, json_mode: bool = False) -> str:
-    """Gemini chat with round-robin key rotation and 429 fallback across all keys.
-    Default max_tokens=2048 -- gemini-2.5-flash is a thinking model that uses tokens
-    for internal reasoning before output. Low limits cause empty content responses.
-    json_mode=True: sets responseMimeType=application/json to force structured JSON output."""
+    """LLM chat via OpenRouter (or Gemini direct as fallback).
+    Drop-in replacement — all callers unchanged.
+    json_mode=True: instructs model to return valid JSON only."""
+    if OPENROUTER_API_KEY:
+        prompt = f"{system}\n\n{user}" if system else user
+        payload = {
+            "model": OPENROUTER_MODEL,
+            "max_tokens": max_tokens,
+            "temperature": 0.1,
+            "messages": [{"role": "user", "content": prompt}],
+        }
+        if json_mode:
+            payload["response_format"] = {"type": "json_object"}
+        last_err = None
+        for attempt in range(3):
+            try:
+                r = httpx.post(
+                    "https://openrouter.ai/api/v1/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+                        "Content-Type": "application/json",
+                        "HTTP-Referer": "https://core-agi-production.up.railway.app",
+                        "X-Title": "CORE AGI",
+                    },
+                    json=payload,
+                    timeout=60,
+                )
+                if r.status_code == 429:
+                    last_err = "429 rate limit"
+                    time.sleep(3 * (attempt + 1))
+                    continue
+                r.raise_for_status()
+                return r.json()["choices"][0]["message"]["content"].strip()
+            except Exception as e:
+                last_err = str(e)
+                continue
+        raise RuntimeError(f"OpenRouter failed after 3 attempts. Last: {last_err}")
+
+    # Fallback: Gemini direct (if OPENROUTER_API_KEY not set)
     global _GEMINI_KEY_INDEX
     if not _GEMINI_KEYS:
-        raise RuntimeError("GEMINI_KEYS env var not set")
+        raise RuntimeError("Neither OPENROUTER_API_KEY nor GEMINI_KEYS is set")
     attempts = len(_GEMINI_KEYS)
     last_err = None
     for _ in range(attempts):
@@ -197,14 +234,13 @@ def gemini_chat(system: str, user: str, max_tokens: int = 2048, json_mode: bool 
             if r.status_code == 429:
                 last_err = f"429 on key index {(_GEMINI_KEY_INDEX - 1) % len(_GEMINI_KEYS)}"
                 time.sleep(2)
-                continue  # try next key
+                continue
             r.raise_for_status()
             resp_json = r.json()
             candidate = resp_json.get("candidates", [{}])[0]
             parts = candidate.get("content", {}).get("parts", [])
             if not parts:
-                # Thinking model exhausted token budget on reasoning -- treat as 429, try next key
-                last_err = f"empty parts (finish={candidate.get('finishReason','?')}) -- likely token budget exhausted"
+                last_err = f"empty parts (finish={candidate.get('finishReason','?')})"
                 continue
             return parts[0]["text"].strip()
         except Exception as e:
