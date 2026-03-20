@@ -128,6 +128,11 @@ _TOOL_CATEGORIES = {
                   "project_update_kb", "project_index"],
     "agentic":   ["reason_chain", "lookahead", "decompose_task", "negative_space",
                   "predict_failure", "action_gate", "loop_detect"],
+    "web":       ["web_search", "web_fetch", "summarize_url"],
+    "document":  ["create_document", "create_spreadsheet", "create_presentation",
+                  "read_document", "convert_document"],
+    "image":     ["generate_image", "image_process"],
+    "utils":     ["weather", "calc", "datetime_now", "currency", "translate", "run_python"],
 }
 
 
