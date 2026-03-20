@@ -1273,7 +1273,7 @@ def _desktop_result_poller():
                     continue
                 status = row.get("status")
                 result = row.get("result") or row.get("error") or "no result"
-                icon   = "✅" if status == "completed" else "❌"
+                icon   = "✅" if status == "done" else "❌"
                 _tg_send(
                     cid,
                     f"{icon} Async task <code>{tid[:8]}</code> {status}:\n"
