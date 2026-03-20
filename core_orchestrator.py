@@ -101,7 +101,7 @@ _cache_lock            = threading.Lock()
 
 # Tools that are ALWAYS included regardless of message (core infra)
 _ALWAYS_TOOLS = {
-    "session_start", "session_end", "search_kb", "get_mistakes",
+    "session_end", "search_kb", "get_mistakes",
     "add_knowledge", "log_mistake", "notify_owner", "checkpoint",
     "task_add", "task_update", "sb_query", "sb_patch",
 }
@@ -1098,11 +1098,14 @@ def _agentic_loop(cid: str, user_message: str,
         if thought and len(thought.strip()) > 10:
             _tg_send(cid, f"🧠 <i>{thought[:400]}</i>")
 
-        # No tool calls — model is done
+        # No tool calls — model is done or stuck
         if not tool_calls:
             if reply:
                 _tg_send(cid, reply)
                 _append_history(cid, "assistant", reply)
+            else:
+                # Model returned nothing useful — break to avoid infinite loop
+                _tg_send(cid, "✅ Done.")
             return
 
         # Execute tool calls
