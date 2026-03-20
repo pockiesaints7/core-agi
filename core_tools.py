@@ -1621,90 +1621,12 @@ def t_system_map_scan(trigger: str = "manual") -> dict:
         inserted_tools = []
         tombstoned_tools = []
         if trigger == "session_end":
-            live_tool_count = len(TOOLS)
-            # --- Update volatile key_facts (tool_count on core_tools.py row) ---
-            for row in rows:
-                if not row.get("is_volatile"):
-                    continue
-                kf = row.get("key_facts") or {}
-                new_kf = dict(kf)
-                changed = False
-                if row["name"] == "core_tools.py" and row["component"] == "railway":
-                    if kf.get("tool_count") != live_tool_count:
-                        new_kf["tool_count"] = live_tool_count
-                        changed = True
-                if changed:
-                    sb_patch("system_map", f"id=eq.{row['id']}", {
-                        "key_facts": new_kf,
-                        "last_updated": datetime.utcnow().isoformat(),
-                        "updated_by": "session_end"
-                    })
-                    updates.append({"name": row["name"], "updated_fields": list(new_kf.keys())})
-
-            # --- Auto-reconcile tool entries: insert missing, tombstone removed ---
-            # Uses TOOLS dict directly at runtime -- works regardless of how many
-            # source files exist or how CORE evolves. No file scanning. No patterns.
-            live_tool_names = set(TOOLS.keys())
-            registered = {
-                row["name"]: row
-                for row in rows
-                if row.get("component") == "railway"
-                and row.get("item_type") == "tool"
-                and row.get("status") != "tombstone"
-            }
-            registered_names = set(registered.keys())
-
-            # Insert tools that exist in TOOLS but not in system_map
-            missing = live_tool_names - registered_names
-            for tool_name in sorted(missing):
-                try:
-                    desc = TOOLS[tool_name].get("desc", "")
-                    role = desc if desc else f"MCP tool: {tool_name}"
-                    sb_post_critical("system_map", {
-                        "layer": "executor",
-                        "component": "railway",
-                        "item_type": "tool",
-                        "name": tool_name,
-                        "role": role,
-                        "responsibility": "auto-registered by session_end reconciliation",
-                        "status": "active",
-                        "updated_by": "session_end_auto",
-                        "last_updated": datetime.utcnow().isoformat(),
-                    })
-                    inserted_tools.append(tool_name)
-                except Exception as _ie:
-                    print(f"[SMAP] insert {tool_name} failed: {_ie}")
-
-            # Tombstone tools in system_map that are no longer in TOOLS
-            removed = registered_names - live_tool_names
-            for tool_name in sorted(removed):
-                try:
-                    row_id = registered[tool_name].get("id")
-                    if not row_id: continue
-                    sb_patch("system_map", f"id=eq.{row_id}", {
-                        "status": "tombstone",
-                        "notes": "auto-tombstoned by session_end: not in TOOLS dict",
-                        "last_updated": datetime.utcnow().isoformat(),
-                        "updated_by": "session_end_auto",
-                    })
-                    tombstoned_tools.append(tool_name)
-                except Exception as _te:
-                    print(f"[SMAP] tombstone {tool_name} failed: {_te}")
-
-            # --- 16.A: Auto-reconcile brain layer (Supabase tables) ---
-            _reconcile_brain_tables(rows, inserted_tools, tombstoned_tools)
-
-            # --- 16.B: Auto-reconcile executor layer (.py source files) ---
-            _reconcile_executor_files(rows, inserted_tools, tombstoned_tools)
-
-            # --- 16.C: Auto-reconcile skeleton layer (.md/.json/.txt docs) ---
-            _reconcile_skeleton_docs(rows, inserted_tools, tombstoned_tools)
-
-            # --- 16.D: Auto-reconcile interface layer (external MCP servers) ---
-            _reconcile_interface_services(rows, inserted_tools, tombstoned_tools)
-
-            # --- 16.E: Auto-reconcile local_pc skill file versions ---
-            _reconcile_skill_versions(rows, inserted_tools, tombstoned_tools)
+            # B.2: delegate entirely to t_sync_system_map -- no duplicate reconciler logic here
+            # t_sync_system_map runs all 6 layer reconcilers + volatile key_facts updates
+            sync_result = t_sync_system_map(trigger="session_end", notify_on_changes="false")
+            inserted_tools  = sync_result.get("drift", {}).get("inserted", [])
+            tombstoned_tools = sync_result.get("drift", {}).get("tombstoned", [])
+            updates = sync_result.get("drift", {}).get("kf_updated", [])
 
         wiring = {}
         for row in rows:
@@ -4728,7 +4650,7 @@ TOOLS = {
     "get_training_pipeline":  {"fn": t_get_training_pipeline,  "perm": "READ",    "args": [],
                                "desc": "Full training pipeline status. Returns: hot (total, unprocessed, simulation_ok, last_real, last_simulation), cold (last_run_ts, last_run_mins_ago, threshold, last_patterns_found, last_evolutions_queued, recent_5_summaries), patterns (active_count, stale_count, top), evolutions (pending, applied), quality (7d_avg, trend), health_flags (simulation_dead|cold_stale_Xmin|unprocessed_backlog_X|zero_patterns_last_5_runs|quality_declining), pipeline_ok. Use at session_start or when diagnosing training issues."},
     "get_training_status":    {"fn": t_training_status,        "perm": "READ",    "args": [],
-                               "desc": "Legacy thin wrapper. Use get_training_pipeline for full status."},
+                               "desc": "DEPRECATED -- use get_training_pipeline for full status. This thin wrapper returns a subset of fields and will be removed."},
     "search_kb":              {"fn": t_search_kb,              "perm": "READ",    "args": ["query", "domain", "limit"],
                                "desc": "Search knowledge base by query (multi-word, searches topic+instruction+content) and optional domain. Returns domain, topic, instruction, content, confidence. Use before any write to check if knowledge already exists."},
     "get_mistakes":           {"fn": t_get_mistakes,           "perm": "READ",    "args": ["domain", "limit"],
@@ -4798,7 +4720,7 @@ TOOLS = {
     "bulk_apply":             {"fn": t_bulk_apply,             "perm": "WRITE",   "args": ["executor_override", "dry_run"],
                                "desc": "Apply ALL pending evolution_queue items."},
     "repopulate":             {"fn": _repopulate_evolution_queue, "perm": "WRITE", "args": [],
-                               "desc": "Re-push all P3+ backlog items to evolution_queue."},
+                               "desc": "DEPRECATED -- backlog change_type is retired. _repopulate_evolution_queue is a no-op stub. Do not use."},
     "list_templates":         {"fn": t_list_templates,         "perm": "READ",    "args": ["limit"],
                                "desc": "List reusable script templates."},
     "run_template":           {"fn": t_run_template,           "perm": "EXECUTE", "args": ["name", "params"],
@@ -4814,7 +4736,7 @@ TOOLS = {
     "crash_report":           {"fn": t_crash_report,           "perm": "READ",    "args": [],
                                "desc": "Detect Railway restart loops."},
     "review_evolutions":      {"fn": t_review_evolutions,      "perm": "READ",    "args": [],
-                               "desc": "Get URL to the interactive evolution review widget."},
+                               "desc": "Returns URL to the Railway-hosted evolution review widget (https://<domain>/review). Use check_evolutions for in-session Groq-powered evolution brief instead."},
     "check_evolutions":       {"fn": t_check_evolutions,       "perm": "READ",    "args": ["limit"],
                                "desc": "Groq-powered evolution brief."},
     "search_in_file":         {"fn": t_search_in_file,         "perm": "READ",    "args": ["path", "pattern", "repo", "regex", "case_sensitive"],
