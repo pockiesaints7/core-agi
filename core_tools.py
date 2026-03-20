@@ -7736,3 +7736,7 @@ TOOLS["load_arch_context"] = {
         "CORE must never write code from memory -- always load live context first."
     ),
 }
+
+# -- core_web tools registration ----------------------------------------------
+from core_web import _register_web_tools
+_register_web_tools(TOOLS)
