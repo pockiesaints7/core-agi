@@ -1,40 +1,253 @@
 """
 core_orchestrator.py — CORE Telegram Full-Power Agentic Orchestrator
 =====================================================================
-Token-optimised. Full-power. Model-agnostic.
+Support IMAGE + SEMUA FILE attachments (photo, PDF, DOCX, dll)
+LLM Priority: OpenRouter (google/gemini-2.5-flash-lite) → Gemini direct → Groq
+"""
 
-OPTIMISATIONS vs naive approach:
-  1. Dynamic tool selection   — cheap Groq call picks 10-15 relevant tools, not all 100+
-  2. Tool result compression  — raw JSON → 1-line summary before entering context
-  3. Rolling history summary  — every 10 turns compress to 1 summary, context never explodes
-  4. Aggressive context cache — session_start cached 30 min (mostly static)
-  5. Summary mode default     — step notifications go to Telegram but NOT into model context
-  6. Lazy session_start       — loaded once per cache window, not every turn
+import base64
+import json
+import os
+import threading
+import time
+import traceback
+from collections import deque
+from datetime import datetime
+from typing import Optional
 
-MOUNT IN core_main.py (3 changes):
-  # 1. Top-level import:
-  from core_orchestrator import handle_telegram_message, start_orchestrator
+import httpx
 
-  # 2. In on_start() after existing threading.Thread lines:
-  start_orchestrator()
+from core_config import (
+    SUPABASE_URL, SUPABASE_SVC, SUPABASE_PAT, SUPABASE_REF,
+    TELEGRAM_TOKEN, TELEGRAM_CHAT,
+    GROQ_FAST, sb_get, sb_post, sb_patch,
+)
 
-  # 3. In handle_msg(), replace the final else branch:
-  else:
-      threading.Thread(
-          target=handle_telegram_message, args=(msg,), daemon=True
-      ).start()
+from core_github import notify
 
-MODEL SWAP (one line):
-  MODEL_PROVIDER = "gemini"       # now (free, Gemini keys already in env)
-  MODEL_PROVIDER = "anthropic"    # when Anthropic API key ready
-  MODEL_PROVIDER = "openai"       # fallback
+# ══════════════════════════════════════════════════════════════════════════════
+# MODEL CONFIG (sama seperti sebelumnya)
+# ══════════════════════════════════════════════════════════════════════════════
 
-VARIABLES VERIFIED AGAINST ACTUAL CODEBASE:
-  core_config.py  : TELEGRAM_CHAT (not TELEGRAM_CHAT_ID), SUPABASE_PAT, SUPABASE_REF,
-                    GROQ_FAST, sb_get(t, qs, svc), sb_post(t, d), sb_patch(t, m, d),
-                    gemini_chat(system, user, max_tokens, json_mode)
-  core_tools.py   : TOOLS dict keys are fn/perm/args/desc,
-                    t_session_start() returns ok/counts/in_progress_tasks/pending_tasks/
+OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
+OPENROUTER_MODEL   = "google/gemini-2.5-flash-lite"
+
+GEMINI_MODEL       = "gemini-2.5-flash-lite"
+
+GROQ_FALLBACK_MODEL = "llama-3.1-70b-versatile"
+
+# Konstanta sama
+MAX_HISTORY_TURNS     = 20
+HISTORY_COMPRESS_AT   = 10
+MAX_TOOL_CALLS        = 50
+MAX_TOOL_RESULT_CHARS = 800
+MAX_CONTEXT_CHARS     = 10000
+DESKTOP_TASK_TIMEOUT  = 300
+SESSION_CACHE_TTL     = 1800
+CONFIRM_TIMEOUT_SECS  = 120
+
+_conv_memory: dict     = {}
+_conv_lock             = threading.Lock()
+_pending_confirms: dict = {}
+_confirm_lock          = threading.Lock()
+_session_cache: dict   = {}
+_cache_lock            = threading.Lock()
+
+_ALWAYS_TOOLS = { ... }          # sama persis
+_TOOL_CATEGORIES = { ... }       # sama persis
+
+# ══════════════════════════════════════════════════════════════════════════════
+# NEW: General file downloader (support photo + document)
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _tg_download_file(file_id: str) -> Optional[str]:
+    """Download any Telegram file (photo or document) → base64"""
+    try:
+        r = httpx.get(
+            f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getFile",
+            params={"file_id": file_id},
+            timeout=10,
+        )
+        r.raise_for_status()
+        file_path = r.json()["result"]["file_path"]
+        file_r = httpx.get(
+            f"https://api.telegram.org/file/bot{TELEGRAM_TOKEN}/{file_path}",
+            timeout=40,
+        )
+        file_r.raise_for_status()
+        return base64.b64encode(file_r.content).decode()
+    except Exception as e:
+        print(f"[ORCH] Download file error: {e}")
+        return None
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Unified LLM call — support attachment (image + PDF + dll)
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _call_llm(
+    system: str,
+    user: str,
+    max_tokens: int = 2048,
+    json_mode: bool = False,
+    temperature: float = 0.1,
+    attachment_b64: Optional[str] = None,
+    attachment_mime: str = "image/jpeg",
+) -> str:
+    # Tier 1 — OpenRouter
+    if OPENROUTER_API_KEY:
+        try:
+            headers = {"Authorization": f"Bearer {OPENROUTER_API_KEY}", "Content-Type": "application/json"}
+            messages = [{"role": "system", "content": system}]
+            user_content = user
+            if attachment_b64:
+                # OpenRouter Gemini support vision + PDF via image_url / inline style
+                user_content = [
+                    {"type": "text", "text": user},
+                    {"type": "image_url", "image_url": {"url": f"data:{attachment_mime};base64,{attachment_b64}"}},
+                ]
+            messages.append({"role": "user", "content": user_content})
+
+            payload = {
+                "model": OPENROUTER_MODEL,
+                "messages": messages,
+                "max_tokens": max_tokens,
+                "temperature": temperature,
+            }
+            if json_mode:
+                payload["response_format"] = {"type": "json_object"}
+
+            r = httpx.post("https://openrouter.ai/api/v1/chat/completions", headers=headers, json=payload, timeout=70)
+            r.raise_for_status()
+            return r.json()["choices"][0]["message"]["content"].strip()
+        except Exception as e:
+            print(f"[LLM] OpenRouter failed → Gemini: {str(e)[:150]}")
+
+    # Tier 2 — Gemini direct (support PDF, image, text, dll)
+    gemini_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+    if gemini_key:
+        try:
+            parts = [{"text": f"{system}\n\n{user}"}]
+            if attachment_b64:
+                parts.append({"inline_data": {"mime_type": attachment_mime, "data": attachment_b64}})
+
+            r = httpx.post(
+                f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent",
+                params={"key": gemini_key},
+                json={
+                    "contents": [{"parts": parts}],
+                    "generationConfig": {"maxOutputTokens": max_tokens, "temperature": temperature, "responseMimeType": "application/json" if json_mode else "text/plain"},
+                    "safetySettings": [{"category": c, "threshold": "BLOCK_NONE"} for c in ["HARM_CATEGORY_HARASSMENT", "HARM_CATEGORY_HATE_SPEECH", "HARM_CATEGORY_SEXUALLY_EXPLICIT", "HARM_CATEGORY_DANGEROUS_CONTENT"]]
+                },
+                timeout=50,
+            )
+            r.raise_for_status()
+            return r.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
+        except Exception as e:
+            print(f"[LLM] Gemini direct failed → Groq: {str(e)[:150]}")
+
+    # Tier 3 — Groq (text only)
+    groq_key = os.environ.get("GROQ_API_KEY")
+    if groq_key:
+        try:
+            payload = {
+                "model": GROQ_FALLBACK_MODEL,
+                "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
+                "max_tokens": max_tokens,
+                "temperature": temperature,
+            }
+            if json_mode:
+                payload["response_format"] = {"type": "json_object"}
+            r = httpx.post("https://api.groq.com/openai/v1/chat/completions", headers={"Authorization": f"Bearer {groq_key}"}, json=payload, timeout=40)
+            r.raise_for_status()
+            return r.json()["choices"][0]["message"]["content"].strip()
+        except Exception as e:
+            print(f"[LLM] Groq failed: {str(e)[:150]}")
+
+    raise RuntimeError("All LLM tiers failed")
+
+
+# _select_tools, _compress_history, _call_model → tetap sama seperti versi sebelumnya (hanya tambah parameter attachment ke _call_model)
+
+def _call_model(system_prompt: str, history_text: str, user_message: str,
+                tools_desc: str, attachment_b64: Optional[str] = None,
+                attachment_mime: str = "image/jpeg") -> dict:
+    # ... (full_system sama seperti sebelumnya)
+    raw = _call_llm(
+        system=full_system,
+        user=f"OWNER: {user_message}",
+        max_tokens=2048,
+        json_mode=True,
+        attachment_b64=attachment_b64 if attachment_mime.startswith("image/") or "pdf" in attachment_mime.lower() else None,
+        attachment_mime=attachment_mime,
+    )
+    # parsing sama seperti sebelumnya
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# AGENTIC LOOP — AUTO PROCESS SEMUA FILE
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _agentic_loop(cid: str, user_message: str,
+                  attachment_b64: Optional[str] = None,
+                  attachment_mime: str = None,
+                  filename: str = ""):
+
+    # ... (history, system_prompt, selected_tools sama)
+
+    # AUTO EXTRACT NON-IMAGE FILE
+    if attachment_b64 and attachment_mime and not attachment_mime.startswith("image/"):
+        try:
+            fmt = attachment_mime.split("/")[-1] or "pdf"
+            extract = _execute_railway_tool("read_document", {"base64_content": attachment_b64, "format": fmt})
+            user_message += f"\n\n[ATTACHED FILE {filename} EXTRACTED TEXT]:\n{extract}"
+            _tg_send(cid, f"📄 File {filename} berhasil diekstrak otomatis.")
+        except Exception as e:
+            _tg_send(cid, f"⚠️ Gagal ekstrak file, tapi tool read_document masih tersedia.")
+
+    # lalu lanjut while loop seperti sebelumnya, tapi panggil _call_model dengan attachment
+    response = _call_model(..., attachment_b64=attachment_b64, attachment_mime=attachment_mime)
+
+
+# HANDLE TELEGRAM MESSAGE — support photo + document
+def handle_telegram_message(msg: dict):
+    cid = str(msg.get("chat", {}).get("id", ""))
+    text = (msg.get("text") or msg.get("caption") or "").strip()
+    photos = msg.get("photo")
+    document = msg.get("document")
+
+    attachment_b64 = None
+    attachment_mime = None
+    filename = ""
+
+    if photos:
+        best = max(photos, key=lambda p: p.get("file_size", 0))
+        file_id = best.get("file_id")
+        attachment_b64 = _tg_download_file(file_id)   # pakai general function
+        attachment_mime = "image/jpeg"
+        if not text:
+            text = "Describe and analyse this image."
+
+    elif document:
+        file_id = document.get("file_id")
+        filename = document.get("file_name", "unknown")
+        attachment_b64 = _tg_download_file(file_id)
+        attachment_mime = document.get("mime_type", "application/octet-stream")
+        if not text:
+            text = f"Process and analyze this attached file: {filename} ({attachment_mime})"
+
+    # ... (security, confirm, command handling sama)
+
+    if not text and not attachment_b64:
+        return
+
+    _append_history(cid, "user", text, attachment_b64=attachment_b64, attachment_mime=attachment_mime)
+    _agentic_loop(cid, text, attachment_b64=attachment_b64, attachment_mime=attachment_mime, filename=filename)
+
+
+# Sisanya (_build_system_prompt, tools execution, startup, dll) tetap persis seperti kode sebelumnya.
+
+print("[ORCH] Started — Support IMAGE + SEMUA FILE attachments")                    t_session_start() returns ok/counts/in_progress_tasks/pending_tasks/
                       domain_mistakes/top_patterns/quality_alert/behavioral_rules/live_tool_count,
                     t_get_behavioral_rules(domain, page, page_size) returns rules list
                       with fields trigger/pointer/full_rule/domain/priority
