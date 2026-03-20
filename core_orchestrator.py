@@ -261,9 +261,30 @@ def _build_system_prompt(cid: str) -> str:
     except Exception as e:
         print(f"[ORCH] session_start error (non-fatal): {e}")
 
-    # Desktop capabilities
+    # Railway tools summary (always visible in system prompt)
     parts.append(
-        "DESKTOP TOOLS (prefix desktop_):\n"
+        "RAILWAY TOOLS (no prefix — run on server instantly):\n"
+        "  web_search(query, max_results) — search web via DuckDuckGo\n"
+        "  web_fetch(url, max_chars) — fetch any URL content\n"
+        "  summarize_url(url, focus) — fetch + Gemini summary\n"
+        "  create_document(content, filename, format) — format=docx|pdf|txt|md|csv\n"
+        "  create_spreadsheet(data, filename, format) — format=xlsx|csv\n"
+        "  create_presentation(slides, filename, theme) — format=pptx\n"
+        "  read_document(base64_content, format) — extract text from docx|xlsx|pptx|txt|csv\n"
+        "  convert_document(base64_content, from_format, to_format) — convert between formats\n"
+        "  generate_image(prompt, aspect_ratio) — Gemini Imagen\n"
+        "  image_process(base64_content, operation, params) — resize|crop|rotate|watermark etc\n"
+        "  weather(location) — current weather, default Jakarta\n"
+        "  calc(expression) — safe math: sqrt, sin, log, pi, etc\n"
+        "  datetime_now(timezone) — default Asia/Jakarta WIB\n"
+        "  currency(amount, from_cur, to_cur) — live exchange rate\n"
+        "  translate(text, target_language) — via Gemini\n"
+        "  run_python(code, timeout) — execute Python on Railway"
+    )
+
+    # Desktop capabilities (PC tools — requires core_agent.py running on PC)
+    parts.append(
+        "DESKTOP TOOLS (prefix desktop_ — requires PC online):\n"
         "  desktop_run_script:  {script, lang: powershell|python}\n"
         "  desktop_file_ops:    {path, operation: read|write|list|delete|exists|move|mkdir|info|append, content?}\n"
         "  desktop_browser:     {url?, steps: [{action, selector?, value?, script?}], screenshot?}\n"
