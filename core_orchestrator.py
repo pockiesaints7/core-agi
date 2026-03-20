@@ -780,10 +780,11 @@ def _compress_result(result_str: str, tool_name: str) -> str:
                     compressed[k] = v
                 elif isinstance(v, list):
                     compressed[f"{k}_count"] = len(v)
-                    if v and len(str(v[0])) < 200:
+                    # For search/query results, keep all items not just first
+                    if k in ("results", "items", "hits", "entries"):
+                        compressed[k] = v[:10]  # keep up to 10
+                    elif v and len(str(v[0])) < 200:
                         compressed[f"{k}_first"] = v[0]
-                elif isinstance(v, str) and len(v) > 200:
-                    compressed[k] = v[:200] + "…"
                 else:
                     compressed[k] = v
             out = json.dumps(compressed, default=str)
