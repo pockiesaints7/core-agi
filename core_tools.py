@@ -4362,8 +4362,24 @@ def t_add_evolution_rule(
         if kb_ok:
             persisted_to.append("knowledge_base")
 
-        # NOTE: SESSION.md is static (never auto-written). KB is the sole persistence layer.
-        # SESSION.md edits are manual-only when active rules or protocol changes.
+        # I.2: also write to behavioral_rules table for hard_rule and sop categories
+        # behavioral_rules is the authoritative source for session_start rule loading
+        if category in ("hard_rule", "sop", "architectural_decision"):
+            try:
+                br_ok = sb_post("behavioral_rules", {
+                    "domain": domain,
+                    "trigger": "session_open",
+                    "pointer": f"add_evolution_rule: {rule[:80]}",
+                    "full_rule": rule,
+                    "confidence": 0.9,
+                    "active": True,
+                    "source": source,
+                    "priority": 2,
+                })
+                if br_ok:
+                    persisted_to.append("behavioral_rules")
+            except Exception:
+                pass  # non-fatal -- KB is primary, behavioral_rules is secondary
 
         return {
             "ok": True,
@@ -4371,12 +4387,7 @@ def t_add_evolution_rule(
             "rule": rule[:120],
             "domain": domain,
             "category": category,
-            "reminder": (
-                "IMPORTANT: Now write this rule to the LOCAL SKILL FILE: "
-                "C:\\Users\\rnvgg\\.claude-skills\\CORE_AGI_SKILL_V8.md "
-                "via Windows-MCP:FileSystem or Desktop Commander:edit_block. "
-                "Then call session_end."
-            ),
+            "note": "Rule persisted to: " + ", ".join(persisted_to),
         }
     except Exception as e:
         return {"ok": False, "error": str(e)}
