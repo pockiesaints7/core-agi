@@ -34,9 +34,9 @@ from core_github import notify, gh_write
 # Training globals
 _last_cold_run: float = 0.0
 _last_cold_kb_count: int = 0
-_last_research_run: float = 0.0
+_last_research_run: float = -1.0
 _IMPROVEMENT_INTERVAL = 3600  # 60 min
-_last_public_source_run: float = 0.0
+_last_public_source_run: float = -1.0
 _PUBLIC_SOURCE_INTERVAL = 21600  # 6 hours
 
 # Source confidence multipliers (Phase 3)
@@ -1792,12 +1792,39 @@ def background_researcher():
     print("[RESEARCH] background researcher started - real signal + simulation + public source mode")
     _cycle_count = 0
 
+  # Restore timestamps from Supabase to survive redeploys
+    global _last_research_run, _last_public_source_run
+    try:
+        rows = sb_get("sessions", "select=summary&summary=like.*last_research_ts*&order=created_at.desc&limit=1", svc=True)
+        if rows:
+            val = rows[0]["summary"].split("last_research_ts:")[-1].strip().split()[0]
+            _last_research_run = float(val)
+            print(f"[RESEARCH] Restored last_research_ts: {datetime.utcfromtimestamp(_last_research_run).isoformat()}")
+        else:
+            _last_research_run = time.time() - (_IMPROVEMENT_INTERVAL + 60)
+    except Exception as e:
+        print(f"[RESEARCH] restore research_ts error: {e}")
+        _last_research_run = time.time() - (_IMPROVEMENT_INTERVAL + 60)
+
+    try:
+        rows = sb_get("sessions", "select=summary&summary=like.*last_public_source_ts*&order=created_at.desc&limit=1", svc=True)
+        if rows:
+            val = rows[0]["summary"].split("last_public_source_ts:")[-1].strip().split()[0]
+            _last_public_source_run = float(val)
+            print(f"[RESEARCH] Restored last_public_source_ts: {datetime.utcfromtimestamp(_last_public_source_run).isoformat()}")
+        else:
+            _last_public_source_run = time.time() - (_PUBLIC_SOURCE_INTERVAL + 60)
+    except Exception as e:
+        print(f"[RESEARCH] restore public_source_ts error: {e}")
+        _last_public_source_run = time.time() - (_PUBLIC_SOURCE_INTERVAL + 60)
+
     while True:
         try:
             now = time.time()
             if now - _last_research_run >= _IMPROVEMENT_INTERVAL:
                 print("[RESEARCH] Running signal extraction cycle...")
                 _last_research_run = now
+                sb_post("sessions", {"summary": f"[state_update] last_research_ts: {now}", "actions": ["last_research_ts persisted"], "interface": "mcp"})
                 _cycle_count += 1
 
                 public_content = ""
@@ -1806,6 +1833,7 @@ def background_researcher():
                     public_content = _ingest_public_sources()
                     if public_content:
                         _last_public_source_run = now
+                        sb_post("sessions", {"summary": f"[state_update] last_public_source_ts: {now}", "actions": ["last_public_source_ts persisted"], "interface": "mcp"})
                         print(f"[RESEARCH] Public sources fetched: {len(public_content)} chars")
                     else:
                         print("[RESEARCH] Public sources returned empty - skipping")
