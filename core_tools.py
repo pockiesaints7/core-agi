@@ -169,7 +169,9 @@ _SB_SCHEMA = {
             "columns": {"id": "bigint", "started_at": "timestamptz", "ended_at": "timestamptz",
                         "summary": "text", "actions": "text", "patterns": "text",
                         "domain": "text", "quality": "float8",
-                        "state_key": "text", "state_value": "text"},
+                        "state_key": "text", "state_value": "text",
+                        # E.3: checkpoint fields used by t_checkpoint
+                        "checkpoint_data": "jsonb", "checkpoint_ts": "timestamptz"},
             "required": [],
             "enums": {},
             "fat_columns": ["summary", "actions", "patterns"],
@@ -356,8 +358,34 @@ def t_state(include_operating_context: str = "false"):
         except Exception as e: operating_context = {"error": f"failed to load: {e}"}
     else:
         operating_context = None
-    try:    session_md = gh_read("SESSION.md")[:5000]
-    except Exception as e: session_md = f"SESSION.md unavailable: {e}"
+    # E.5: cache SESSION.md -- it is static, no need for a GitHub fetch on every t_state call
+    # Try to read from Supabase state_key first (written at last successful fetch)
+    session_md = None
+    try:
+        cached_rows = sb_get("sessions",
+            "select=summary&summary=like.*session_md_cache*&order=id.desc&limit=1",
+            svc=True) or []
+        if cached_rows:
+            raw_cache = cached_rows[0].get("summary", "")
+            prefix = "[state_update] session_md_cache: "
+            if raw_cache.startswith(prefix):
+                session_md = raw_cache[len(prefix):].strip()
+    except Exception:
+        pass
+    if not session_md:
+        try:
+            session_md = gh_read("SESSION.md")[:5000]
+            # Write to cache so future calls skip GitHub
+            try:
+                sb_post("sessions", {
+                    "summary": f"[state_update] session_md_cache: {session_md}",
+                    "actions": ["session_md cached from GitHub"],
+                    "interface": "mcp",
+                })
+            except Exception:
+                pass
+        except Exception as e:
+            session_md = f"SESSION.md unavailable: {e}"
     return {"last_session": session.get("summary", "No sessions yet."),
             "last_actions": session.get("actions", []),
             "last_session_ts": session.get("created_at", ""),
