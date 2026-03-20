@@ -58,11 +58,11 @@ def get_resume_task() -> str:
                 title = str(raw)[:80]
             priority = tasks[0].get("priority", "?")
             return f"Resuming: {title} (P{priority})"
-        # No in_progress tasks -- check for pending
+        # No in_progress tasks -- check for pending (exclude desktop_agent tasks)
         pending = sb_get(
             "task_queue",
             "select=task,priority&source=in.(core_v6_registry,mcp_session)"
-            "&status=eq.pending&order=priority.desc&limit=1"
+            "&status=eq.pending&task=not.like.*desktop_agent*&order=priority.desc&limit=1"
         )
         if pending and isinstance(pending, list) and pending[0]:
             raw = pending[0].get("task", "")
@@ -815,7 +815,7 @@ async def webhook(req: Request):
 def handle_msg(msg):
     cid  = str(msg.get("chat", {}).get("id", ""))
     text = msg.get("text", "").strip()
-    if not text and not msg.get("photo") and not msg.get("caption"):
+    if not text and not msg.get("photo") and not msg.get("caption") and not msg.get("document") and not msg.get("audio") and not msg.get("voice") and not msg.get("video") and not msg.get("video_note") and not msg.get("sticker"):
         return
     # Strip bot username suffix from commands (e.g. /status@reinvagnarbot -> /status)
     if text.startswith("/") and "@" in text:
@@ -932,12 +932,14 @@ def handle_msg(msg):
 # ---------------------------------------------------------------------------
 def queue_poller():
     """Notify-only mode — no auto-execution without owner approval.
-    Polls task_queue for pending tasks and notifies owner via Telegram."""
+    Only notifies NEW tasks (created in last 5 minutes) to avoid spam on redeploy."""
     print("[QUEUE] Started - notify-only mode (no auto-execution)")
     _notified: set = set()
     while True:
         try:
-            tasks = sb_get("task_queue", "status=eq.pending&order=priority.asc&limit=5")
+            # Only fetch tasks created in last 5 minutes — avoids spam on redeploy
+            cutoff = (datetime.utcnow() - timedelta(minutes=5)).isoformat()
+            tasks = sb_get("task_queue", f"status=eq.pending&created_at=gte.{cutoff}&order=priority.asc&limit=5")
             if tasks:
                 for t in tasks:
                     tid = t["id"]
@@ -998,7 +1000,7 @@ def on_start():
             pending = sb_get(
                 "task_queue",
                 "select=task,priority&source=in.(core_v6_registry,mcp_session)"
-                "&status=eq.pending&order=priority.desc&limit=1"
+                "&status=eq.pending&task=not.like.*desktop_agent*&order=priority.desc&limit=1"
             ) or []
             if pending:
                 raw = pending[0].get("task", "")
