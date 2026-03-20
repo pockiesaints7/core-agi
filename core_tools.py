@@ -1653,8 +1653,8 @@ def t_system_map_scan(trigger: str = "manual") -> dict:
     try:
         rows = sb_get(
             "system_map",
-            "select=id,layer,component,item_type,name,role,responsibility,key_facts,is_volatile,status"
-            "&order=layer,component,name",
+            "select=id,layer,component,item_type,name,role,responsibility,key_facts,is_volatile,status,notes"
+            "&order=layer,component,name&limit=2000",
             svc=True
         )
         if not isinstance(rows, list):
@@ -7142,7 +7142,7 @@ def t_sync_system_map(trigger: str = "manual", notify_on_changes: str = "true") 
         rows = sb_get(
             "system_map",
             "select=id,layer,component,item_type,name,role,responsibility,key_facts,is_volatile,status,notes"
-            "&order=layer,component,name",
+            "&order=layer,component,name&limit=2000",
             svc=True
         )
         if not isinstance(rows, list):
