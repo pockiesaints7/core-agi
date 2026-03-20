@@ -563,6 +563,17 @@ def t_set_simulation(instruction: str) -> dict:
 
 
 def t_log_mistake(context="", what_failed="", correct_approach="", domain="general", root_cause="", how_to_avoid="", severity="medium"):
+    # A.2: dedup guard -- skip if identical what_failed+domain logged in last 24h
+    try:
+        cutoff = (datetime.utcnow() - timedelta(hours=24)).isoformat()
+        _wf = (what_failed or "")[:40].replace("'", "")
+        existing = sb_get("mistakes",
+            f"domain=eq.{domain}&what_failed=ilike.*{_wf}*&created_at=gte.{cutoff}&select=id&limit=1",
+            svc=True) or []
+        if existing:
+            return {"ok": True, "action": "skipped_duplicate", "hint": "identical mistake already logged in last 24h"}
+    except Exception:
+        pass  # dedup failure is non-fatal -- proceed with write
     ok = sb_post("mistakes", {"domain": domain, "context": context, "what_failed": what_failed,
                               "correct_approach": correct_approach, "root_cause": root_cause or what_failed,
                               "how_to_avoid": how_to_avoid or correct_approach, "severity": severity, "tags": []})
@@ -616,106 +627,7 @@ def t_notify(message, level="info"):
 # _TABLE_SCHEMAS removed -- unified into _SB_SCHEMA above.
 # Legacy reference kept as alias for any internal code still using it.
 _TABLE_SCHEMAS = _SB_SCHEMA["tables"]  # type: ignore
-_TABLE_SCHEMAS_REMOVED = {
-    "task_queue": {
-        "pk": "id", "pk_type": "uuid",
-        "columns": ["id", "task", "status", "priority", "result", "error",
-                    "created_at", "updated_at", "source", "chat_id",
-                    "next_step", "blocked_by", "checkpoint", "checkpoint_at",
-                    "project_id", "checkpoint_draft"],
-        "fat_columns": ["task", "checkpoint", "checkpoint_draft", "result"],
-        "safe_select": "id,status,priority,source,next_step,blocked_by,created_at",
-        "notes": "task column is a large JSONB blob. Use task->>title for title extraction but it returns null (title is a string-encoded JSON key). Always exclude task from bulk queries."
-    },
-    "knowledge_base": {
-        "pk": "id", "pk_type": "bigserial",
-        "columns": ["id", "domain", "topic", "content", "confidence", "tags",
-                    "source", "created_at", "updated_at"],
-        "fat_columns": ["content"],
-        "safe_select": "id,domain,topic,confidence,source,created_at",
-        "notes": "Use id=gt.1 filter. content can be large."
-    },
-    "evolution_queue": {
-        "pk": "id", "pk_type": "bigserial",
-        "columns": ["id", "change_type", "change_summary", "diff_content", "pattern_key",
-                    "confidence", "status", "source", "impact", "recommendation",
-                    "applied_at", "created_at"],
-        "fat_columns": ["diff_content", "change_summary"],
-        "safe_select": "id,change_type,status,confidence,pattern_key,source,created_at",
-        "notes": "Use id=gt.1. diff_content can be large for code evolutions."
-    },
-    "hot_reflections": {
-        "pk": "id", "pk_type": "bigserial",
-        "columns": ["id", "domain", "new_patterns", "new_mistakes", "quality_score",
-                    "source", "task_summary", "gaps_identified", "processed_by_cold", "created_at"],
-        "fat_columns": ["new_patterns", "new_mistakes", "gaps_identified", "task_summary"],
-        "safe_select": "id,domain,quality_score,source,processed_by_cold,created_at",
-        "notes": "Use id=gt.1."
-    },
-    "mistakes": {
-        "pk": "id", "pk_type": "bigserial",
-        "columns": ["id", "domain", "context", "what_failed", "correct_approach",
-                    "root_cause", "how_to_avoid", "severity", "tags", "created_at"],
-        "fat_columns": ["context", "correct_approach", "how_to_avoid"],
-        "safe_select": "id,domain,what_failed,severity,root_cause,created_at",
-        "notes": "Use id=gt.1."
-    },
-    "sessions": {
-        "pk": "id", "pk_type": "bigserial",
-        "columns": ["id", "started_at", "ended_at", "summary", "actions",
-                    "patterns", "domain", "quality", "state_key", "state_value"],
-        "fat_columns": ["summary", "actions", "patterns"],
-        "safe_select": "id,domain,quality,started_at,ended_at,state_key,state_value",
-        "notes": "Use id=gt.1."
-    },
-    "behavioral_rules": {
-        "pk": "id", "pk_type": "bigserial",
-        "columns": ["id", "domain", "trigger", "instruction", "confidence",
-                    "active", "source", "created_at"],
-        "fat_columns": ["instruction"],
-        "safe_select": "id,domain,trigger,confidence,active,source,created_at",
-        "notes": "Use id=gt.1. 123 active rules -- use page/page_size for full load."
-    },
-    "pattern_frequency": {
-        "pk": "id", "pk_type": "bigserial",
-        "columns": ["id", "pattern_key", "frequency", "domain", "description",
-                    "auto_applied", "last_seen", "stale"],
-        "fat_columns": ["description"],
-        "safe_select": "id,pattern_key,frequency,domain,auto_applied,last_seen,stale",
-        "notes": "Use id=gt.1."
-    },
-    "system_map": {
-        "pk": "id", "pk_type": "bigserial",
-        "columns": ["id", "layer", "component", "description", "status",
-                    "last_verified", "notes"],
-        "fat_columns": ["description", "notes"],
-        "safe_select": "id,layer,component,status,last_verified",
-        "notes": "Use id=gt.1."
-    },
-    "script_templates": {
-        "pk": "id", "pk_type": "bigserial",
-        "columns": ["id", "name", "description", "trigger_pattern", "code",
-                    "use_count", "created_at"],
-        "fat_columns": ["code"],
-        "safe_select": "id,name,description,trigger_pattern,use_count,created_at",
-        "notes": "Use id=gt.1."
-    },
-    "changelog": {
-        "pk": "id", "pk_type": "bigserial",
-        "columns": ["id", "action", "detail", "domain", "created_at"],
-        "fat_columns": ["detail"],
-        "safe_select": "id,action,domain,created_at",
-        "notes": "Use id=gt.1."
-    },
-    "cold_reflections": {
-        "pk": "id", "pk_type": "bigserial",
-        "columns": ["id", "period_start", "period_end", "hot_count", "patterns_found",
-                    "evolutions_queued", "auto_applied", "summary_text", "created_at"],
-        "fat_columns": ["summary_text"],
-        "safe_select": "id,period_start,period_end,hot_count,patterns_found,evolutions_queued,auto_applied,created_at",
-        "notes": "Use id=gt.1."
-    },
-}
+# A.4: _TABLE_SCHEMAS_REMOVED deleted -- was ~100 lines of orphaned dead code, never referenced.
 
 def t_sb_query(table, filters="", limit=20, order="", select="*"):
     """Schema-aware Supabase read. Auto-blocks tombstone tables, auto-downgrades
@@ -945,9 +857,13 @@ def t_debug_fn(fn_name: str, dry_run: bool = True, extra_args: dict = None) -> d
 
         final = "ok" if ok2 else "failed_at_stage_2"
     else:
-        # Generic: just call it directly
-        call_kwargs = extra_args or {}
-        ok, result = stage("1_direct_call", target_fn, **call_kwargs)
+        # A.1: Guard against non-dict extra_args before ** unpacking
+        # extra_args could be non-dict if JSON parse failed (edge case after MCP string coercion)
+        call_kwargs = extra_args if isinstance(extra_args, dict) else {}
+        if call_kwargs:
+            ok, result = stage("1_direct_call", target_fn, **call_kwargs)
+        else:
+            ok, result = stage("1_direct_call", target_fn)
         final = "ok" if ok else "failed_at_stage_1"
 
     return {"fn": fn_name, "dry_run": dry_run, "stages": stages, "final": final, "result": result}
@@ -2139,10 +2055,11 @@ def t_core_py_validate() -> dict:
                 if "TOOLS = {" not in content:
                     errors.append("TOOLS dict not found â€” critical corruption")
             for i, line in enumerate(lines, 1):
-                if "backboard.railway" in line:
-                    errors.append(f"L{i}: stale backboard.railway reference")
+                # A.8: backboard.railway GQL endpoint is valid -- only flag old REST references
+                if "backboard.railway.app/api" in line and "graphql" not in line.lower():
+                    errors.append(f"L{i}: stale backboard.railway REST reference (use GQL endpoint)")
                 if "core.py" in line and not line.strip().startswith("#"):
-                    warnings.append(f"L{i}: stale core.py reference â€” file deleted")
+                    warnings.append(f"L{i}: stale core.py reference -- file deleted")
             if size_kb > 150:
                 warnings.append(f"{target} is {size_kb}KB â€” consider splitting (>150KB)")
             triple_count = content.count('"""')
@@ -2882,14 +2799,18 @@ def t_stats():
         avg_quality = round(sum(scores) / len(scores), 2) if scores else None
         counts = get_system_counts()
         
-        # Evolution queue counts - use COUNT queries per status (scales to millions of rows)
-        evo_pending = sb_get("evolution_queue", "select=count&status=eq.pending", svc=True)
-        evo_applied = sb_get("evolution_queue", "select=count&status=eq.applied", svc=True)
-        evo_rejected = sb_get("evolution_queue", "select=count&status=eq.rejected", svc=True)
+        # A.10: fix evolution counts -- select=count without Prefer header returns wrong shape.
+        # Use slim select + len() which works correctly with existing sb_get implementation.
+        def _evo_count(status):
+            try:
+                return len(sb_get("evolution_queue",
+                    f"select=id&status=eq.{status}", svc=True) or [])
+            except Exception:
+                return 0
         evo_counts = {
-            "pending": evo_pending[0]["count"] if evo_pending else 0,
-            "applied": evo_applied[0]["count"] if evo_applied else 0,
-            "rejected": evo_rejected[0]["count"] if evo_rejected else 0,
+            "pending":  _evo_count("pending"),
+            "applied":  _evo_count("applied"),
+            "rejected": _evo_count("rejected"),
         }
         
         cold_rows = sb_get("cold_reflections", "select=created_at&order=created_at.desc&limit=1", svc=True) or []
@@ -3216,6 +3137,19 @@ def t_changelog_add(version: str = "", component: str = "", summary: str = "",
     try:
         ts = datetime.utcnow().isoformat()
         ver = version.strip() or datetime.utcnow().strftime("v%Y%m%d")
+        # A.3: dedup guard -- skip if identical title+component already logged today
+        today = datetime.utcnow().strftime("%Y-%m-%d")
+        _title = summary.strip()[:40].replace("'", "")
+        _comp  = component.strip() or "general"
+        try:
+            existing = sb_get("changelog",
+                f"component=eq.{_comp}&title=ilike.*{_title}*&created_at=gte.{today}&select=id&limit=1",
+                svc=True) or []
+            if existing:
+                return {"ok": True, "action": "skipped_duplicate", "version": ver, "component": _comp,
+                        "hint": "identical changelog entry already logged today"}
+        except Exception:
+            pass  # dedup failure is non-fatal
         ok = sb_post("changelog", {
             "version":      ver,
             "change_type":  change_type.strip() or "upgrade",
@@ -4255,8 +4189,9 @@ def t_get_state_key(key: str) -> dict:
     if not key:
         return {"ok": False, "error": "key required"}
     try:
+        # A.9: PostgREST LIKE uses * not % as wildcard
         rows = sb_get("sessions",
-            f"select=summary&summary=like.[state_update] {key}:%&order=id.desc&limit=1",
+            f"select=summary&summary=like.*%5Bstate_update%5D+{key}:*&order=id.desc&limit=1",
             svc=True) or []
         if not rows:
             return {"ok": False, "key": key, "found": False, "value": None}
@@ -4406,11 +4341,13 @@ def t_mistakes_since(hours: str = "24") -> dict:
     """Return mistakes logged in the last N hours. Use at session_end to see only this session's errors."""
     try:
         h = int(hours) if hours else 24
+        # A.5: compute cutoff in Python -- PostgREST interval syntax (now()-interval.Xhours) is invalid
+        cutoff = (datetime.utcnow() - timedelta(hours=h)).isoformat()
         rows = sb_get("mistakes",
             f"select=domain,context,what_failed,correct_approach,severity,root_cause,how_to_avoid"
-            f"&created_at=gte.now()-interval.{h}.hours&order=created_at.desc&limit=50",
+            f"&created_at=gte.{cutoff}&order=created_at.desc&limit=50",
             svc=True) or []
-        return {"ok": True, "hours": h, "count": len(rows), "mistakes": rows}
+        return {"ok": True, "hours": h, "cutoff": cutoff, "count": len(rows), "mistakes": rows}
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
@@ -4466,8 +4403,8 @@ def t_add_evolution_rule(
             "category": category,
             "reminder": (
                 "IMPORTANT: Now write this rule to the LOCAL SKILL FILE: "
-                "C:\\Users\\rnvgg\\.claude-skills\\CORE_AGI_SKILL_V4.md "
-                "Section 12 via Windows-MCP:FileSystem or Desktop Commander:edit_block. "
+                "C:\\Users\\rnvgg\\.claude-skills\\CORE_AGI_SKILL_V8.md "
+                "via Windows-MCP:FileSystem or Desktop Commander:edit_block. "
                 "Then call session_end."
             ),
         }
@@ -6845,7 +6782,8 @@ def t_loop_detect(action: str = "", context_hash: str = "", session_id: str = "d
             action_log = json.loads(rows[0]["action_log"]) if isinstance(rows[0]["action_log"], str) else rows[0]["action_log"]
         if clear_bool:
             if row_exists:
-                sb_patch("agentic_sessions", {"action_log": json.dumps([])}, f"session_id=eq.{session_id}")
+                # A.6: fix sb_patch arg order -- signature is (table, filter_str, data_dict)
+                sb_patch("agentic_sessions", f"session_id=eq.{session_id}", {"action_log": json.dumps([])})
             return {"ok": True, "cleared": True, "session_id": session_id}
         # Check for loop
         loop_detected = fingerprint in action_log
@@ -6853,7 +6791,8 @@ def t_loop_detect(action: str = "", context_hash: str = "", session_id: str = "d
         # Append to log
         action_log.append(fingerprint)
         if row_exists:
-            sb_patch("agentic_sessions", {"action_log": json.dumps(action_log[-100:])}, f"session_id=eq.{session_id}")
+            # A.6: fix sb_patch arg order
+            sb_patch("agentic_sessions", f"session_id=eq.{session_id}", {"action_log": json.dumps(action_log[-100:])})
         else:
             sb_post("agentic_sessions", {"session_id": session_id, "action_log": json.dumps(action_log[-100:]), "created_at": datetime.utcnow().isoformat()})
         return {
