@@ -1637,11 +1637,11 @@ def _run_rarl_epoch() -> bool:
     role             = "champion" if beats_champion else "mutant"
     duration         = int(_time.time() - _start)
 
-    # Step 7: update rarl_architectures
+    # Step 7: update rarl_architectures (upsert on arch_id to handle duplicate names)
     try:
         if beats_champion and champion:
             sb_patch("rarl_architectures", "role=eq.champion", {"role": "archived"})
-        sb_post("rarl_architectures", {
+        sb_upsert("rarl_architectures", {
             "arch_id": arch_id, "epoch_created": epoch_number, "role": role,
             "hypothesis": hypothesis, "core_mechanism": core_mechanism, "pseudocode": pseudocode,
             "discovery_score": ds,
@@ -1657,7 +1657,7 @@ def _run_rarl_epoch() -> bool:
             "next_direction": next_direction, "mutation_applied": mutation_applied,
             "parent_arch_id": champion["arch_id"] if champion else None,
             "insight_for_core": insight_for_core, "research_branch": "main",
-        })
+        }, on_conflict="arch_id")
         print(f"[RARL] rarl_architectures: {arch_id} role={role}")
     except Exception as e:
         print(f"[RARL] rarl_architectures error (non-fatal): {e}")
@@ -1717,13 +1717,13 @@ def _run_rarl_epoch() -> bool:
             except Exception as e:
                 print(f"[RARL] mistake write error (non-fatal): {e}")
 
-    # Step 11: compressed insight -> knowledge_base
+    # Step 11: compressed insight -> knowledge_base (upsert to avoid 409 on duplicate arch_id)
     if compressed and len(compressed) > 10:
         try:
-            sb_post("knowledge_base", {
+            sb_upsert("knowledge_base", {
                 "domain": "rarl", "topic": arch_id, "instruction": compressed,
                 "content": core_mechanism[:500], "confidence": "medium", "source_type": "evolved",
-            })
+            }, on_conflict="domain,topic")
         except Exception as e:
             print(f"[RARL] knowledge_base write error (non-fatal): {e}")
 
