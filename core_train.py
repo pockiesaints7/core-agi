@@ -847,14 +847,14 @@ def apply_evolution(evolution_id: int):
         applied = False; note = ""
 
         if change_type == "knowledge":
-            applied = sb_post_critical("knowledge_base", {
+            applied = sb_upsert("knowledge_base", {
                 "domain": evo.get("impact", "general"),
-                "topic": pattern_key[:100] or change_summary[:100],
+                "topic": (pattern_key[:100] or change_summary[:100]),
                 "content": change_summary,
                 "confidence": "high" if confidence >= 0.8 else "medium",
                 "tags": ["evolution", "auto"], "source": "evolution_queue",
-            })
-            note = "Added to knowledge_base"
+            }, on_conflict="domain,topic")
+            note = "Added/updated knowledge_base"
 
         elif change_type == "new_tool":
             try:
