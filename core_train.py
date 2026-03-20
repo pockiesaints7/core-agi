@@ -1451,6 +1451,307 @@ Output ONLY valid JSON, no preamble."""
         return False
 
 
+# -- RARL epoch ----------------------------------------------------------------
+
+def _run_rarl_epoch() -> bool:
+    """Run one RARL research epoch via Gemini (Groq fallback).
+    Replaces _run_simulation_batch() call in background_researcher().
+    Writes to: rarl_architectures, rarl_epochs, hot_reflections (domain=rarl),
+    mistakes (critic failures), knowledge_base (compressed insight),
+    evolution_queue (significant discoveries > 0.3 DS improvement).
+    Returns True if hot_reflection written successfully.
+    """
+    import time as _time
+    _start = _time.time()
+
+    # Step 1: epoch number
+    try:
+        last = sb_get(
+            "rarl_epochs",
+            "select=epoch_number&id=gt.1&order=epoch_number.desc&limit=1",
+            svc=True
+        )
+        epoch_number = (last[0]["epoch_number"] + 1) if last else 1
+    except Exception as e:
+        print(f"[RARL] epoch_number query error: {e}")
+        epoch_number = 1
+    print(f"[RARL] Starting epoch {epoch_number}")
+
+    # Step 2: live context
+    try:
+        kb_count_r = httpx.get(
+            f"{SUPABASE_URL}/rest/v1/knowledge_base?select=id&limit=1",
+            headers=_sbh_count_svc(), timeout=8
+        )
+        kb_total = int(kb_count_r.headers.get("content-range", "*/0").split("/")[-1])
+    except Exception:
+        kb_total = 0
+    try:
+        recent_mistakes = sb_get(
+            "mistakes", "select=domain,what_failed&order=id.desc&limit=10&id=gt.1", svc=True
+        ) or []
+    except Exception:
+        recent_mistakes = []
+    try:
+        champion = sb_get(
+            "rarl_architectures",
+            "select=arch_id,hypothesis,discovery_score,next_direction"
+            "&role=eq.champion&id=gt.1&order=created_at.desc&limit=1",
+            svc=True
+        )
+        champion = champion[0] if champion else None
+    except Exception:
+        champion = None
+    try:
+        recent_kb = sb_get(
+            "knowledge_base",
+            "select=topic,instruction&domain=eq.rarl&id=gt.1&order=updated_at.desc&limit=10",
+            svc=True
+        ) or []
+    except Exception:
+        recent_kb = []
+
+    # Step 3: research goal -- 6-epoch rotation, custom instruction override
+    _RARL_GOALS = [
+        ("improve reasoning depth -- focus on sustained multi-step logical reasoning chains that do not degrade over long contexts", "reasoning"),
+        ("improve memory architecture -- focus on continual learning mechanisms that prevent catastrophic forgetting across tasks", "memory"),
+        ("improve world modeling -- focus on building predictive internal models of environment dynamics for better planning", "world_modeling"),
+        ("improve sample efficiency -- focus on architectures that learn robust representations from severely limited training data", "sample_efficiency"),
+        ("improve cross-domain generalization -- focus on knowledge transfer mechanisms that apply learned skills to unseen domains", "generalization"),
+        ("improve planning capability -- focus on multi-step goal-directed reasoning with explicit internal search and evaluation", "planning"),
+    ]
+    _custom_goal = None
+    try:
+        _task = _get_simulation_task()
+        if _task and _task.get("instruction") and "RARL EPOCH" not in _task["instruction"]:
+            _custom_goal = _task["instruction"][:300]
+    except Exception:
+        pass
+    if _custom_goal:
+        research_goal, research_domain = _custom_goal, "general"
+    else:
+        research_goal, research_domain = _RARL_GOALS[(epoch_number - 1) % len(_RARL_GOALS)]
+
+    ds_before = champion["discovery_score"] if champion else 0.0
+    failure_block = "\n".join(
+        f"  - [{r.get('domain','?')}] {r.get('what_failed','')[:100]}" for r in recent_mistakes
+    ) or "  None recorded yet."
+    kb_block = "\n".join(
+        f"  - {r.get('topic','')[:100]}" for r in recent_kb
+    ) or "  None yet."
+    champion_block = (
+        f"Champion: {champion['arch_id']} | DS: {champion['discovery_score']:.3f}\n"
+        f"  Next direction: {champion.get('next_direction','not set')[:200]}"
+        if champion else "No champion yet -- establish a strong baseline."
+    )
+
+    # Step 4: build prompts
+    _sys = (
+        "You are the Recursive Autonomous AGI Research Laboratory (RARL). "
+        "You simulate 10 specialized agents: Planner, Architect, Theory, Literature, "
+        "Critic, Experiment, Evaluation, Archivist, Meta-Learning, Prompt Evolution. "
+        "Target architectures that advance AGI. Be technically grounded. "
+        "Mark uncertain reasoning [CONJECTURE]. Output ONLY valid JSON."
+    )
+    _json_schema = (
+        '{"research_goal":"one sentence",'
+        '"hypothesis":"2-4 sentences",'
+        '"core_mechanism":"4-6 sentences",'
+        '"pseudocode":"15-25 lines Python style",'
+        '"mutation_applied":"SynapticPruning|TopologyExpansion|ModularDuplication|CrossDomainGrafting|MemoryAugmentation|LearningRuleMutation|DynamicRoutingMutation|WorldModelIntegration|NeuroSymbolicIntegration|SparseExpertRouting|Novel",'
+        '"theory_analysis":"2-3 sentences with [CONJECTURE] markers",'
+        '"experiment_design":"benchmarks compute estimate success criteria",'
+        '"critic_failures":["specific failure 1","specific failure 2","specific failure 3"],'
+        '"mitigation":"how failures are addressed",'
+        '"benchmark_score":0.0,"transfer_score":0.0,"stability_score":0.0,'
+        '"sample_efficiency":0.0,"reasoning_depth":0.0,'
+        '"complexity_penalty":1.0,"compute_cost":1.0,"inference_latency":1.0,'
+        '"discovery_score":0.0,"beats_champion":false,'
+        f'"arch_id":"DescriptiveName_v{epoch_number}",'
+        '"compressed_insight":"one specific sentence distinct from prior KB",'
+        '"next_direction":"specific next epoch direction",'
+        '"insight_for_core":"one actionable change to core_tools.py/core_train.py/behavioral_rules/schema",'
+        '"meta_learning_note":"one concrete RARL methodology improvement",'
+        '"prompt_evolution_note":"one change to improve evolution_queue quality or null"}'
+    )
+    _usr = (
+        f"EPOCH: {epoch_number}\n"
+        f"RESEARCH GOAL: {research_goal}\n"
+        f"DOMAIN: {research_domain}\n\n"
+        f"LIVE STATE:\n"
+        f"  KB entries: {kb_total}\n"
+        f"  Recent mistakes:\n{failure_block}\n"
+        f"  RARL KB (do not repeat):\n{kb_block}\n"
+        f"  {champion_block}\n\n"
+        f"Discovery Score: DS = (benchmark+transfer+stability+sample_efficiency+reasoning_depth)"
+        f" / (complexity_penalty+compute_cost+inference_latency)\n"
+        f"Numerators 0.0-3.0. Denominators 0.5-3.0. beats_champion=true only if DS>{ds_before:.3f}\n"
+        f"arch_id format: DescriptiveMechanism_v{epoch_number}\n\n"
+        f"Output ONLY this JSON:\n{_json_schema}"
+    )
+
+    # Step 5: call Gemini, fallback to Groq
+    parsed = {}
+    try:
+        raw = gemini_chat(_sys, _usr, max_tokens=2048, json_mode=True)
+        raw = raw.strip().lstrip("```json").lstrip("```").rstrip("```").strip()
+        parsed = json.loads(raw)
+        print(f"[RARL] Gemini OK epoch={epoch_number} DS={parsed.get('discovery_score',0):.3f}")
+    except Exception as e_gem:
+        print(f"[RARL] Gemini failed ({e_gem}), trying Groq fallback")
+        try:
+            raw = groq_chat(_sys, _usr, model=GROQ_MODEL, max_tokens=1500)
+            raw = raw.strip().lstrip("```json").lstrip("```").rstrip("```").strip()
+            parsed = json.loads(raw)
+            print(f"[RARL] Groq OK epoch={epoch_number} DS={parsed.get('discovery_score',0):.3f}")
+        except Exception as e_grq:
+            print(f"[RARL] both LLMs failed: {e_grq}")
+            sb_post("hot_reflections", {
+                "task_summary": f"RARL Epoch {epoch_number} -- LLM error: {str(e_grq)[:100]}",
+                "domain": "rarl", "new_patterns": [], "quality_score": 0.1,
+                "gaps_identified": ["Gemini and Groq both failed"],
+                "reflection_text": f"Epoch {epoch_number} LLM failure. gem={e_gem} grq={e_grq}",
+                "processed_by_cold": 0, "source": "rarl",
+            })
+            return False
+
+    # Step 6: extract fields
+    arch_id          = parsed.get("arch_id", f"Unknown_v{epoch_number}")
+    hypothesis       = parsed.get("hypothesis", "")[:1000]
+    core_mechanism   = parsed.get("core_mechanism", "")[:1000]
+    pseudocode       = parsed.get("pseudocode", "")[:2000]
+    mutation_applied = parsed.get("mutation_applied", "Unknown")
+    critic_failures  = parsed.get("critic_failures", [])[:5]
+    mitigation       = parsed.get("mitigation", "")[:500]
+    next_direction   = parsed.get("next_direction", "")[:300]
+    insight_for_core = parsed.get("insight_for_core", "")[:300]
+    compressed       = parsed.get("compressed_insight", "")[:400]
+    beats_champion   = bool(parsed.get("beats_champion", False))
+    ds               = float(parsed.get("discovery_score", 0.0))
+    role             = "champion" if beats_champion else "mutant"
+    duration         = int(_time.time() - _start)
+
+    # Step 7: update rarl_architectures
+    try:
+        if beats_champion and champion:
+            sb_patch("rarl_architectures", "role=eq.champion", {"role": "archived"})
+        sb_post("rarl_architectures", {
+            "arch_id": arch_id, "epoch_created": epoch_number, "role": role,
+            "hypothesis": hypothesis, "core_mechanism": core_mechanism, "pseudocode": pseudocode,
+            "discovery_score": ds,
+            "benchmark_score":   float(parsed.get("benchmark_score", 0)),
+            "transfer_score":    float(parsed.get("transfer_score", 0)),
+            "stability_score":   float(parsed.get("stability_score", 0)),
+            "sample_efficiency": float(parsed.get("sample_efficiency", 0)),
+            "reasoning_depth":   float(parsed.get("reasoning_depth", 0)),
+            "complexity_penalty":float(parsed.get("complexity_penalty", 1)),
+            "compute_cost":      float(parsed.get("compute_cost", 1)),
+            "inference_latency": float(parsed.get("inference_latency", 1)),
+            "failure_modes": critic_failures, "mitigation": mitigation,
+            "next_direction": next_direction, "mutation_applied": mutation_applied,
+            "parent_arch_id": champion["arch_id"] if champion else None,
+            "insight_for_core": insight_for_core, "research_branch": "main",
+        })
+        print(f"[RARL] rarl_architectures: {arch_id} role={role}")
+    except Exception as e:
+        print(f"[RARL] rarl_architectures error (non-fatal): {e}")
+
+    # Step 8: write rarl_epochs log
+    try:
+        sb_post("rarl_epochs", {
+            "epoch_number": epoch_number, "research_goal": research_goal[:300],
+            "research_domain": research_domain,
+            "champion_before": champion["arch_id"] if champion else None,
+            "champion_after": arch_id if beats_champion else (champion["arch_id"] if champion else None),
+            "ds_before": ds_before, "ds_after": ds if beats_champion else ds_before,
+            "ds_improvement": (ds - ds_before) if beats_champion else 0.0,
+            "new_champion": beats_champion,
+            "agents_active": ["Planner","Literature","Theory","Architect","Experiment",
+                              "Critic","Evaluation","Archivist","Meta-Learning","Prompt Evolution"],
+            "insights_count": 1, "branch": "main",
+            "groq_model_used": GROQ_MODEL, "duration_seconds": duration,
+        })
+        print(f"[RARL] rarl_epochs: epoch={epoch_number}")
+    except Exception as e:
+        print(f"[RARL] rarl_epochs error (non-fatal): {e}")
+
+    # Step 9: hot_reflection -- main pipeline integration point
+    quality  = round(min(1.0, ds / 3.0), 3) if ds > 0 else 0.4
+    patterns = [p for p in [
+        core_mechanism[:120] if core_mechanism else None,
+        insight_for_core[:120] if insight_for_core else None,
+        next_direction[:120] if next_direction else None,
+        compressed[:120] if compressed else None,
+        parsed.get("meta_learning_note", "")[:120] or None,
+    ] if p]
+    ok = sb_post("hot_reflections", {
+        "task_summary": f"RARL Epoch {epoch_number} [{research_domain}]: {research_goal[:150]}",
+        "domain": "rarl", "new_patterns": patterns[:5],
+        "new_mistakes": [f[:120] for f in critic_failures[:3]],
+        "quality_score": quality,
+        "gaps_identified": [next_direction] if next_direction else None,
+        "reflection_text": (
+            f"Arch: {arch_id} | DS: {ds:.3f} | Role: {role} | "
+            f"Mutation: {mutation_applied} | Duration: {duration}s | "
+            f"For CORE: {insight_for_core[:150]}"
+        ),
+        "processed_by_cold": 0, "source": "rarl",
+    })
+    print(f"[RARL] hot_reflection ok={ok} quality={quality}")
+
+    # Step 10: critic failures -> mistakes
+    for failure in critic_failures[:3]:
+        if failure and len(failure) > 5:
+            try:
+                sb_post("mistakes", {
+                    "domain": "rarl", "context": f"Epoch {epoch_number}: {arch_id}",
+                    "what_failed": failure[:300], "correct_approach": mitigation[:300],
+                    "root_cause": failure[:200], "how_to_avoid": mitigation[:200], "severity": "medium",
+                })
+            except Exception as e:
+                print(f"[RARL] mistake write error (non-fatal): {e}")
+
+    # Step 11: compressed insight -> knowledge_base
+    if compressed and len(compressed) > 10:
+        try:
+            sb_post("knowledge_base", {
+                "domain": "rarl", "topic": arch_id, "instruction": compressed,
+                "content": core_mechanism[:500], "confidence": "medium", "source_type": "evolved",
+            })
+        except Exception as e:
+            print(f"[RARL] knowledge_base write error (non-fatal): {e}")
+
+    # Step 12: significant discovery -> evolution_queue + Telegram
+    ds_improvement = ds - ds_before
+    if beats_champion and ds_improvement > 0.3:
+        try:
+            sb_post("evolution_queue", {
+                "change_type": "rarl_discovery",
+                "change_summary": (
+                    f"[P2] RARL Champion: {arch_id} | "
+                    f"DS: {ds_before:.2f} -> {ds:.2f} (+{ds_improvement:.2f}) | {compressed[:150]}"
+                ),
+                "confidence": round(quality, 3),
+                "pattern_key": f"rarl_epoch_{epoch_number}",
+                "diff_content": json.dumps({
+                    "arch_id": arch_id, "hypothesis": hypothesis[:300],
+                    "core_mechanism": core_mechanism[:300],
+                    "insight_for_core": insight_for_core[:200], "discovery_score": ds,
+                }, indent=2),
+                "status": "pending",
+            })
+            notify(
+                f"RARL New Champion\nEpoch {epoch_number} | {research_domain}\n"
+                f"Arch: {arch_id}\nDS: {ds_before:.2f} -> {ds:.2f} (+{ds_improvement:.2f})\n"
+                f"For CORE: {insight_for_core[:150]}\nNext: {next_direction[:100]}"
+            )
+        except Exception as e:
+            print(f"[RARL] evolution_queue error (non-fatal): {e}")
+
+    print(f"[RARL] Epoch {epoch_number} done. DS={ds:.3f} role={role} ok={ok} t={duration}s")
+    return ok
+
+
 # -- Public source ingestion ---------------------------------------------------
 def _ingest_public_sources() -> str:
     sources = [
@@ -1505,7 +1806,7 @@ def background_researcher():
 
                 real_ok = _extract_real_signal()
                 time.sleep(3)
-                sim_ok = _run_simulation_batch()
+                sim_ok = _run_rarl_epoch()
 
                 try:
                     groq_pending = sb_get(
@@ -1533,7 +1834,7 @@ def background_researcher():
                         if real_ok:
                             parts.append("new patterns extracted")
                         if sim_ok:
-                            parts.append("simulation complete")
+                            parts.append("rarl epoch complete")
                         if auto_applied:
                             parts.append(f"{auto_applied} evolutions auto-applied")
                         if public_content:
