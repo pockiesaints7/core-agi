@@ -5123,7 +5123,7 @@ def _reconcile_executor_files(rows: list, inserted: list, tombstoned: list) -> N
         missing = live_py - registered_names
         for fname in sorted(missing):
             try:
-                sb_post_critical("system_map", {
+                sb_upsert("system_map", {
                     "layer": "executor",
                     "component": "railway",
                     "item_type": "file",
@@ -5133,7 +5133,7 @@ def _reconcile_executor_files(rows: list, inserted: list, tombstoned: list) -> N
                     "status": "active",
                     "updated_by": "session_end_auto",
                     "last_updated": datetime.utcnow().isoformat(),
-                })
+                }, on_conflict="name,component,item_type")
                 inserted.append(f"executor:{fname}")
             except Exception as _ie:
                 print(f"[SMAP] executor insert {fname} failed: {_ie}")
@@ -7165,13 +7165,13 @@ def t_sync_system_map(trigger: str = "manual", notify_on_changes: str = "true") 
             try:
                 desc = TOOLS[tool_name].get("desc", "")
                 perm = TOOLS[tool_name].get("perm", "READ")
-                sb_post_critical("system_map", {
+                sb_upsert("system_map", {
                     "layer": "executor", "component": "railway", "item_type": "tool",
                     "name": tool_name, "role": (desc or f"MCP tool: {tool_name}")[:400],
                     "responsibility": f"perm={perm} -- auto-registered by sync_system_map",
                     "status": "active", "updated_by": f"sync_{trigger}",
                     "last_updated": datetime.utcnow().isoformat(),
-                })
+                }, on_conflict="name,component,item_type")
                 inserted.append(f"tool:{tool_name}")
             except Exception as _ie:
                 print(f"[SMAP] tool insert {tool_name}: {_ie}")
