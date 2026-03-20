@@ -2150,7 +2150,8 @@ def t_session_end(summary: str = "", actions: str = "", domain: str = "general",
                   force_close: str = "false",
                   active_task_ids: str = "",
                   new_tool_sop: str = "",
-                  tools_updated: str = "") -> dict:
+                  tools_updated: str = "",
+                  owner_corrections: str = "0") -> dict:  # E.1: explicit param
     """One-call session close.
     skill_file_updated: TASK-21.B gate. Pass 'true' after writing new rules to local skill file.
     force_close: pass 'true' to bypass all gates (owner explicit override).
@@ -2265,7 +2266,8 @@ def t_session_end(summary: str = "", actions: str = "", domain: str = "general",
         # Also close out any open causal_predictions from this session.
         counterfactuals_written = 0
         try:
-            session_ts_anchor = (session_start_at - timedelta(hours=2)).isoformat()
+            # E.2: 4h window -- session_start_at is the time session_end was CALLED, not when session started
+            session_ts_anchor = (session_start_at - timedelta(hours=4)).isoformat()
             recent_mistakes = sb_get("mistakes",
                 f"select=id,domain,context,what_failed,correct_approach,root_cause,how_to_avoid,severity&created_at=gte.{session_ts_anchor}&order=created_at.desc&limit=10",
                 svc=True) or []
@@ -2306,8 +2308,8 @@ def t_session_end(summary: str = "", actions: str = "", domain: str = "general",
         # AGI-06: Capability metrics -- multi-dimensional session scoring
         cap_metrics = {}
         try:
-            # Fetch recent mistakes count for this session (last 2hr window)
-            session_ts_cap = (datetime.utcnow() - timedelta(hours=2)).isoformat()
+            # E.2: widen to 4h (session_start_at is call time, not actual session start)
+            session_ts_cap = (datetime.utcnow() - timedelta(hours=4)).isoformat()
             session_mistakes = sb_get("mistakes",
                 f"select=id,severity&created_at=gte.{session_ts_cap}&limit=20",
                 svc=True) or []
@@ -2322,9 +2324,11 @@ def t_session_end(summary: str = "", actions: str = "", domain: str = "general",
             # EFFICIENCY: quality score directly (proxy for actions-to-outcome ratio)
             efficiency = round(q, 3)
 
-            # AUTONOMY: 1.0 if no owner corrections, degrades with corrections
-            # Note: owner_corrections not in session_end params yet -- derive from patterns keyword
-            n_corrections = patterns.lower().count("correction") + patterns.lower().count("corrected")
+            # AUTONOMY: E.1 -- use explicit owner_corrections param instead of fragile string match
+            try:
+                n_corrections = int(owner_corrections) if str(owner_corrections).isdigit() else 0
+            except Exception:
+                n_corrections = 0
             autonomy = max(0.0, round(1.0 - min(n_corrections * 0.2, 1.0), 3))
 
             # ROBUSTNESS: 1.0 if no critical/high mistakes, degrades with severity
