@@ -1280,17 +1280,9 @@ Output ONLY valid JSON, no preamble."""
         raw = raw.strip().lstrip("```json").lstrip("```").rstrip("```").strip()
         brief = json.loads(raw)
 
-        for tpl in brief.get("templates_proposed", []):
-            try:
-                sb_post("script_templates", {
-                    "name": tpl.get("name", ""),
-                    "description": tpl.get("description", ""),
-                    "trigger_pattern": tpl.get("trigger_pattern", ""),
-                    "code": tpl.get("code", ""),
-                    "use_count": 0,
-                    "created_at": datetime.utcnow().isoformat(),
-                })
-            except Exception: pass
+        # H.2: removed auto-save side effect -- check_evolutions is a READ tool.
+        # Templates are returned in brief.templates_proposed for owner to review.
+        # Owner calls run_template or manually approves before any template is saved.
 
         return {
             "ok": True,
@@ -2716,8 +2708,13 @@ def t_ask(question: str, domain: str = ""):
     try:
         answer = gemini_chat(system, user, max_tokens=512)
         return {"ok": True, "answer": answer, "kb_hits": len(kb_results), "model": "gemini-2.5-flash-lite", "question": question}
-    except Exception as e:
-        return {"ok": False, "error": str(e)}
+    except Exception:
+        # I.1: Groq fallback -- if Gemini is down, ask() must not fail entirely
+        try:
+            answer = groq_chat(system, user, max_tokens=512)
+            return {"ok": True, "answer": answer, "kb_hits": len(kb_results), "model": "groq_fallback", "question": question}
+        except Exception as e2:
+            return {"ok": False, "error": str(e2), "note": "both Gemini and Groq fallback failed"}
 
 
 
@@ -3109,7 +3106,8 @@ def t_bulk_apply(executor_override: str = "claude_desktop", dry_run: bool = Fals
         dry_run = dry_run.strip().lower() not in ("false", "0", "no", "")
     try:
         rows = sb_get("evolution_queue",
-                      "select=*&status=in.(pending,pending_desktop)&order=id.asc",
+                      # H.1: slim select -- only fetch needed columns, not fat diff_content
+                      "select=id,change_type,change_summary,diff_content,status,source&status=in.(pending,pending_desktop)&order=id.asc",
                       svc=True)
         if not rows:
             return {"ok": True, "message": "No pending evolutions", "applied": [], "total": 0}
@@ -3735,11 +3733,12 @@ def t_synthesize_evolutions() -> dict:
             svc=True) or []
 
         # 5. Open task_queue items -- pending AND in_progress (full context for Q1+Q3 pre-flight checks)
+        # H.5: safe_select -- task column is a fat JSONB blob, don't load it
         open_tasks_pending = sb_get("task_queue",
-            "select=task,status&status=eq.pending&order=priority.desc&limit=20",
+            "select=id,status,priority&status=eq.pending&order=priority.desc&limit=20",
             svc=True) or []
         open_tasks_inprog = sb_get("task_queue",
-            "select=task,status&status=eq.in_progress&order=priority.desc&limit=10",
+            "select=id,status,priority&status=eq.in_progress&order=priority.desc&limit=10",
             svc=True) or []
         open_tasks = open_tasks_pending + open_tasks_inprog
 
@@ -5995,7 +5994,8 @@ def t_reason_chain(action: str = "", domain: str = "general"):
         return {"ok": False, "error": "action is required"}
     try:
         mistakes = sb_get("mistakes", f"domain=eq.{domain}&order=created_at.desc&limit=5&id=gt.1", svc=True) or []
-        kb = sb_get("knowledge_base", f"domain=eq.{domain}&limit=5&id=gt.1", svc=True) or []
+        # F.1: use semantic search so KB entries are relevant to this specific action, not just domain
+        kb = t_search_kb(query=action, domain=domain, limit=5) or []
         return {
             "ok": True,
             "action": action,
@@ -6128,13 +6128,12 @@ def t_mid_task_correct(anomaly: str = "", last_action: str = "", last_result: st
     if not anomaly:
         return {"ok": False, "error": "anomaly description is required"}
     try:
-        # Search mistakes broadly — anomaly may cross domains
-        all_mistakes = sb_get("mistakes", "order=created_at.desc&limit=10&id=gt.1", svc=True) or []
-        # Filter for semantic relevance by checking key terms in anomaly
-        anomaly_terms = set(anomaly.lower().split())
-        similar = [m for m in all_mistakes if any(t in (m.get("what_failed") or "").lower() for t in anomaly_terms)]
+        # F.9: use t_search_mistakes for proper multi-field semantic search (what_failed+context+root_cause+how_to_avoid)
+        search_result = t_search_mistakes(query=anomaly, limit=8)
+        similar = search_result.get("mistakes", []) if search_result.get("ok") else []
         if not similar:
-            similar = all_mistakes[:5]
+            # Fallback: recent mistakes if query returns nothing
+            similar = sb_get("mistakes", "order=created_at.desc&limit=5&id=gt.1", svc=True) or []
         return {
             "ok": True,
             "anomaly": anomaly,
@@ -6166,7 +6165,8 @@ def t_decompose_task(goal: str = "", domain: str = "general"):
     if not goal:
         return {"ok": False, "error": "goal is required"}
     try:
-        kb = sb_get("knowledge_base", f"domain=eq.{domain}&limit=8&id=gt.1", svc=True) or []
+        # F.2: semantic search on goal text, not just domain filter -- much more relevant results
+        kb = t_search_kb(query=goal, domain=domain, limit=8) or []
         mistakes = sb_get("mistakes", f"domain=eq.{domain}&order=created_at.desc&limit=5&id=gt.1", svc=True) or []
         return {
             "ok": True,
@@ -6257,7 +6257,8 @@ def t_lookahead(current_action: str = "", current_state: str = "", steps_ahead: 
             "current_action": current_action,
             "current_state": current_state,
             "steps_ahead": steps_ahead,
-            "top_failure_patterns": [{"pattern": p.get("pattern"), "domain": p.get("domain"), "freq": p.get("freq")} for p in patterns],
+            # F.3: fix field names -- pattern_frequency table uses pattern_key and frequency, not pattern/freq
+            "top_failure_patterns": [{"pattern": p.get("pattern_key"), "domain": p.get("domain"), "freq": p.get("frequency")} for p in patterns],
             "recent_mistakes": [{"context": m.get("context"), "what_failed": m.get("what_failed"), "root_cause": m.get("root_cause")} for m in mistakes],
             "instruction": f"Claude: model the next {steps_ahead} system states after this action. Return next_states (step, state_after, risk, risk_description), blocking_detected, blocking_reason, recommendation (proceed|reconsider|abort), summary."
         }
@@ -6785,16 +6786,18 @@ TOOLS["test_gemini"] = {"fn": t_test_gemini, "perm": "READ", "args": [],
 # --- AGI-01: Cross-Domain Synthesis ------------------------------------------
 
 def t_synthesize_cross_domain():
-    """AGI-01: Manual trigger for cross-domain synthesis. Runs _run_cross_domain_synthesis() immediately.
-    Reads top patterns per domain, finds structural similarities via Groq,
-    writes insights to knowledge_base(domain=synthesis)."""
+    """AGI-01: Manual trigger for cross-domain synthesis.
+    I.4: Runs in background thread -- _run_cross_domain_synthesis() is a long Groq call
+    that blocks the MCP socket if run synchronously. Now fires async and returns immediately."""
     try:
+        import threading
         from core_train import _run_cross_domain_synthesis
-        _run_cross_domain_synthesis()
+        t = threading.Thread(target=_run_cross_domain_synthesis, daemon=True)
+        t.start()
         return {
             "ok": True,
-            "message": "Cross-domain synthesis triggered. Check Railway logs for [SYNTH] output and Telegram for results.",
-            "instruction": "Check railway_logs_live keyword=SYNTH to monitor progress."
+            "message": "Cross-domain synthesis started in background. Check Railway logs for [SYNTH] output and Telegram for results.",
+            "instruction": "Check railway_logs_live keyword=SYNTH to monitor progress. Returns when complete via Telegram."
         }
     except Exception as e:
         return {"ok": False, "error": str(e)}
