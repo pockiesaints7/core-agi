@@ -997,21 +997,7 @@ def on_start():
                 lines.append(f"  ▶ {title} (P{t.get('priority','?')})")
             task_line = "In progress:\n" + "\n".join(lines)
         else:
-            pending = sb_get(
-                "task_queue",
-                "select=task,priority&source=in.(core_v6_registry,mcp_session)"
-                "&status=eq.pending&task=not.like.*desktop_agent*&order=priority.desc&limit=1"
-            ) or []
-            if pending:
-                raw = pending[0].get("task", "")
-                try:
-                    parsed = json.loads(raw) if isinstance(raw, str) else raw
-                    title = parsed.get("title") or str(parsed)[:60]
-                except Exception:
-                    title = str(raw)[:60]
-                task_line = f"Next up: {title}"
-            else:
-                task_line = "No active tasks"
+            task_line = ""  # already shown in resume line above
     except Exception as e:
         task_line = f"Tasks: unavailable ({e})"
     evo_line = f"Evolutions — pending: {evo_pending} | applied: {evo_applied} | rejected: {evo_rejected}"
@@ -1019,10 +1005,9 @@ def on_start():
         f"<b>CORE Online</b>\n{resume}\n"
         f"KB: {counts.get('knowledge_base',0)} | Mistakes: {counts.get('mistakes',0)} | Sessions: {counts.get('sessions',0)}\n"
         f"MCP: {len(TOOLS)} tools\n"
-        f"{evo_line}\n"
-        f"{task_line}"
+        f"{evo_line}"
     )
-    print(f"[CORE] v6.0 online :{PORT} - {resume}")
+    print(f"[CORE] v8.0 online :{PORT} - {resume}")
 
 
 if __name__ == "__main__":
