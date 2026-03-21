@@ -605,24 +605,26 @@ def _reason_before_execute(user_message: str, system_prompt: str,
     try:
         from core_tools import TOOLS
 
-        # Brain 1: KB
+        # Brain 1: KB — t_search_kb returns list directly
         kb_fn = TOOLS.get("search_kb", {}).get("fn")
         if kb_fn:
             kb = kb_fn(query=user_message[:100], domain="core_agi", limit="5")
-            if kb.get("ok") and kb.get("results"):
+            kb_list = kb if isinstance(kb, list) else kb.get("results", []) if isinstance(kb, dict) else []
+            if kb_list:
                 brain_context += "KB CONTEXT:\n" + "\n".join(
                     f"  [{r.get('topic','')}] {r.get('content','')[:150]}"
-                    for r in kb["results"][:5]
+                    for r in kb_list[:5]
                 ) + "\n"
 
-        # Brain 2: Mistakes
+        # Brain 2: Mistakes — t_get_mistakes returns list directly
         m_fn = TOOLS.get("get_mistakes", {}).get("fn")
         if m_fn:
             m = m_fn(domain="core_agi", limit="3")
-            if m.get("ok") and m.get("mistakes"):
+            m_list = m if isinstance(m, list) else m.get("mistakes", []) if isinstance(m, dict) else []
+            if m_list:
                 brain_context += "RELEVANT MISTAKES:\n" + "\n".join(
-                    f"  {x.get('what_failed','')[:100]} → {x.get('fix','')[:100]}"
-                    for x in m["mistakes"][:3]
+                    f"  {x.get('what_failed','')[:100]} → {x.get('correct_approach','')[:100]}"
+                    for x in m_list[:3]
                 ) + "\n"
 
         # Brain 3: Behavioral rules
