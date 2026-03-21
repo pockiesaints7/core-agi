@@ -106,8 +106,8 @@ _TG_MIME_EXT = {
 MAX_HISTORY_TURNS     = 20
 HISTORY_COMPRESS_AT   = 10
 MAX_TOOL_CALLS        = 50
-MAX_TOOL_RESULT_CHARS = 800
-MAX_CONTEXT_CHARS     = 10000
+MAX_TOOL_RESULT_CHARS = 16000
+MAX_CONTEXT_CHARS     = 16000
 DESKTOP_TASK_TIMEOUT  = 300
 SESSION_CACHE_TTL     = 1800
 CONFIRM_TIMEOUT_SECS  = 120
@@ -849,9 +849,10 @@ def _build_tools_desc(selected_tool_names: list) -> str:
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _compress_result(result_str: str, tool_name: str) -> str:
-    
-    # Meta-tools need higher limit — tool list is intentionally large
-    limit = 6000 if tool_name in ("list_tools", "get_tool_info") else MAX_TOOL_RESULT_CHARS
+    # Meta-tools: never truncate — model needs full data
+    if tool_name in ("list_tools", "get_tool_info", "get_behavioral_rules"):
+        return result_str
+    limit = MAX_TOOL_RESULT_CHARS
     if len(result_str) <= limit:
         return result_str
     try:
@@ -1011,7 +1012,15 @@ def _request_confirmation(cid: str, tool_name: str, tool_args: dict) -> bool:
 
 def _tg_send(cid: str, text: str):
     try:
-        notify(text[:4096], cid=cid)
+        # Split long messages into chunks
+        chunk_size = 4000  # sedikit di bawah 4096 untuk safety
+        if len(text) <= chunk_size:
+            notify(text, cid=cid)
+        else:
+            chunks = [text[i:i+chunk_size] for i in range(0, len(text), chunk_size)]
+            for chunk in chunks:
+                notify(chunk, cid=cid)
+                time.sleep(0.3)  # avoid Telegram flood limit
     except Exception as e:
         print(f"[ORCH] _tg_send error: {e}")
 
@@ -1083,7 +1092,7 @@ def _safe_result(r: str, tool_name: str = "") -> str:
     except Exception:
         pass
     # Everything else — pass through raw, let model read it directly
-    return r[:800]
+    return r
 
 
 def _agentic_loop(cid: str, user_message: str,
