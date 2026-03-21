@@ -865,8 +865,8 @@ def _compress_result(result_str: str, tool_name: str) -> str:
                     compressed[k] = v
                 elif isinstance(v, list):
                     compressed[f"{k}_count"] = len(v)
-                    if k in ("results", "items", "hits", "entries"):
-                        compressed[k] = v[:10]
+                    if k in ("results", "items", "hits", "entries", "tools", "rules", "mistakes"):
+                        compressed[k] = v[:20]
                     elif v and len(str(v[0])) < 200:
                         compressed[f"{k}_first"] = v[0]
                 else:
