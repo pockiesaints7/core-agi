@@ -1308,9 +1308,94 @@ def _reason_before_execute(user_message: str, system_prompt: str,
         return {}
 
 
+def _check_hallucination(reply: str, results_buffer: list) -> dict:
+    """Fast rule-based hallucination guard — no LLM call.
+    Detects when reply claims CONFIRMED/verified facts that don't appear in any tool result.
+    Also detects fake UUIDs, invented timestamps, and fabricated numeric data.
+    Returns: {hallucination_detected, suspicious_claims, correction_hint}
+    """
+    if not reply or not results_buffer:
+        return {"hallucination_detected": False, "suspicious_claims": [], "correction_hint": ""}
+
+    import re as _re
+
+    # Build a single string of all actual tool results for lookup
+    all_results_text = " ".join(
+        r["result"] for r in results_buffer
+    ).lower()
+
+    suspicious = []
+
+    # Check 1: Reply contains UUIDs not present in any tool result
+    uuid_pattern = _re.compile(
+        r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}',
+        _re.IGNORECASE
+    )
+    reply_uuids = uuid_pattern.findall(reply)
+    for uid in reply_uuids:
+        if uid.lower() not in all_results_text:
+            suspicious.append(f"UUID in reply not found in any tool result: {uid[:16]}...")
+
+    # Check 2: Reply claims CONFIRMED/VERIFIED but the specific value isn't in tool results
+    confirmed_pattern = _re.compile(
+        r'(?:CONFIRMED|VERIFIED|confirmed as|verified as)[^.\n]{0,200}',
+        _re.IGNORECASE
+    )
+    confirmed_claims = confirmed_pattern.findall(reply)
+    for claim in confirmed_claims:
+        # Extract numbers from the claim
+        nums = _re.findall(r'\d+\.\d+|\d{4,}', claim)
+        for num in nums:
+            if num not in all_results_text:
+                suspicious.append(f"Confirmed claim contains value not in tool results: {claim[:80]}")
+                break
+
+    # Check 3: Reply contains quality scores as decimals (0.xx) not in tool results
+    score_pattern = _re.compile(r'quality[^.\n]{0,50}(0\.[0-9]{2})', _re.IGNORECASE)
+    score_matches = score_pattern.findall(reply)
+    for score in score_matches:
+        if score not in all_results_text:
+            suspicious.append(f"Quality score {score} in reply not found in tool results")
+
+    # Check 4: Fabricated session IDs pattern (hex strings typical of made-up data)
+    fake_id_pattern = _re.compile(r'[a-f0-9]{8}(?:ef|12|23|34|45|56)[a-f0-9]+', _re.IGNORECASE)
+    fake_ids = fake_id_pattern.findall(reply)
+    for fid in fake_ids:
+        if len(fid) > 20 and fid.lower() not in all_results_text:
+            suspicious.append(f"Suspicious fabricated ID in reply: {fid[:20]}...")
+
+    hallucination_detected = len(suspicious) > 0
+    if hallucination_detected:
+        print(f"[HALLUCINATION GUARD] Detected {len(suspicious)} suspicious claim(s): {suspicious[:2]}")
+
+    return {
+        "hallucination_detected": hallucination_detected,
+        "suspicious_claims": suspicious[:5],
+        "correction_hint": (
+            "Reply contains data not found in any tool result. "
+            "Do NOT invent or assume values. "
+            "If a tool call failed or returned no data, say so explicitly. "
+            "Only report values that appear in the tool results above."
+        ) if hallucination_detected else "",
+    }
+
+
 def _validate_before_reply(user_message: str, reply: str,
                             results_buffer: list, system_prompt: str) -> dict:
-    """Post-execution self-check."""
+    """Post-execution self-check with hallucination guard."""
+
+    # ── Fast hallucination guard — no LLM call ────────────────────────────────
+    if reply and results_buffer:
+        hg = _check_hallucination(reply, results_buffer)
+        if hg["hallucination_detected"]:
+            print(f"[VALIDATOR] Hallucination guard triggered: {hg['suspicious_claims'][:1]}")
+            return {
+                "is_valid": False,
+                "reason": f"Hallucination detected: {hg['suspicious_claims'][0] if hg['suspicious_claims'] else 'fabricated data'}",
+                "corrected_reply": "",
+                "better_approach": hg["correction_hint"],
+            }
+
     results_summary = "\n".join(
         f"[{r['name']}] → {r['result'][:400]}" for r in results_buffer[-10:]
     ) or "No tools called."
@@ -1319,16 +1404,18 @@ def _validate_before_reply(user_message: str, reply: str,
         "You are a quality checker for CORE AGI.\n"
         "Evaluate the draft reply on TWO dimensions:\n"
         "1. CORRECTNESS: does it actually answer the owner's question?\n"
-        "2. OPTIMALITY: was the approach efficient? Could run_python or a simpler path have worked better?\n\n"
+        "2. HALLUCINATION: does the reply contain ANY specific values (IDs, scores, counts, timestamps) "
+        "that are NOT present in the tool results? If yes, is_valid=false.\n"
+        "3. OPTIMALITY: was the approach efficient?\n\n"
         f"OWNER QUESTION: {user_message}\n\n"
         f"TOOL RESULTS AVAILABLE:\n{results_summary}\n\n"
         f"DRAFT REPLY: {reply or '(empty)'}\n\n"
         "Output ONLY valid JSON:\n"
         "{\n"
         '  "is_valid": true/false,\n'
-        '  "reason": "why correct/incorrect and optimal/suboptimal",\n'
-        '  "corrected_reply": "improved reply using available tool results — empty string if reply is already good",\n'
-        '  "better_approach": "if suboptimal, describe smarter path for next time — empty string if approach was fine"\n'
+        '  "reason": "why correct/incorrect — specifically flag if reply contains data not in tool results",\n'
+        '  "corrected_reply": "reply using ONLY data from tool results — empty string if reply is already grounded",\n'
+        '  "better_approach": "smarter path for next time — empty string if approach was fine"\n'
         "}"
     )
     try:
