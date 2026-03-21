@@ -72,7 +72,7 @@ def _get_embedding(text: str) -> list:
         _cc._GEMINI_KEY_INDEX = (_cc._GEMINI_KEY_INDEX + 1) % len(keys)
         try:
             r = httpx.post(
-                f"https://generativelanguage.googleapis.com/v1beta/{_EMBED_MODEL}:embedContent",
+                "https://generativelanguage.googleapis.com/v1/models/text-embedding-004:embedContent",
                 params={"key": key},
                 headers={"Content-Type": "application/json"},
                 json={"model": _EMBED_MODEL,
