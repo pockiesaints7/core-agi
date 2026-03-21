@@ -247,3 +247,48 @@ def gemini_chat(system: str, user: str, max_tokens: int = 2048, json_mode: bool 
             last_err = str(e)
             continue
     raise RuntimeError(f"All {attempts} Gemini keys exhausted. Last error: {last_err}")
+
+def _build_live_schema() -> dict:
+    """
+    Build schema registry from actual Supabase tables at startup.
+    Replaces hardcoded _SB_SCHEMA columns with live data.
+    Falls back to hardcoded if Management API unavailable.
+    """
+    try:
+        import httpx, os
+        from core_config import SUPABASE_REF, SUPABASE_PAT
+        if not SUPABASE_PAT:
+            return {}
+        
+        resp = httpx.post(
+            f"https://api.supabase.com/v1/projects/{SUPABASE_REF}/database/query",
+            headers={
+                "Authorization": f"Bearer {SUPABASE_PAT}",
+                "Content-Type": "application/json",
+            },
+            json={"query": """
+                SELECT table_name, column_name, data_type, is_nullable
+                FROM information_schema.columns
+                WHERE table_schema = 'public'
+                ORDER BY table_name, ordinal_position
+            """},
+            timeout=15,
+        )
+        if resp.status_code not in (200, 201):
+            return {}
+        
+        rows = resp.json()
+        live_schema = {}
+        for row in rows:
+            table = row["table_name"]
+            col   = row["column_name"]
+            dtype = row["data_type"]
+            if table not in live_schema:
+                live_schema[table] = {"columns": {}}
+            live_schema[table]["columns"][col] = dtype
+        
+        print(f"[SCHEMA] Live schema loaded: {len(live_schema)} tables")
+        return live_schema
+    except Exception as e:
+        print(f"[SCHEMA] Live schema failed (using hardcoded): {e}")
+        return {}
