@@ -1074,9 +1074,9 @@ def _execute_railway_tool(tool_name: str, tool_args: dict) -> str:
             print(f"[ORCH] {err}")
             return json.dumps({"ok": False, "error": err})
         fn = TOOLS[tool_name]["fn"]
-        # Unwrap nested args if model passed {"args": {...}} instead of flat dict
         if tool_args and list(tool_args.keys()) == ["args"] and isinstance(tool_args.get("args"), dict):
             tool_args = tool_args["args"]
+        print(f"[ORCH] {tool_name} args: {json.dumps(tool_args, default=str)[:200]}")
         result = fn(**tool_args) if tool_args else fn()
         raw    = json.dumps(result, default=str)
         compressed = _compress_result(raw, tool_name)
