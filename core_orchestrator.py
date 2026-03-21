@@ -210,7 +210,7 @@ def _or_text(system: str, user: str, model: str = None,
 # TOKEN-OPTIMISED TOOL SELECTION — via OpenRouter
 # ══════════════════════════════════════════════════════════════════════════════
 
-_ALWAYS_TOOLS = {"search_kb", "get_mistakes", "task_update", "sb_query"}
+_ALWAYS_TOOLS = {"t_tools", "get_tool_info"}
 
 _TOOL_CATEGORIES = {
     "deploy":    ["redeploy", "build_status", "deploy_and_wait", "validate_syntax",
@@ -837,7 +837,10 @@ def _build_tools_desc(selected_tool_names: list) -> str:
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _compress_result(result_str: str, tool_name: str) -> str:
-    if len(result_str) <= MAX_TOOL_RESULT_CHARS:
+    
+    # Meta-tools need higher limit — tool list is intentionally large
+    limit = 6000 if tool_name in ("list_tools", "get_tool_info") else MAX_TOOL_RESULT_CHARS
+    if len(result_str) <= limit:
         return result_str
     try:
         parsed = json.loads(result_str)
