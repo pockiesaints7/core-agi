@@ -248,7 +248,7 @@ def gemini_chat(system: str, user: str, max_tokens: int = 2048, json_mode: bool 
             continue
     raise RuntimeError(f"All {attempts} Gemini keys exhausted. Last error: {last_err}")
 
-def build_live_schema() -> dict:
+def build_live_schema(supabase_ref: str = "", supabase_pat: str = "") -> dict:
     """
     Build schema registry from actual Supabase tables at startup.
     Replaces hardcoded _SB_SCHEMA columns with live data.
