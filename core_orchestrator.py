@@ -72,7 +72,7 @@ from core_github import notify  # notify(msg, cid=None)
 # ══════════════════════════════════════════════════════════════════════════════
 
 # Primary model for ALL calls — reasoning, tool selection, compression, metacognition
-OPENROUTER_MODEL       = "google/gemini-2.5-flash-lite"   # swap here to change model
+OPENROUTER_MODEL       = "anthropic/claude-haiku-4-5"   # swap here to change model
 OPENROUTER_FAST_MODEL  = "google/gemini-2.5-flash-lite"   # cheap calls: tool select, compress
                                                            # swap to "meta-llama/llama-3.3-70b-instruct:free"
                                                            # or any fast OR model if needed
