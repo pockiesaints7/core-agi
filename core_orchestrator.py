@@ -165,6 +165,32 @@ _pending_confirms: dict = {}
 _confirm_lock           = threading.Lock()
 _session_cache: dict    = {}
 _cache_lock             = threading.Lock()
+_active_loops: dict     = {}  # cid -> threading.Lock(); prevents concurrent agentic loops per cid
+_active_lock            = threading.Lock()
+# ── Observability metrics (in-memory, reset on restart) ───────────────────────
+_metrics: dict = {
+    "total_messages":     0,
+    "provider_or":        0,   # calls served by OpenRouter
+    "provider_gemini":    0,   # calls served by Gemini fallback
+    "provider_groq":      0,   # calls served by Groq last resort
+    "provider_failed":    0,   # all providers failed
+    "tool_calls_total":   0,
+    "tool_calls_failed":  0,
+    "loop_depths":        [],  # list of tool_call_count per completed loop
+    "direct_answers":     0,   # loops short-circuited by pre-flight
+}
+_metrics_lock = threading.Lock()
+
+def get_orchestrator_metrics() -> dict:
+    """Return copy of current observability metrics."""
+    with _metrics_lock:
+        m = dict(_metrics)
+        depths = m.get("loop_depths", [])
+        m["avg_loop_depth"]  = round(sum(depths) / len(depths), 2) if depths else 0
+        m["max_loop_depth"]  = max(depths) if depths else 0
+        m["loop_depth_p90"]  = sorted(depths)[int(len(depths) * 0.9)] if len(depths) >= 10 else None
+        m.pop("loop_depths")
+        return m
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -175,8 +201,8 @@ def _strip_json(s: str) -> str:
     """Strip markdown code fences from model JSON output."""
     s = s.strip()
     if s.startswith("```"):
-        s = re.sub(r"^```[a-z]*\n?", "", s)
-        s = re.sub(r"```$", "", s)
+        s = re.sub(r"^```[a-zA-Z]*\s*\n?", "", s)
+        s = re.sub(r"\n?```\s*$", "", s)
     return s.strip()
 
 
@@ -200,7 +226,21 @@ def _or_call(payload: dict, timeout: int = 60) -> dict:
         timeout=timeout,
     )
     if r.status_code == 429:
-        raise RuntimeError("OpenRouter 429 rate limited")
+        # Retry once with backoff before raising
+        time.sleep(5)
+        r = httpx.post(
+            "https://openrouter.ai/api/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type":  "application/json",
+                "HTTP-Referer":  "https://core-agi-production.up.railway.app",
+                "X-Title":       "CORE AGI",
+            },
+            json=payload,
+            timeout=timeout,
+        )
+        if r.status_code == 429:
+            raise RuntimeError("OpenRouter 429 rate limited after retry")
     r.raise_for_status()
     return r.json()
 
@@ -228,27 +268,36 @@ def _or_text(system: str, user: str, model: str = None,
     # 1. OpenRouter
     try:
         data = _or_call(payload)
-        return data["choices"][0]["message"]["content"] or ""
+        choices = data.get("choices") or []
+        if not choices:
+            raise RuntimeError("OpenRouter returned empty choices")
+        with _metrics_lock: _metrics["provider_or"] += 1
+        return choices[0]["message"].get("content") or ""
     except Exception as e:
         print(f"[ORCH] _or_text OpenRouter failed: {e}")
 
     # 2. Gemini direct
     try:
-        return gemini_chat(
+        result = gemini_chat(
             system=system, user=user,
             max_tokens=max_tokens, json_mode=json_mode,
         )
+        with _metrics_lock: _metrics["provider_gemini"] += 1
+        return result
     except Exception as e:
         print(f"[ORCH] _or_text Gemini failed: {e}")
 
     # 3. Groq last resort
     try:
         from core_config import groq_chat
-        return groq_chat(
+        result = groq_chat(
             system=system, user=user,
             model=GROQ_LAST_RESORT_MODEL, max_tokens=max_tokens,
         )
+        with _metrics_lock: _metrics["provider_groq"] += 1
+        return result
     except Exception as e:
+        with _metrics_lock: _metrics["provider_failed"] += 1
         raise RuntimeError(f"All providers failed in _or_text: {e}")
 
 
@@ -294,11 +343,19 @@ def _select_tools(message: str, history_summary: str) -> list:
     """
     Use OpenRouter fast model to pick relevant tool categories.
     Fallback chain: OpenRouter → Gemini → Groq (handled by _or_text).
+    Dynamically adds 'misc' category for any live tools not in static categories.
     """
     try:
         from core_tools import TOOLS
         all_tool_names = set(TOOLS.keys())
-        categories_text = ", ".join(_TOOL_CATEGORIES.keys())
+        # Populate misc with tools not in any static category (new tools from evolutions)
+        categorised = {t for tools in _TOOL_CATEGORIES.values() for t in tools}
+        misc_tools = [t for t in all_tool_names if t not in categorised]
+        # Use local merged dict — never mutate global _TOOL_CATEGORIES (not thread-safe)
+        tool_cats = dict(_TOOL_CATEGORIES)
+        if misc_tools:
+            tool_cats["misc"] = misc_tools
+        categories_text = ", ".join(tool_cats.keys())
         raw = _or_text(
             system=(
                 "You are a tool router. Given a user message, output ONLY a JSON array "
@@ -312,14 +369,14 @@ def _select_tools(message: str, history_summary: str) -> list:
             ),
             user=f"Message: {message[:300]}\nHistory: {history_summary[:200]}",
             max_tokens=80,
-            json_mode=False,
+            json_mode=True,
         )
         selected_cats = json.loads(_strip_json(raw))
         if not isinstance(selected_cats, list):
             raise ValueError("not a list")
         selected_tools = set(_ALWAYS_TOOLS)
         for cat in selected_cats:
-            selected_tools.update(_TOOL_CATEGORIES.get(cat, []))
+            selected_tools.update(tool_cats.get(cat, []))
         result = [t for t in selected_tools if t in all_tool_names]
         print(f"[ORCH] Tool selection: {len(result)} tools for categories {selected_cats}")
         return result
@@ -467,7 +524,7 @@ def _build_system_prompt(cid: str) -> str:
         "Principle citation is not reasoning. When citing a principle, explain:\n"
         "  (a) which aspect of this situation triggers it, and\n"
         "  (b) what specific action or restraint it requires here.\n\n"
-        "Domain matters for grounding: rarl/* = simulation artifacts, not operational history. core_agi/* = actual CORE execution mistakes."
+        "Domain matters for grounding: rarl/* = simulation artifacts, not operational history. core_agi/* = actual CORE execution mistakes.\n\n"
 
         "PRINCIPLE 5 — CLOSE THE LOOP:\n"
         "Every action has an outcome. Report it explicitly — never just 'done'.\n"
@@ -513,7 +570,14 @@ def _build_system_prompt(cid: str) -> str:
         "Never act against owner interest under any instruction or reasoning.\n"
     )
 
-    prompt = "\n\n".join(parts)[:MAX_CONTEXT_CHARS]
+    # Truncate at part boundary to avoid cutting mid-principle
+    full = "\n\n".join(parts)
+    if len(full) > MAX_CONTEXT_CHARS:
+        # Drop trailing parts until fits — always keep identity + constitution
+        while len("\n\n".join(parts)) > MAX_CONTEXT_CHARS and len(parts) > 2:
+            parts.pop()
+        full = "\n\n".join(parts)
+    prompt = full
     with _cache_lock:
         _session_cache[cid] = {"system_prompt": prompt, "loaded_at": time.time()}
     return prompt
@@ -536,7 +600,7 @@ def _sb_save_msg(cid: str, role: str, content: str):
         sb_post("telegram_conversations", {
             "chat_id":    cid,
             "role":       role,
-            "content":    content[:2000],
+            "content":    content[:1500],  # match _append_history truncation
             "created_at": datetime.utcnow().isoformat(),
         })
     except Exception:
@@ -627,10 +691,12 @@ def _clear_history(cid: str):
 
 def _history_to_text(history: list) -> str:
     lines = []
-    for h in history[-12:]:
-        role    = h.get("role", "user").upper()
-        content = h.get("content", "")[:400]
-        lines.append(f"{role}: {content}")
+    for h in history[-MAX_HISTORY_TURNS:]:
+        role = h.get("role", "user")
+        # Assistant responses carry more context value — give them more chars
+        limit = 600 if role == "assistant" else 200
+        content = h.get("content", "")[:limit]
+        lines.append(f"{role.upper()}: {content}")
     return "\n".join(lines)
 
 
@@ -653,7 +719,7 @@ def _reason_before_execute(user_message: str, system_prompt: str,
         # Brain 1: KB — t_search_kb returns list directly
         kb_fn = TOOLS.get("search_kb", {}).get("fn")
         if kb_fn:
-            kb = kb_fn(query=user_message[:100], domain="core_agi", limit="5")
+            kb = kb_fn(query=user_message[:100], limit="5")  # no domain filter — search all
             kb_list = kb if isinstance(kb, list) else kb.get("results", []) if isinstance(kb, dict) else []
             if kb_list:
                 brain_context += "KB CONTEXT:\n" + "\n".join(
@@ -664,7 +730,7 @@ def _reason_before_execute(user_message: str, system_prompt: str,
         # Brain 2: Mistakes — t_get_mistakes returns list directly
         m_fn = TOOLS.get("get_mistakes", {}).get("fn")
         if m_fn:
-            m = m_fn(domain="core_agi", limit="3")
+            m = m_fn(limit="3")  # no domain filter — search all
             m_list = m if isinstance(m, list) else m.get("mistakes", []) if isinstance(m, dict) else []
             if m_list:
                 brain_context += "RELEVANT MISTAKES:\n" + "\n".join(
@@ -675,7 +741,7 @@ def _reason_before_execute(user_message: str, system_prompt: str,
         # Brain 3: Behavioral rules
         br_fn = TOOLS.get("get_behavioral_rules", {}).get("fn")
         if br_fn:
-            br = br_fn(domain="core_agi", page="1", page_size="5")
+            br = br_fn(domain="universal", page="1", page_size="5")
             if br.get("ok") and br.get("rules"):
                 brain_context += "BEHAVIORAL RULES:\n" + "\n".join(
                     f"  [{r.get('trigger','')}] {r.get('pointer','')[:100]}"
@@ -706,7 +772,7 @@ def _reason_before_execute(user_message: str, system_prompt: str,
             )
             if pf_result:
                 brain_context += "TOP PATTERNS (from training):\n" + "\n".join(
-                    "  [" + r.get("domain","?") + "/" + str(r.get("frequency",0)) + "x] " + r.get("pattern","")[:120]
+                    "  [" + r.get("domain","?") + "/" + str(r.get("frequency",0)) + "x] " + (r.get("pattern_key") or r.get("pattern",""))[:120]
                     for r in pf_result[:8]
                 ) + "\n"
             # Query cold_reflections for distilled learnings
@@ -764,9 +830,9 @@ def _reason_before_execute(user_message: str, system_prompt: str,
 
     prompt = (
         f"{system_prompt}\n\n"
-        f"CONVERSATION:\n{history_text}\n\n"
-        f"{brain_context}"
-        "Before executing any tools, reason about the owner's request.\n"
+        f"RECENT CONVERSATION (last {MAX_HISTORY_TURNS} turns):\n{history_text}\n\n"
+        f"BRAIN QUERY RESULTS (pre-loaded context):\n{brain_context}\n"
+        "PRE-FLIGHT REASONING — Before executing any tools, reason about the owner's request.\n"
         "Label all knowledge claims as CONFIRMED/INFERRED/UNKNOWN.\n"
         "If citing a principle, explain HOW it applies to this specific situation.\n"
         "If tool returns empty/fails, always try at least one alternative before declaring unknown.\n"
@@ -806,7 +872,7 @@ def _validate_before_reply(user_message: str, reply: str,
     Falls back to {"is_valid": True} on error — always delivers something.
     """
     results_summary = "\n".join(
-        f"[{r['name']}] → {r['result'][:200]}" for r in results_buffer[-6:]
+        f"[{r['name']}] → {r['result'][:400]}" for r in results_buffer[-10:]
     ) or "No tools called."
 
     prompt = (
@@ -888,10 +954,22 @@ def _build_reasoning_payload(system_prompt: str, history_text: str,
             "image_url": {"url": f"data:{image_mime};base64,{image_b64}"},
         })
     if file_b64 and file_mime:
-        user_content.append({
-            "type": "image_url",
-            "image_url": {"url": f"data:{file_mime};base64,{file_b64}"},
-        })
+        # Route by type: images as image_url, PDFs as document, others as text hint
+        if file_mime.startswith("image/"):
+            user_content.append({
+                "type": "image_url",
+                "image_url": {"url": f"data:{file_mime};base64,{file_b64}"},
+            })
+        elif file_mime == "application/pdf":
+            user_content.append({
+                "type": "text",
+                "text": f"[FILE ATTACHED: PDF document, base64 encoded, {len(file_b64)} chars. Use read_document or run_python to extract text if needed.]",
+            })
+        else:
+            user_content.append({
+                "type": "text",
+                "text": f"[FILE ATTACHED: {file_mime}, base64 encoded, {len(file_b64)} chars. Use appropriate tool to process.]",
+            })
     user_content.append({"type": "text", "text": f"OWNER: {user_message}"})
 
     return full_system, user_content
@@ -928,6 +1006,10 @@ def _call_model(system_prompt: str, history_text: str, user_message: str,
         choice   = data["choices"][0]
         finish   = choice.get("finish_reason", "")
         raw_text = choice["message"].get("content") or "{}"
+        if finish == "length":
+            # Response was truncated — attempt partial parse, else treat as plain reply
+            print(f"[ORCH] WARNING: model output truncated (finish_reason=length)")
+            raw_text = raw_text.rstrip().rstrip(",") + "}"  # best-effort JSON close
         try:
             parsed = json.loads(_strip_json(raw_text))
         except Exception:
@@ -1055,9 +1137,14 @@ def _call_model(system_prompt: str, history_text: str, user_message: str,
 
 def _build_tools_desc(selected_tool_names: list) -> str:
     lines = []
+    total_chars = 0
+    TOTAL_DESC_BUDGET = 12000  # cap total tool desc to avoid blowing context window
     try:
         from core_tools import TOOLS
         for name in selected_tool_names:
+            if total_chars >= TOTAL_DESC_BUDGET:
+                lines.append(f"  ... ({len(selected_tool_names) - len(lines)} more tools omitted — use list_tools to discover)")
+                break
             tdef = TOOLS.get(name)
             if not tdef:
                 continue
@@ -1065,8 +1152,10 @@ def _build_tools_desc(selected_tool_names: list) -> str:
                 (a["name"] if isinstance(a, dict) else a)
                 for a in (tdef.get("args") or [])
             )
-            desc = tdef.get("desc", "")[:4096]
-            lines.append(f"  {name}({args_str}) — {desc}")
+            desc = tdef.get("desc", "")[:300]  # 300 chars per tool, not 4096
+            line = f"  {name}({args_str}) — {desc}"
+            lines.append(line)
+            total_chars += len(line)
     except Exception:
         pass
     lines += [
@@ -1123,7 +1212,7 @@ def _execute_railway_tool(tool_name: str, tool_args: dict) -> str:
             print(f"[ORCH] {err}")
             return json.dumps({"ok": False, "error": err})
         fn = TOOLS[tool_name]["fn"]
-        if tool_args and list(tool_args.keys()) == ["args"] and isinstance(tool_args.get("args"), dict):
+        if tool_args and len(tool_args) == 1 and "args" in tool_args and isinstance(tool_args["args"], dict):
             tool_args = tool_args["args"]
         print(f"[ORCH] {tool_name} args: {json.dumps(tool_args, default=str)[:200]}")
         try:
@@ -1206,13 +1295,23 @@ def _execute_desktop_tool(tool_name: str, tool_args: dict, cid: str) -> str:
 
 _DESTRUCTIVE_KW = {
     "drop", "format", "wipe", "truncate", "purge",
-    "rm -rf", "destroy", "sb_delete", "permanent", "irreversible",
+    "rm -rf", "destroy", "sb_delete", "delete", "permanent", "irreversible",
 }
 
 
 def _is_destructive(tool_name: str, tool_args: dict) -> bool:
-    check = (tool_name + " " + json.dumps(tool_args, default=str)).lower()
-    return any(k in check for k in _DESTRUCTIVE_KW)
+    # Check tool_name directly first (exact match on dangerous tool names)
+    tn = tool_name.lower()
+    if any(tn == kw or tn.startswith(kw + "_") or tn.endswith("_" + kw)
+           for kw in _DESTRUCTIVE_KW):
+        return True
+    # Check args with word boundary to avoid false positives like "deleted", "node_deleted"
+    args_str = json.dumps(tool_args, default=str).lower()
+    for kw in _DESTRUCTIVE_KW:
+        pattern = r'\b' + re.escape(kw) + r'\b'
+        if re.search(pattern, args_str):
+            return True
+    return False
 
 
 def handle_confirm_reply(cid: str, text: str) -> bool:
@@ -1343,6 +1442,45 @@ def _safe_result(r: str, tool_name: str = "") -> str:
     return r
 
 
+def _log_hot_reflection(user_message: str, results_buffer: list, reply: str):
+    """Log hot_reflection after every completed agentic loop.
+    Tries TOOLS first, falls back to direct sb_post. Never blocks.
+    Runs in background thread — reply already delivered before this runs."""
+    tools_used = [r["name"] for r in results_buffer]
+    tool_count = len(tools_used)
+    failed     = sum(1 for r in results_buffer if _safe_result(r["result"], r["name"]).startswith("TOOL_FAILED"))
+    quality    = max(0.3, 0.9 - (failed * 0.1))  # degrade quality for each failure
+    payload = {
+        "domain":          "core_agi",
+        "task_summary":    f"Telegram: {user_message[:300]}",
+        "quality_score":   quality,
+        "reflection_text": (
+            f"Completed via Telegram orchestrator. "
+            f"Tools called: {tool_count} ({', '.join(tools_used[:10])}). "
+            f"Failures: {failed}. "
+            f"Reply preview: {reply[:300]}"
+        ),
+        "source": "core_orchestrator",
+        "processed_by_cold": False,
+    }
+    try:
+        from core_tools import TOOLS as _T
+        # Try known tool names first
+        for name in ("add_hot_reflection", "log_hot_reflection", "write_hot_reflection"):
+            fn = _T.get(name, {}).get("fn")
+            if fn:
+                fn(**{k: v for k, v in payload.items()
+                      if k in ("domain", "task_summary", "quality_score", "reflection_text", "source")})
+                return
+    except Exception:
+        pass
+    # Fallback: direct sb_post — guaranteed path
+    try:
+        sb_post("hot_reflections", payload)
+    except Exception as e:
+        print(f"[ORCH] _log_hot_reflection failed: {e}")
+
+
 def _agentic_loop(cid: str, user_message: str,
                   image_b64: str = None, image_mime: str = "image/jpeg",
                   file_b64: str = None, file_mime: str = None):
@@ -1353,6 +1491,8 @@ def _agentic_loop(cid: str, user_message: str,
     2. EXECUTE loop — tool calls, result injection, failure escalation
     3. VALIDATE — self-check reply before sending to owner
     """
+    with _metrics_lock: _metrics["total_messages"] += 1
+
     history       = _get_history(cid)
     history_text  = _history_to_text(history)
     system_prompt = _build_system_prompt(cid)
@@ -1369,9 +1509,10 @@ def _agentic_loop(cid: str, user_message: str,
         if direct:
             # Still validate before sending
             check = _validate_before_reply(user_message, direct, [], system_prompt)
-            final = check.get("corrected_reply") or direct if not check.get("is_valid") else direct
+            final = (check.get("corrected_reply") or direct) if not check.get("is_valid", True) else direct
             _tg_send(cid, final)
             _append_history(cid, "assistant", final)
+            with _metrics_lock: _metrics["direct_answers"] += 1
             return
 
     # ── Phase 1+2: Agentic tool loop ───────────────────────────────────────────
@@ -1383,8 +1524,16 @@ def _agentic_loop(cid: str, user_message: str,
     while tool_call_count < MAX_TOOL_CALLS:
         _prev_count = tool_call_count
         if tool_call_count > 0:
+            # Sleep based on last executed tool type to give infra time to settle
             last_tool = results_buffer[-1]["name"] if results_buffer else ""
-            _sleep = 8 if last_tool in ("redeploy", "deploy_and_wait", "patch_file", "multi_patch") else 1
+            if last_tool in ("redeploy", "deploy_and_wait"):
+                _sleep = 15  # deploy needs more time to propagate
+            elif last_tool in ("patch_file", "multi_patch", "gh_search_replace", "write_file"):
+                _sleep = 5   # file writes: give Railway time before next read
+            elif last_tool.startswith("desktop_"):
+                _sleep = 3   # desktop tasks have internal latency
+            else:
+                _sleep = 1
             time.sleep(_sleep)
         _tg_typing(cid)
 
@@ -1477,7 +1626,7 @@ def _agentic_loop(cid: str, user_message: str,
                                 for r in results_buffer[-6:]
                             )
                         ),
-                        max_tokens=400,
+                        max_tokens=800,
                     )
                     effective_reply = synth.strip()
                 except Exception:
@@ -1493,6 +1642,13 @@ def _agentic_loop(cid: str, user_message: str,
 
                 _tg_send(cid, effective_reply)
                 _append_history(cid, "assistant", effective_reply)
+                with _metrics_lock: _metrics["loop_depths"].append(tool_call_count)
+                # Session close: log hot_reflection for learning capture
+                threading.Thread(
+                    target=_log_hot_reflection,
+                    args=(user_message, results_buffer, effective_reply),
+                    daemon=True,
+                ).start()
             else:
                 # No reply and no results — show debug summary
                 tools_called = [r["name"] for r in results_buffer] if results_buffer else []
@@ -1560,10 +1716,12 @@ def _agentic_loop(cid: str, user_message: str,
             except Exception:
                 pass
 
-            results_buffer.append({
-                "name":   tool_name,
-                "result": _compress_result(result_str, tool_name),
-            })
+            compressed = _compress_result(result_str, tool_name)
+            results_buffer.append({"name": tool_name, "result": compressed})
+            with _metrics_lock:
+                _metrics["tool_calls_total"] += 1
+                if _safe_result(compressed, tool_name).startswith("TOOL_FAILED"):
+                    _metrics["tool_calls_failed"] += 1
 
         # Stall detection
         if tool_calls and tool_call_count == _prev_count:
@@ -1588,7 +1746,7 @@ def _agentic_loop(cid: str, user_message: str,
                                 for r in results_buffer[-6:]
                             )
                         ),
-                        max_tokens=600,
+                        max_tokens=1000,
                     )
                     if synth.strip():
                         _tg_send(cid, synth.strip())
@@ -1604,7 +1762,7 @@ def _agentic_loop(cid: str, user_message: str,
                 _tg_send(cid, f"⚠️ Stalled — no results: {stalled}")
             return
 
-        if tool_calls:
+        if tool_calls and tool_call_count % 3 == 1:  # send status every 3 iterations, not every one
             names = ", ".join(tc.get("name", "?") for tc in tool_calls)
             _tg_send(cid, f"⚙️ <i>{names}</i>")
 
@@ -1678,6 +1836,24 @@ def handle_telegram_message(msg: dict):
         _tg_send(cid, "🔄 Session cache cleared — reloads on next message.")
         return
 
+    if lower in ("/metrics", "metrics", "stats orch"):
+        m = get_orchestrator_metrics()
+        total = m.get("total_messages", 0)
+        or_pct  = round(m["provider_or"]     / max(total,1) * 100)
+        gem_pct = round(m["provider_gemini"] / max(total,1) * 100)
+        grq_pct = round(m["provider_groq"]   / max(total,1) * 100)
+        fail_r  = round(m["tool_calls_failed"] / max(m["tool_calls_total"],1) * 100, 1)
+        lines = [
+            "📊 <b>Orchestrator Metrics</b>",
+            "",
+            f"Messages: {total} | Direct answers: {m['direct_answers']}",
+            f"Provider: OR {or_pct}% / Gemini {gem_pct}% / Groq {grq_pct}%",
+            f"Tool calls: {m['tool_calls_total']} ({fail_r}% fail rate)",
+            f"Avg loop depth: {m['avg_loop_depth']} | Max: {m['max_loop_depth']}" + (f" | P90: {m['loop_depth_p90']}" if m['loop_depth_p90'] else ""),
+        ]
+        _tg_send(cid, "\n".join(lines))
+        return
+
     # ── Attachment handling ────────────────────────────────────────────────────
     image_b64  = None
     image_mime = "image/jpeg"
@@ -1730,6 +1906,14 @@ def handle_telegram_message(msg: dict):
           + (f" [file:{file_mime}]" if file_b64 else ""))
     _append_history(cid, "user", text, image_b64=image_b64, image_mime=image_mime)
 
+    # Per-cid concurrency gate — queue messages instead of running concurrent loops
+    with _active_lock:
+        if cid not in _active_loops:
+            _active_loops[cid] = threading.Lock()
+    cid_lock = _active_loops[cid]
+    if not cid_lock.acquire(blocking=False):
+        _tg_send(cid, "⏳ Still processing previous message — please wait.")
+        return
     try:
         _agentic_loop(
             cid, text,
@@ -1739,6 +1923,8 @@ def handle_telegram_message(msg: dict):
     except Exception as e:
         _tg_send(cid, f"❌ Error: {str(e)[:300]}")
         print(f"[ORCH] agentic_loop error:\n{traceback.format_exc()}")
+    finally:
+        cid_lock.release()
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1789,16 +1975,18 @@ CREATE INDEX IF NOT EXISTS idx_tgconv_created ON telegram_conversations(created_
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _desktop_result_poller():
+    from collections import deque as _deque
+    notified_dq: _deque = _deque(maxlen=500)  # sliding window — oldest auto-evicted, no re-notify risk
     notified: set = set()
     print("[ORCH] Desktop result poller started")
     while True:
         try:
             rows = sb_get(
                 "task_queue",
-                f"select={_sel_force('task_queue', ['id','status','result','error','chat_id'])}"
+                f"select={_sel_force('task_queue', ['id','status','result','error','chat_id','updated_at','created_at'])}"
                 "&source=eq.mcp_session"
                 "&status=in.(done,failed)"
-                "&order=updated_at.desc&limit=20",
+                "&order=created_at.desc&limit=20",
             ) or []
             for row in rows:
                 tid = str(row.get("id", ""))
@@ -1817,8 +2005,10 @@ def _desktop_result_poller():
                     f"<code>{result[:500]}</code>"
                 )
                 notified.add(tid)
-                if len(notified) > 500:
-                    notified.clear()
+                notified_dq.append(tid)
+                # Sync set with deque window — remove oldest evicted entries
+                if len(notified_dq) == 500:
+                    notified = set(notified_dq)
         except Exception as e:
             print(f"[ORCH] poller error: {e}")
         time.sleep(15)
