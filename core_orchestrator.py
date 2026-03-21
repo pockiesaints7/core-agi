@@ -353,7 +353,10 @@ def _build_system_prompt(cid: str) -> str:
         "CONSTITUTION: Owner=REINVAGNAR always. "
         "Never expose credentials. "
         "Never take destructive action without owner approval. "
-        "When in doubt, do less and ask."
+        "When in doubt, do less and ask. "
+        "If owner says 'plan only', 'do not execute', 'just plan', or 'dry run' — "
+        "respond with a numbered plan using tool names WITHOUT calling any tools. "
+        "Only execute when owner explicitly says 'go', 'execute', or 'do it'."
     )
 
     prompt = "\n\n".join(parts)[:MAX_CONTEXT_CHARS]
