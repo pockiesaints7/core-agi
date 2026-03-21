@@ -1066,6 +1066,144 @@ def t_run_python(code: str = "", timeout: str = "10") -> dict:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# META-TOOLS — tool self-awareness
+# ══════════════════════════════════════════════════════════════════════════════
+
+def t_list_tools(category: str = "", search: str = "") -> dict:
+    """
+    List all available tools in the TOOLS registry.
+    category: optional filter by category name (deploy/code/training/system/
+              railway/knowledge/task/web/document/image/utils/agentic/crypto/project)
+    search:   optional keyword filter on tool name + description
+    Returns full list with name, args, desc per tool.
+    """
+    try:
+        from core_tools import TOOLS
+        # Category map — mirrors _TOOL_CATEGORIES in core_orchestrator.py
+        CATEGORIES = {
+            "deploy":    ["redeploy", "build_status", "deploy_and_wait", "validate_syntax",
+                          "patch_file", "multi_patch", "gh_search_replace", "railway_logs_live"],
+            "code":      ["read_file", "write_file", "gh_read_lines", "search_in_file",
+                          "core_py_fn", "core_py_validate", "append_to_file", "diff"],
+            "training":  ["trigger_cold_processor", "get_training_pipeline", "list_evolutions",
+                          "approve_evolution", "reject_evolution", "check_evolutions",
+                          "bulk_reject_evolutions", "backfill_patterns"],
+            "system":    ["get_state", "get_system_health", "stats", "build_status",
+                          "crash_report", "system_map_scan", "sync_system_map"],
+            "railway":   ["railway_env_get", "railway_env_set", "railway_logs_live",
+                          "railway_service_info", "redeploy", "build_status"],
+            "knowledge": ["search_kb", "add_knowledge", "kb_update", "get_mistakes",
+                          "search_mistakes", "ask"],
+            "task":      ["task_add", "task_update", "task_health", "synthesize_evolutions",
+                          "sb_query", "sb_insert", "sb_patch"],
+            "crypto":    ["crypto_price", "crypto_balance", "crypto_trade"],
+            "project":   ["project_list", "project_get", "project_search", "project_register",
+                          "project_update_kb", "project_index"],
+            "agentic":   ["reason_chain", "lookahead", "decompose_task", "negative_space",
+                          "predict_failure", "action_gate", "loop_detect"],
+            "web":       ["web_search", "web_fetch", "summarize_url"],
+            "document":  ["create_document", "create_spreadsheet", "create_presentation",
+                          "read_document", "convert_document"],
+            "image":     ["generate_image", "image_process"],
+            "utils":     ["weather", "calc", "datetime_now", "currency", "translate",
+                          "run_python", "list_tools", "get_tool_info"],
+        }
+
+        # Resolve which tool names to include
+        cat = category.lower().strip() if category else ""
+        if cat:
+            if cat not in CATEGORIES:
+                available = ", ".join(CATEGORIES.keys())
+                return {
+                    "ok": False,
+                    "error": f"unknown category '{cat}'. Available: {available}"
+                }
+            candidate_names = CATEGORIES[cat]
+        else:
+            candidate_names = list(TOOLS.keys())
+
+        results = []
+        kw = search.lower().strip() if search else ""
+        for name in candidate_names:
+            tdef = TOOLS.get(name)
+            if not tdef:
+                continue
+            desc = tdef.get("desc", "")
+            # Keyword filter
+            if kw and kw not in name.lower() and kw not in desc.lower():
+                continue
+            args_str = ", ".join(
+                (a["name"] if isinstance(a, dict) else str(a))
+                for a in (tdef.get("args") or [])
+            )
+            results.append({
+                "name": name,
+                "args": args_str,
+                "perm": tdef.get("perm", ""),
+                "desc": desc[:120],
+            })
+
+        return {
+            "ok":       True,
+            "total":    len(TOOLS),
+            "filtered": len(results),
+            "category": cat or "all",
+            "search":   search or "",
+            "tools":    results,
+        }
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def t_get_tool_info(name: str = "") -> dict:
+    """
+    Get full detail of a specific tool by exact name.
+    Returns args (with types if available), full description, permission level.
+    Use this before calling an unfamiliar tool to verify correct parameter names.
+    """
+    if not name:
+        return {"ok": False, "error": "name required"}
+    try:
+        from core_tools import TOOLS
+        name = name.strip()
+        tdef = TOOLS.get(name)
+        if not tdef:
+            # Fuzzy suggest
+            close = [t for t in TOOLS if name.lower() in t.lower()]
+            return {
+                "ok":      False,
+                "error":   f"tool '{name}' not found",
+                "similar": close[:10],
+            }
+        args = tdef.get("args") or []
+        args_detail = []
+        for a in args:
+            if isinstance(a, dict):
+                args_detail.append({
+                    "name":     a.get("name", ""),
+                    "type":     a.get("type", "string"),
+                    "required": a.get("required", False),
+                    "default":  a.get("default", ""),
+                })
+            else:
+                args_detail.append({"name": str(a), "type": "string"})
+
+        return {
+            "ok":   True,
+            "name": name,
+            "perm": tdef.get("perm", ""),
+            "desc": tdef.get("desc", ""),
+            "args": args_detail,
+            "args_simple": ", ".join(
+                (a["name"] if isinstance(a, dict) else str(a))
+                for a in args
+            ),
+        }
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # TOOLS REGISTRATION
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -1167,4 +1305,16 @@ def _register_web_tools(TOOLS: dict) -> None:
         "perm": "EXECUTE",
         "args": ["code", "timeout"],
         "desc": "Execute Python code on Railway. Safe subprocess, max 30s. Returns stdout+stderr. Good for calculations, data transforms.",
+    }
+    TOOLS["list_tools"] = {
+        "fn":   t_list_tools,
+        "perm": "READ",
+        "args": ["category", "search"],
+        "desc": "List all available tools. category= filter by category name (deploy/code/training/system/railway/knowledge/task/web/document/image/utils/agentic/crypto/project). search= keyword filter on name+desc. Returns name, args, desc per tool.",
+    }
+    TOOLS["get_tool_info"] = {
+        "fn":   t_get_tool_info,
+        "perm": "READ",
+        "args": ["name"],
+        "desc": "Get full detail of a specific tool by name: args, desc, perm. Use before calling an unfamiliar tool to verify correct args.",
     }
