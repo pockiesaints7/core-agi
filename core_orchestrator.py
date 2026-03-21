@@ -412,15 +412,16 @@ def _build_dynamic_context(recent_text: str = "") -> str:
     parts = []
     recent_lower = recent_text.lower()[:200]
 
-    # Extract keywords from recent conversation for KB search
-    # Strip common words, keep nouns/verbs likely to match KB topics
+    # Extract keywords — min 5 chars, alphanumeric only, skip stop words
     import re as _re
     stop = {"the","a","an","is","are","was","were","i","you","we","it","to","of",
             "and","or","in","on","at","for","with","do","did","can","could","would",
             "please","kalau","yang","ada","ini","itu","ke","dari","sudah","bisa",
-            "mau","perlu","tidak","bukan","tapi","juga","saya","kamu","dia"}
-    words = [w for w in _re.findall(r"[a-zA-Z]{4,}", recent_lower) if w not in stop]
-    keywords = list(dict.fromkeys(words))[:5]  # deduplicated, max 5
+            "mau","perlu","tidak","bukan","tapi","juga","saya","kamu","dia",
+            "that","this","have","from","they","them","will","what","when","where",
+            "brp","gitu","udah","mana","kami","core","tool","tools"}
+    words = [w for w in _re.findall(r"[a-zA-Z]{5,}", recent_lower) if w not in stop]
+    keywords = list(dict.fromkeys(words))[:4]  # deduplicated, max 4
 
     results = {}
 
@@ -428,16 +429,26 @@ def _build_dynamic_context(recent_text: str = "") -> str:
         try:
             if not keywords:
                 return
-            # Search KB for entries matching any keyword
-            # Use OR filter: topic contains keyword1 OR keyword2...
-            filters = ",".join(f"topic.ilike.*{k}*,content.ilike.*{k}*" for k in keywords[:3])
+            # PostgREST OR syntax: or=(col.op.val,col.op.val)
+            # Safe: one filter per keyword on topic column only (reliable, no 400s)
+            # Use first 2 keywords to keep URL short
+            kw_filters = ",".join(f"topic.ilike.*{k}*" for k in keywords[:2])
             rows = sb_get(
                 "knowledge_base",
                 f"select={_sel_force('knowledge_base', ['domain','topic','content','source_type'])}"
-                f"&or=({filters})"
+                f"&or=({kw_filters})"
                 f"&active=eq.true&order=confidence.desc&limit=5",
                 svc=True,
             ) or []
+            # Fallback: if OR returned nothing, try single keyword fulltext on topic
+            if not rows and keywords:
+                rows = sb_get(
+                    "knowledge_base",
+                    f"select={_sel_force('knowledge_base', ['domain','topic','content','source_type'])}"
+                    f"&topic=ilike.*{keywords[0]}*"
+                    f"&active=eq.true&order=confidence.desc&limit=5",
+                    svc=True,
+                ) or []
             if rows:
                 lines = []
                 for r in rows:
