@@ -1,6 +1,7 @@
 """core_embeddings.py — CORE AGI Semantic Embedding Layer (P3-01 / P3-04)
 =========================================================================
-Provides vector embeddings via Gemini text-embedding-004 (free tier).
+Provides vector embeddings via Voyage AI voyage-3-lite (1024-dim).
+Fallback: Gemini text-embedding-004 (768-dim, geo-blocked on Railway US-WEST).
 Used by:
   - t_embed_kb_entry        — embed one KB entry and store in knowledge_base.embedding
   - t_semantic_kb_search    — cosine similarity search via pgvector <=> operator
@@ -10,7 +11,7 @@ Used by:
 
 SUPABASE DDL REQUIRED (run manually once):
   -- P3-01: add embedding column to knowledge_base
-  ALTER TABLE knowledge_base ADD COLUMN IF NOT EXISTS embedding vector(768);
+  ALTER TABLE knowledge_base ADD COLUMN IF NOT EXISTS embedding vector(1024);
   CREATE INDEX IF NOT EXISTS idx_kb_embedding
     ON knowledge_base USING ivfflat (embedding vector_cosine_ops)
     WITH (lists = 100);
@@ -20,7 +21,7 @@ SUPABASE DDL REQUIRED (run manually once):
       id          BIGSERIAL PRIMARY KEY,
       chat_id     TEXT NOT NULL,
       summary     TEXT NOT NULL,
-      embedding   vector(768),
+      embedding   vector(1024),
       turn_start  TIMESTAMPTZ,
       turn_end    TIMESTAMPTZ,
       topic_tags  TEXT[],
@@ -32,7 +33,8 @@ SUPABASE DDL REQUIRED (run manually once):
     ON conversation_episodes USING ivfflat (embedding vector_cosine_ops)
     WITH (lists = 50);
 
-Depends on: core_config (SUPABASE_URL, _sbh, sb_get, sb_patch, sb_post, _GEMINI_KEYS)
+Depends on: core_config (SUPABASE_URL, _sbh, sb_get, sb_patch, sb_post)
+Env vars: VOYAGE_API_KEY (primary), GEMINI_KEYS (fallback, likely geo-blocked on Railway)
 """
 import json
 import time
@@ -47,10 +49,13 @@ from core_config import (
 )
 
 # ── Constants ──────────────────────────────────────────────────────────────────
-_EMBED_MODEL   = "models/text-embedding-004"
-_EMBED_DIM     = 768
-_EMBED_BATCH   = 20           # entries per backfill batch
-_EMBED_SLEEP   = 1.0          # seconds between batches (rate-limit buffer)
+_EMBED_MODEL   = "voyage-3-lite"   # Voyage AI primary — 1024-dim, not geo-blocked
+_EMBED_DIM     = 1024              # Voyage voyage-3-lite output dimension
+_EMBED_BATCH   = 20                # entries per backfill batch
+_EMBED_SLEEP   = 1.0               # seconds between batches (rate-limit buffer)
+
+import os as _os
+_VOYAGE_API_KEY = _os.environ.get("VOYAGE_API_KEY", "")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -58,40 +63,77 @@ _EMBED_SLEEP   = 1.0          # seconds between batches (rate-limit buffer)
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _get_embedding(text: str) -> list:
-    """Call Gemini text-embedding-004 and return 768-dim float list.
-    Raises RuntimeError if all keys exhausted or API error."""
+    """Return embedding vector for text.
+    Primary: Voyage AI voyage-3-lite (1024-dim) — not geo-blocked on Railway.
+    Fallback: Gemini text-embedding-004 (768-dim) — geo-blocked on Railway US-WEST.
+    Raises RuntimeError if all providers fail.
+    """
     import core_config as _cc
-    keys = _cc._GEMINI_KEYS
-    if not keys:
-        raise RuntimeError("GEMINI_KEYS not set — cannot generate embeddings")
-
-    text = text.strip()[:8000]   # API limit
+    text = text.strip()[:8000]
     last_err = None
-    for _ in range(len(keys)):
-        key = keys[_cc._GEMINI_KEY_INDEX % len(keys)]
-        _cc._GEMINI_KEY_INDEX = (_cc._GEMINI_KEY_INDEX + 1) % len(keys)
+
+    # ── Primary: Voyage AI ────────────────────────────────────────────────────
+    voyage_key = _os.environ.get("VOYAGE_API_KEY", "") or _VOYAGE_API_KEY
+    if voyage_key:
         try:
             r = httpx.post(
-                "https://generativelanguage.googleapis.com/v1/models/text-embedding-004:embedContent",
-                params={"key": key},
-                headers={"Content-Type": "application/json"},
-                json={"model": _EMBED_MODEL,
-                      "content": {"parts": [{"text": text}]}},
+                "https://api.voyageai.com/v1/embeddings",
+                headers={
+                    "Authorization": f"Bearer {voyage_key}",
+                    "Content-Type": "application/json",
+                },
+                json={"model": "voyage-3-lite", "input": [text]},
                 timeout=15,
             )
             if r.status_code == 429:
-                last_err = "429 rate limit"
                 time.sleep(2)
-                continue
+                r = httpx.post(
+                    "https://api.voyageai.com/v1/embeddings",
+                    headers={
+                        "Authorization": f"Bearer {voyage_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json={"model": "voyage-3-lite", "input": [text]},
+                    timeout=15,
+                )
             r.raise_for_status()
-            values = r.json()["embedding"]["values"]
-            if len(values) != _EMBED_DIM:
-                raise ValueError(f"Expected {_EMBED_DIM} dims, got {len(values)}")
+            values = r.json()["data"][0]["embedding"]
+            if not values:
+                raise ValueError("empty embedding returned")
             return values
         except Exception as e:
-            last_err = str(e)
-            continue
-    raise RuntimeError(f"All Gemini keys failed for embedding. Last: {last_err}")
+            last_err = f"Voyage: {e}"
+            print(f"[EMBED] Voyage failed: {e} — trying Gemini fallback")
+
+    # ── Fallback: Gemini ──────────────────────────────────────────────────────
+    keys = _cc._GEMINI_KEYS
+    if keys:
+        for _ in range(len(keys)):
+            key = keys[_cc._GEMINI_KEY_INDEX % len(keys)]
+            _cc._GEMINI_KEY_INDEX = (_cc._GEMINI_KEY_INDEX + 1) % len(keys)
+            try:
+                r = httpx.post(
+                    "https://generativelanguage.googleapis.com/v1/models/text-embedding-004:embedContent",
+                    params={"key": key},
+                    headers={"Content-Type": "application/json"},
+                    json={"model": "models/text-embedding-004",
+                          "content": {"parts": [{"text": text}]}},
+                    timeout=15,
+                )
+                if r.status_code == 429:
+                    last_err = "Gemini 429 rate limit"
+                    time.sleep(2)
+                    continue
+                r.raise_for_status()
+                values = r.json()["embedding"]["values"]
+                if not values:
+                    raise ValueError("empty embedding")
+                return values
+            except Exception as e:
+                last_err = f"Gemini: {e}"
+                continue
+
+    raise RuntimeError(f"All embedding providers failed. Last: {last_err}")
 
 
 def _embed_text_safe(text: str) -> list:
@@ -119,7 +161,7 @@ def _kb_text(row: dict) -> str:
 def t_embed_kb_entry(kb_id: str = "") -> dict:
     """P3-01: Embed a single knowledge_base entry by id.
     Calls Gemini text-embedding-004, stores result in knowledge_base.embedding column.
-    REQUIRES: knowledge_base.embedding vector(768) column to exist.
+    REQUIRES: knowledge_base.embedding vector(1024) column to exist.
     Returns: {ok, id, dims, topic}
     """
     if not kb_id:
@@ -154,7 +196,7 @@ def t_semantic_kb_search(query: str = "", domain: str = "",
                           limit: str = "10", threshold: str = "0.70") -> dict:
     """P3-01: Semantic KB search using vector cosine similarity.
     Falls back to ilike if pgvector not available or embedding returns empty.
-    REQUIRES: knowledge_base.embedding vector(768) column + ivfflat index.
+    REQUIRES: knowledge_base.embedding vector(1024) column + ivfflat index.
     Returns same format as t_search_kb for drop-in compatibility.
     """
     if not query:
@@ -440,14 +482,14 @@ def t_semantic_episode_search(chat_id: str = "", query: str = "", limit: str = "
 CREATE EXTENSION IF NOT EXISTS vector;
 
 -- P3-01: KB embedding column
-ALTER TABLE knowledge_base ADD COLUMN IF NOT EXISTS embedding vector(768);
+ALTER TABLE knowledge_base ADD COLUMN IF NOT EXISTS embedding vector(1024);
 CREATE INDEX IF NOT EXISTS idx_kb_embedding
   ON knowledge_base USING ivfflat (embedding vector_cosine_ops)
   WITH (lists = 100);
 
 -- P3-01: RPC function for cosine similarity search
 CREATE OR REPLACE FUNCTION match_knowledge_base(
-  query_embedding vector(768),
+  query_embedding vector(1024),
   match_threshold float DEFAULT 0.70,
   match_count     int   DEFAULT 10,
   filter_domain   text  DEFAULT NULL
@@ -484,7 +526,7 @@ CREATE TABLE IF NOT EXISTS conversation_episodes (
   id          BIGSERIAL PRIMARY KEY,
   chat_id     TEXT NOT NULL,
   summary     TEXT NOT NULL,
-  embedding   vector(768),
+  embedding   vector(1024),
   turn_start  TIMESTAMPTZ,
   turn_end    TIMESTAMPTZ,
   topic_tags  TEXT[],
@@ -498,7 +540,7 @@ CREATE INDEX IF NOT EXISTS idx_episodes_embedding
 
 -- P3-04: RPC function for episode similarity search
 CREATE OR REPLACE FUNCTION match_conversation_episodes(
-  query_embedding vector(768),
+  query_embedding vector(1024),
   match_threshold float DEFAULT 0.65,
   match_count     int   DEFAULT 3,
   filter_chat_id  text  DEFAULT NULL
