@@ -23,7 +23,7 @@ from core_config import (
     GITHUB_REPO, KB_MINE_BATCH_SIZE, KB_MINE_RATIO_THRESHOLD,
     COLD_HOT_THRESHOLD, COLD_KB_GROWTH_THRESHOLD, PATTERN_EVO_THRESHOLD,
     KNOWLEDGE_AUTO_CONFIDENCE, MCP_PROTOCOL_VERSION, SUPABASE_URL, SUPABASE_REF, SUPABASE_PAT,
-    L, gemini_chat, sb_get, sb_post, sb_post_critical, sb_patch, sb_upsert, sb_delete,
+    L, gemini_chat, groq_chat, sb_get, sb_post, sb_post_critical, sb_patch, sb_upsert, sb_delete,
 )
 from core_config import _sbh, _sbh_count_svc
 from core_github import _ghh, _gh_blob_read, _gh_blob_write, gh_read, gh_write, notify
@@ -253,98 +253,31 @@ _SB_SCHEMA = {
             "on_conflict": "name",
             "notes": "Use id=gt.1."
         },
-        "telegram_conversations": {
-            "pk": "id", "pk_type": "bigserial",
-            "columns": {"id": "bigint", "chat_id": "text", "role": "text",
-                        "content": "text", "deleted": "boolean", "created_at": "timestamptz"},
-            "required": ["chat_id", "role"],
-            "enums": {"role": ["user", "assistant", "system"]},
-            "fat_columns": ["content"],
-            "safe_select": "id,chat_id,role,created_at",
-            "notes": "Use id=gt.1. Created by core_orchestrator._ensure_table() on first run."
-        },
     }
 }
 
-# ── Live schema merge — runs once at import time ──────────────────────────────
-# Fetches real column definitions from Supabase information_schema and patches
-# _SB_SCHEMA["tables"] so all validators use live data, not hardcoded snapshots.
-# Falls back silently to hardcoded if PAT missing or Management API unavailable.
-from core_config import build_live_schema as _build_live_schema
-_live_schema = _build_live_schema(SUPABASE_REF, SUPABASE_PAT)
-if _live_schema:
-    _tombstones  = _SB_SCHEMA.get("_tombstone", set())
-    _schema_tbls = _SB_SCHEMA.setdefault("tables", {})
-    _patched = 0
-    _added   = 0
-    for _tname, _tdata in _live_schema.items():
-        if _tname in _tombstones:
+from core_config import build_live_schema
+_live = build_live_schema(SUPABASE_REF, SUPABASE_PAT)
+if _live:
+    _tombstones = _SB_SCHEMA.get("_tombstone", set())
+    _tables     = _SB_SCHEMA.get("tables", {})
+    for table, live_data in _live.items():
+        if table in _tombstones:
             continue
-        _live_cols = _tdata.get("columns", {})
-        if not _live_cols:
-            continue
-        if _tname in _schema_tbls:
-            # Patch existing entry: update columns, trim safe_select to valid cols only
-            _schema_tbls[_tname]["columns"] = _live_cols
-            _existing_safe = _schema_tbls[_tname].get("safe_select", "")
-            if _existing_safe:
-                _valid = [c for c in _existing_safe.split(",") if c.strip() in _live_cols]
-                if _valid:
-                    _schema_tbls[_tname]["safe_select"] = ",".join(_valid)
-            _patched += 1
-        else:
-            # New table not in hardcoded registry — register it with minimal metadata
-            _schema_tbls[_tname] = {
-                "pk": "id",
-                "pk_type": "bigserial",  # conservative default; override if needed
-                "columns": _live_cols,
-                "required": [],
-                "enums": {},
-                "fat_columns": [],
-                "safe_select": ",".join(list(_live_cols.keys())[:8]),
-                "notes": f"Auto-registered from live schema at startup. {len(_live_cols)} columns.",
-            }
-            _added += 1
-    print(f"[SCHEMA] Live merge complete: {_patched} patched, {_added} new tables registered")
-else:
-    print("[SCHEMA] Live merge skipped — using hardcoded _SB_SCHEMA")
+        if table in _tables:
+            _tables[table]["columns"] = live_data["columns"]
+            # Also update safe_select to only include columns that actually exist
+            existing_safe = _tables[table].get("safe_select", "")
+            if existing_safe:
+                valid_cols = [c for c in existing_safe.split(",") if c.strip() in live_data["columns"]]
+                if valid_cols:
+                    _tables[table]["safe_select"] = ",".join(valid_cols)
+    print(f"[SCHEMA] Patched {len(_live)} tables in _SB_SCHEMA with live columns")
 
 def _sb_schema(table: str) -> dict:
     """Return schema entry for a table, or empty dict if unknown."""
     return _SB_SCHEMA["tables"].get(table, {})
 
-
-def get_safe_select(table: str, extra_cols: list = None) -> str:
-    """Return a safe SELECT string for a table based on live-merged _SB_SCHEMA.
-
-    Preference order:
-      1. schema safe_select (pre-validated, fat columns excluded)
-      2. all non-fat columns joined (if no safe_select defined)
-      3. '*' fallback (if table not in registry)
-
-    extra_cols: additional columns to append if present in live schema.
-    Never includes fat_columns or columns not in live schema.
-    """
-    schema = _sb_schema(table)
-    if not schema:
-        return "*"
-    known_cols = set(schema.get("columns", {}).keys())
-    fat        = set(schema.get("fat_columns", []))
-    base       = schema.get("safe_select", "")
-    if base:
-        cols = [c.strip() for c in base.split(",") if c.strip() in known_cols]
-    else:
-        cols = [c for c in schema.get("columns", {}) if c not in fat]
-    if extra_cols:
-        for c in extra_cols:
-            if c in known_cols and c not in fat and c not in cols:
-                cols.append(c)
-    return ",".join(cols) if cols else "*"
-
-
-def get_table_cols(table: str) -> set:
-    """Return set of all known column names for a table from live-merged schema."""
-    return set(_sb_schema(table).get("columns", {}).keys())
 def _load_schema_registry():
     """Compat shim -- returns _SB_SCHEMA in old format for _validate_write."""
     # Rebuild old format on the fly from unified schema
@@ -548,10 +481,13 @@ def t_get_mistakes(domain="", limit=10):
     return sb_get("mistakes", qs, svc=True)
 
 def t_update_state(key="", value="", reason=""):
-    ok = sb_post("sessions", {"summary": f"[state_update] {key}: {str(value)[:200]}",
+    try:
+        ok = sb_post("sessions", {"summary": f"[state_update] {key}: {str(value)[:200]}",
                               "actions": [f"{key}={str(value)[:100]} - {reason}"], "interface": "mcp"})
-    return {"ok": ok, "key": key}
+        return {"ok": ok, "key": key}
 
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
 def t_add_knowledge(domain="", topic="", instruction="", content="", tags="", confidence="medium", source_type="", source_ref=""):
     """Add knowledge entry. instruction = behavioral directive for CORE (primary). content = supporting detail. At least one required. source_type=manual|ingested|evolved|session. source_ref=URL or session_id."""
     if not instruction and not content:
@@ -589,7 +525,13 @@ def t_add_knowledge(domain="", topic="", instruction="", content="", tags="", co
                             "message": "Content differs from existing KB entry. Use kb_update to overwrite."}
     except Exception:
         pass  # Non-fatal -- proceed with insert if check fails
-    tags_list = [t.strip() for t in tags.split(",")] if tags else []
+    # Handle tags as list OR comma-string — model sometimes sends either
+    if isinstance(tags, list):
+        tags_list = [str(t).strip() for t in tags if t]
+    elif isinstance(tags, str) and tags.strip():
+        tags_list = [t.strip() for t in tags.split(",") if t.strip()]
+    else:
+        tags_list = []
     # Normalize confidence to valid enum -- guard against float strings passed from older calls
     VALID_CONFIDENCE = {"low", "medium", "high", "proven"}
     if str(confidence) not in VALID_CONFIDENCE:
@@ -921,7 +863,7 @@ def t_debug_fn(fn_name: str, dry_run: bool = True, extra_args: dict = None) -> d
     }
 
     if fn_name in known_staged:
-        from core_config import sb_get, sb_post, groq_chat, GROQ_MODEL
+        from core_config import sb_get, sb_post, GROQ_MODEL
         import json as _json
 
         # -- Gemini staged test --
@@ -1153,15 +1095,18 @@ def t_training_status():
         return {"status": "error", "error": str(e)}
 
 def t_trigger_cold_processor():
-    # H.4: size guard -- run_cold_processor() can return large patterns/evolutions arrays
-    result = run_cold_processor()
-    if isinstance(result, dict):
-        for _k in ("patterns", "evolutions", "hot_items", "items"):
-            if _k in result and isinstance(result[_k], list) and len(result[_k]) > 10:
-                result[_k] = result[_k][:10]
-                result[f"{_k}_truncated"] = True
-    return result
+    try:
+        # H.4: size guard -- run_cold_processor() can return large patterns/evolutions arrays
+        result = run_cold_processor()
+        if isinstance(result, dict):
+            for _k in ("patterns", "evolutions", "hot_items", "items"):
+                if _k in result and isinstance(result[_k], list) and len(result[_k]) > 10:
+                    result[_k] = result[_k][:10]
+                    result[f"{_k}_truncated"] = True
+        return result
 
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
 def t_backfill_patterns(batch_size: str = "20") -> dict:
     """TASK-20: Backfill pattern_frequency -> knowledge_base directly via Groq.
     batch_size: max patterns per run (default 20).
@@ -1307,25 +1252,26 @@ def t_listen_result() -> dict:
         return {"ok": False, "error": str(e)}
 
 def t_list_evolutions(status="pending", limit="20"):
-    # C.5: accept limit param (was hardcoded 20)
-    lim = int(limit) if limit else 20
-    rows = sb_get("evolution_queue",
+    try:
+        # C.5: accept limit param (was hardcoded 20)
+        lim = int(limit) if limit else 20
+        rows = sb_get("evolution_queue",
                   f"select=id,status,change_type,change_summary,confidence,pattern_key,created_at&status=eq.{status}&id=gt.1&order=created_at.desc&limit={lim}",
                   svc=True)
-    return {"evolutions": rows, "count": len(rows)}
+        return {"evolutions": rows, "count": len(rows)}
 
 
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
 def t_bulk_reject_evolutions(change_type: str = "", ids: str = "", reason: str = "", include_synthesized: str = "false") -> dict:
-    """Bulk reject pending evolutions silently â€” one Telegram summary at end.
-    change_type: 'backlog' | 'knowledge' | '' (all pending).
-    ids: comma-separated evolution IDs (overrides change_type).
-    include_synthesized: 'true' to also reject status=synthesized items.
-    reason: optional rejection reason."""
-    id_list = [int(i.strip()) for i in ids.split(",") if i.strip().isdigit()] if ids else []
-    inc_syn = str(include_synthesized).lower() in ("true", "1", "yes")
-    return bulk_reject_evolutions(change_type=change_type, ids=id_list or None, reason=reason, include_synthesized=inc_syn)
+    try:
+        id_list = [int(i.strip()) for i in ids.split(",") if i.strip().isdigit()] if ids else []
+        inc_syn = str(include_synthesized).lower() in ("true", "1", "yes")
+        return bulk_reject_evolutions(change_type=change_type, ids=id_list or None, reason=reason, include_synthesized=inc_syn)
 
 
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
 def t_check_evolutions(limit: int = 20) -> dict:
     """Groq-powered evolution brief."""
     try:
@@ -2150,9 +2096,10 @@ def t_search_in_file(path: str, pattern: str, repo: str = "",
         return {"ok": False, "error": str(e)}
 
 
-def t_multi_patch(path: str, patches: str, message: str, repo: str = "") -> dict:
+def t_multi_patch(path: str, patches: str, message: str, repo: str = "", dry_run: str = "false") -> dict:
     """Apply multiple find-replace patches via Blobs API (atomic commit, no SHA conflict, no size limit).
-    Uses whitespace-normalized fallback matching + char-level diff hint on failure."""
+    Uses whitespace-normalized fallback matching + char-level diff hint on failure.
+    dry_run=true: preview diff without pushing."""
     try:
         repo = repo or GITHUB_REPO
         if isinstance(patches, str):
@@ -2223,6 +2170,16 @@ def t_multi_patch(path: str, patches: str, message: str, repo: str = "") -> dict
             finally:
                 import os
                 if os.path.exists(tmp): os.unlink(tmp)
+        if str(dry_run).lower() == "true":
+            import difflib as _dl_mp
+            _orig = _gh_blob_read(path, repo)
+            diff_preview = "".join(_dl_mp.unified_diff(
+                _orig.splitlines(keepends=True),
+                content.splitlines(keepends=True),
+                fromfile=f"{path} (before)", tofile=f"{path} (after)", n=2
+            ))[:3000]
+            return {"ok": True, "dry_run": True, "path": path,
+                    "applied": len(applied), "diff": diff_preview, "details": applied}
         commit_sha = _gh_blob_write(path, content, message, repo)
         return {"ok": True, "path": path, "applied": len(applied), "skipped": 0,
                 "details": applied, "commit": commit_sha[:12] if commit_sha else None}
@@ -2761,7 +2718,10 @@ def t_railway_service_info() -> dict:
 
 def t_ping_health() -> dict:
     """Direct health check - calls t_health() internally without HTTP."""
-    return t_health()
+    try:
+        return t_health()
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
 
 
 def t_verify_live(expected_text: str, timeout: str = "90") -> dict:
@@ -3547,11 +3507,14 @@ def t_crash_report() -> dict:
 
 
 def t_review_evolutions() -> dict:
-    railway_url = os.environ.get("RAILWAY_PUBLIC_DOMAIN", "core-agi-production.up.railway.app")
-    url = f"https://{railway_url}/review"
-    return {"ok": True, "url": url, "note": "Open URL in browser to review pending evolutions."}
+    try:
+        railway_url = os.environ.get("RAILWAY_PUBLIC_DOMAIN", "core-agi-production.up.railway.app")
+        url = f"https://{railway_url}/review"
+        return {"ok": True, "url": url, "note": "Open URL in browser to review pending evolutions."}
 
 
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
 # -- Project Mode tools -------------------------------------------------------
 
 def t_project_list() -> dict:
@@ -3985,6 +3948,7 @@ def t_patch_file(path: str, patches: str, message: str, repo: str = "", dry_run:
         if isinstance(patches, str):
             patches = json.loads(patches)
         content = _gh_blob_read(path, repo)
+        _orig_content = content  # save for diff — avoids second network call
         applied = []
         skipped = []
         _allow_del = str(allow_deletion).lower() == "true"
@@ -4063,8 +4027,7 @@ def t_patch_file(path: str, patches: str, message: str, repo: str = "", dry_run:
             if not syntax_ok:
                 return {"ok": False, "error": f"Syntax error - NOT pushed: {syntax_error}",
                         "applied": len(applied), "skipped": len(skipped)}
-        # Build compact preview diff (returned even on live writes so CORE can verify)
-        _orig_content = _gh_blob_read(path, repo)  # re-read original for diff
+        # Build compact preview diff using original content (already loaded, no double read)
         preview_diff = "".join(difflib.unified_diff(
             _orig_content.splitlines(keepends=True),
             content.splitlines(keepends=True),
@@ -4757,7 +4720,10 @@ def t_predict_failure(operation: str = "", context: str = "", domain: str = "", 
     session_id: optional -- links prediction to session for counterfactual tracking.
     Use before any risky write operation to get a pre-flight causal warning.
     """
-    return _predict_failure(operation=operation, context=context, domain=domain, session_id=session_id)
+    try:
+        return _predict_failure(operation=operation, context=context, domain=domain, session_id=session_id)
+    except Exception as e:
+        return {"ok": False, "error": str(e), "predicted": False, "warnings": []}
 # -- TASK-26: Tool Reliability Tracking ---------------------------------------
 def _track_tool_stat(tool_name: str, success: bool, error: str = None):
     """Fire-and-forget: increment tool_stats counters for today. Non-fatal -- never raises."""
@@ -4781,7 +4747,7 @@ def _track_tool_stat(tool_name: str, success: bool, error: str = None):
             sb_patch("tool_stats", f"tool_name=eq.{tool_name}&date=eq.{today}", new_data)
         else:
             # Row doesn't exist -- insert initial values
-            sb_insert("tool_stats", {
+            sb_post("tool_stats", {
                 "tool_name": tool_name,
                 "date": today,
                 "call_count": 1,
@@ -5389,6 +5355,8 @@ def t_crypto_price(symbol: str = "BTCUSDT") -> dict:
     return result
 
 
+
+
 def t_crypto_balance(asset: str = "") -> dict:
     """Get Binance account balances. asset=optional filter e.g. BTC. Returns all non-zero balances if empty."""
     data = _binance_signed_get("/api/v3/account", {"recvWindow": 5000})
@@ -5404,6 +5372,8 @@ def t_crypto_balance(asset: str = "") -> dict:
     if asset:
         balances = [b for b in balances if b["asset"].upper() == asset.upper()]
     return {"ok": True, "balances": balances, "count": len(balances)}
+
+
 
 
 def t_crypto_trade(symbol: str = "", side: str = "", quantity: str = "",
@@ -6196,72 +6166,63 @@ TOOLS["reason_chain"] = {"fn": t_reason_chain, "perm": "READ",
 def t_action_gate(action: str = "", owner_token: str = ""):
     """AGI-11/S3: Hard reversibility gate. Classifies action as read/reversible_write/irreversible.
     irreversible requires owner_token to proceed. Returns blocked=True if irreversible and no token."""
-    if not action:
-        return {"ok": False, "error": "action is required"}
-    IRREVERSIBLE_KEYWORDS = [
-        "drop", "delete", "destroy", "purge", "force_close", "truncate",
-        "overwrite production", "permanent", "cannot be undone", "hard delete"
-    ]
-    REVERSIBLE_KEYWORDS = [
-        "insert", "update", "patch", "upsert", "deploy", "redeploy",
-        "add", "create", "write", "push", "post"
-    ]
-    action_lower = action.lower()
-    if any(kw in action_lower for kw in IRREVERSIBLE_KEYWORDS):
-        classification = "irreversible"
-    elif any(kw in action_lower for kw in REVERSIBLE_KEYWORDS):
-        classification = "reversible_write"
-    else:
-        classification = "read"
-    # F.7: require literal phrase -- any non-empty string previously bypassed this (security theater)
-    _valid_token = (owner_token == "OWNER_CONFIRMED")
-    blocked = classification == "irreversible" and not _valid_token
-    return {
-        "ok": True,
-        "action": action,
-        "classification": classification,
-        "blocked": blocked,
-        "message": "BLOCKED: pass owner_token='OWNER_CONFIRMED' to proceed" if blocked else "Proceed",
-        "requires_owner_token": classification == "irreversible",
-    }
+    try:
+        if not action:
+            return {"ok": False, "error": "action is required"}
+        IRREVERSIBLE_KEYWORDS = [
+            "drop", "delete", "destroy", "purge", "force_close", "truncate",
+            "overwrite production", "permanent", "cannot be undone", "hard delete"
+        ]
+        REVERSIBLE_KEYWORDS = [
+            "insert", "update", "patch", "upsert", "deploy", "redeploy",
+            "add", "create", "write", "push", "post"
+        ]
+        action_lower = action.lower()
+        if any(kw in action_lower for kw in IRREVERSIBLE_KEYWORDS):
+            classification = "irreversible"
+        elif any(kw in action_lower for kw in REVERSIBLE_KEYWORDS):
+            classification = "reversible_write"
+        else:
+            classification = "read"
+        # F.7: require literal phrase -- any non-empty string previously bypassed this (security theater)
+        _valid_token = (owner_token == "OWNER_CONFIRMED")
+        blocked = classification == "irreversible" and not _valid_token
+        return {
+            "ok": True,
+            "action": action,
+            "classification": classification,
+            "blocked": blocked,
+            "message": "BLOCKED: pass owner_token='OWNER_CONFIRMED' to proceed" if blocked else "Proceed",
+            "requires_owner_token": classification == "irreversible",
+        }
 
-TOOLS["action_gate"] = {"fn": t_action_gate, "perm": "READ",
-    "args": [
-        {"name": "action", "type": "string", "description": "The action description to classify"},
-        {"name": "owner_token", "type": "string", "description": "Owner confirmation token for irreversible actions"}
-    ],
-    "desc": "AGI-11: Hard reversibility gate. Classifies action as read/reversible_write/irreversible. blocked=true if irreversible and no owner_token. Call before any destructive operation."}
-
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
 
 def t_assert_source(value: str = "", declared_source: str = "memory", field_name: str = ""):
     """AGI-11/S4: Assumption detection at point of use.
     declared_source: session_query | owner_input | memory | skill_file
     Returns flagged=True if source=memory — forces CORE to query instead."""
-    if not value:
-        return {"ok": False, "error": "value is required"}
-    # F.8: skill_file on owner PC, not accessible from Railway -- same reliability risk as memory
-    TRUSTED_SOURCES = {"session_query", "owner_input"}
-    UNTRUSTED_SOURCES = {"memory", "skill_file"}
-    flagged = declared_source in UNTRUSTED_SOURCES
-    return {
-        "ok": True,
-        "value": value[:100],
-        "field_name": field_name,
-        "declared_source": declared_source,
-        "flagged": flagged,
-        "trusted": not flagged,
-        "instruction": "Query this value from its source before using" if flagged else "Source verified — safe to use",
-        "risk": "high" if flagged else "low"
-    }
+    try:
+        if not value:
+            return {"ok": False, "error": "value is required"}
+        # F.8: skill_file on owner PC, not accessible from Railway -- same reliability risk as memory
+        TRUSTED_SOURCES = {"session_query", "owner_input"}
+        UNTRUSTED_SOURCES = {"memory", "skill_file"}
+        flagged = declared_source in UNTRUSTED_SOURCES
+        return {
+            "ok": True,
+            "value": value[:100],
+            "field_name": field_name,
+            "declared_source": declared_source,
+            "flagged": flagged,
+            "trusted": not flagged,
+            "instruction": "Query this value from its source before using" if flagged else "Source verified — safe to use",
+            "risk": "high" if flagged else "low"
+        }
 
-TOOLS["assert_source"] = {"fn": t_assert_source, "perm": "READ",
-    "args": [
-        {"name": "value", "type": "string", "description": "The value being used"},
-        {"name": "declared_source", "type": "string", "description": "Source of the value: session_query | owner_input | skill_file | memory"},
-        {"name": "field_name", "type": "string", "description": "The field or variable name this value will populate"}
-    ],
-    "desc": "AGI-11: Assumption detection at point of use. Flags values sourced from memory — forces query instead. Call before using any value whose origin is uncertain."}
-
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
 
 def t_goal_check(proposed_action: str = "", session_id: str = "", register_goal: str = ""):
     """AGI-11/S5: Goal-action alignment check.
@@ -6398,26 +6359,21 @@ def t_scope_tracker(planned_scope: str = "", actions_taken: str = "", task_id: s
     """AGI-12/S3: Return planned vs actual scope for Claude to detect creep natively.
     No Supabase fetch needed — pure input comparison.
     Claude generates: scope_exceeded, drift_level, unplanned_items, recommendation."""
-    if not planned_scope or not actions_taken:
-        return {"ok": False, "error": "planned_scope and actions_taken are required"}
-    actions_list = [a.strip() for a in actions_taken.split(",") if a.strip()]
-    return {
-        "ok": True,
-        "task_id": task_id,
-        "planned_scope": planned_scope,
-        "actions_taken": actions_list,
-        "action_count": len(actions_list),
-        "instruction": "Claude: compare planned_scope vs actions_taken. Return scope_exceeded (bool), drift_level (none|minor|moderate|severe), planned_items[], unplanned_items[], overlap_percent (0-100), recommendation (continue|flag_owner|stop), summary."
-    }
+    try:
+        if not planned_scope or not actions_taken:
+            return {"ok": False, "error": "planned_scope and actions_taken are required"}
+        actions_list = [a.strip() for a in actions_taken.split(",") if a.strip()]
+        return {
+            "ok": True,
+            "task_id": task_id,
+            "planned_scope": planned_scope,
+            "actions_taken": actions_list,
+            "action_count": len(actions_list),
+            "instruction": "Claude: compare planned_scope vs actions_taken. Return scope_exceeded (bool), drift_level (none|minor|moderate|severe), planned_items[], unplanned_items[], overlap_percent (0-100), recommendation (continue|flag_owner|stop), summary."
+        }
 
-TOOLS["scope_tracker"] = {"fn": t_scope_tracker, "perm": "READ",
-    "args": [
-        {"name": "planned_scope", "type": "string", "description": "What was planned at task start"},
-        {"name": "actions_taken", "type": "string", "description": "Comma-separated list of actions taken so far"},
-        {"name": "task_id", "type": "string", "description": "Task UUID for reference"}
-    ],
-    "desc": "AGI-12: Scope creep detection. Compares planned vs actual touch surface. Returns scope_exceeded, drift_level, unplanned_items. Call after each subtask gate."}
-
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
 
 def t_lookahead(current_action: str = "", current_state: str = "", steps_ahead: int = 2):
     """AGI-12/S4: Fetch Supabase context for multi-step consequence modeling.
@@ -6459,20 +6415,17 @@ def t_sequence_plan(subtasks: str = ""):
     """AGI-12/S5: Return subtask list for Claude to sequence natively.
     No Supabase fetch needed — pure reasoning from input.
     Claude generates: sequential order, parallel_groups, dependency_map, race_condition_risks."""
-    if not subtasks:
-        return {"ok": False, "error": "subtasks list is required"}
-    return {
-        "ok": True,
-        "subtasks": subtasks,
-        "instruction": "Claude: analyze these subtasks for dependencies and side effects. Return sequential[], parallel_groups[], recommended_order[], dependency_map{}, race_condition_risks[]."
-    }
+    try:
+        if not subtasks:
+            return {"ok": False, "error": "subtasks list is required"}
+        return {
+            "ok": True,
+            "subtasks": subtasks,
+            "instruction": "Claude: analyze these subtasks for dependencies and side effects. Return sequential[], parallel_groups[], recommended_order[], dependency_map{}, race_condition_risks[]."
+        }
 
-TOOLS["sequence_plan"] = {"fn": t_sequence_plan, "perm": "READ",
-    "args": [
-        {"name": "subtasks", "type": "string", "description": "JSON or comma-separated list of subtask IDs and descriptions"}
-    ],
-    "desc": "AGI-12: Parallel vs sequential discrimination. Analyzes subtask dependencies, returns recommended order, parallel groups, dependency map. Prevents race conditions and wrong sequencing."}
-
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
 
 def t_negative_space(task_description: str = "", domain: str = "general"):
     """AGI-12/S6: Fetch all domain mistakes from Supabase for negative space reasoning.
@@ -6508,75 +6461,66 @@ TOOLS["negative_space"] = {"fn": t_negative_space, "perm": "READ",
 def t_validate_output(value: str = "", target_field: str = "", table: str = ""):
     """AGI-13/S1: Semantic output validation before any write.
     Validates against operating_context.json schema. Returns safe_to_write."""
-    if not value or not target_field or not table:
-        return {"ok": False, "error": "value, target_field, and table are required"}
-    schema = _load_schema_registry()
-    violations = []
-    if schema:
-        table_schema = schema.get("tables", {}).get(table, {})
-        # allowed_values lives at table level keyed by field name
-        allowed_values = table_schema.get("allowed_values", {}).get(target_field, [])
-        # field type lives in columns dict
-        field_type = table_schema.get("columns", {}).get(target_field, "")
-        if allowed_values and value not in allowed_values:
-            violations.append({"field": target_field, "reason": f"Value '{value}' not in allowed: {allowed_values}"})
-        if field_type == "uuid":
-            import re as _uuid_re
-            if not _uuid_re.match(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', str(value).lower()):
-                violations.append({"field": target_field, "reason": f"Value is not a valid UUID"})
-    safe_to_write = len(violations) == 0
-    return {
-        "ok": True,
-        "value": value[:100],
-        "target_field": target_field,
-        "table": table,
-        "safe_to_write": safe_to_write,
-        "violations": violations,
-        "schema_found": schema is not None
-    }
+    try:
+        if not value or not target_field or not table:
+            return {"ok": False, "error": "value, target_field, and table are required"}
+        schema = _load_schema_registry()
+        violations = []
+        if schema:
+            table_schema = schema.get("tables", {}).get(table, {})
+            # allowed_values lives at table level keyed by field name
+            allowed_values = table_schema.get("allowed_values", {}).get(target_field, [])
+            # field type lives in columns dict
+            field_type = table_schema.get("columns", {}).get(target_field, "")
+            if allowed_values and value not in allowed_values:
+                violations.append({"field": target_field, "reason": f"Value '{value}' not in allowed: {allowed_values}"})
+            if field_type == "uuid":
+                import re as _uuid_re
+                if not _uuid_re.match(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', str(value).lower()):
+                    violations.append({"field": target_field, "reason": f"Value is not a valid UUID"})
+        safe_to_write = len(violations) == 0
+        return {
+            "ok": True,
+            "value": value[:100],
+            "target_field": target_field,
+            "table": table,
+            "safe_to_write": safe_to_write,
+            "violations": violations,
+            "schema_found": schema is not None
+        }
 
-TOOLS["validate_output"] = {"fn": t_validate_output, "perm": "READ",
-    "args": [
-        {"name": "value", "type": "string", "description": "The value to validate"},
-        {"name": "target_field", "type": "string", "description": "The field name this value will be written to"},
-        {"name": "table", "type": "string", "description": "The Supabase table being written to"}
-    ],
-    "desc": "AGI-13: Semantic output validation before write. Checks value against operating_context.json schema. Returns safe_to_write, violations. Call before every sb_insert/sb_patch/sb_upsert."}
-
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
 
 def t_tag_certainty(conclusion: str = "", basis: str = "inferred"):
     """AGI-13/S2: Tag a conclusion with its certainty level.
     basis: observed | inferred | assumed
     Returns certainty level, decay_rate, requires_verification."""
-    if not conclusion:
-        return {"ok": False, "error": "conclusion is required"}
-    BASIS_MAP = {
-        "observed": {"certainty": "confirmed", "decay_rate": "slow", "requires_verification": False},
-        "inferred": {"certainty": "inferred", "decay_rate": "medium", "requires_verification": True},
-        "assumed": {"certainty": "uncertain", "decay_rate": "fast", "requires_verification": True}
-    }
-    basis = basis.lower()
-    if basis not in BASIS_MAP:
-        basis = "assumed"
-    tag = BASIS_MAP[basis]
-    return {
-        "ok": True,
-        "conclusion": conclusion[:200],
-        "basis": basis,
-        "certainty": tag["certainty"],
-        "decay_rate": tag["decay_rate"],
-        "requires_verification": tag["requires_verification"],
-        "safe_for_irreversible_action": basis == "observed",
-        "instruction": "Verify before using in irreversible action" if tag["requires_verification"] else "Safe to use"
-    }
+    try:
+        if not conclusion:
+            return {"ok": False, "error": "conclusion is required"}
+        BASIS_MAP = {
+            "observed": {"certainty": "confirmed", "decay_rate": "slow", "requires_verification": False},
+            "inferred": {"certainty": "inferred", "decay_rate": "medium", "requires_verification": True},
+            "assumed": {"certainty": "uncertain", "decay_rate": "fast", "requires_verification": True}
+        }
+        basis = basis.lower()
+        if basis not in BASIS_MAP:
+            basis = "assumed"
+        tag = BASIS_MAP[basis]
+        return {
+            "ok": True,
+            "conclusion": conclusion[:200],
+            "basis": basis,
+            "certainty": tag["certainty"],
+            "decay_rate": tag["decay_rate"],
+            "requires_verification": tag["requires_verification"],
+            "safe_for_irreversible_action": basis == "observed",
+            "instruction": "Verify before using in irreversible action" if tag["requires_verification"] else "Safe to use"
+        }
 
-TOOLS["tag_certainty"] = {"fn": t_tag_certainty, "perm": "READ",
-    "args": [
-        {"name": "conclusion", "type": "string", "description": "The conclusion or value to tag"},
-        {"name": "basis", "type": "string", "description": "How this was derived: observed | inferred | assumed"}
-    ],
-    "desc": "AGI-13: Certainty tagging. Tags conclusions as confirmed/inferred/uncertain based on how they were derived. uncertain conclusions block irreversible actions. Call before using derived values."}
-
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
 
 def t_progress_model(task_id: str = "", subtasks_total: int = 0, subtasks_done: int = 0, actions_taken: int = 0):
     """AGI-13/S3: Progress visibility within a task.
@@ -6701,30 +6645,97 @@ TOOLS["partial_complete"] = {"fn": t_partial_complete, "perm": "WRITE",
 
 
 def t_verify_external_state(assumed_state: str = "", sources: str = "supabase"):
-    """AGI-13/S6: External state change detection before committing.
-    Re-queries key values to detect drift from assumed state.
-    assumed_state: JSON string of {key: assumed_value} pairs."""
+    """AGI-13/S6: Live external state verification before committing.
+    Re-queries actual values from Supabase/GitHub/Railway and compares against assumed state.
+    assumed_state: JSON string of {key: assumed_value} pairs.
+    Supported key patterns (auto-routed):
+      task:<uuid>:status       → task_queue.status
+      task:<uuid>:next_step    → task_queue.next_step
+      kb:<domain>:<topic>:confidence → knowledge_base.confidence
+      session:last:quality     → sessions.quality_score (latest)
+      evolution:<id>:status    → evolution_queue.status
+      Any other key            → searched in sessions state_updates
+    """
     if not assumed_state:
         return {"ok": False, "error": "assumed_state JSON string is required"}
     try:
         state = json.loads(assumed_state)
     except json.JSONDecodeError:
-        return {"ok": False, "error": "assumed_state must be valid JSON: {\"key\": \"assumed_value\"}"}
+        return {"ok": False, "error": 'assumed_state must be valid JSON: {"key": "assumed_value"}'}
+
     drifted = []
     checked = []
-    # For now: structural check — verify keys are present and non-null
-    # Full live re-query requires knowing table+column routing per key (future enhancement)
+
     for key, assumed_value in state.items():
-        checked.append({"key": key, "assumed": assumed_value, "note": "structural check — live re-query requires table routing"})
-    match = len(drifted) == 0
+        live_value = None
+        source = "unknown"
+        error = None
+        try:
+            parts = key.split(":")
+            # task:<uuid>:<field>
+            if parts[0] == "task" and len(parts) >= 3:
+                uuid, field = parts[1], parts[2]
+                rows = sb_get("task_queue", f"select={field}&id=eq.{uuid}&limit=1", svc=True) or []
+                live_value = rows[0].get(field) if rows else None
+                source = "task_queue"
+            # kb:<domain>:<topic>:<field>
+            elif parts[0] == "kb" and len(parts) >= 4:
+                domain, topic, field = parts[1], parts[2], parts[3]
+                rows = sb_get("knowledge_base",
+                    f"select={field}&domain=eq.{domain}&topic=eq.{topic}&limit=1", svc=True) or []
+                live_value = rows[0].get(field) if rows else None
+                source = "knowledge_base"
+            # evolution:<id>:<field>
+            elif parts[0] == "evolution" and len(parts) >= 3:
+                eid, field = parts[1], parts[2]
+                rows = sb_get("evolution_queue", f"select={field}&id=eq.{eid}&limit=1", svc=True) or []
+                live_value = rows[0].get(field) if rows else None
+                source = "evolution_queue"
+            # session:last:<field>
+            elif parts[0] == "session" and len(parts) >= 3:
+                field = parts[2]
+                rows = sb_get("sessions", f"select={field}&order=id.desc&limit=1", svc=True) or []
+                live_value = rows[0].get(field) if rows else None
+                source = "sessions"
+            # fallback: scan state_update keys in sessions
+            else:
+                rows = sb_get("sessions",
+                    f"select=summary&summary=like.*%5Bstate_update%5D+{key}:*&order=id.desc&limit=1",
+                    svc=True) or []
+                if rows:
+                    raw = rows[0].get("summary", "")
+                    prefix = f"[state_update] {key}: "
+                    live_value = raw[len(prefix):].strip() if raw.startswith(prefix) else None
+                source = "sessions_state"
+        except Exception as e:
+            error = str(e)
+
+        # Compare
+        match = (str(live_value) == str(assumed_value)) if live_value is not None else None
+        entry = {
+            "key": key,
+            "assumed": assumed_value,
+            "live": live_value,
+            "source": source,
+            "match": match,
+        }
+        if error:
+            entry["error"] = error
+        if match is False:
+            drifted.append(entry)
+        checked.append(entry)
+
+    all_match = len(drifted) == 0
     return {
         "ok": True,
         "sources_checked": sources,
         "assumed_keys": list(state.keys()),
-        "match": match,
+        "all_match": all_match,
+        "drifted_count": len(drifted),
         "drifted": drifted,
         "checked": checked,
-        "note": "Structural validation complete. Wire live re-query per key in AGI-13 execution phase."
+        "note": "Live re-query complete. Drifted keys indicate state changed since assumed." if drifted
+                else "All keys match assumed state.",
     }
 
 TOOLS["verify_external_state"] = {"fn": t_verify_external_state, "perm": "READ",
@@ -6740,42 +6751,39 @@ TOOLS["verify_external_state"] = {"fn": t_verify_external_state, "perm": "READ",
 def t_resource_model(planned_actions: str = ""):
     """AGI-14/S1: Resource awareness and consumption estimation.
     Returns Groq token estimate, Railway compute impact, Supabase write count, throttle recommendations."""
-    if not planned_actions:
-        return {"ok": False, "error": "planned_actions is required"}
-    actions_list = [a.strip() for a in planned_actions.split(",") if a.strip()]
-    groq_calls = sum(1 for a in actions_list if any(k in a.lower() for k in ["reason", "groq", "analyze", "generate", "synthesize", "check"]))
-    sb_writes = sum(1 for a in actions_list if any(k in a.lower() for k in ["insert", "update", "patch", "upsert", "write", "post"]))
-    deploys = sum(1 for a in actions_list if any(k in a.lower() for k in ["deploy", "patch_file", "redeploy"]))
-    token_estimate = groq_calls * 2000
-    GROQ_SESSION_LIMIT = 50000
-    SUPABASE_BURST_LIMIT = 20
-    DEPLOY_LIMIT = 3
-    within_limits = token_estimate < GROQ_SESSION_LIMIT and sb_writes < SUPABASE_BURST_LIMIT and deploys <= DEPLOY_LIMIT
-    throttle_recommended = sb_writes > 10 or deploys > 2
-    batch_candidates = [a for a in actions_list if any(k in a.lower() for k in ["insert", "post", "write"])]
-    return {
-        "ok": True,
-        "planned_action_count": len(actions_list),
-        "groq_calls_estimated": groq_calls,
-        "token_estimate": token_estimate,
-        "supabase_writes": sb_writes,
-        "deploys": deploys,
-        "within_limits": within_limits,
-        "throttle_recommended": throttle_recommended,
-        "batch_candidates": batch_candidates,
-        "warnings": [
-            f"Token estimate {token_estimate} approaching Groq session limit" if token_estimate > 40000 else None,
-            f"{sb_writes} Supabase writes -- consider batching" if sb_writes > 10 else None,
-            f"{deploys} deploys planned -- high Railway compute" if deploys > 2 else None
-        ]
-    }
+    try:
+        if not planned_actions:
+            return {"ok": False, "error": "planned_actions is required"}
+        actions_list = [a.strip() for a in planned_actions.split(",") if a.strip()]
+        groq_calls = sum(1 for a in actions_list if any(k in a.lower() for k in ["reason", "groq", "analyze", "generate", "synthesize", "check"]))
+        sb_writes = sum(1 for a in actions_list if any(k in a.lower() for k in ["insert", "update", "patch", "upsert", "write", "post"]))
+        deploys = sum(1 for a in actions_list if any(k in a.lower() for k in ["deploy", "patch_file", "redeploy"]))
+        token_estimate = groq_calls * 2000
+        GROQ_SESSION_LIMIT = 50000
+        SUPABASE_BURST_LIMIT = 20
+        DEPLOY_LIMIT = 3
+        within_limits = token_estimate < GROQ_SESSION_LIMIT and sb_writes < SUPABASE_BURST_LIMIT and deploys <= DEPLOY_LIMIT
+        throttle_recommended = sb_writes > 10 or deploys > 2
+        batch_candidates = [a for a in actions_list if any(k in a.lower() for k in ["insert", "post", "write"])]
+        return {
+            "ok": True,
+            "planned_action_count": len(actions_list),
+            "groq_calls_estimated": groq_calls,
+            "token_estimate": token_estimate,
+            "supabase_writes": sb_writes,
+            "deploys": deploys,
+            "within_limits": within_limits,
+            "throttle_recommended": throttle_recommended,
+            "batch_candidates": batch_candidates,
+            "warnings": [
+                f"Token estimate {token_estimate} approaching Groq session limit" if token_estimate > 40000 else None,
+                f"{sb_writes} Supabase writes -- consider batching" if sb_writes > 10 else None,
+                f"{deploys} deploys planned -- high Railway compute" if deploys > 2 else None
+            ]
+        }
 
-TOOLS["resource_model"] = {"fn": t_resource_model, "perm": "READ",
-    "args": [
-        {"name": "planned_actions", "type": "string", "description": "Comma-separated list of planned actions for this task"}
-    ],
-    "desc": "AGI-14: Resource awareness. Estimates Groq tokens, Supabase writes, deploys before execution. Returns within_limits, throttle_recommended, batch_candidates. Call before multi-step plans."}
-
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
 
 def t_impact_model(action: str = "", current_state: str = ""):
     """AGI-14/S2: Fetch infrastructure map + pending tasks for system impact modeling.
@@ -6808,38 +6816,35 @@ TOOLS["impact_model"] = {"fn": t_impact_model, "perm": "READ",
 def t_trust_map(action_type: str = ""):
     """AGI-14/S3: Trust calibration per action type.
     Returns verification_required and verification_steps for the given action."""
-    TRUST_MAP = {
-        "read": {"trust": "high", "verification_required": False, "verification_steps": [], "risk_level": "low"},
-        "reversible_write": {"trust": "medium", "verification_required": True, "verification_steps": ["verify_output", "check_schema"], "risk_level": "medium"},
-        "deploy": {"trust": "low", "verification_required": True, "verification_steps": ["validate_syntax", "verify_before_deploy", "predict_failure", "health_check_after"], "risk_level": "high"},
-        "irreversible": {"trust": "critical", "verification_required": True, "verification_steps": ["action_gate", "owner_confirmation", "reason_chain", "lookahead"], "risk_level": "critical"},
-        "schema_change": {"trust": "low", "verification_required": True, "verification_steps": ["dry_run_first", "verify_before_deploy", "owner_confirmation"], "risk_level": "high"},
-        "groq_call": {"trust": "medium", "verification_required": False, "verification_steps": ["validate_json_output"], "risk_level": "low"},
-    }
-    action_lower = action_type.lower()
-    if not action_type or action_lower not in TRUST_MAP:
+    try:
+        TRUST_MAP = {
+            "read": {"trust": "high", "verification_required": False, "verification_steps": [], "risk_level": "low"},
+            "reversible_write": {"trust": "medium", "verification_required": True, "verification_steps": ["verify_output", "check_schema"], "risk_level": "medium"},
+            "deploy": {"trust": "low", "verification_required": True, "verification_steps": ["validate_syntax", "verify_before_deploy", "predict_failure", "health_check_after"], "risk_level": "high"},
+            "irreversible": {"trust": "critical", "verification_required": True, "verification_steps": ["action_gate", "owner_confirmation", "reason_chain", "lookahead"], "risk_level": "critical"},
+            "schema_change": {"trust": "low", "verification_required": True, "verification_steps": ["dry_run_first", "verify_before_deploy", "owner_confirmation"], "risk_level": "high"},
+            "groq_call": {"trust": "medium", "verification_required": False, "verification_steps": ["validate_json_output"], "risk_level": "low"},
+        }
+        action_lower = action_type.lower()
+        if not action_type or action_lower not in TRUST_MAP:
+            return {
+                "ok": True,
+                "available_types": list(TRUST_MAP.keys()),
+                "message": "Pass one of the available action types to get trust calibration"
+            }
+        entry = TRUST_MAP[action_lower]
         return {
             "ok": True,
-            "available_types": list(TRUST_MAP.keys()),
-            "message": "Pass one of the available action types to get trust calibration"
+            "action_type": action_lower,
+            "trust_level": entry["trust"],
+            "risk_level": entry["risk_level"],
+            "verification_required": entry["verification_required"],
+            "verification_steps": entry["verification_steps"],
+            "instruction": f"Run {entry['verification_steps']} before proceeding" if entry["verification_required"] else "Low risk — proceed with standard care"
         }
-    entry = TRUST_MAP[action_lower]
-    return {
-        "ok": True,
-        "action_type": action_lower,
-        "trust_level": entry["trust"],
-        "risk_level": entry["risk_level"],
-        "verification_required": entry["verification_required"],
-        "verification_steps": entry["verification_steps"],
-        "instruction": f"Run {entry['verification_steps']} before proceeding" if entry["verification_required"] else "Low risk — proceed with standard care"
-    }
 
-TOOLS["trust_map"] = {"fn": t_trust_map, "perm": "READ",
-    "args": [
-        {"name": "action_type", "type": "string", "description": "Action category: read | reversible_write | deploy | irreversible | schema_change | groq_call"}
-    ],
-    "desc": "AGI-14: Trust calibration per action type. Returns trust_level, risk_level, verification_required, verification_steps. Makes verification frequency data-driven, not rule-based."}
-
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
 
 def t_contradiction_check(new_instruction: str = "", domain: str = "general"):
     """AGI-14/S4: Fetch behavioral_rules from Supabase for contradiction detection.
@@ -6874,25 +6879,20 @@ def t_circuit_breaker(failed_step: str = "", dependent_steps: str = "", failure_
     """AGI-14/S5: Failure cascade prevention.
     Analyzes which downstream steps depend on the failed step.
     Returns cascade_risk, safe_to_continue, steps_to_suspend."""
-    if not failed_step:
-        return {"ok": False, "error": "failed_step is required"}
-    dependent_list = [s.strip() for s in dependent_steps.split(",") if s.strip()] if dependent_steps else []
-    return {
-        "ok": True,
-        "failed_step": failed_step,
-        "failure_reason": failure_reason,
-        "dependent_steps": dependent_list,
-        "instruction": "Claude: analyze cascade risk for these dependent steps given the failed step and reason. Return cascade_risk (list of {step, dependency, impact: blocked|degraded|unaffected, severity}), safe_to_continue, steps_to_suspend[], steps_safe_to_run[], recommended_action (suspend_all|skip_dependents|retry_failed|ask_owner), summary."
-    }
+    try:
+        if not failed_step:
+            return {"ok": False, "error": "failed_step is required"}
+        dependent_list = [s.strip() for s in dependent_steps.split(",") if s.strip()] if dependent_steps else []
+        return {
+            "ok": True,
+            "failed_step": failed_step,
+            "failure_reason": failure_reason,
+            "dependent_steps": dependent_list,
+            "instruction": "Claude: analyze cascade risk for these dependent steps given the failed step and reason. Return cascade_risk (list of {step, dependency, impact: blocked|degraded|unaffected, severity}), safe_to_continue, steps_to_suspend[], steps_safe_to_run[], recommended_action (suspend_all|skip_dependents|retry_failed|ask_owner), summary."
+        }
 
-TOOLS["circuit_breaker"] = {"fn": t_circuit_breaker, "perm": "READ",
-    "args": [
-        {"name": "failed_step", "type": "string", "description": "The step that failed"},
-        {"name": "dependent_steps", "type": "string", "description": "Comma-separated list of steps that depend on the failed step"},
-        {"name": "failure_reason", "type": "string", "description": "Why the step failed"}
-    ],
-    "desc": "AGI-14: Failure cascade prevention. Analyzes dependent steps when one fails. Returns steps_to_suspend, safe_to_continue, recommended_action. Prevents executing downstream steps on null/stale data."}
-
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
 
 def t_loop_detect(action: str = "", context_hash: str = "", session_id: str = "default", clear: bool = False):
     """AGI-14/S6: Action loop detection within a session.
@@ -7819,6 +7819,431 @@ TOOLS["load_arch_context"] = {
         "active behavioral rules for domain, last 5 cold_reflections, open tasks. "
         "HARD RULE: call before any new tool creation, architecture change, or major patch session. "
         "CORE must never write code from memory -- always load live context first."
+    ),
+}
+
+
+
+def t_get_table_schema(table: str = "") -> dict:
+    """Return schema info for a Supabase table from live-merged _SB_SCHEMA.
+    If table="" returns summary of all registered tables.
+    Returns: columns, pk_type, fat_columns, safe_select, enums, notes.
+    Use before any sb_insert/sb_patch to verify column names and types."""
+    try:
+        if not table or table.strip() == "":
+            # Return summary of all tables
+            summary = {}
+            for tname, tdef in _SB_SCHEMA.get("tables", {}).items():
+                summary[tname] = {
+                    "pk_type":     tdef.get("pk_type", "?"),
+                    "columns":     sorted(tdef.get("columns", {}).keys()),
+                    "fat_columns": tdef.get("fat_columns", []),
+                    "safe_select": tdef.get("safe_select", "*"),
+                }
+            tombstones = sorted(_SB_SCHEMA.get("_tombstone", set()))
+            protected  = sorted(_SB_SCHEMA.get("_protected", set()))
+            return {
+                "ok": True,
+                "table_count": len(summary),
+                "tables": summary,
+                "tombstone_tables": tombstones,
+                "protected_tables": protected,
+                "note": "Pass table=<name> to get full schema for a specific table",
+            }
+        tdef = _SB_SCHEMA.get("tables", {}).get(table.strip())
+        if not tdef:
+            if table in _SB_SCHEMA.get("_tombstone", set()):
+                return {"ok": False, "error": f"TOMBSTONE: '{table}' is retired — never query"}
+            return {"ok": False, "error": f"Table '{table}' not in schema registry",
+                    "hint": "Call get_table_schema() with no args to see all known tables"}
+        return {
+            "ok": True,
+            "table": table,
+            "pk": tdef.get("pk", "id"),
+            "pk_type": tdef.get("pk_type", "?"),
+            "columns": tdef.get("columns", {}),
+            "required": tdef.get("required", []),
+            "enums": tdef.get("enums", {}),
+            "fat_columns": tdef.get("fat_columns", []),
+            "safe_select": tdef.get("safe_select", "*"),
+            "on_conflict": tdef.get("on_conflict", ""),
+            "notes": tdef.get("notes", ""),
+            "is_protected": table in _SB_SCHEMA.get("_protected", set()),
+            "is_tombstone": False,
+        }
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+TOOLS["get_table_schema"] = {
+    "fn": t_get_table_schema,
+    "perm": "READ",
+    "args": [
+        {"name": "table", "type": "string",
+         "description": "Table name (e.g. 'knowledge_base'). Empty = list all tables."},
+    ],
+    "desc": (
+        "Return live schema info for any Supabase table from _SB_SCHEMA. "
+        "table='' → summary of all tables with column lists, pk_type, fat_columns. "
+        "table='name' → full schema: columns+types, required, enums, safe_select, notes. "
+        "Use BEFORE any sb_insert/sb_patch/sb_query to verify column names. "
+        "Also shows tombstone+protected table lists. Schema is live-merged at startup."
+    ),
+}
+
+
+
+# =============================================================================
+# SELF-EDITING TOOLKIT
+# Tools for CORE to edit its own codebase from anywhere — Telegram, Claude Desktop
+# t_replace_fn:    replace entire function by name (no old_str needed)
+# t_smart_patch:   plain-English description → Gemini generates old_str/new_str
+# t_register_tool: atomically add new function + TOOLS entry in one commit
+# =============================================================================
+
+def t_replace_fn(fn_name: str, new_code: str, file: str = "core_tools.py",
+                 message: str = "", repo: str = "", dry_run: str = "false") -> dict:
+    """Replace an entire function in a GitHub file by name.
+    Finds function boundaries automatically — no need for exact old_str.
+    Supports any size function. Syntax-checks before pushing.
+    fn_name: function name without 'def' keyword (e.g. 't_add_knowledge').
+    new_code: complete replacement function including def line and full body.
+    dry_run: pass 'true' to preview diff without pushing.
+    """
+    import py_compile as _pc, tempfile as _tf, difflib as _dl
+    try:
+        repo = repo or GITHUB_REPO
+        content = _gh_blob_read(file, repo)
+        lines = content.splitlines(keepends=True)
+
+        # Find function start (handles both module-level and class method)
+        start_idx = None
+        base_indent = 0
+        for i, line in enumerate(lines):
+            stripped = line.lstrip()
+            if (stripped.startswith(f"def {fn_name}(") or
+                stripped.startswith(f"async def {fn_name}(")):
+                start_idx = i
+                base_indent = len(line) - len(line.lstrip())
+                break
+
+        if start_idx is None:
+            return {"ok": False, "error": f"Function '{fn_name}' not found in {file}",
+                    "hint": f"Use search_in_file to confirm exact name"}
+
+        # Find function end — next def/class/TOOLS at same or lower indent, or EOF
+        end_idx = start_idx + 1
+        while end_idx < len(lines):
+            line = lines[end_idx]
+            stripped = line.lstrip()
+            if not stripped or stripped.startswith("#"):
+                end_idx += 1
+                continue
+            cur_indent = len(line) - len(line.lstrip())
+            if cur_indent <= base_indent and (
+                stripped.startswith("def ") or
+                stripped.startswith("async def ") or
+                stripped.startswith("class ") or
+                stripped.startswith("TOOLS[") or
+                stripped.startswith("@")
+            ):
+                break
+            end_idx += 1
+
+        old_fn = "".join(lines[start_idx:end_idx])
+
+        # Normalize new_code trailing newline
+        nc = new_code.strip() + "\n"
+        # Re-indent if inside class
+        if base_indent > 0:
+            indent_str = " " * base_indent
+            nc = "\n".join(
+                indent_str + l if l.strip() else l
+                for l in nc.splitlines()
+            ) + "\n"
+
+        new_content = content.replace(old_fn, nc, 1)
+        if new_content == content:
+            return {"ok": False, "error": "Replace had no effect — function boundary issue or identical code"}
+
+        # Syntax check
+        if file.endswith(".py"):
+            with _tf.NamedTemporaryFile(mode="w", suffix=".py", delete=False, encoding="utf-8") as tf:
+                tf.write(new_content); tmp = tf.name
+            try:
+                _pc.compile(tmp, doraise=True)
+            except _pc.PyCompileError as ce:
+                import os; os.unlink(tmp)
+                return {"ok": False, "error": f"SYNTAX ERROR — not pushed: {ce}"}
+            finally:
+                import os
+                if os.path.exists(tmp): os.unlink(tmp)
+
+        diff = "".join(_dl.unified_diff(
+            old_fn.splitlines(keepends=True), nc.splitlines(keepends=True),
+            fromfile=f"{file}:{fn_name} (before)", tofile=f"{file}:{fn_name} (after)", n=2,
+        ))[:2000]
+
+        if str(dry_run).lower() == "true":
+            return {"ok": True, "dry_run": True, "fn_name": fn_name, "file": file,
+                    "old_lines": end_idx - start_idx,
+                    "new_lines": len(nc.splitlines()), "diff": diff}
+
+        commit_sha = _gh_blob_write(file, new_content,
+            message or f"replace_fn: {fn_name} in {file}", repo)
+        return {"ok": True, "dry_run": False, "fn_name": fn_name, "file": file,
+                "start_line": start_idx + 1,
+                "old_lines": end_idx - start_idx,
+                "new_lines": len(nc.splitlines()),
+                "commit": commit_sha[:12] if commit_sha else None,
+                "diff": diff}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def t_smart_patch(file: str, instruction: str, repo: str = "",
+                  dry_run: str = "false", context_lines: int = 80) -> dict:
+    """High-level intelligent patch: describe what to change in plain English.
+    CORE reads the relevant section, uses Gemini to generate old_str/new_str,
+    then applies via _patch_find with full syntax check.
+    instruction: e.g. 'Fix tags handling to accept list or string in t_add_knowledge'
+                      'Change timeout from 15 to 30 in sb_get'
+    dry_run: 'true' to preview diff without pushing.
+    """
+    import py_compile as _pc2, tempfile as _tf2, difflib as _dl2, re as _re2
+    try:
+        repo = repo or GITHUB_REPO
+        content = _gh_blob_read(file, repo)
+        lines = content.splitlines()
+        total = len(lines)
+
+        # Find anchor line via keyword matching
+        stop = {"the","a","an","is","are","to","of","and","or","in","fix","add",
+                "change","update","make","handle","for","with","from","that","this"}
+        kws = [w for w in _re2.findall(r"[a-zA-Z_]{4,}", instruction.lower()) if w not in stop][:5]
+        anchor = 0
+        best = 0
+        for i, line in enumerate(lines):
+            score = sum(1 for kw in kws if kw in line.lower())
+            if score > best:
+                best = score
+                anchor = i
+
+        # Extract context window
+        cs = max(0, anchor - context_lines // 2)
+        ce = min(total, anchor + context_lines // 2)
+        ctx = "\n".join(f"{cs+i+1:4d}  {l}" for i, l in enumerate(lines[cs:ce]))
+
+        # Ask Gemini for patch
+        system = (
+            "You are a Python code patcher. Given file context and instruction, "
+            "output ONLY a JSON object with keys: "
+            "old_str (exact substring to replace, must exist verbatim), "
+            "new_str (replacement code), "
+            "explanation (one sentence). "
+            "old_str must be unique in the file. new_str must be valid Python. "
+            "Output ONLY valid JSON."
+        )
+        user = (
+            f"FILE: {file}\n"
+            f"INSTRUCTION: {instruction}\n\n"
+            f"FILE CONTEXT (lines {cs+1}-{ce}):\n{ctx}\n\n"
+            "Generate the patch JSON."
+        )
+        raw = gemini_chat(system, user, max_tokens=1500, json_mode=True)
+        raw = raw.strip().lstrip("```json").lstrip("```").rstrip("```").strip()
+        patch = json.loads(raw)
+
+        old_str = patch.get("old_str", "")
+        new_str = patch.get("new_str", "")
+        explanation = patch.get("explanation", "")
+
+        if not old_str:
+            return {"ok": False, "error": "Gemini returned empty old_str", "raw": raw[:300]}
+
+        # Apply with fuzzy matching
+        pf = _patch_find(content, old_str)
+        found, count, matched, hint = pf[0], pf[1], pf[2], pf[3]
+        auto_context = pf[4] if len(pf) > 4 else None
+
+        if not found:
+            return {"ok": False, "error": "Generated old_str not found in file",
+                    "hint": hint, "auto_context": auto_context,
+                    "llm_old_str_preview": old_str[:200],
+                    "suggestion": "Try more specific instruction or use gh_search_replace directly"}
+        if count > 1:
+            return {"ok": False, "error": f"Generated old_str ambiguous ({count} matches)",
+                    "llm_old_str_preview": old_str[:200]}
+
+        new_content = content.replace(matched, new_str, 1)
+
+        # Syntax check
+        if file.endswith(".py"):
+            with _tf2.NamedTemporaryFile(mode="w", suffix=".py", delete=False, encoding="utf-8") as tf:
+                tf.write(new_content); tmp = tf.name
+            try:
+                _pc2.compile(tmp, doraise=True)
+            except _pc2.PyCompileError as ce2:
+                import os; os.unlink(tmp)
+                return {"ok": False, "error": f"SYNTAX ERROR in patch: {ce2}"}
+            finally:
+                import os
+                if os.path.exists(tmp): os.unlink(tmp)
+
+        diff = "".join(_dl2.unified_diff(
+            content.splitlines(keepends=True),
+            new_content.splitlines(keepends=True),
+            fromfile=f"{file} (before)", tofile=f"{file} (after)", n=2,
+        ))[:2000]
+
+        if str(dry_run).lower() == "true":
+            return {"ok": True, "dry_run": True, "file": file,
+                    "explanation": explanation, "diff": diff,
+                    "match_note": hint or "exact_match"}
+
+        commit_sha = _gh_blob_write(file, new_content,
+            f"smart_patch: {instruction[:80]}", repo)
+        return {"ok": True, "dry_run": False, "file": file,
+                "explanation": explanation,
+                "commit": commit_sha[:12] if commit_sha else None,
+                "diff": diff, "match_note": hint or "exact_match"}
+    except json.JSONDecodeError as e:
+        return {"ok": False, "error": f"Gemini returned invalid JSON: {e}"}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def t_register_tool(name: str, fn_code: str, desc: str,
+                    args_list: str = "", perm: str = "READ",
+                    message: str = "", dry_run: str = "false") -> dict:
+    """Atomically add a new tool to core_tools.py: function + TOOLS entry in one commit.
+    name: tool name without t_ prefix (e.g. 'my_tool' → creates t_my_tool).
+    fn_code: complete function source starting with 'def t_{name}(...)'.
+    desc: tool description for TOOLS registry.
+    args_list: comma-separated arg names e.g. 'path,content,message'.
+    perm: READ | WRITE | EXECUTE.
+    dry_run: 'true' to preview without pushing.
+    Guards: blocks if fn already defined or TOOLS key already registered.
+    """
+    import py_compile as _pc3, tempfile as _tf3
+    try:
+        repo = GITHUB_REPO
+        content = _gh_blob_read("core_tools.py", repo)
+
+        fn_full = f"t_{name}" if not name.startswith("t_") else name
+        tool_key = fn_full[2:] if fn_full.startswith("t_") else name
+
+        # Duplicate guards
+        if f"def {fn_full}(" in content:
+            return {"ok": False, "error": f"BLOCKED: {fn_full} already defined in core_tools.py"}
+        if f'TOOLS["{tool_key}"]' in content:
+            return {"ok": False, "error": f'BLOCKED: TOOLS["{tool_key}"] already registered'}
+
+        # Build args dicts for TOOLS entry
+        args = [a.strip() for a in args_list.split(",") if a.strip()]
+        args_json = json.dumps([{"name": a, "type": "string"} for a in args])
+
+        tools_entry = (
+            f'\n\nTOOLS["{tool_key}"] = {{\n'
+            f'    "fn": {fn_full},\n'
+            f'    "perm": "{perm}",\n'
+            f'    "args": {args_json},\n'
+            f'    "desc": {json.dumps(desc)},\n'
+            f'}}\n'
+        )
+
+        fn_block = "\n\n" + fn_code.strip() + "\n"
+        insert_marker = "# -- core_web tools registration"
+        if insert_marker in content:
+            new_content = content.replace(insert_marker,
+                fn_block + tools_entry + "\n" + insert_marker, 1)
+        else:
+            new_content = content + fn_block + tools_entry
+
+        # Full syntax check
+        with _tf3.NamedTemporaryFile(mode="w", suffix=".py", delete=False, encoding="utf-8") as tf:
+            tf.write(new_content); tmp = tf.name
+        try:
+            _pc3.compile(tmp, doraise=True)
+        except _pc3.PyCompileError as ce3:
+            import os; os.unlink(tmp)
+            return {"ok": False, "error": f"SYNTAX ERROR — not pushed: {ce3}",
+                    "hint": "Check fn_code for syntax errors"}
+        finally:
+            import os
+            if os.path.exists(tmp): os.unlink(tmp)
+
+        if str(dry_run).lower() == "true":
+            return {"ok": True, "dry_run": True, "tool_name": tool_key,
+                    "fn_name": fn_full, "fn_lines": len(fn_code.splitlines()),
+                    "preview_fn": fn_code[:300], "preview_entry": tools_entry[:300]}
+
+        commit_sha = _gh_blob_write("core_tools.py", new_content,
+            message or f"register_tool: {tool_key} ({perm})", repo)
+        notify(f"[SELF-EXTEND] New tool registered: {tool_key} ({perm})")
+        return {"ok": True, "tool_name": tool_key, "fn_name": fn_full,
+                "perm": perm, "args": args,
+                "commit": commit_sha[:12] if commit_sha else None,
+                "note": "Tool registered. Restart MCP session to see it (client caches tool list)."}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+TOOLS["replace_fn"] = {
+    "fn": t_replace_fn,
+    "perm": "EXECUTE",
+    "args": [
+        {"name": "fn_name",  "type": "string", "description": "Function name to replace (e.g. 't_add_knowledge')"},
+        {"name": "new_code", "type": "string", "description": "Complete replacement function source"},
+        {"name": "file",     "type": "string", "description": "File path (default: core_tools.py)"},
+        {"name": "message",  "type": "string", "description": "Commit message"},
+        {"name": "repo",     "type": "string", "description": "GitHub repo (default: CORE repo)"},
+        {"name": "dry_run",  "type": "string", "description": "true to preview without pushing"},
+    ],
+    "desc": (
+        "Replace an entire function by name — no need for exact old_str. "
+        "Finds function boundaries automatically. Syntax-checks before pushing. "
+        "Supports dry_run=true. USE THIS instead of multi_patch for full function replacements. "
+        "Works on any size function in any CORE source file."
+    ),
+}
+
+TOOLS["smart_patch"] = {
+    "fn": t_smart_patch,
+    "perm": "EXECUTE",
+    "args": [
+        {"name": "file",          "type": "string", "description": "File path to patch"},
+        {"name": "instruction",   "type": "string", "description": "Plain English description of the change"},
+        {"name": "repo",          "type": "string", "description": "GitHub repo (default: CORE repo)"},
+        {"name": "dry_run",       "type": "string", "description": "true to preview without pushing"},
+        {"name": "context_lines", "type": "string", "description": "Lines of context to read around match (default: 80)"},
+    ],
+    "desc": (
+        "Intelligent patch: describe what to change in plain English — Gemini generates old_str/new_str. "
+        "Example: smart_patch(file='core_tools.py', instruction='Fix tags to accept list or string in t_add_knowledge'). "
+        "Supports dry_run=true. Syntax-checked before push. "
+        "Fallback: use gh_search_replace if smart_patch cannot find the right location."
+    ),
+}
+
+TOOLS["register_tool"] = {
+    "fn": t_register_tool,
+    "perm": "EXECUTE",
+    "args": [
+        {"name": "name",      "type": "string", "description": "Tool name without t_ prefix"},
+        {"name": "fn_code",   "type": "string", "description": "Complete function source starting with def t_{name}(...)"},
+        {"name": "desc",      "type": "string", "description": "Tool description for TOOLS registry"},
+        {"name": "args_list", "type": "string", "description": "Comma-separated arg names e.g. 'path,content,message'"},
+        {"name": "perm",      "type": "string", "description": "READ | WRITE | EXECUTE"},
+        {"name": "message",   "type": "string", "description": "Commit message"},
+        {"name": "dry_run",   "type": "string", "description": "true to preview without pushing"},
+    ],
+    "desc": (
+        "Self-extension: atomically add a new tool to CORE in one commit. "
+        "Appends function + TOOLS entry to core_tools.py. "
+        "Guards against duplicates. Full syntax check before push. Supports dry_run=true. "
+        "NOTE: new tool visible after MCP session restart (client caches tool list). "
+        "USE THIS when CORE needs to permanently add a new capability."
     ),
 }
 
