@@ -1310,11 +1310,11 @@ def _register_web_tools(TOOLS: dict) -> None:
         "fn":   t_list_tools,
         "perm": "READ",
         "args": ["category", "search"],
-        "desc": "List all available tools. category= filter by category name (deploy/code/training/system/railway/knowledge/task/web/document/image/utils/agentic/crypto/project). search= keyword filter on name+desc. Returns name, args, desc per tool.",
+        "desc": "List all available tools with name, args, desc. Use when you need to discover what tools exist before acting. category= filter by: deploy/code/training/system/railway/knowledge/task/web/document/image/utils/agentic/crypto/project. search= keyword filter on name+desc. CALL ONCE per intent — result is cached in context, do not repeat same call. EXAMPLES: list_tools(search='supabase') to find DB tools | list_tools(category='training') for training tools | list_tools() for all 155 tools.",
     }
     TOOLS["get_tool_info"] = {
         "fn":   t_get_tool_info,
         "perm": "READ",
         "args": ["name"],
-        "desc": "Get full detail of a specific tool by name: args, desc, perm. Use before calling an unfamiliar tool to verify correct args.",
+        "desc": "Get full detail of one specific tool: args with types, full desc, perm level. Use BEFORE calling any unfamiliar tool to verify exact parameter names. If name not found, returns similar tool suggestions. CALL ONCE per tool — do not repeat. EXAMPLE: get_tool_info(name='sb_query') to see exact args before querying Supabase.",
     }
