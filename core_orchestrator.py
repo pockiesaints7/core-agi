@@ -2427,8 +2427,10 @@ def _agentic_loop(cid: str, user_message: str,
             "\n\nAUTONOMOUS MODE ACTIVE: Execute the full multi-step sequence end-to-end. "
             "Do NOT send intermediate status messages. Complete all steps, then return "
             "a single summary: what was done, what worked, what failed, what was skipped. "
-            "If any step hits a destructive action, pause and ask for confirmation first."
-        )
+            "If any step hits a destructive action, pause and ask for confirmation first. "
+            "If you are unsure which tool to call for a step, call list_tools(search=<keyword>) "
+            "to find it. NEVER skip a step by claiming no tool exists — the tool exists, find it."
+)
 
     # Can answer directly without tools?
     if pre_flight.get("can_answer_directly") and pre_flight.get("direct_answer"):
