@@ -1202,6 +1202,26 @@ def t_get_tool_info(name: str = "") -> dict:
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
+def t_get_table_schema(table: str = "") -> dict:
+    """Get actual column names and types from Supabase for any table."""
+    if not table:
+        return {"ok": False, "error": "table required"}
+    try:
+        from core_config import sb_get
+        rows = sb_get(
+            "information_schema.columns",
+            f"select=column_name,data_type,is_nullable"
+            f"&table_name=eq.{table}"
+            f"&table_schema=eq.public"
+            f"&order=ordinal_position.asc",
+            svc=True,
+        )
+        if not rows:
+            return {"ok": False, "error": f"table '{table}' not found in public schema"}
+        return {"ok": True, "table": table, "columns": rows}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # TOOLS REGISTRATION
@@ -1317,4 +1337,10 @@ def _register_web_tools(TOOLS: dict) -> None:
         "perm": "READ",
         "args": ["name"],
         "desc": "Get full detail of one specific tool: args with types, full desc, perm level. Use BEFORE calling any unfamiliar tool to verify exact parameter names. If name not found, returns similar tool suggestions. CALL ONCE per tool — do not repeat. EXAMPLE: get_tool_info(name='sb_query') to see exact args before querying Supabase.",
+    }
+    TOOLS["get_table_schema"] = {
+    "fn":   t_get_table_schema,
+    "perm": "READ",
+    "args": ["table"],
+    "desc": "Get actual column names and types from Supabase for any table. Use BEFORE sb_query to verify correct column names. Prevents 400 errors from querying non-existent columns. EXAMPLE: get_table_schema(table='sessions') → returns all columns with types.",
     }
