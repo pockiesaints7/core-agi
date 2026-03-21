@@ -1066,44 +1066,24 @@ def _tg_download_file(file_id: str) -> Optional[str]:
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _safe_result(r: str, tool_name: str = "") -> str:
-    """
-    Sanitize tool result for model context injection.
-    Injects explicit signals for failures and empty KB results.
-    """
     try:
         parsed = json.loads(r)
         if isinstance(parsed, dict):
-            ok    = parsed.get("ok", "?")
-            parts = [f"ok={ok}"]
-            for k in ["status", "summary", "output", "result", "error",
-                      "count", "total", "commit", "path", "message",
-                      "tools", "filtered", "rules", "mistakes", "results"]:
-                v = parsed.get(k)
-                if v is not None:
-                    parts.append(f"{k}={str(v)[:120]}")
-            result_text = " | ".join(parts)
-
-            # Explicit failure signal
-            if ok is False or ok == "false" or parsed.get("error"):
-                return f"TOOL_FAILED: {result_text}"
-
-            # KB empty signal — model must use fallback strategy, not give up
+            # Failure signal
+            if parsed.get("ok") is False or parsed.get("error"):
+                return f"TOOL_FAILED: {json.dumps(parsed, default=str)[:300]}"
+            # KB empty signal
             if tool_name in ("search_kb", "search_mistakes", "ask"):
                 results = parsed.get("results") or parsed.get("items") or []
-                count   = parsed.get("count", len(results) if isinstance(results, list) else -1)
-                if count == 0 or results == []:
+                if not results:
                     return (
-                        f"KB_EMPTY: no results found for this query. "
-                        f"Try: (1) different keywords, "
-                        f"(2) sb_query table=hot_reflections/cold_reflections/pattern_frequency directly, "
-                        f"(3) web_search if topic is external, "
-                        f"(4) synthesize from session_start context already loaded. "
-                        f"Do NOT declare done without answering."
+                        "KB_EMPTY: no results. Try: different keywords, "
+                        "sb_query direct tables, web_search, or synthesize from context."
                     )
-            return result_text
     except Exception:
         pass
-    return r.replace("\\", "/").replace('"', "'")[:400]
+    # Everything else — pass through raw, let model read it directly
+    return r[:800]
 
 
 def _agentic_loop(cid: str, user_message: str,
