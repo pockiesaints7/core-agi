@@ -256,6 +256,12 @@ _SB_SCHEMA = {
     }
 }
 
+from core_config import build_live_schema
+_live = build_live_schema(SUPABASE_REF, SUPABASE_PAT)
+for table, live_data in _live.items():
+    if table in _SB_SCHEMA and table not in _SB_SCHEMA.get("_tombstone", set()):
+        _SB_SCHEMA[table]["columns"] = live_data["columns"]
+
 def _sb_schema(table: str) -> dict:
     """Return schema entry for a table, or empty dict if unknown."""
     return _SB_SCHEMA["tables"].get(table, {})
