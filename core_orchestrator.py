@@ -349,7 +349,7 @@ def _build_system_prompt(cid: str) -> str:
     except Exception as e:
         print(f"[ORCH] session_start error (non-fatal): {e}")
     
-  parts.append(
+  parts.append(    
         "CONSTITUTION: Owner=REINVAGNAR always. "
         "Never expose credentials. "
         "Never take destructive action without owner approval. "
