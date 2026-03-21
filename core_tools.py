@@ -165,18 +165,19 @@ _SB_SCHEMA = {
             "notes": "Use id=gt.1. PROTECTED -- no deletes."
         },
         "sessions": {
-            "pk": "id", "pk_type": "bigserial",
-            "columns": {"id": "bigint", "started_at": "timestamptz", "ended_at": "timestamptz",
-                        "summary": "text", "actions": "text", "patterns": "text",
-                        "domain": "text", "quality": "float8",
-                        "state_key": "text", "state_value": "text",
-                        # E.3: checkpoint fields used by t_checkpoint
-                        "checkpoint_data": "jsonb", "checkpoint_ts": "timestamptz"},
+            "pk": "id", "pk_type": "int4",
+            "columns": {"id": "integer", "summary": "text", "actions": "ARRAY",
+                        "project_id": "integer", "created_at": "timestamptz",
+                        "interface": "text", "checkpoint_data": "jsonb",
+                        "checkpoint_ts": "timestamptz", "resume_task": "text",
+                        "domain": "text", "quality_score": "float8",
+                        "next_session": "text", "interrupted": "boolean",
+                        "tools_called": "jsonb"},
             "required": [],
             "enums": {},
-            "fat_columns": ["summary", "actions", "patterns"],
-            "safe_select": "id,domain,quality,started_at,ended_at,state_key,state_value",
-            "notes": "Use id=gt.1. PROTECTED -- no deletes."
+            "fat_columns": ["actions", "checkpoint_data", "tools_called"],
+            "safe_select": "id,summary,domain,quality_score,created_at,resume_task",
+            "notes": "Use id=gt.1. quality column is quality_score. actions is ARRAY type."
         },
         "pattern_frequency": {
             "pk": "id", "pk_type": "bigserial",
