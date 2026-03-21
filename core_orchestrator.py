@@ -387,7 +387,8 @@ def _select_tools(message: str, history_summary: str) -> list:
             from core_tools import TOOLS
             return list(TOOLS.keys())
         except Exception:
-            return []
+            # Absolute minimum — always return _ALWAYS_TOOLS so model can at least query KB
+            return list(_ALWAYS_TOOLS)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1217,9 +1218,6 @@ def _build_tools_desc(selected_tool_names: list) -> str:
     try:
         from core_tools import TOOLS
         for name in selected_tool_names:
-            if total_chars >= TOTAL_DESC_BUDGET:
-                lines.append(f"  ... ({len(selected_tool_names) - len(lines)} more tools omitted — use list_tools to discover)")
-                break
             tdef = TOOLS.get(name)
             if not tdef:
                 continue
@@ -1227,12 +1225,17 @@ def _build_tools_desc(selected_tool_names: list) -> str:
                 (a["name"] if isinstance(a, dict) else a)
                 for a in (tdef.get("args") or [])
             )
-            desc = tdef.get("desc", "")[:300]  # 300 chars per tool, not 4096
+            desc = tdef.get("desc", "")[:300]
             line = f"  {name}({args_str}) — {desc}"
             lines.append(line)
             total_chars += len(line)
-    except Exception:
-        pass
+            if total_chars >= TOTAL_DESC_BUDGET:
+                remaining = len(selected_tool_names) - len(lines)
+                if remaining > 0:
+                    lines.append(f"  ... ({remaining} more tools available — call list_tools to discover)")
+                break
+    except Exception as e:
+        print(f"[ORCH] _build_tools_desc failed: {e}")
     lines += [
         "  desktop_run_script(script, lang) — run PowerShell/Python on PC",
         "  desktop_file_ops(path, operation, content?) — read/write/list/delete/move/mkdir/info",
