@@ -874,10 +874,9 @@ def _compress_result(result_str: str, tool_name: str) -> str:
             out = json.dumps(compressed, default=str)
             if len(out) <= limit:
                 return out
-    return result_str[:limit] + "…[truncated]"
     except Exception:
         pass
-    return result_str[:MAX_TOOL_RESULT_CHARS] + "…[truncated]"
+    return result_str[:limit] + "…[truncated]"
 
 
 def _execute_railway_tool(tool_name: str, tool_args: dict) -> str:
