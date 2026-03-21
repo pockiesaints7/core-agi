@@ -693,7 +693,7 @@ def _reason_before_execute(user_message: str, system_prompt: str,
         if is_accountability:
             sess_result = sb_get(
                 "sessions",
-                "select=summary,quality,domain,created_at&id=gt.1&order=created_at.desc&limit=3",
+                "select=summary,quality_score,domain,created_at,resume_task&id=gt.1&order=created_at.desc&limit=3",
             )
             if sess_result:
                 brain_context += "RECENT SESSIONS:\n" + "\n".join(
@@ -1380,7 +1380,7 @@ def _agentic_loop(cid: str, user_message: str,
                 "- pattern_frequency: sb_query(table='pattern_frequency', filters='id=gt.1', order='frequency.desc', limit='8')\n"
                 "- cold_reflections: sb_query(table='cold_reflections', filters='id=gt.1', order='created_at.desc', limit='5')\n"
                 "- knowledge_base: sb_query(table='knowledge_base', filters='id=gt.1&domain=like.*core*', limit='10', select='domain,topic,content,created_at')\n"
-                "- sessions: sb_query(table='sessions', filters='id=gt.1', order='created_at.desc', limit='3', select='summary,quality,domain,created_at')\n"
+                "- sessions: sb_query(table='sessions', filters='id=gt.1', order='created_at.desc', limit='3', select='id,summary,quality_score,domain,created_at')\n"
                 "- hot_reflections: sb_query(table='hot_reflections', filters='id=gt.1&processed_by_cold=eq.0', order='created_at.desc', limit='5')\n"
                 "Do NOT call search_kb again with the same query. Use sb_query instead."
             )
