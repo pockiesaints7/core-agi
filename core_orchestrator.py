@@ -1,15 +1,22 @@
 """
 core_orchestrator.py — CORE Telegram Full-Power Agentic Orchestrator
 =====================================================================
-Token-optimised. Full-power. Model-agnostic.
+Token-optimised. Full-power. OpenRouter-primary.
 
-OPTIMISATIONS vs naive approach:
-  1. Dynamic tool selection   — cheap Groq call picks 10-15 relevant tools, not all 100+
-  2. Tool result compression  — raw JSON → 1-line summary before entering context
-  3. Rolling history summary  — every 10 turns compress to 1 summary, context never explodes
-  4. Aggressive context cache — session_start cached 30 min (mostly static)
-  5. Summary mode default     — step notifications go to Telegram but NOT into model context
-  6. Lazy session_start       — loaded once per cache window, not every turn
+PROVIDER CHAIN (all functions):
+  1. OpenRouter  — primary for ALL calls (tool selection, history compression,
+                   main reasoning, metacognition). Supports vision + long context.
+  2. Gemini direct — fallback if OpenRouter fails/429
+  3. Groq        — last resort, text only
+
+REMOVED vs previous version:
+  - _call_anthropic()  — not needed, OpenRouter handles Claude models too
+  - _call_openai()     — not needed, OpenRouter handles GPT models too
+  - All GROQ_FAST usage for cheap calls — replaced with OpenRouter fast model
+
+METACOGNITIVE LAYER (new):
+  - _reason_before_execute()  — think before first tool call
+  - _validate_before_reply()  — self-check before sending answer to owner
 
 MOUNT IN core_main.py (3 changes):
   # 1. Top-level import:
@@ -25,20 +32,17 @@ MOUNT IN core_main.py (3 changes):
       ).start()
 
 MODEL SWAP (one line):
-  MODEL_PROVIDER = "gemini"       # now (free, Gemini keys already in env)
-  MODEL_PROVIDER = "anthropic"    # when Anthropic API key ready
-  MODEL_PROVIDER = "openai"       # fallback
+  OPENROUTER_MODEL = "google/gemini-2.5-flash-lite"   # current default
+  OPENROUTER_MODEL = "anthropic/claude-sonnet-4-5"     # if want Claude
+  OPENROUTER_MODEL = "openai/gpt-4o"                   # if want GPT
 
 VARIABLES VERIFIED AGAINST ACTUAL CODEBASE:
-  core_config.py  : TELEGRAM_CHAT (not TELEGRAM_CHAT_ID), SUPABASE_PAT, SUPABASE_REF,
-                    GROQ_FAST, sb_get(t, qs, svc), sb_post(t, d), sb_patch(t, m, d),
-                    gemini_chat(system, user, max_tokens, json_mode)
-  core_tools.py   : TOOLS dict keys are fn/perm/args/desc,
-                    t_session_start() returns ok/counts/in_progress_tasks/pending_tasks/
-                      domain_mistakes/top_patterns/quality_alert/behavioral_rules/live_tool_count,
-                    t_get_behavioral_rules(domain, page, page_size) returns rules list
-                      with fields trigger/pointer/full_rule/domain/priority
-  core_main.py    : handle_msg(msg) uses cid/text, on_start() decorated with @app.on_event
+  core_config.py  : TELEGRAM_CHAT, SUPABASE_PAT, SUPABASE_REF,
+                    sb_get(t, qs, svc), sb_post(t, d), sb_patch(t, m, d),
+                    gemini_chat(system, user, max_tokens, json_mode),
+                    groq_chat(system, user, model, max_tokens)
+  core_tools.py   : TOOLS dict keys are fn/perm/args/desc
+  core_main.py    : handle_msg(msg) uses cid/text, on_start() @app.on_event
 """
 
 import base64
@@ -49,51 +53,39 @@ import time
 import traceback
 import re
 from collections import deque
-def _strip_json(s: str) -> str:
-    """Strip markdown code fences from model JSON output."""
-    s = s.strip()
-    if s.startswith("```"):
-        s = re.sub(r"^```[a-z]*\n?", "", s)
-        s = re.sub(r"```$", "", s)
-    return s.strip()
-
-
 from datetime import datetime
 from typing import Optional
 
 import httpx
 
-
 from core_config import (
     SUPABASE_URL, SUPABASE_SVC, SUPABASE_PAT, SUPABASE_REF,
-    TELEGRAM_TOKEN, TELEGRAM_CHAT,      # TELEGRAM_CHAT — verified from core_config.py
-    GROQ_FAST,                          # for cheap tool-selection call
+    TELEGRAM_TOKEN, TELEGRAM_CHAT,
     sb_get, sb_post, sb_patch,
-    gemini_chat,                        # gemini_chat(system, user, max_tokens, json_mode)
+    gemini_chat,
 )
-from core_github import notify          # notify(msg, cid=None)
+from core_github import notify  # notify(msg, cid=None)
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # MODEL CONFIGURATION
 # ══════════════════════════════════════════════════════════════════════════════
 
-# Primary provider is always OpenRouter (text + image + files).
-# Fallback chain: OpenRouter → Gemini (direct) → Groq.
-# MODEL_PROVIDER is kept for /model command display only — routing is automatic.
-MODEL_PROVIDER = "openrouter"   # display label
+# Primary model for ALL calls — reasoning, tool selection, compression, metacognition
+OPENROUTER_MODEL       = "google/gemini-2.5-flash-lite"   # swap here to change model
+OPENROUTER_FAST_MODEL  = "google/gemini-2.5-flash-lite"   # cheap calls: tool select, compress
+                                                           # swap to "meta-llama/llama-3.3-70b-instruct:free"
+                                                           # or any fast OR model if needed
 
-# OpenRouter model — supports vision + long context
-OPENROUTER_MODEL = "google/gemini-2.5-flash-lite"   # swap to any OR model here
+MODEL_PROVIDER = "openrouter"  # display label only
 
-_MODEL_STRINGS = {
-    "openrouter": OPENROUTER_MODEL,
-    "gemini":     "gemini-2.5-flash-lite",
-    "anthropic":  "claude-sonnet-4-20250514",
-    "openai":     "gpt-4o",
-    "groq":       "llama-3.3-70b-versatile",
-}
+# Gemini fallback model (direct API)
+GEMINI_FALLBACK_MODEL = "gemini-2.5-flash-lite"
 
-# Telegram document MIME types → extension hint (for file naming only)
+# Groq last resort
+GROQ_LAST_RESORT_MODEL = "llama-3.3-70b-versatile"
+
+# Telegram document MIME types → extension hint
 _TG_MIME_EXT = {
     "application/pdf":          "pdf",
     "application/msword":       "doc",
@@ -111,36 +103,115 @@ _TG_MIME_EXT = {
 }
 
 # ── Constants ──────────────────────────────────────────────────────────────────
-MAX_HISTORY_TURNS     = 20      # hard cap on turns kept in memory per chat
-HISTORY_COMPRESS_AT   = 10      # compress oldest N turns into 1 summary when exceeded
-MAX_TOOL_CALLS        = 50      # safety ceiling per message (unlimited intent)
-MAX_TOOL_RESULT_CHARS = 800     # compress tool results beyond this in context
-MAX_CONTEXT_CHARS     = 10000   # total system prompt chars fed to model
-DESKTOP_TASK_TIMEOUT  = 300     # seconds to wait for PC task result
-SESSION_CACHE_TTL     = 1800    # 30 min — session_start is mostly static
-CONFIRM_TIMEOUT_SECS  = 120     # owner has this long to reply CONFIRM/REJECT
+MAX_HISTORY_TURNS     = 20
+HISTORY_COMPRESS_AT   = 10
+MAX_TOOL_CALLS        = 50
+MAX_TOOL_RESULT_CHARS = 800
+MAX_CONTEXT_CHARS     = 10000
+DESKTOP_TASK_TIMEOUT  = 300
+SESSION_CACHE_TTL     = 1800
+CONFIRM_TIMEOUT_SECS  = 120
 
 # ── In-memory state ────────────────────────────────────────────────────────────
-_conv_memory: dict     = {}   # {cid: deque([{role, content, ts, image_b64?, image_mime?}])}
-_conv_lock             = threading.Lock()
-_pending_confirms: dict = {}  # {cid: {event, confirmed}}
-_confirm_lock          = threading.Lock()
-_session_cache: dict   = {}   # {cid: {system_prompt, loaded_at}}
-_cache_lock            = threading.Lock()
+_conv_memory: dict      = {}
+_conv_lock              = threading.Lock()
+_pending_confirms: dict = {}
+_confirm_lock           = threading.Lock()
+_session_cache: dict    = {}
+_cache_lock             = threading.Lock()
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# TOKEN-OPTIMISED TOOL SELECTION
-# Cheap Groq call to pick 10-15 relevant tools before main model call.
-# ~2000 tokens saved per turn vs injecting all 100+.
+# HELPERS
 # ══════════════════════════════════════════════════════════════════════════════
 
-# Tools that are ALWAYS included regardless of message (core infra)
-_ALWAYS_TOOLS = {
-    "search_kb", "get_mistakes", "task_update", "sb_query"
-}
+def _strip_json(s: str) -> str:
+    """Strip markdown code fences from model JSON output."""
+    s = s.strip()
+    if s.startswith("```"):
+        s = re.sub(r"^```[a-z]*\n?", "", s)
+        s = re.sub(r"```$", "", s)
+    return s.strip()
 
-# Tool category map — keyword → tool names
+
+def _or_call(payload: dict, timeout: int = 60) -> dict:
+    """
+    Raw OpenRouter /v1/chat/completions call.
+    Returns parsed response dict. Raises on non-2xx or missing key.
+    """
+    api_key = os.environ.get("OPENROUTER_API_KEY", "")
+    if not api_key:
+        raise RuntimeError("OPENROUTER_API_KEY not set")
+    r = httpx.post(
+        "https://openrouter.ai/api/v1/chat/completions",
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type":  "application/json",
+            "HTTP-Referer":  "https://core-agi-production.up.railway.app",
+            "X-Title":       "CORE AGI",
+        },
+        json=payload,
+        timeout=timeout,
+    )
+    if r.status_code == 429:
+        raise RuntimeError("OpenRouter 429 rate limited")
+    r.raise_for_status()
+    return r.json()
+
+
+def _or_text(system: str, user: str, model: str = None,
+             max_tokens: int = 512, json_mode: bool = False) -> str:
+    """
+    Simple OpenRouter text call — returns raw string.
+    Used for cheap operations: tool selection, history compression, metacognition.
+    Fallback: Gemini direct → Groq.
+    """
+    m = model or OPENROUTER_FAST_MODEL
+    payload = {
+        "model":       m,
+        "max_tokens":  max_tokens,
+        "temperature": 0.1,
+        "messages": [
+            {"role": "system", "content": system},
+            {"role": "user",   "content": user},
+        ],
+    }
+    if json_mode:
+        payload["response_format"] = {"type": "json_object"}
+
+    # 1. OpenRouter
+    try:
+        data = _or_call(payload)
+        return data["choices"][0]["message"]["content"] or ""
+    except Exception as e:
+        print(f"[ORCH] _or_text OpenRouter failed: {e}")
+
+    # 2. Gemini direct
+    try:
+        return gemini_chat(
+            system=system, user=user,
+            max_tokens=max_tokens, json_mode=json_mode,
+        )
+    except Exception as e:
+        print(f"[ORCH] _or_text Gemini failed: {e}")
+
+    # 3. Groq last resort
+    try:
+        from core_config import groq_chat
+        return groq_chat(
+            system=system, user=user,
+            model=GROQ_LAST_RESORT_MODEL, max_tokens=max_tokens,
+        )
+    except Exception as e:
+        raise RuntimeError(f"All providers failed in _or_text: {e}")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TOKEN-OPTIMISED TOOL SELECTION — via OpenRouter
+# ══════════════════════════════════════════════════════════════════════════════
+
+_ALWAYS_TOOLS = {"search_kb", "get_mistakes", "task_update", "sb_query"}
+
 _TOOL_CATEGORIES = {
     "deploy":    ["redeploy", "build_status", "deploy_and_wait", "validate_syntax",
                   "patch_file", "multi_patch", "gh_search_replace", "railway_logs_live"],
@@ -172,43 +243,32 @@ _TOOL_CATEGORIES = {
 
 def _select_tools(message: str, history_summary: str) -> list:
     """
-    Use Groq fast model to pick relevant tool categories for this message.
-    Returns list of tool names (always_tools + selected categories).
-    Falls back to all tools if Groq fails.
+    Use OpenRouter fast model to pick relevant tool categories.
+    Fallback chain: OpenRouter → Gemini → Groq (handled by _or_text).
     """
     try:
-        
-        from core_config import groq_chat, GROQ_FAST
         from core_tools import TOOLS
-
         all_tool_names = set(TOOLS.keys())
-        categories_text = "\n".join(
-            f"  {cat}: {', '.join(tools[:4])}..."
-            for cat, tools in _TOOL_CATEGORIES.items()
-        )
-        raw = groq_chat(
+        categories_text = ", ".join(_TOOL_CATEGORIES.keys())
+        raw = _or_text(
             system=(
                 "You are a tool router. Given a user message, output ONLY a JSON array "
-                "of category names that are relevant. "
-                f"Categories: {list(_TOOL_CATEGORIES.keys())}. "
+                f"of category names from: [{categories_text}]. "
                 "Output only valid JSON array of strings, no preamble."
             ),
             user=f"Message: {message[:300]}\nHistory: {history_summary[:200]}",
-            model=GROQ_FAST,
-            max_tokens=60,
+            max_tokens=80,
+            json_mode=False,
         )
         selected_cats = json.loads(_strip_json(raw))
         if not isinstance(selected_cats, list):
             raise ValueError("not a list")
-
         selected_tools = set(_ALWAYS_TOOLS)
         for cat in selected_cats:
             selected_tools.update(_TOOL_CATEGORIES.get(cat, []))
-        # Only return tools that actually exist in TOOLS
         result = [t for t in selected_tools if t in all_tool_names]
         print(f"[ORCH] Tool selection: {len(result)} tools for categories {selected_cats}")
         return result
-
     except Exception as e:
         print(f"[ORCH] tool selection fallback (all tools): {e}")
         try:
@@ -223,11 +283,6 @@ def _select_tools(message: str, history_summary: str) -> list:
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _build_system_prompt(cid: str) -> str:
-    """
-    Build full CORE system prompt. Cached per cid for SESSION_CACHE_TTL seconds.
-    Mirrors Claude Desktop boot: session_start + behavioral_rules.
-    Heavy but called at most once per 30 min per chat.
-    """
     with _cache_lock:
         cached = _session_cache.get(cid)
         if cached and (time.time() - cached["loaded_at"]) < SESSION_CACHE_TTL:
@@ -241,50 +296,40 @@ def _build_system_prompt(cid: str) -> str:
         "Never assume — query Supabase or the PC first. Think step by step."
     ]
 
-    # session_start — same fields as Claude Desktop boot
     try:
         from core_tools import t_session_start
         ss = t_session_start()
         if ss.get("ok"):
-            counts   = ss.get("counts", {})
-            in_prog  = ss.get("in_progress_tasks", []) or []
-            pending  = ss.get("pending_tasks", []) or []
-            mistakes = ss.get("domain_mistakes", []) or []
-            patterns = ss.get("top_patterns", []) or []
-            qa       = ss.get("quality_alert")
+            counts     = ss.get("counts", {})
+            in_prog    = ss.get("in_progress_tasks", []) or []
+            mistakes   = ss.get("domain_mistakes", []) or []
+            patterns   = ss.get("top_patterns", []) or []
+            qa         = ss.get("quality_alert")
             live_tools = ss.get("live_tool_count", 0)
 
-            state_line = (
+            parts.append(
                 f"STATE: KB={counts.get('knowledge_base',0)} "
                 f"Sessions={counts.get('sessions',0)} "
                 f"Mistakes={counts.get('mistakes',0)} "
                 f"Tools={live_tools}"
             )
-            parts.append(state_line)
-
             if in_prog:
                 raw   = in_prog[0].get("task", "")
                 title = raw[:120] if isinstance(raw, str) else str(raw)[:120]
                 parts.append(f"RESUME TASK: {title}")
-
             if mistakes:
                 m_lines = " | ".join(
                     f"[{m.get('domain','?')}] {m.get('what_failed','')[:80]}"
                     for m in mistakes[:3]
                 )
                 parts.append(f"AVOID: {m_lines}")
-
             if patterns:
                 p_lines = " | ".join(
-                    f"{p.get('pattern','')[:80]}"
-                    for p in patterns[:3]
+                    p.get("pattern", "")[:80] for p in patterns[:3]
                 )
                 parts.append(f"TOP PATTERNS: {p_lines}")
-
             if qa:
                 parts.append(f"QUALITY ALERT: {qa}")
-
-            # behavioral_rules already loaded by session_start
             rules = ss.get("behavioral_rules", []) or []
             if rules:
                 r_lines = "\n".join(
@@ -292,32 +337,28 @@ def _build_system_prompt(cid: str) -> str:
                     for r in rules[:15]
                 )
                 parts.append(f"BEHAVIORAL RULES:\n{r_lines}")
-
     except Exception as e:
         print(f"[ORCH] session_start error (non-fatal): {e}")
 
-    # Railway tools summary (always visible in system prompt)
     parts.append(
         "RAILWAY TOOLS (no prefix — run on server instantly):\n"
-        "  web_search(query, max_results) — search web via DuckDuckGo\n"
-        "  web_fetch(url, max_chars) — fetch any URL content\n"
-        "  summarize_url(url, focus) — fetch + Gemini summary\n"
-        "  create_document(content, filename, format) — format=docx|pdf|txt|md|csv\n"
-        "  create_spreadsheet(data, filename, format) — format=xlsx|csv\n"
-        "  create_presentation(slides, filename, theme) — format=pptx\n"
-        "  read_document(base64_content, format) — extract text from docx|xlsx|pptx|txt|csv\n"
-        "  convert_document(base64_content, from_format, to_format) — convert between formats\n"
+        "  web_search(query, max_results) — search web\n"
+        "  web_fetch(url, max_chars) — fetch URL content\n"
+        "  summarize_url(url, focus) — fetch + summary\n"
+        "  create_document(content, filename, format) — docx|pdf|txt|md|csv\n"
+        "  create_spreadsheet(data, filename, format) — xlsx|csv\n"
+        "  create_presentation(slides, filename, theme) — pptx\n"
+        "  read_document(base64_content, format) — extract text\n"
+        "  convert_document(base64_content, from_format, to_format)\n"
         "  generate_image(prompt, aspect_ratio) — Gemini Imagen\n"
-        "  image_process(base64_content, operation, params) — resize|crop|rotate|watermark etc\n"
-        "  weather(location) — current weather, default Jakarta\n"
-        "  calc(expression) — safe math: sqrt, sin, log, pi, etc\n"
-        "  datetime_now(timezone) — default Asia/Jakarta WIB\n"
-        "  currency(amount, from_cur, to_cur) — live exchange rate\n"
-        "  translate(text, target_language) — via Gemini\n"
+        "  image_process(base64_content, operation, params)\n"
+        "  weather(location) — default Jakarta\n"
+        "  calc(expression) — safe math\n"
+        "  datetime_now(timezone) — default Asia/Jakarta\n"
+        "  currency(amount, from_cur, to_cur) — live rate\n"
+        "  translate(text, target_language)\n"
         "  run_python(code, timeout) — execute Python on Railway"
     )
-
-    # Desktop capabilities (PC tools — requires core_agent.py running on PC)
     parts.append(
         "DESKTOP TOOLS (prefix desktop_ — requires PC online):\n"
         "  desktop_run_script:  {script, lang: powershell|python}\n"
@@ -326,8 +367,6 @@ def _build_system_prompt(cid: str) -> str:
         "  desktop_search_web:  {query, max_results?}\n"
         "  desktop_cmd:         {command?, script?}"
     )
-
-    # Constitution (immutable)
     parts.append(
         "CONSTITUTION: Owner=REINVAGNAR always. "
         "Never expose credentials. "
@@ -336,10 +375,8 @@ def _build_system_prompt(cid: str) -> str:
     )
 
     prompt = "\n\n".join(parts)[:MAX_CONTEXT_CHARS]
-
     with _cache_lock:
         _session_cache[cid] = {"system_prompt": prompt, "loaded_at": time.time()}
-
     return prompt
 
 
@@ -352,11 +389,10 @@ def _invalidate_cache(cid: str = None):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# CONVERSATION HISTORY — rolling summary compression
+# CONVERSATION HISTORY — rolling summary compression via OpenRouter
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _sb_save_msg(cid: str, role: str, content: str):
-    """Persist message to telegram_conversations (best-effort)."""
     try:
         sb_post("telegram_conversations", {
             "chat_id":    cid,
@@ -369,7 +405,6 @@ def _sb_save_msg(cid: str, role: str, content: str):
 
 
 def _sb_load_history(cid: str) -> list:
-    """Load recent history from Supabase on cold start."""
     try:
         rows = sb_get(
             "telegram_conversations",
@@ -399,11 +434,7 @@ def _get_history(cid: str) -> list:
 
 def _append_history(cid: str, role: str, content: str,
                     image_b64: str = None, image_mime: str = None):
-    entry = {
-        "role":    role,
-        "content": content[:1500],
-        "ts":      datetime.utcnow().isoformat(),
-    }
+    entry = {"role": role, "content": content[:1500], "ts": datetime.utcnow().isoformat()}
     if image_b64:
         entry["image_b64"]  = image_b64
         entry["image_mime"] = image_mime or "image/jpeg"
@@ -411,7 +442,6 @@ def _append_history(cid: str, role: str, content: str,
         if cid not in _conv_memory:
             _conv_memory[cid] = deque(maxlen=MAX_HISTORY_TURNS)
         q = _conv_memory[cid]
-        # Rolling compression: if near limit, compress oldest turns
         if len(q) >= MAX_HISTORY_TURNS - 2:
             _compress_history(q)
         q.append(entry)
@@ -419,28 +449,17 @@ def _append_history(cid: str, role: str, content: str,
 
 
 def _compress_history(q: deque):
-    """
-    Compress oldest HISTORY_COMPRESS_AT entries into a single summary entry.
-    Uses Groq fast model. Falls back to simple truncation if Groq fails.
-    Mutates q in place.
-    """
+    """Compress oldest N turns into summary. Uses OpenRouter (fallback chain inside _or_text)."""
     if len(q) < HISTORY_COMPRESS_AT:
         return
-    oldest = []
-    for _ in range(HISTORY_COMPRESS_AT):
-        if q:
-            oldest.append(q.popleft())
+    oldest = [q.popleft() for _ in range(HISTORY_COMPRESS_AT) if q]
     try:
-        
-        from core_config import groq_chat, GROQ_FAST
         text = "\n".join(
-            f"{e['role'].upper()}: {e['content'][:200]}"
-            for e in oldest
+            f"{e['role'].upper()}: {e['content'][:200]}" for e in oldest
         )
-        summary = groq_chat(
+        summary = _or_text(
             system="Summarise this conversation segment in 2-3 sentences. Be factual, include outcomes.",
             user=text,
-            model=GROQ_FAST,
             max_tokens=150,
         )
         q.appendleft({
@@ -449,7 +468,6 @@ def _compress_history(q: deque):
             "ts":      oldest[0].get("ts", ""),
         })
     except Exception:
-        # Fallback: just keep first and last of the compressed block
         if oldest:
             q.appendleft({
                 "role":    "system",
@@ -469,9 +487,8 @@ def _clear_history(cid: str):
 
 
 def _history_to_text(history: list) -> str:
-    """Convert history list to compact text for model context."""
     lines = []
-    for h in history[-12:]:  # only last 12 turns in context
+    for h in history[-12:]:
         role    = h.get("role", "user").upper()
         content = h.get("content", "")[:400]
         lines.append(f"{role}: {content}")
@@ -479,451 +496,305 @@ def _history_to_text(history: list) -> str:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# MODEL ABSTRACTION LAYER
+# METACOGNITIVE LAYER
+# Two lightweight model calls that wrap the agentic loop.
 # ══════════════════════════════════════════════════════════════════════════════
 
-def _call_model(system_prompt: str, history_text: str, user_message: str,
-                tools_desc: str, image_b64: str = None,
-                image_mime: str = "image/jpeg",
-                file_b64: str = None, file_mime: str = None) -> dict:
+def _reason_before_execute(user_message: str, system_prompt: str,
+                            history_text: str, tools_desc: str) -> dict:
     """
-    Waterfall fallback chain:
-      1. OpenRouter  (text + image + file — primary)
-      2. Gemini direct (text + image — fallback)
-      3. Groq        (text only — last resort)
-
-    Returns:
-      {"thought": str, "tool_calls": [{"name": str, "args": dict}],
-       "reply": str, "done": bool}
+    Pre-execution reasoning pass (OpenRouter fast model).
+    Returns {
+        "can_answer_directly": bool,   # true if no tools needed
+        "direct_answer": str,          # if can_answer_directly
+        "intent": str,                 # true intent parsed from message
+        "plan": [str],                 # ordered steps
+        "known_context": str,          # what we already know relevant to this
+    }
+    Falls back to empty plan on any error — loop continues normally.
     """
-    errors = []
-
-    # 1 — OpenRouter (handles text, image, and file attachments)
+    prompt = (
+        f"{system_prompt}\n\n"
+        f"CONVERSATION:\n{history_text}\n\n"
+        "Before executing any tools, reason about the owner's request.\n"
+        "Output ONLY valid JSON:\n"
+        "{\n"
+        '  "intent": "true intent behind the message",\n'
+        '  "known_context": "what you already know from session_start/history relevant to this",\n'
+        '  "can_answer_directly": true/false,\n'
+        '  "direct_answer": "full answer if can_answer_directly=true, else empty string",\n'
+        '  "plan": ["step 1", "step 2", ...],\n'
+        '  "fallback_strategy": "if primary tools return empty, what to try next"\n'
+        "}"
+    )
     try:
-        return _call_openrouter(
-            system_prompt, history_text, user_message,
-            tools_desc, image_b64, image_mime, file_b64, file_mime,
+        raw = _or_text(
+            system=prompt,
+            user=f"OWNER MESSAGE: {user_message}",
+            max_tokens=400,
+            json_mode=True,
         )
+        parsed = json.loads(_strip_json(raw))
+        return parsed if isinstance(parsed, dict) else {}
     except Exception as e:
-        err = str(e)
-        errors.append(f"OpenRouter: {err[:200]}")
-        print(f"[ORCH] OpenRouter failed, falling back to Gemini: {err[:200]}")
-
-    # 2 — Gemini direct (text + image, no arbitrary file)
-    try:
-        return _call_gemini(
-            system_prompt, history_text, user_message,
-            tools_desc, image_b64, image_mime,
-        )
-    except Exception as e:
-        err = str(e)
-        errors.append(f"Gemini: {err[:200]}")
-        print(f"[ORCH] Gemini failed, falling back to Groq: {err[:200]}")
-
-    # 3 — Groq (text only — no vision, but keeps the loop alive)
-    try:
-        return _call_groq_model(
-            system_prompt, history_text, user_message, tools_desc,
-        )
-    except Exception as e:
-        errors.append(f"Groq: {str(e)[:200]}")
-
-    raise RuntimeError("All providers failed:\n" + "\n".join(errors))
+        print(f"[ORCH] _reason_before_execute failed (non-fatal): {e}")
+        return {}
 
 
-def _call_openrouter(system_prompt: str, history_text: str, user_message: str,
-                     tools_desc: str, image_b64: str = None,
-                     image_mime: str = "image/jpeg",
-                     file_b64: str = None, file_mime: str = None) -> dict:
+def _validate_before_reply(user_message: str, reply: str,
+                            results_buffer: list, system_prompt: str) -> dict:
     """
-    OpenRouter via /v1/chat/completions (OpenAI-compatible).
-    Supports: text, images (inline base64), and arbitrary files (PDF, DOCX, etc.)
-    via base64 data URIs in the content array.
-    Tool calling via structured JSON output (same schema as Gemini path).
+    Post-execution self-check (OpenRouter fast model).
+    Returns {
+        "is_valid": bool,           # does reply actually answer the question?
+        "corrected_reply": str,     # improved reply if not valid (may use results_buffer)
+        "reason": str,              # why valid/invalid
+    }
+    Falls back to {"is_valid": True} on error — always delivers something.
     """
-    api_key = os.environ.get("OPENROUTER_API_KEY", "")
-    if not api_key:
-        raise RuntimeError("OPENROUTER_API_KEY not set")
+    results_summary = "\n".join(
+        f"[{r['name']}] → {r['result'][:200]}" for r in results_buffer[-6:]
+    ) or "No tools called."
 
-    # Build system message
+    prompt = (
+        "You are a quality checker for CORE AGI. "
+        "Given an owner question and a draft reply, decide if the reply actually answers the question.\n\n"
+        f"OWNER QUESTION: {user_message}\n\n"
+        f"TOOL RESULTS AVAILABLE:\n{results_summary}\n\n"
+        f"DRAFT REPLY: {reply or '(empty)'}\n\n"
+        "Output ONLY valid JSON:\n"
+        "{\n"
+        '  "is_valid": true/false,\n'
+        '  "reason": "why valid or not",\n'
+        '  "corrected_reply": "improved reply using tool results if not valid, empty string if valid"\n'
+        "}"
+    )
+    try:
+        raw = _or_text(
+            system=prompt,
+            user="Validate.",
+            max_tokens=300,
+            json_mode=True,
+        )
+        parsed = json.loads(_strip_json(raw))
+        return parsed if isinstance(parsed, dict) else {"is_valid": True}
+    except Exception as e:
+        print(f"[ORCH] _validate_before_reply failed (non-fatal): {e}")
+        return {"is_valid": True}
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# MODEL ABSTRACTION LAYER — main reasoning call
+# Chain: OpenRouter → Gemini direct → Groq
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _build_reasoning_payload(system_prompt: str, history_text: str,
+                              user_message: str, tools_desc: str,
+                              image_b64: str = None, image_mime: str = "image/jpeg",
+                              file_b64: str = None, file_mime: str = None,
+                              pre_flight: dict = None) -> tuple:
+    """Build system string and user content list for reasoning call."""
+    plan_hint = ""
+    if pre_flight and pre_flight.get("plan"):
+        plan_hint = "\nEXECUTION PLAN:\n" + "\n".join(
+            f"  {i+1}. {s}" for i, s in enumerate(pre_flight["plan"])
+        )
+    if pre_flight and pre_flight.get("fallback_strategy"):
+        plan_hint += f"\nFALLBACK: {pre_flight['fallback_strategy']}"
+    if pre_flight and pre_flight.get("known_context"):
+        plan_hint += f"\nKNOWN CONTEXT: {pre_flight['known_context']}"
+
     full_system = (
         f"{system_prompt}\n\n"
         f"AVAILABLE TOOLS:\n{tools_desc}\n\n"
-        f"CONVERSATION SO FAR:\n{history_text}\n\n"
+        f"CONVERSATION SO FAR:\n{history_text}"
+        f"{plan_hint}\n\n"
         "Respond ONLY with valid JSON:\n"
         '{"thought": "step-by-step reasoning", '
         '"tool_calls": [{"name": "tool_name", "args": {}}], '
         '"reply": "final message to owner when done", '
         '"done": true/false}\n'
         "Rules:\n"
-        "- done=true ONLY when task is fully complete and reply is set\n"
+        "- done=true ONLY when task is fully complete AND reply is non-empty\n"
         "- tool_calls=[] when replying directly with no tools needed\n"
         "- Never invent tool results — always call the tool\n"
+        "- If KB search returns empty, use fallback_strategy — do NOT just say Done\n"
         "- Output ONLY valid JSON, no markdown fences"
     )
 
-    # Build user content — supports text + image + file (all as inline data URIs)
     user_content: list = []
-
     if image_b64:
         user_content.append({
             "type": "image_url",
             "image_url": {"url": f"data:{image_mime};base64,{image_b64}"},
         })
-
     if file_b64 and file_mime:
-        # For PDFs and docs — embed as data URI; models that support it will parse inline
         user_content.append({
             "type": "image_url",
             "image_url": {"url": f"data:{file_mime};base64,{file_b64}"},
         })
-
     user_content.append({"type": "text", "text": f"OWNER: {user_message}"})
 
-    payload = {
-        "model":       OPENROUTER_MODEL,
-        "messages": [
-            {"role": "system", "content": full_system},
-            {"role": "user",   "content": user_content},
-        ],
-        "max_tokens":  2048,
-        "temperature": 0.1,
-        "response_format": {"type": "json_object"},
-    }
+    return full_system, user_content
 
-    r = httpx.post(
-        "https://openrouter.ai/api/v1/chat/completions",
-        headers={
-            "Authorization":  f"Bearer {api_key}",
-            "Content-Type":   "application/json",
-            "HTTP-Referer":   "https://core-agi-production.up.railway.app",
-            "X-Title":        "CORE AGI",
-        },
-        json=payload,
-        timeout=60,
+
+def _call_model(system_prompt: str, history_text: str, user_message: str,
+                tools_desc: str, image_b64: str = None,
+                image_mime: str = "image/jpeg",
+                file_b64: str = None, file_mime: str = None,
+                pre_flight: dict = None) -> dict:
+    """
+    Main reasoning call. Chain: OpenRouter → Gemini → Groq.
+    Returns {"thought": str, "tool_calls": [...], "reply": str, "done": bool}
+    """
+    full_system, user_content = _build_reasoning_payload(
+        system_prompt, history_text, user_message, tools_desc,
+        image_b64, image_mime, file_b64, file_mime, pre_flight,
     )
-    if r.status_code == 429:
-        raise RuntimeError("429 rate limited")
-    r.raise_for_status()
-    data       = r.json()
-    choice     = data["choices"][0]
-    msg        = choice["message"]
-    finish     = choice.get("finish_reason", "")
-    raw_text   = msg.get("content") or "{}"
+    errors = []
+
+    # 1. OpenRouter
     try:
-        parsed = json.loads(_strip_json(raw_text))
-    except Exception:
-        # Model returned plain text — treat as final reply
-        return {"thought": "", "tool_calls": [], "reply": raw_text, "done": True}
-
-    return {
-        "thought":    parsed.get("thought", ""),
-        "tool_calls": parsed.get("tool_calls", []),
-        "reply":      parsed.get("reply", ""),
-        "done":       bool(parsed.get("done", False)),
-    }
-
-
-def _call_groq_model(system_prompt: str, history_text: str, user_message: str,
-                     tools_desc: str) -> dict:
-    """
-    Groq fast model — text only, last-resort fallback.
-    Re-uses groq_chat() from core_config which handles 429 + key rotation.
-    """
-    from core_config import groq_chat, GROQ_FAST
-
-    full_prompt = (
-        f"{system_prompt}\n\n"
-        f"AVAILABLE TOOLS:\n{tools_desc}\n\n"
-        f"CONVERSATION SO FAR:\n{history_text}\n\n"
-        "Respond ONLY with valid JSON:\n"
-        '{"thought": "reasoning", '
-        '"tool_calls": [{"name": "tool_name", "args": {}}], '
-        '"reply": "final reply when done", '
-        '"done": true/false}\n'
-        "Output ONLY valid JSON, no markdown fences."
-    )
-    raw = groq_chat(
-        system=full_prompt,
-        user=f"OWNER: {user_message}",
-        model=GROQ_FAST,
-        max_tokens=1024,
-    )
-    try:
-        parsed = json.loads(_strip_json(raw))
-    except Exception:
-        return {"thought": "", "tool_calls": [], "reply": raw, "done": True}
-    return {
-        "thought":    parsed.get("thought", ""),
-        "tool_calls": parsed.get("tool_calls", []),
-        "reply":      parsed.get("reply", ""),
-        "done":       bool(parsed.get("done", False)),
-    }
-
-
-def _call_gemini(system_prompt: str, history_text: str, user_message: str,
-                 tools_desc: str, image_b64: str = None,
-                 image_mime: str = "image/jpeg") -> dict:
-    """
-    Gemini via generateContent. Tool calling via structured JSON output.
-    Uses gemini_chat() from core_config which already handles key rotation + 429 fallback.
-    NOTE: gemini_chat() combines system+user into one prompt — we build accordingly.
-    """
-    full_system = (
-        f"{system_prompt}\n\n"
-        f"AVAILABLE TOOLS:\n{tools_desc}\n\n"
-        f"CONVERSATION SO FAR:\n{history_text}\n\n"
-        "Respond ONLY with valid JSON:\n"
-        '{"thought": "step-by-step reasoning", '
-        '"tool_calls": [{"name": "tool_name", "args": {}}], '
-        '"reply": "final message to owner when done", '
-        '"done": true/false}\n'
-        "Rules:\n"
-        "- done=true ONLY when task is fully complete and reply is set\n"
-        "- tool_calls=[] when replying directly with no tools needed\n"
-        "- Never invent tool results — always call the tool\n"
-        "- Output ONLY valid JSON, no markdown fences"
-    )
-
-    user_part = f"OWNER: {user_message}"
-
-    # If image attached, we can't pass it via gemini_chat() (which takes text only).
-    # Call the API directly for image turns, reuse gemini_chat() for text turns.
-    if image_b64:
-        from core_config import _GEMINI_KEYS, _GEMINI_KEY_INDEX
-        import core_config as _cc
-        keys = _cc._GEMINI_KEYS
-        if not keys:
-            raise RuntimeError("GEMINI_KEYS not set")
-        model_name = _MODEL_STRINGS["gemini"]
-        combined   = f"{full_system}\n\n{user_part}"
-        parts_list = [
-            {"text": combined},
-            {"inline_data": {"mime_type": image_mime, "data": image_b64}},
-        ]
-        last_err = None
-        for _ in range(len(keys)):
-            key = keys[_cc._GEMINI_KEY_INDEX % len(keys)]
-            _cc._GEMINI_KEY_INDEX = (_cc._GEMINI_KEY_INDEX + 1) % len(keys)
-            try:
-                r = httpx.post(
-                    f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent",
-                    params={"key": key},
-                    headers={"Content-Type": "application/json"},
-                    json={
-                        "contents": [{"parts": parts_list}],
-                        "generationConfig": {
-                            "maxOutputTokens": 2048,
-                            "temperature": 0.1,
-                            "responseMimeType": "application/json",
-                        },
-                        "safetySettings": [
-                            {"category": c, "threshold": "BLOCK_NONE"}
-                            for c in [
-                                "HARM_CATEGORY_HARASSMENT", "HARM_CATEGORY_HATE_SPEECH",
-                                "HARM_CATEGORY_SEXUALLY_EXPLICIT", "HARM_CATEGORY_DANGEROUS_CONTENT",
-                            ]
-                        ],
-                    },
-                    timeout=30,
-                )
-                if r.status_code == 429:
-                    last_err = "429"
-                    continue
-                r.raise_for_status()
-                candidate  = r.json().get("candidates", [{}])[0]
-                resp_parts = candidate.get("content", {}).get("parts", [])
-                if not resp_parts:
-                    last_err = "empty parts"
-                    continue
-                raw = resp_parts[0]["text"].strip()
-                parsed = json.loads(_strip_json(raw))
-                return {
-                    "thought":    parsed.get("thought", ""),
-                    "tool_calls": parsed.get("tool_calls", []),
-                    "reply":      parsed.get("reply", ""),
-                    "done":       bool(parsed.get("done", False)),
-                }
-            except Exception as e:
-                last_err = str(e)
-                continue
-        raise RuntimeError(f"Gemini image call failed: {last_err}")
-    else:
-        # Text-only — use gemini_chat() which handles rotation + 429 automatically
-        raw = gemini_chat(
-            system=full_system,
-            user=user_part,
-            max_tokens=2048,
-            json_mode=True,
-        )
-        parsed = json.loads(_strip_json(raw))
+        payload = {
+            "model":           OPENROUTER_MODEL,
+            "max_tokens":      2048,
+            "temperature":     0.1,
+            "response_format": {"type": "json_object"},
+            "messages": [
+                {"role": "system", "content": full_system},
+                {"role": "user",   "content": user_content},
+            ],
+        }
+        data     = _or_call(payload, timeout=60)
+        choice   = data["choices"][0]
+        finish   = choice.get("finish_reason", "")
+        raw_text = choice["message"].get("content") or "{}"
+        try:
+            parsed = json.loads(_strip_json(raw_text))
+        except Exception:
+            return {"thought": "", "tool_calls": [], "reply": raw_text, "done": True}
         return {
             "thought":    parsed.get("thought", ""),
             "tool_calls": parsed.get("tool_calls", []),
             "reply":      parsed.get("reply", ""),
             "done":       bool(parsed.get("done", False)),
         }
+    except Exception as e:
+        errors.append(f"OpenRouter: {str(e)[:200]}")
+        print(f"[ORCH] OpenRouter reasoning failed, trying Gemini: {str(e)[:200]}")
 
-
-def _call_anthropic(system_prompt: str, history_text: str, user_message: str,
-                    tools_desc: str, image_b64: str = None,
-                    image_mime: str = "image/jpeg") -> dict:
-    """Anthropic Claude via /v1/messages with native tool use."""
-    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
-    if not api_key:
-        raise RuntimeError("ANTHROPIC_API_KEY not set")
-
-    # Build tools from TOOLS dict
+    # 2. Gemini direct (text + image; no arbitrary file)
     try:
-        from core_tools import TOOLS
-        selected_names = [t.strip() for t in tools_desc.split("\n")
-                          if t.strip() and not t.strip().startswith("desktop_")]
-        anth_tools = []
-        for name, tdef in TOOLS.items():
-            props = {}
-            for arg in (tdef.get("args") or []):
-                an = arg["name"] if isinstance(arg, dict) else arg
-                at = arg.get("type", "string") if isinstance(arg, dict) else "string"
-                props[an] = {"type": at}
-            anth_tools.append({
-                "name":         name,
-                "description":  tdef.get("desc", name)[:200],
-                "input_schema": {"type": "object", "properties": props},
-            })
-    except Exception:
-        anth_tools = []
+        combined_prompt = f"{full_system}\n\nOWNER: {user_message}"
+        if image_b64:
+            from core_config import _GEMINI_KEYS
+            import core_config as _cc
+            keys = _cc._GEMINI_KEYS
+            if not keys:
+                raise RuntimeError("GEMINI_KEYS not set")
+            parts_list = [
+                {"text": combined_prompt},
+                {"inline_data": {"mime_type": image_mime, "data": image_b64}},
+            ]
+            last_err = None
+            for _ in range(len(keys)):
+                key = keys[_cc._GEMINI_KEY_INDEX % len(keys)]
+                _cc._GEMINI_KEY_INDEX = (_cc._GEMINI_KEY_INDEX + 1) % len(keys)
+                try:
+                    r = httpx.post(
+                        f"https://generativelanguage.googleapis.com/v1beta/models/"
+                        f"{GEMINI_FALLBACK_MODEL}:generateContent",
+                        params={"key": key},
+                        headers={"Content-Type": "application/json"},
+                        json={
+                            "contents": [{"parts": parts_list}],
+                            "generationConfig": {
+                                "maxOutputTokens": 2048, "temperature": 0.1,
+                                "responseMimeType": "application/json",
+                            },
+                            "safetySettings": [
+                                {"category": c, "threshold": "BLOCK_NONE"}
+                                for c in [
+                                    "HARM_CATEGORY_HARASSMENT", "HARM_CATEGORY_HATE_SPEECH",
+                                    "HARM_CATEGORY_SEXUALLY_EXPLICIT", "HARM_CATEGORY_DANGEROUS_CONTENT",
+                                ]
+                            ],
+                        },
+                        timeout=30,
+                    )
+                    if r.status_code == 429:
+                        last_err = "429"
+                        continue
+                    r.raise_for_status()
+                    candidate  = r.json().get("candidates", [{}])[0]
+                    resp_parts = candidate.get("content", {}).get("parts", [])
+                    if not resp_parts:
+                        last_err = "empty parts"
+                        continue
+                    raw = resp_parts[0]["text"].strip()
+                    parsed = json.loads(_strip_json(raw))
+                    return {
+                        "thought":    parsed.get("thought", ""),
+                        "tool_calls": parsed.get("tool_calls", []),
+                        "reply":      parsed.get("reply", ""),
+                        "done":       bool(parsed.get("done", False)),
+                    }
+                except Exception as ex:
+                    last_err = str(ex)
+                    continue
+            raise RuntimeError(f"Gemini image all keys failed: {last_err}")
+        else:
+            raw = gemini_chat(
+                system=full_system,
+                user=f"OWNER: {user_message}",
+                max_tokens=2048,
+                json_mode=True,
+            )
+            parsed = json.loads(_strip_json(raw))
+            return {
+                "thought":    parsed.get("thought", ""),
+                "tool_calls": parsed.get("tool_calls", []),
+                "reply":      parsed.get("reply", ""),
+                "done":       bool(parsed.get("done", False)),
+            }
+    except Exception as e:
+        errors.append(f"Gemini: {str(e)[:200]}")
+        print(f"[ORCH] Gemini reasoning failed, trying Groq: {str(e)[:200]}")
 
-    # Build message content
-    user_content: list = []
-    if image_b64:
-        user_content.append({"type": "image", "source": {
-            "type": "base64", "media_type": image_mime, "data": image_b64,
-        }})
-    user_content.append({"type": "text", "text": (
-        f"CONVERSATION SO FAR:\n{history_text}\n\nOWNER: {user_message}"
-    )})
-
-    payload: dict = {
-        "model":      _MODEL_STRINGS["anthropic"],
-        "max_tokens": 4096,
-        "system":     f"{system_prompt}\n\nAVAILABLE TOOLS:\n{tools_desc}",
-        "messages":   [{"role": "user", "content": user_content}],
-    }
-    if anth_tools:
-        payload["tools"] = anth_tools[:64]
-
-    r = httpx.post(
-        "https://api.anthropic.com/v1/messages",
-        headers={
-            "x-api-key":         api_key,
-            "anthropic-version": "2023-06-01",
-            "content-type":      "application/json",
-        },
-        json=payload,
-        timeout=60,
-    )
-    r.raise_for_status()
-    data       = r.json()
-    content    = data.get("content", [])
-    stop       = data.get("stop_reason", "")
-    text_parts = [b["text"] for b in content if b.get("type") == "text"]
-    tool_uses  = [
-        {"name": b["name"], "args": b.get("input", {})}
-        for b in content if b.get("type") == "tool_use"
-    ]
-    reply_text = " ".join(text_parts)
-    return {
-        "thought":    "",
-        "tool_calls": tool_uses,
-        "reply":      reply_text,
-        "done":       stop == "end_turn" and not tool_uses,
-    }
-
-
-def _call_openai(system_prompt: str, history_text: str, user_message: str,
-                 tools_desc: str, image_b64: str = None,
-                 image_mime: str = "image/jpeg") -> dict:
-    """OpenAI GPT-4o via /v1/chat/completions."""
-    api_key = os.environ.get("OPENAI_API_KEY", "")
-    if not api_key:
-        raise RuntimeError("OPENAI_API_KEY not set")
-
-    user_content: list = []
-    if image_b64:
-        user_content.append({"type": "image_url", "image_url": {
-            "url": f"data:{image_mime};base64,{image_b64}"
-        }})
-    user_content.append({"type": "text", "text": (
-        f"CONVERSATION:\n{history_text}\n\nOWNER: {user_message}"
-    )})
-
-    # Build function tools
+    # 3. Groq last resort (text only)
     try:
-        from core_tools import TOOLS
-        oai_tools = []
-        for name, tdef in TOOLS.items():
-            props = {}
-            for arg in (tdef.get("args") or []):
-                an = arg["name"] if isinstance(arg, dict) else arg
-                at = arg.get("type", "string") if isinstance(arg, dict) else "string"
-                props[an] = {"type": at}
-            oai_tools.append({
-                "type": "function",
-                "function": {
-                    "name":        name,
-                    "description": tdef.get("desc", name)[:200],
-                    "parameters":  {"type": "object", "properties": props},
-                },
-            })
-    except Exception:
-        oai_tools = []
-
-    payload: dict = {
-        "model":       _MODEL_STRINGS["openai"],
-        "messages":    [
-            {"role": "system", "content": f"{system_prompt}\n\nTOOLS:\n{tools_desc}"},
-            {"role": "user",   "content": user_content},
-        ],
-        "max_tokens":  4096,
-        "temperature": 0.1,
-    }
-    if oai_tools:
-        payload["tools"]       = oai_tools[:64]
-        payload["tool_choice"] = "auto"
-
-    r = httpx.post(
-        "https://api.openai.com/v1/chat/completions",
-        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-        json=payload,
-        timeout=60,
-    )
-    r.raise_for_status()
-    data       = r.json()
-    choice     = data["choices"][0]
-    msg        = choice["message"]
-    finish     = choice.get("finish_reason", "")
-    text       = msg.get("content") or ""
-    tool_calls = []
-    for tc in msg.get("tool_calls", []):
+        from core_config import groq_chat
+        full_prompt = (
+            f"{full_system}\n\n"
+            "Output ONLY valid JSON, no markdown fences."
+        )
+        raw = groq_chat(
+            system=full_prompt,
+            user=f"OWNER: {user_message}",
+            model=GROQ_LAST_RESORT_MODEL,
+            max_tokens=1024,
+        )
         try:
-            args = json.loads(tc["function"]["arguments"])
+            parsed = json.loads(_strip_json(raw))
         except Exception:
-            args = {}
-        tool_calls.append({"name": tc["function"]["name"], "args": args})
-    return {
-        "thought":    "",
-        "tool_calls": tool_calls,
-        "reply":      text,
-        "done":       finish == "stop" and not tool_calls,
-    }
+            return {"thought": "", "tool_calls": [], "reply": raw, "done": True}
+        return {
+            "thought":    parsed.get("thought", ""),
+            "tool_calls": parsed.get("tool_calls", []),
+            "reply":      parsed.get("reply", ""),
+            "done":       bool(parsed.get("done", False)),
+        }
+    except Exception as e:
+        errors.append(f"Groq: {str(e)[:200]}")
+
+    raise RuntimeError("All providers failed:\n" + "\n".join(errors))
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# TOOLS DESCRIPTION — compact, used in model context
+# TOOLS DESCRIPTION
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _build_tools_desc(selected_tool_names: list) -> str:
-    """Build compact tool descriptions for selected tools + desktop tools."""
     lines = []
     try:
         from core_tools import TOOLS
@@ -939,8 +810,6 @@ def _build_tools_desc(selected_tool_names: list) -> str:
             lines.append(f"  {name}({args_str}) — {desc}")
     except Exception:
         pass
-
-    # Always include desktop tools description
     lines += [
         "  desktop_run_script(script, lang) — run PowerShell/Python on PC",
         "  desktop_file_ops(path, operation, content?) — read/write/list/delete/move/mkdir/info",
@@ -956,16 +825,11 @@ def _build_tools_desc(selected_tool_names: list) -> str:
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _compress_result(result_str: str, tool_name: str) -> str:
-    """
-    Compress tool result to MAX_TOOL_RESULT_CHARS for context efficiency.
-    For JSON results, extract the most signal-rich fields.
-    """
     if len(result_str) <= MAX_TOOL_RESULT_CHARS:
         return result_str
     try:
         parsed = json.loads(result_str)
         if isinstance(parsed, dict):
-            # Keep ok, error, key counts, summaries — drop fat arrays
             compressed = {}
             for k, v in parsed.items():
                 if k in ("ok", "error", "error_code", "message", "status",
@@ -974,9 +838,8 @@ def _compress_result(result_str: str, tool_name: str) -> str:
                     compressed[k] = v
                 elif isinstance(v, list):
                     compressed[f"{k}_count"] = len(v)
-                    # For search/query results, keep all items not just first
                     if k in ("results", "items", "hits", "entries"):
-                        compressed[k] = v[:10]  # keep up to 10
+                        compressed[k] = v[:10]
                     elif v and len(str(v[0])) < 200:
                         compressed[f"{k}_first"] = v[0]
                 else:
@@ -990,7 +853,6 @@ def _compress_result(result_str: str, tool_name: str) -> str:
 
 
 def _execute_railway_tool(tool_name: str, tool_args: dict) -> str:
-    """Direct call into TOOLS dict. Returns compressed result string."""
     try:
         from core_tools import TOOLS
         if tool_name not in TOOLS:
@@ -1004,10 +866,7 @@ def _execute_railway_tool(tool_name: str, tool_args: dict) -> str:
 
 
 def _execute_desktop_tool(tool_name: str, tool_args: dict, cid: str) -> str:
-    """Queue desktop task to core_agent.py on PC, wait for result."""
     action = tool_name.replace("desktop_", "", 1)
-
-    # Parse steps from JSON string if browser
     if action == "browser":
         if isinstance(tool_args.get("steps"), str):
             try:
@@ -1016,13 +875,9 @@ def _execute_desktop_tool(tool_name: str, tool_args: dict, cid: str) -> str:
                 pass
         if isinstance(tool_args.get("screenshot"), str):
             tool_args["screenshot"] = tool_args["screenshot"].lower() == "true"
-
     try:
-        # task JSON blob — "desktop_agent": true is the marker core_agent.py uses to filter
-        # source must be a valid enum: mcp_session|self_assigned|core_v6_registry|bulk_apply|improvement
-        # status valid values: pending|in_progress|done|failed
         task_payload = json.dumps({
-            "desktop_agent": True,      # filter key — core_agent.py checks this
+            "desktop_agent": True,
             "action":        action,
             "payload":       tool_args,
             "chat_id":       cid,
@@ -1032,27 +887,19 @@ def _execute_desktop_tool(tool_name: str, tool_args: dict, cid: str) -> str:
             "task":     task_payload,
             "status":   "pending",
             "priority": 9,
-            "source":   "mcp_session",  # valid enum value
+            "source":   "mcp_session",
             "chat_id":  cid,
         })
         if not ok:
             return json.dumps({"ok": False, "error": "sb_post failed for task_queue"})
-
-        # Get task id — source=mcp_session (valid enum), filter by chat_id + pending
         rows = sb_get(
             "task_queue",
-            f"select=id"
-            f"&source=eq.mcp_session"
-            f"&status=eq.pending"
-            f"&chat_id=eq.{cid}"
-            f"&order=created_at.desc"
-            f"&limit=1",
+            f"select=id&source=eq.mcp_session&status=eq.pending"
+            f"&chat_id=eq.{cid}&order=created_at.desc&limit=1",
         ) or []
         if not rows:
             return json.dumps({"ok": False, "error": "task queued but id not found"})
-        task_id = str(rows[0]["id"])
-
-        # Poll — valid status values: pending|in_progress|done|failed
+        task_id  = str(rows[0]["id"])
         deadline = time.time() + DESKTOP_TASK_TIMEOUT
         while time.time() < deadline:
             r = sb_get(
@@ -1062,13 +909,11 @@ def _execute_desktop_tool(tool_name: str, tool_args: dict, cid: str) -> str:
             if r:
                 status = r[0].get("status")
                 if status == "done":
-                    out = r[0].get("result") or "Done."
-                    return _compress_result(out, tool_name)
+                    return _compress_result(r[0].get("result") or "Done.", tool_name)
                 elif status == "failed":
                     return json.dumps({"ok": False, "error": r[0].get("error", "unknown")})
             time.sleep(5)
         return json.dumps({"ok": False, "error": f"desktop task timed out after {DESKTOP_TASK_TIMEOUT}s"})
-
     except Exception as e:
         return json.dumps({"ok": False, "error": str(e)})
 
@@ -1089,7 +934,6 @@ def _is_destructive(tool_name: str, tool_args: dict) -> bool:
 
 
 def handle_confirm_reply(cid: str, text: str) -> bool:
-    """Consume a CONFIRM/REJECT reply. Returns True if consumed."""
     with _confirm_lock:
         gate = _pending_confirms.get(cid)
         if not gate:
@@ -1106,7 +950,6 @@ def handle_confirm_reply(cid: str, text: str) -> bool:
 
 
 def _request_confirmation(cid: str, tool_name: str, tool_args: dict) -> bool:
-    """Ask owner to confirm. Blocks current thread until reply or timeout."""
     event = threading.Event()
     with _confirm_lock:
         _pending_confirms[cid] = {"confirmed": False, "event": event}
@@ -1134,7 +977,6 @@ def _request_confirmation(cid: str, tool_name: str, tool_args: dict) -> bool:
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _tg_send(cid: str, text: str):
-    """Send text message. Uses notify() from core_github which handles TELEGRAM_TOKEN."""
     try:
         notify(text[:4096], cid=cid)
     except Exception as e:
@@ -1153,7 +995,6 @@ def _tg_typing(cid: str):
 
 
 def _tg_photo(cid: str, image_b64: str, caption: str = ""):
-    """Send base64 image as photo."""
     try:
         import io
         img_bytes = base64.b64decode(image_b64)
@@ -1168,7 +1009,6 @@ def _tg_photo(cid: str, image_b64: str, caption: str = ""):
 
 
 def _tg_download_file(file_id: str) -> Optional[str]:
-    """Download any Telegram file (photo or document), return as base64 string."""
     try:
         r = httpx.get(
             f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getFile",
@@ -1184,7 +1024,7 @@ def _tg_download_file(file_id: str) -> Optional[str]:
         img_r.raise_for_status()
         return base64.b64encode(img_r.content).decode()
     except Exception as e:
-        print(f"[ORCH] _tg_download_photo error: {e}")
+        print(f"[ORCH] _tg_download_file error: {e}")
         return None
 
 
@@ -1192,59 +1032,86 @@ def _tg_download_file(file_id: str) -> Optional[str]:
 # AGENTIC LOOP
 # ══════════════════════════════════════════════════════════════════════════════
 
+def _safe_result(r: str, tool_name: str = "") -> str:
+    """
+    Sanitize tool result for model context injection.
+    Injects explicit signals for failures and empty KB results.
+    """
+    try:
+        parsed = json.loads(r)
+        if isinstance(parsed, dict):
+            ok    = parsed.get("ok", "?")
+            parts = [f"ok={ok}"]
+            for k in ["status", "summary", "output", "result", "error",
+                      "count", "total", "commit", "path", "message"]:
+                v = parsed.get(k)
+                if v is not None:
+                    parts.append(f"{k}={str(v)[:120]}")
+            result_text = " | ".join(parts)
+
+            # Explicit failure signal
+            if ok is False or ok == "false" or parsed.get("error"):
+                return f"TOOL_FAILED: {result_text}"
+
+            # KB empty signal — model must use fallback strategy, not give up
+            if tool_name in ("search_kb", "search_mistakes", "ask"):
+                results = parsed.get("results") or parsed.get("items") or []
+                count   = parsed.get("count", len(results) if isinstance(results, list) else -1)
+                if count == 0 or results == []:
+                    return (
+                        f"KB_EMPTY: no results found for this query. "
+                        f"Try: (1) different keywords, "
+                        f"(2) sb_query table=hot_reflections/cold_reflections/pattern_frequency directly, "
+                        f"(3) web_search if topic is external, "
+                        f"(4) synthesize from session_start context already loaded. "
+                        f"Do NOT declare done without answering."
+                    )
+            return result_text
+    except Exception:
+        pass
+    return r.replace("\\", "/").replace('"', "'")[:400]
+
+
 def _agentic_loop(cid: str, user_message: str,
                   image_b64: str = None, image_mime: str = "image/jpeg",
                   file_b64: str = None, file_mime: str = None):
     """
-    Full agentic loop with token optimisations:
-    1. Select relevant tools (cheap Groq call)
-    2. Build compact tools description
-    3. Load cached session context
-    4. Call model with compressed history + user message
-    5. Execute tool calls → compress results → feed back to model
-    6. Stream thought + step notifications to Telegram
-    7. Loop until done=True or ceiling hit
+    Full agentic loop with metacognitive wrapper:
+    0. REASON — pre-flight: intent + plan (can short-circuit if answerable directly)
+    1. SELECT tools
+    2. EXECUTE loop — tool calls, result injection, failure escalation
+    3. VALIDATE — self-check reply before sending to owner
     """
-    history          = _get_history(cid)
-    history_text     = _history_to_text(history)
-    system_prompt    = _build_system_prompt(cid)
-    selected_tools   = _select_tools(user_message, history_text)
-    tools_desc       = _build_tools_desc(selected_tools)
-    tool_call_count  = 0
-    _prev_count      = 0
-    # Accumulate tool results in a separate buffer (not full history)
-    # This is the key token optimisation: results don't bloat history
-    results_buffer: list = []
-    # Loop detection: track (tool_name, frozen_args) to catch infinite repeats
-    _seen_calls: set = set()
+    history       = _get_history(cid)
+    history_text  = _history_to_text(history)
+    system_prompt = _build_system_prompt(cid)
 
-    def _safe_result(r: str) -> str:
-        """Sanitize tool result before injecting into model prompt.
-        Raw JSON with backslashes can break JSON output mode.
-        Also injects FAILED signal so model can react."""
-        try:
-            parsed = json.loads(r)
-            if isinstance(parsed, dict):
-                ok    = parsed.get("ok", "?")
-                parts = [f"ok={ok}"]
-                for k in ["status", "summary", "output", "result", "error",
-                          "count", "total", "commit", "path", "message"]:
-                    v = parsed.get(k)
-                    if v is not None:
-                        parts.append(f"{k}={str(v)[:120]}")
-                result_text = " | ".join(parts)
-                # Inject explicit failure signal — model must react, not ignore
-                if ok is False or ok == "false" or parsed.get("error"):
-                    return f"TOOL_FAILED: {result_text}"
-                return result_text
-        except Exception:
-            pass
-        return r.replace("\\", "/").replace('"', "'")[:400]
+    # ── Phase 0: Reason before executing ──────────────────────────────────────
+    selected_tools = _select_tools(user_message, history_text)
+    tools_desc     = _build_tools_desc(selected_tools)
+
+    pre_flight = _reason_before_execute(user_message, system_prompt, history_text, tools_desc)
+
+    # Can answer directly without tools?
+    if pre_flight.get("can_answer_directly") and pre_flight.get("direct_answer"):
+        direct = pre_flight["direct_answer"].strip()
+        if direct:
+            # Still validate before sending
+            check = _validate_before_reply(user_message, direct, [], system_prompt)
+            final = check.get("corrected_reply") or direct if not check.get("is_valid") else direct
+            _tg_send(cid, final)
+            _append_history(cid, "assistant", final)
+            return
+
+    # ── Phase 1+2: Agentic tool loop ───────────────────────────────────────────
+    tool_call_count = 0
+    _prev_count     = 0
+    results_buffer: list = []
+    _seen_calls: set     = set()
 
     while tool_call_count < MAX_TOOL_CALLS:
         _prev_count = tool_call_count
         if tool_call_count > 0:
-            # Adaptive delay: deploy/build ops need more wait time
             last_tool = results_buffer[-1]["name"] if results_buffer else ""
             _sleep = 8 if last_tool in ("redeploy", "deploy_and_wait", "patch_file", "multi_patch") else 1
             time.sleep(_sleep)
@@ -1252,32 +1119,44 @@ def _agentic_loop(cid: str, user_message: str,
 
         # Build user content for this loop iteration
         if results_buffer:
-            # Feed last 8 results to model; note count if more were dropped
-            visible = results_buffer[-8:]
-            dropped = len(results_buffer) - len(visible)
+            visible  = results_buffer[-8:]
+            dropped  = len(results_buffer) - len(visible)
             tool_results_text = "\n".join(
-                f"[{r['name']}] → {_safe_result(r['result'])}"
+                f"[{r['name']}] → {_safe_result(r['result'], r['name'])}"
                 for r in visible
             )
             if dropped:
                 tool_results_text = f"[...{dropped} earlier results omitted...]\n" + tool_results_text
-            current_user = (
-                f"{user_message}\n\n"
-                f"TOOL RESULTS SO FAR:\n{tool_results_text}"
-            )
+            current_user = f"{user_message}\n\nTOOL RESULTS SO FAR:\n{tool_results_text}"
         else:
             current_user = user_message
 
-        # Error escalation: if last result was a failure, nudge model explicitly
-        failed_results = [r for r in results_buffer if _safe_result(r["result"]).startswith("TOOL_FAILED")]
+        # Failure escalation
+        failed_results = [
+            r for r in results_buffer
+            if _safe_result(r["result"], r["name"]).startswith("TOOL_FAILED")
+        ]
         if failed_results:
             last_fail = failed_results[-1]
-            escalation = (
+            current_user += (
                 f"\n\nTOOL_FAILURE_ALERT: {last_fail['name']} failed — "
                 "decide: (1) retry with different args, (2) use alternative tool, "
                 "(3) ask owner for clarification. Do NOT repeat the same failing call."
             )
-            current_user = current_user + escalation
+
+        # KB miss escalation — after 2+ empty KB searches, inject strategy
+        kb_misses = [
+            r for r in results_buffer
+            if r["name"] in ("search_kb", "search_mistakes", "ask")
+            and "KB_EMPTY" in _safe_result(r["result"], r["name"])
+        ]
+        if len(kb_misses) >= 2:
+            current_user += (
+                "\n\nKB_MISS_ALERT: KB returned empty 2+ times. "
+                "You MUST use the fallback_strategy from your pre-flight plan now. "
+                "Options: sb_query direct tables, web_search, or synthesize from session_start data. "
+                "Do NOT give up and do NOT call search_kb again with the same query."
+            )
 
         try:
             response = _call_model(
@@ -1289,10 +1168,10 @@ def _agentic_loop(cid: str, user_message: str,
                 image_mime    = image_mime,
                 file_b64      = file_b64  if tool_call_count == 0 else None,
                 file_mime     = file_mime,
+                pre_flight    = pre_flight if tool_call_count == 0 else None,
             )
         except Exception as e:
-            err = str(e)
-            _tg_send(cid, f"❌ All providers failed: {err[:300]}")
+            _tg_send(cid, f"❌ All providers failed: {str(e)[:300]}")
             return
 
         thought    = response.get("thought", "")
@@ -1300,17 +1179,44 @@ def _agentic_loop(cid: str, user_message: str,
         reply      = response.get("reply", "")
         done       = response.get("done", False)
 
-        # Thoughts are suppressed — too noisy per turn
-
-        # No tool calls — model is done or stuck
+        # No tool calls — model wants to reply or is stuck
         if not tool_calls:
-            if reply:
-                _tg_send(cid, reply)
-                _append_history(cid, "assistant", reply)
-            elif results_buffer:
-                # Model has results but gave no reply — summarise and exit
-                last = results_buffer[-1]
-                _tg_send(cid, f"✅ {last['name']}: {last['result'][:300]}")
+            # ── Phase 3: Validate before reply ───────────────────────────────
+            effective_reply = reply.strip() if reply else ""
+
+            if not effective_reply and results_buffer:
+                # Model has results but gave no reply — force synthesis
+                try:
+                    synth = _or_text(
+                        system=(
+                            f"{system_prompt}\n\n"
+                            "The owner asked a question. You ran tools. "
+                            "Now synthesize a clear, direct answer from the tool results."
+                        ),
+                        user=(
+                            f"OWNER QUESTION: {user_message}\n\n"
+                            f"TOOL RESULTS:\n" +
+                            "\n".join(
+                                f"[{r['name']}] → {r['result'][:300]}"
+                                for r in results_buffer[-6:]
+                            )
+                        ),
+                        max_tokens=400,
+                    )
+                    effective_reply = synth.strip()
+                except Exception:
+                    pass
+
+            if effective_reply:
+                check = _validate_before_reply(
+                    user_message, effective_reply, results_buffer, system_prompt
+                )
+                if not check.get("is_valid", True) and check.get("corrected_reply"):
+                    effective_reply = check["corrected_reply"].strip() or effective_reply
+                    print(f"[ORCH] reply corrected by validator: {check.get('reason','')[:100]}")
+
+                _tg_send(cid, effective_reply)
+                _append_history(cid, "assistant", effective_reply)
             else:
                 _tg_send(cid, "✅ Done.")
             return
@@ -1322,33 +1228,26 @@ def _agentic_loop(cid: str, user_message: str,
             if not tool_name:
                 continue
 
-            # Loop detection — skip exact duplicate calls within this agentic turn
             call_key = (tool_name, json.dumps(tool_args, sort_keys=True, default=str))
             if call_key in _seen_calls:
-                # Inject a fake "already done" result so model moves on
                 results_buffer.append({
                     "name":   tool_name,
                     "result": '{"ok": true, "note": "already called this turn — result cached above"}',
                 })
                 continue
             _seen_calls.add(call_key)
-
             tool_call_count += 1
 
-            # Step notification suppressed — batched summary sent after round
-
-            # Destructive gate
             if _is_destructive(tool_name, tool_args):
                 confirmed = _request_confirmation(cid, tool_name, tool_args)
                 if not confirmed:
                     results_buffer.append({
-                        "name": tool_name,
+                        "name":   tool_name,
                         "result": '{"ok": false, "error": "CANCELLED by owner"}',
                     })
                     _tg_send(cid, "🚫 Action cancelled.")
                     continue
 
-            # Execute
             is_desktop = tool_name.startswith("desktop_")
             if is_desktop:
                 _tg_send(cid, "🖥 <i>Sending to PC...</i>")
@@ -1356,9 +1255,7 @@ def _agentic_loop(cid: str, user_message: str,
             else:
                 result_str = _execute_railway_tool(tool_name, tool_args)
 
-            # Individual result preview suppressed — see round summary below
-
-            # Auto-send screenshot if result contains base64 image
+            # Auto-send screenshot
             try:
                 rp = json.loads(result_str)
                 if isinstance(rp, dict):
@@ -1374,16 +1271,12 @@ def _agentic_loop(cid: str, user_message: str,
             except Exception:
                 pass
 
-            # Store in results buffer (compressed)
             results_buffer.append({
                 "name":   tool_name,
                 "result": _compress_result(result_str, tool_name),
             })
 
-        # One summary per round — not per tool (after stall check so it's not dangling)
-
-        # Stall detection: if no new tool_call_count was incremented this round,
-        # every call was a duplicate — model is stuck, force exit
+        # Stall detection
         if tool_calls and tool_call_count == _prev_count:
             final = reply or "✅ Done."
             _tg_send(cid, final)
@@ -1392,17 +1285,20 @@ def _agentic_loop(cid: str, user_message: str,
             return
 
         if tool_calls:
-            names = ", ".join(tc.get("name","?") for tc in tool_calls)
+            names = ", ".join(tc.get("name", "?") for tc in tool_calls)
             _tg_send(cid, f"⚙️ <i>{names}</i>")
 
         if done:
-            final = reply or "✅ Done."
-            _tg_send(cid, final)
-            if reply:
-                _append_history(cid, "assistant", reply)
+            final = reply.strip() if reply else ""
+            if final:
+                check = _validate_before_reply(user_message, final, results_buffer, system_prompt)
+                if not check.get("is_valid", True) and check.get("corrected_reply"):
+                    final = check["corrected_reply"].strip() or final
+            _tg_send(cid, final or "✅ Done.")
+            if final:
+                _append_history(cid, "assistant", final)
             return
 
-    # Safety ceiling
     _tg_send(
         cid,
         f"⚠️ Hit tool call limit ({MAX_TOOL_CALLS}). "
@@ -1411,7 +1307,7 @@ def _agentic_loop(cid: str, user_message: str,
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# MAIN ENTRY POINT — called by core_main.py handle_msg()
+# MAIN ENTRY POINT
 # ══════════════════════════════════════════════════════════════════════════════
 
 def handle_telegram_message(msg: dict):
@@ -1426,17 +1322,13 @@ def handle_telegram_message(msg: dict):
 
     if not cid:
         return
-
-    # Security: owner only
     if cid != str(TELEGRAM_CHAT):
         _tg_send(cid, "Unauthorized.")
         return
 
-    # Consume CONFIRM/REJECT replies first
     if text and handle_confirm_reply(cid, text):
         return
 
-    # Strip bot @username suffix from commands
     if text.startswith("/") and "@" in text:
         text = text.split("@")[0]
 
@@ -1451,7 +1343,8 @@ def handle_telegram_message(msg: dict):
         _tg_send(
             cid,
             f"Model: <b>OpenRouter ({OPENROUTER_MODEL})</b>\n"
-            f"Fallback chain: OpenRouter → Gemini → Groq\n"
+            f"Cheap calls: <b>OpenRouter ({OPENROUTER_FAST_MODEL})</b>\n"
+            f"Fallback chain: OpenRouter → Gemini direct → Groq\n"
             f"Swap: change OPENROUTER_MODEL in core_orchestrator.py"
         )
         return
@@ -1461,14 +1354,12 @@ def handle_telegram_message(msg: dict):
         _tg_send(cid, "🔄 Session cache cleared — reloads on next message.")
         return
 
-    # ── Attachment handling ─────────────────────────────────────────────────
+    # ── Attachment handling ────────────────────────────────────────────────────
     image_b64  = None
     image_mime = "image/jpeg"
     file_b64   = None
     file_mime  = None
-    file_name  = None
 
-    # Photo (Telegram compressed image)
     if photos:
         best    = max(photos, key=lambda p: p.get("file_size", 0))
         file_id = best.get("file_id")
@@ -1481,14 +1372,13 @@ def handle_telegram_message(msg: dict):
         if not text:
             text = "Describe and analyse this image."
 
-    # Document / file (PDF, DOCX, XLSX, TXT, images sent as file, etc.)
     elif doc:
         file_id   = doc.get("file_id")
         file_mime = doc.get("mime_type") or "application/octet-stream"
         file_name = doc.get("file_name") or "attachment"
         file_size = doc.get("file_size") or 0
 
-        if file_size > 20 * 1024 * 1024:  # 20 MB hard cap
+        if file_size > 20 * 1024 * 1024:
             _tg_send(cid, "❌ File too large (max 20 MB).")
             return
 
@@ -1498,13 +1388,11 @@ def handle_telegram_message(msg: dict):
             _tg_send(cid, "❌ Failed to download file.")
             return
 
-        # Images sent as document — treat as image for vision models
         if file_mime.startswith("image/"):
             image_b64  = raw_b64
             image_mime = file_mime
         else:
             file_b64 = raw_b64
-            # file_mime already set above
 
         if not text:
             ext  = _TG_MIME_EXT.get(file_mime, "file")
@@ -1514,7 +1402,7 @@ def handle_telegram_message(msg: dict):
         return
 
     print(f"[ORCH] [{cid}] {text[:80]}"
-          + (f" [img]" if image_b64 else "")
+          + (" [img]" if image_b64 else "")
           + (f" [file:{file_mime}]" if file_b64 else ""))
     _append_history(cid, "user", text, image_b64=image_b64, image_mime=image_mime)
 
@@ -1534,11 +1422,6 @@ def handle_telegram_message(msg: dict):
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _ensure_table():
-    """
-    Auto-create telegram_conversations via Supabase Management API.
-    Reads SUPABASE_PAT from core_config (already loaded as env var).
-    Called in background thread at startup — non-blocking, non-fatal.
-    """
     DDL = """
 CREATE TABLE IF NOT EXISTS telegram_conversations (
     id         BIGSERIAL PRIMARY KEY,
@@ -1552,10 +1435,8 @@ CREATE INDEX IF NOT EXISTS idx_tgconv_chat    ON telegram_conversations(chat_id)
 CREATE INDEX IF NOT EXISTS idx_tgconv_created ON telegram_conversations(created_at DESC);
 """
     try:
-        # SUPABASE_PAT is already in core_config env — use directly
         pat = SUPABASE_PAT
         if not pat:
-            print("[ORCH] _ensure_table: SUPABASE_PAT not set — trying KB fallback")
             rows = sb_get(
                 "knowledge_base",
                 "select=content&domain=eq.system.config&topic=eq.supabase_pat&limit=1",
@@ -1563,7 +1444,7 @@ CREATE INDEX IF NOT EXISTS idx_tgconv_created ON telegram_conversations(created_
             )
             pat = (rows[0].get("content", "") if rows else "").strip()
         if not pat:
-            print("[ORCH] _ensure_table: no PAT available — skipping auto-migration")
+            print("[ORCH] _ensure_table: no PAT available — skipping")
             return
         resp = httpx.post(
             f"https://api.supabase.com/v1/projects/{SUPABASE_REF}/database/query",
@@ -1581,14 +1462,9 @@ CREATE INDEX IF NOT EXISTS idx_tgconv_created ON telegram_conversations(created_
 
 # ══════════════════════════════════════════════════════════════════════════════
 # ASYNC DESKTOP RESULT POLLER
-# Catches tasks that timed out inline but completed later on PC.
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _desktop_result_poller():
-    """
-    Watch for completed desktop tasks that have a chat_id.
-    Notifies owner if task finished after the inline wait timed out.
-    """
     notified: set = set()
     print("[ORCH] Desktop result poller started")
     while True:
@@ -1625,14 +1501,16 @@ def _desktop_result_poller():
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# STARTUP — called by core_main.py on_start()
+# STARTUP
 # ══════════════════════════════════════════════════════════════════════════════
 
 def start_orchestrator():
     """
     Start all orchestrator background threads.
-    Call this from core_main.py on_start() after the existing thread starts.
+    Call from core_main.py on_start() after existing thread starts.
     """
     threading.Thread(target=_ensure_table,          daemon=True, name="orch_ensure_table").start()
     threading.Thread(target=_desktop_result_poller, daemon=True, name="orch_result_poller").start()
-    print(f"[ORCH] Started. Provider: {MODEL_PROVIDER} ({_MODEL_STRINGS.get(MODEL_PROVIDER,'?')})")
+    print(f"[ORCH] Started. Provider: OpenRouter ({OPENROUTER_MODEL}) | "
+          f"Fast: {OPENROUTER_FAST_MODEL} | "
+          f"Fallback: Gemini ({GEMINI_FALLBACK_MODEL}) → Groq ({GROQ_LAST_RESORT_MODEL})")
