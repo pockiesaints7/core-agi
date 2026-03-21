@@ -65,38 +65,90 @@ def _gemini_image_key() -> str:
 def t_web_search(query: str = "", max_results: str = "5") -> dict:
     """
     Search the web via DuckDuckGo HTML (no API key needed).
+    Fallback to Bing HTML if DDG returns no results or fails.
     Returns list of {title, url, snippet}.
     """
     if not query:
         return {"ok": False, "error": "query required"}
-    try:
-        n = min(int(max_results) if max_results else 5, 20)
-        import urllib.parse
-        encoded = urllib.parse.quote(query)
+
+    import urllib.parse
+
+    def _clean(s: str) -> str:
+        return re.sub(r'<[^>]+>', '', s).strip()
+
+    def _ddg(q: str, n: int):
+        encoded = urllib.parse.quote(q)
         r = httpx.get(
             f"https://html.duckduckgo.com/html/?q={encoded}",
             headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"},
-            timeout=15,
-            follow_redirects=True,
+            timeout=15, follow_redirects=True,
         )
         r.raise_for_status()
         html = r.text
-
         snippets = re.findall(r'class="result__snippet"[^>]*>(.*?)</a>', html, re.DOTALL)
         titles   = re.findall(r'class="result__a"[^>]*>(.*?)</a>', html, re.DOTALL)
-        urls_raw = re.findall(r'class="result__url"[^>]*>(.*?)</span>', html, re.DOTALL)
-
-        def clean(s):
-            return re.sub(r'<[^>]+>', '', s).strip()
-
-        results = []
+        # Extract actual href, not the display URL span (more reliable)
+        hrefs    = re.findall(r'<a class="result__a"[^>]+href="([^"]+)"', html)
+        results  = []
         for i in range(min(n, len(snippets))):
+            url = hrefs[i] if i < len(hrefs) else ""
+            # DDG redirects — extract actual URL from uddg param if present
+            if "uddg=" in url:
+                try:
+                    url = urllib.parse.unquote(url.split("uddg=")[1].split("&")[0])
+                except Exception:
+                    pass
             results.append({
-                "title":   clean(titles[i])   if i < len(titles)   else "",
-                "url":     clean(urls_raw[i]) if i < len(urls_raw) else "",
-                "snippet": clean(snippets[i]),
+                "title":   _clean(titles[i])   if i < len(titles) else "",
+                "url":     url,
+                "snippet": _clean(snippets[i]),
             })
-        return {"ok": True, "query": query, "count": len(results), "results": results}
+        return results
+
+    def _bing(q: str, n: int):
+        encoded = urllib.parse.quote(q)
+        r = httpx.get(
+            f"https://www.bing.com/search?q={encoded}&count={n}",
+            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"},
+            timeout=15, follow_redirects=True,
+        )
+        r.raise_for_status()
+        html = r.text
+        # Bing result blocks
+        blocks  = re.findall(r'<li class="b_algo">(.*?)</li>', html, re.DOTALL)
+        results = []
+        for block in blocks[:n]:
+            title   = _clean(re.search(r'<h2[^>]*>(.*?)</h2>', block, re.DOTALL).group(1) if re.search(r'<h2[^>]*>(.*?)</h2>', block, re.DOTALL) else "")
+            href_m  = re.search(r'href="(https?://[^"]+)"', block)
+            url     = href_m.group(1) if href_m else ""
+            snippet = _clean(re.search(r'<p[^>]*>(.*?)</p>', block, re.DOTALL).group(1) if re.search(r'<p[^>]*>(.*?)</p>', block, re.DOTALL) else "")
+            if title or url:
+                results.append({"title": title, "url": url, "snippet": snippet})
+        return results
+
+    try:
+        n = min(int(max_results) if max_results else 5, 20)
+        results = []
+        source  = "ddg"
+        try:
+            results = _ddg(query, n)
+        except Exception as _de:
+            source = f"ddg_failed({str(_de)[:40]})"
+
+        if not results:
+            try:
+                results = _bing(query, n)
+                source  = "bing_fallback"
+            except Exception as _be:
+                return {"ok": False, "error": f"both DDG and Bing failed. DDG: {_de} Bing: {_be}"}
+
+        return {
+            "ok":      True,
+            "query":   query,
+            "source":  source,
+            "count":   len(results),
+            "results": results,
+        }
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
@@ -1045,7 +1097,7 @@ def t_run_python(code: str = "", timeout: str = "10") -> dict:
             r = subprocess.run(
                 ["python3", tmp],
                 capture_output=True, text=True, timeout=t,
-                env={**os.environ, "PYTHONPATH": ""},
+                env={k: v for k, v in os.environ.items() if k not in ("SUPABASE_SERVICE_KEY","SUPABASE_ANON_KEY","GITHUB_PAT","TELEGRAM_BOT_TOKEN","BINANCE_SECRET_KEY","MCP_SECRET")}, 
             )
             output = (r.stdout + r.stderr)[:5000]
             return {
@@ -1072,53 +1124,30 @@ def t_run_python(code: str = "", timeout: str = "10") -> dict:
 def t_list_tools(category: str = "", search: str = "") -> dict:
     """
     List all available tools in the TOOLS registry.
-    category: optional filter by category name (deploy/code/training/system/
-              railway/knowledge/task/web/document/image/utils/agentic/crypto/project)
-    search:   optional keyword filter on tool name + description
-    Returns full list with name, args, desc per tool.
+    category: optional keyword filter — matches against tool names in each category.
+              Uses live category build from orchestrator (always current, no hardcode).
+    search:   optional keyword filter on tool name + description.
+    Returns full list with name, args, perm, desc per tool.
     """
     try:
         from core_tools import TOOLS
-        # Category map — mirrors _TOOL_CATEGORIES in core_orchestrator.py
-        CATEGORIES = {
-            "deploy":    ["redeploy", "build_status", "deploy_and_wait", "validate_syntax",
-                          "patch_file", "multi_patch", "gh_search_replace", "railway_logs_live"],
-            "code":      ["read_file", "write_file", "gh_read_lines", "search_in_file",
-                          "core_py_fn", "core_py_validate", "append_to_file", "diff"],
-            "training":  ["trigger_cold_processor", "get_training_pipeline", "list_evolutions",
-                          "approve_evolution", "reject_evolution", "check_evolutions",
-                          "bulk_reject_evolutions", "backfill_patterns"],
-            "system":    ["get_state", "get_system_health", "stats", "build_status",
-                          "crash_report", "system_map_scan", "sync_system_map"],
-            "railway":   ["railway_env_get", "railway_env_set", "railway_logs_live",
-                          "railway_service_info", "redeploy", "build_status"],
-            "knowledge": ["search_kb", "add_knowledge", "kb_update", "get_mistakes",
-                          "search_mistakes", "ask"],
-            "task":      ["task_add", "task_update", "task_health", "synthesize_evolutions",
-                          "sb_query", "sb_insert", "sb_patch"],
-            "crypto":    ["crypto_price", "crypto_balance", "crypto_trade"],
-            "project":   ["project_list", "project_get", "project_search", "project_register",
-                          "project_update_kb", "project_index"],
-            "agentic":   ["reason_chain", "lookahead", "decompose_task", "negative_space",
-                          "predict_failure", "action_gate", "loop_detect"],
-            "web":       ["web_search", "web_fetch", "summarize_url"],
-            "document":  ["create_document", "create_spreadsheet", "create_presentation",
-                          "read_document", "convert_document"],
-            "image":     ["generate_image", "image_process"],
-            "utils":     ["weather", "calc", "datetime_now", "currency", "translate",
-                          "run_python", "list_tools", "get_tool_info"],
-        }
+        # Use live category build from orchestrator — always reflects deployed tools
+        # Falls back to keyword-based grouping if import fails
+        cats: dict = {}
+        try:
+            from core_orchestrator import _build_live_categories
+            cats = _build_live_categories()
+        except Exception:
+            pass  # fallback: no category filter, show all
 
-        # Resolve which tool names to include
         cat = category.lower().strip() if category else ""
         if cat:
-            if cat not in CATEGORIES:
-                available = ", ".join(CATEGORIES.keys())
+            if cats and cat not in cats:
                 return {
                     "ok": False,
-                    "error": f"unknown category '{cat}'. Available: {available}"
+                    "error": f"unknown category '{cat}'. Available: {', '.join(sorted(cats.keys()))}",
                 }
-            candidate_names = CATEGORIES[cat]
+            candidate_names = cats.get(cat, list(TOOLS.keys())) if cats else list(TOOLS.keys())
         else:
             candidate_names = list(TOOLS.keys())
 
@@ -1129,7 +1158,6 @@ def t_list_tools(category: str = "", search: str = "") -> dict:
             if not tdef:
                 continue
             desc = tdef.get("desc", "")
-            # Keyword filter
             if kw and kw not in name.lower() and kw not in desc.lower():
                 continue
             args_str = ", ".join(
@@ -1144,12 +1172,13 @@ def t_list_tools(category: str = "", search: str = "") -> dict:
             })
 
         return {
-            "ok":       True,
-            "total":    len(TOOLS),
-            "filtered": len(results),
-            "category": cat or "all",
-            "search":   search or "",
-            "tools":    results,
+            "ok":            True,
+            "total":         len(TOOLS),
+            "filtered":      len(results),
+            "category":      cat or "all",
+            "search":        search or "",
+            "available_cats": sorted(cats.keys()) if cats else [],
+            "tools":         results,
         }
     except Exception as e:
         return {"ok": False, "error": str(e)}
@@ -1203,23 +1232,94 @@ def t_get_tool_info(name: str = "") -> dict:
         return {"ok": False, "error": str(e)}
 
 def t_get_table_schema(table: str = "") -> dict:
-    if not table:
-        return {"ok": False, "error": "table required"}
+    """Get schema for a Supabase table.
+    Merges two sources:
+      - Live DB query (information_schema) → actual column names + data types
+      - _SB_SCHEMA registry → fat_columns, required, enums, safe_select, on_conflict
+    table="": summary of all tables from _SB_SCHEMA (no live query).
+    table="name": full merged schema for that table.
+    Falls back to _SB_SCHEMA-only if live DB query fails (no PAT etc).
+    """
     try:
-        import httpx, os
-        from core_config import SUPABASE_REF, SUPABASE_PAT
-        resp = httpx.post(
-            f"https://api.supabase.com/v1/projects/{SUPABASE_REF}/database/query",
-            headers={
-                "Authorization": f"Bearer {SUPABASE_PAT}",
-                "Content-Type": "application/json",
-            },
-            json={"query": f"SELECT column_name, data_type FROM information_schema.columns WHERE table_name='{table}' AND table_schema='public' ORDER BY ordinal_position"},
-            timeout=15,
-        )
-        if resp.status_code in (200, 201):
-            return {"ok": True, "table": table, "columns": resp.json()}
-        return {"ok": False, "error": f"{resp.status_code}: {resp.text[:200]}"}
+        from core_tools import _SB_SCHEMA
+
+        # ── No table arg: return registry summary ──────────────────────────────
+        if not table or not table.strip():
+            summary = {}
+            for tname, tdef in _SB_SCHEMA.get("tables", {}).items():
+                summary[tname] = {
+                    "pk_type":     tdef.get("pk_type", "?"),
+                    "columns":     sorted(tdef.get("columns", {}).keys()),
+                    "fat_columns": tdef.get("fat_columns", []),
+                    "safe_select": tdef.get("safe_select", "*"),
+                }
+            return {
+                "ok":               True,
+                "mode":             "summary",
+                "table_count":      len(summary),
+                "tables":           summary,
+                "tombstone_tables": sorted(_SB_SCHEMA.get("_tombstone", set())),
+            }
+
+        table = table.strip()
+
+        # ── Tombstone check ────────────────────────────────────────────────────
+        if table in _SB_SCHEMA.get("_tombstone", set()):
+            return {"ok": False, "error": f"TOMBSTONE: '{table}' is retired — never query"}
+
+        # ── _SB_SCHEMA metadata (always available) ─────────────────────────────
+        tdef = _SB_SCHEMA.get("tables", {}).get(table, {})
+        meta = {
+            "pk":          tdef.get("pk", "id"),
+            "pk_type":     tdef.get("pk_type", "unknown"),
+            "fat_columns": tdef.get("fat_columns", []),
+            "safe_select": tdef.get("safe_select", "*"),
+            "required":    tdef.get("required", []),
+            "enums":       tdef.get("enums", {}),
+            "on_conflict": tdef.get("on_conflict", ""),
+        }
+
+        # ── Live DB query for actual columns + types ───────────────────────────
+        live_columns = []
+        live_source = "schema_registry_only"
+        try:
+            from core_config import SUPABASE_REF, SUPABASE_PAT
+            if SUPABASE_REF and SUPABASE_PAT:
+                resp = httpx.post(
+                    f"https://api.supabase.com/v1/projects/{SUPABASE_REF}/database/query",
+                    headers={"Authorization": f"Bearer {SUPABASE_PAT}",
+                             "Content-Type": "application/json"},
+                    json={"query": (
+                        f"SELECT column_name, data_type, is_nullable "
+                        f"FROM information_schema.columns "
+                        f"WHERE table_name='{table}' AND table_schema='public' "
+                        f"ORDER BY ordinal_position"
+                    )},
+                    timeout=12,
+                )
+                if resp.status_code in (200, 201):
+                    live_columns = resp.json()
+                    live_source = "live_db"
+        except Exception as _le:
+            live_source = f"live_db_failed: {str(_le)[:80]}"
+
+        # Fallback: build columns from _SB_SCHEMA if live query failed
+        if not live_columns and tdef.get("columns"):
+            live_columns = [
+                {"column_name": col, "data_type": info if isinstance(info, str) else "text"}
+                for col, info in tdef["columns"].items()
+            ]
+            if live_source.startswith("live_db_failed"):
+                live_source += " (fell back to schema_registry)"
+
+        return {
+            "ok":          True,
+            "table":       table,
+            "source":      live_source,
+            "columns":     live_columns,
+            "in_registry": bool(tdef),
+            **meta,
+        }
     except Exception as e:
         return {"ok": False, "error": str(e)}
 

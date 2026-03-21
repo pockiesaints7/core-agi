@@ -7824,21 +7824,7 @@ TOOLS["load_arch_context"] = {
 
 
 
-TOOLS["get_table_schema"] = {
-    "fn": t_get_table_schema,
-    "perm": "READ",
-    "args": [
-        {"name": "table", "type": "string",
-         "description": "Table name (e.g. 'knowledge_base'). Empty = list all tables."},
-    ],
-    "desc": (
-        "Return live schema info for any Supabase table from _SB_SCHEMA. "
-        "table='' → summary of all tables with column lists, pk_type, fat_columns. "
-        "table='name' → full schema: columns+types, required, enums, safe_select, notes. "
-        "Use BEFORE any sb_insert/sb_patch/sb_query to verify column names. "
-        "Also shows tombstone+protected table lists. Schema is live-merged at startup."
-    ),
-}
+# get_table_schema is registered by core_web._register_web_tools — do not duplicate here
 
 
 
