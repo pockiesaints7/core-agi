@@ -883,13 +883,19 @@ def _execute_railway_tool(tool_name: str, tool_args: dict) -> str:
     try:
         from core_tools import TOOLS
         if tool_name not in TOOLS:
-            return json.dumps({"ok": False, "error": f"tool '{tool_name}' not found"})
+            err = f"tool '{tool_name}' not found in TOOLS registry ({len(TOOLS)} tools available)"
+            print(f"[ORCH] {err}")
+            return json.dumps({"ok": False, "error": err})
         fn     = TOOLS[tool_name]["fn"]
         result = fn(**tool_args) if tool_args else fn()
         raw    = json.dumps(result, default=str)
-        return _compress_result(raw, tool_name)
+        compressed = _compress_result(raw, tool_name)
+        print(f"[ORCH] {tool_name} → {len(raw)}b raw, {len(compressed)}b compressed")
+        return compressed
     except Exception:
-        return json.dumps({"ok": False, "error": traceback.format_exc()[:400]})
+        err = traceback.format_exc()[:400]
+        print(f"[ORCH] {tool_name} EXCEPTION: {err[:200]}")
+        return json.dumps({"ok": False, "error": err})
 
 
 def _execute_desktop_tool(tool_name: str, tool_args: dict, cid: str) -> str:
@@ -1246,7 +1252,17 @@ def _agentic_loop(cid: str, user_message: str,
                 _tg_send(cid, effective_reply)
                 _append_history(cid, "assistant", effective_reply)
             else:
-                _tg_send(cid, "✅ Done.")
+                # No reply and no results — show debug summary
+                tools_called = [r["name"] for r in results_buffer] if results_buffer else []
+                if tools_called:
+                    lines = ["⚠️ No answer generated."]
+                    lines.append(f"Tools called: {', '.join(tools_called)}")
+                    for r in results_buffer[-3:]:
+                        snippet = r["result"][:200].replace("<", "&lt;").replace(">", "&gt;")
+                        lines.append(f"[{r['name']}] {snippet}")
+                    _tg_send(cid, "\n".join(lines))
+                else:
+                    _tg_send(cid, "⚠️ No tools called and no answer — try rephrasing.")
             return
 
         # Execute tool calls
@@ -1306,10 +1322,13 @@ def _agentic_loop(cid: str, user_message: str,
 
         # Stall detection
         if tool_calls and tool_call_count == _prev_count:
-            final = reply or "✅ Done."
-            _tg_send(cid, final)
-            if reply:
-                _append_history(cid, "assistant", reply)
+            if reply and reply.strip():
+                _tg_send(cid, reply.strip())
+                _append_history(cid, "assistant", reply.strip())
+            else:
+                stalled = ", ".join(tc.get("name", "?") for tc in tool_calls)
+                last_r = results_buffer[-1]["result"][:300] if results_buffer else "none"
+                _tg_send(cid, f"⚠️ Stalled — duplicate calls: {stalled}\nLast result: {last_r}")
             return
 
         if tool_calls:
@@ -1327,11 +1346,15 @@ def _agentic_loop(cid: str, user_message: str,
                 return
             # No reply yet — let loop continue once more to synthesize
 
-    _tg_send(
-        cid,
-        f"⚠️ Hit tool call limit ({MAX_TOOL_CALLS}). "
-        "Task may be incomplete — send a follow-up to continue."
+    last_tools = ", ".join(r["name"] for r in results_buffer[-3:]) if results_buffer else "none"
+    last_result = results_buffer[-1]["result"][:200] if results_buffer else "none"
+    msg = (
+        f"⚠️ Hit tool call limit ({MAX_TOOL_CALLS}).\n"
+        f"Last tools: {last_tools}\n"
+        f"Last result: {last_result}\n"
+        "Send a follow-up to continue."
     )
+    _tg_send(cid, msg)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
