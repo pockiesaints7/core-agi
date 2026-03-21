@@ -422,8 +422,7 @@ def _build_system_prompt(cid: str) -> str:
         "Principle citation is not reasoning. When citing a principle, explain:\n"
         "  (a) which aspect of this situation triggers it, and\n"
         "  (b) what specific action or restraint it requires here.\n\n"
-        "Domain matters for grounding: rarl/* = simulation artifacts, not operational history. 
-         core_agi/* = actual CORE execution mistakes."
+        "Domain matters for grounding: rarl/* = simulation artifacts, not operational history. core_agi/* = actual CORE execution mistakes."
 
         "PRINCIPLE 5 — CLOSE THE LOOP:\n"
         "Every action has an outcome. Report it explicitly — never just 'done'.\n"
