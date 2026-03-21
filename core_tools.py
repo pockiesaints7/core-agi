@@ -156,7 +156,9 @@ _SB_SCHEMA = {
             "columns": {"id": "bigint", "change_type": "text", "change_summary": "text",
                         "diff_content": "text", "pattern_key": "text", "confidence": "float8",
                         "status": "text", "source": "text", "impact": "text",
-                        "recommendation": "text", "applied_at": "timestamptz", "created_at": "timestamptz"},
+                        "recommendation": "text", "applied_at": "timestamptz", "created_at": "timestamptz",
+                        "approval_tier": "text", "tier_applied_at": "timestamptz",
+                        "rejected_by_owner": "boolean"},
             "required": ["change_type", "status"],
             "enums": {"status": ["pending", "pending_desktop", "applied", "rejected", "synthesized"],
                       "change_type": ["knowledge", "code", "new_tool", "script_template", "behavior", "backlog"]},
@@ -252,6 +254,62 @@ _SB_SCHEMA = {
             "safe_select": "id,name,description,trigger_pattern,use_count,created_at",
             "on_conflict": "name",
             "notes": "Use id=gt.1."
+        },
+        "session_goals": {
+            "pk": "id", "pk_type": "bigserial",
+            "columns": {"id": "bigint", "goal": "text", "domain": "text",
+                        "progress": "text", "status": "text",
+                        "created_at": "timestamptz", "updated_at": "timestamptz"},
+            "required": ["goal"],
+            "enums": {"status": ["active", "completed", "paused"]},
+            "fat_columns": ["progress"],
+            "safe_select": "id,goal,domain,status,created_at,updated_at",
+            "notes": "P2-03: Cross-session goal tracker. Use get_active_goals at session_start."
+        },
+        "owner_profile": {
+            "pk": "id", "pk_type": "bigserial",
+            "columns": {"id": "bigint", "dimension": "text", "value": "text",
+                        "confidence": "float8", "evidence": "text", "domain": "text",
+                        "source": "text", "active": "boolean", "times_observed": "integer",
+                        "last_seen": "timestamptz", "created_at": "timestamptz",
+                        "updated_at": "timestamptz"},
+            "required": ["dimension", "value"],
+            "enums": {"dimension": ["communication_style", "decision_pattern", "recurring_concern",
+                                     "working_habit", "preference", "trigger", "frustration"]},
+            "fat_columns": ["value", "evidence"],
+            "safe_select": "id,dimension,value,confidence,domain,times_observed,last_seen",
+            "on_conflict": "dimension,value",
+            "notes": "P3-02: Vux behavioral model. Use id=gt.1. Grows via cold processor."
+        },
+        "capability_model": {
+            "pk": "id", "pk_type": "bigserial",
+            "columns": {"id": "bigint", "domain": "text", "capability": "text",
+                        "reliability": "float8", "tool_count": "integer",
+                        "avg_fail_rate": "float8", "strong_tools": "jsonb",
+                        "weak_tools": "jsonb", "last_calibrated": "timestamptz",
+                        "notes": "text", "created_at": "timestamptz"},
+            "required": ["domain", "capability"],
+            "enums": {},
+            "fat_columns": ["strong_tools", "weak_tools", "notes"],
+            "safe_select": "id,domain,capability,reliability,tool_count,avg_fail_rate,last_calibrated",
+            "on_conflict": "domain",
+            "notes": "P3-07: CORE self-model. Calibrated weekly. Unique on domain."
+        },
+        "conversation_episodes": {
+            "pk": "id", "pk_type": "bigserial",
+            "columns": {"id": "bigint", "chat_id": "text", "summary": "text",
+                        "embedding": "vector", "turn_start": "timestamptz",
+                        "turn_end": "timestamptz", "topic_tags": "text[]",
+                        "created_at": "timestamptz"},
+            "required": ["chat_id", "summary"],
+            "enums": {},
+            "fat_columns": ["embedding", "summary"],
+            "safe_select": "id,chat_id,turn_start,turn_end,topic_tags,created_at",
+            "notes": (
+                "P3-04: Compressed conversation episode memory with vector embeddings. "
+                "REQUIRES: CREATE TABLE conversation_episodes + vector(768) column + ivfflat index. "
+                "Populated by _compress_history when conversation exceeds HISTORY_COMPRESS_AT turns."
+            ),
         },
     }
 }
@@ -443,6 +501,7 @@ def t_constitution():
 
 def t_search_kb(query="", domain="", limit=10):
     """Search knowledge_base. Multi-word queries search content, topic, and instruction fields.
+    P3-01: if ilike returns 0 results, automatically retries with semantic (vector) search.
     AGI-05: increments access_count + updates last_accessed on every hit (fire-and-forget)."""
     lim = int(limit) if limit else 10
     qs = f"select=id,domain,topic,instruction,content,confidence&limit={lim}"
@@ -452,11 +511,22 @@ def t_search_kb(query="", domain="", limit=10):
         q = query.strip().replace("'", "").replace('"', "")
         words = q.split()
         # I.3: multi-word queries -- use first keyword as primary ilike filter
-        # Full phrase ilike only matches if all words appear consecutively, which misses many hits
         primary = words[0] if words else q
         qs += f"&or=(content.ilike.*{primary}*,topic.ilike.*{primary}*,instruction.ilike.*{primary}*)"
     rows = sb_get("knowledge_base", qs)
-    # C.2: batch access tracking -- single UPDATE via id=in.(...) instead of N individual patches
+
+    # P3-01: semantic fallback when ilike returns nothing
+    if not rows and query:
+        try:
+            from core_embeddings import t_semantic_kb_search
+            sem = t_semantic_kb_search(query=query, domain=domain, limit=str(lim))
+            if sem.get("ok") and sem.get("results"):
+                rows = sem["results"]
+                print(f"[P3-01] semantic fallback returned {len(rows)} results for: {query[:60]}")
+        except Exception as _se:
+            print(f"[P3-01] semantic fallback error (non-fatal): {_se}")
+
+    # C.2: batch access tracking
     try:
         if rows:
             now_ts = datetime.utcnow().isoformat()
@@ -467,7 +537,7 @@ def t_search_kb(query="", domain="", limit=10):
                     sb_patch("knowledge_base", f"id=in.({id_list})",
                              {"last_accessed": now_ts})
                 except Exception:
-                    pass  # access tracking is best-effort
+                    pass
     except Exception:
         pass
     return rows
@@ -1885,12 +1955,20 @@ def t_session_start() -> dict:
         migration_needed = False
         migration_missing = []
         try:
-            br = t_get_behavioral_rules(domain=detected_domain)
+            # P1-07: Load top-40 rules. confidence>=0.9 always included first,
+            # then remaining by priority. Low-signal rules (<0.5) excluded at DB level.
+            br = t_get_behavioral_rules(domain=detected_domain, page="1", page_size="200")
             if br.get("migration_needed"):
                 migration_needed = True
                 migration_missing.append("behavioral_rules")
             else:
-                behavioral_rules_data = br.get("rules", [])
+                all_rules = br.get("rules", []) or []
+                # Split: high-confidence (>=0.9) always shown, rest sorted by priority
+                critical_rules = [r for r in all_rules if float(r.get("confidence") or 0) >= 0.9]
+                other_rules    = [r for r in all_rules if float(r.get("confidence") or 0) < 0.9]
+                # Fill to 40: critical first, then others up to cap
+                remaining_slots = max(0, 40 - len(critical_rules))
+                behavioral_rules_data = critical_rules + other_rules[:remaining_slots]
         except Exception:
             migration_needed = True
             migration_missing.append("behavioral_rules")
@@ -1946,6 +2024,46 @@ def t_session_start() -> dict:
         except Exception:
             pass  # Non-fatal -- associative bridge is best-effort
 
+        # P2-03: Load active goals for cross-session continuity
+        active_goals = []
+        try:
+            active_goals = sb_get(
+                "session_goals",
+                "select=id,goal,domain,progress,status&status=eq.active&order=created_at.asc&limit=10",
+                svc=True,
+            ) or []
+        except Exception as _ge:
+            print(f"[SESSION] active_goals load failed (non-fatal): {_ge}")
+
+        # P3-02: Load owner profile (top 10 high-confidence entries)
+        owner_profile_data = []
+        try:
+            owner_profile_data = sb_get(
+                "owner_profile",
+                "select=dimension,value,confidence,domain"
+                "&active=eq.true&order=confidence.desc,times_observed.desc&limit=10",
+                svc=True,
+            ) or []
+        except Exception as _ope:
+            print(f"[SESSION] owner_profile load failed (non-fatal): {_ope}")
+
+        # P3-07: Load capability model (all domains, weakest first)
+        capability_model_data = []
+        weak_capability_domains = []
+        try:
+            cap_rows = sb_get(
+                "capability_model",
+                "select=domain,reliability,notes&order=reliability.asc&limit=20",
+                svc=True,
+            ) or []
+            capability_model_data = cap_rows
+            weak_capability_domains = [
+                r["domain"] for r in cap_rows
+                if float(r.get("reliability") or 1.0) < 0.60
+            ]
+        except Exception as _cme:
+            print(f"[SESSION] capability_model load failed (non-fatal): {_cme}")
+
         return {
             "ok": True,
             "health": health.get("overall", "unknown"),
@@ -1974,6 +2092,9 @@ def t_session_start() -> dict:
             "system_map": smap,
             "resume_checkpoint": _get_resume_checkpoint(resume_task_obj),
             "associated_context": associated_context,  # AGI-05/S3: cross-domain associative bridges
+            "active_goals": active_goals,              # P2-03: cross-session goal continuity
+            "owner_profile": owner_profile_data,          # P3-02: Vux behavioral model
+            "weak_capability_domains": weak_capability_domains,  # P3-07: domains below 0.60 reliability
         }
     except Exception as e:
         return {"ok": False, "error": str(e)}
@@ -2410,6 +2531,43 @@ def t_session_end(summary: str = "", actions: str = "", domain: str = "general",
         except Exception:
             pass
 
+        # P2-06: Close out pending pattern_outcome rows — fill quality_after for this session
+        pattern_outcomes_closed = 0
+        try:
+            pending_outcomes = sb_get(
+                "pattern_outcome",
+                "select=id,pattern_key,quality_before&outcome=eq.pending&limit=20",
+                svc=True,
+            ) or []
+            for row in pending_outcomes:
+                oid = row.get("id")
+                q_before = float(row.get("quality_before") or 0)
+                if not oid:
+                    continue
+                outcome = "neutral"
+                if q - q_before > 0.05:
+                    outcome = "improved"
+                elif q_before - q > 0.05:
+                    outcome = "degraded"
+                try:
+                    sb_patch("pattern_outcome", f"id=eq.{oid}", {
+                        "quality_after": q,
+                        "outcome":       outcome,
+                    })
+                    pattern_outcomes_closed += 1
+                    # Mark pattern stale if it degraded quality
+                    if outcome == "degraded":
+                        try:
+                            sb_patch("pattern_frequency",
+                                f"pattern_key=eq.{row.get('pattern_key','')[:200]}",
+                                {"stale": True})
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+        except Exception:
+            pass  # pattern_outcome table may not exist yet -- non-fatal
+
         # Build return -- surface reflection failure and task warnings
         result = {
             "ok": session_ok,
@@ -2424,6 +2582,7 @@ def t_session_end(summary: str = "", actions: str = "", domain: str = "general",
             "new_tool_sop": _new_sop if _new_sop else "none",
             "counterfactuals_written": counterfactuals_written,
             "capability_metrics": cap_metrics,
+            "pattern_outcomes_closed": pattern_outcomes_closed,  # P2-06
         }
         if not r_ok:
             result["reflection_warning"] = (
@@ -4819,8 +4978,6 @@ TOOLS = {
                                "desc": "Railway service snapshot: name, region, latest deploy status+commit, IDs."},
     "get_training_pipeline":  {"fn": t_get_training_pipeline,  "perm": "READ",    "args": [],
                                "desc": "Full training pipeline status. Returns: hot (total, unprocessed, simulation_ok, last_real, last_simulation), cold (last_run_ts, last_run_mins_ago, threshold, last_patterns_found, last_evolutions_queued, recent_5_summaries), patterns (active_count, stale_count, top), evolutions (pending, applied), quality (7d_avg, trend), health_flags (simulation_dead|cold_stale_Xmin|unprocessed_backlog_X|zero_patterns_last_5_runs|quality_declining), pipeline_ok. Use at session_start or when diagnosing training issues."},
-    "get_training_status":    {"fn": t_training_status,        "perm": "READ",    "args": [],
-                               "desc": "DEPRECATED -- use get_training_pipeline for full status. This thin wrapper returns a subset of fields and will be removed."},
     "search_kb":              {"fn": t_search_kb,              "perm": "READ",    "args": ["query", "domain", "limit"],
                            "desc": "Search knowledge base by query. Returns domain, topic, content, confidence. ALWAYS include id=gt.1 filter behavior is automatic. IF EMPTY: do NOT give up — try sb_query(table='knowledge_base', filters='id=gt.1&domain=like.*core*') as fallback. Use before any write to check duplicates. EXAMPLE: search_kb(query='railway deploy', domain='core_agi', limit='5')"},
     "get_mistakes":           {"fn": t_get_mistakes,           "perm": "READ",    "args": ["domain", "limit"],
@@ -4859,8 +5016,6 @@ TOOLS = {
                                "desc": "Manually trigger cold processor run. Processes unread hot_reflections, extracts patterns, queues evolutions. Use when cold_stale flag set in training_pipeline health_flags. Response size-guarded to 10 items max."},
     "backfill_patterns":      {"fn": t_backfill_patterns,      "perm": "WRITE",   "args": ["batch_size"],
                                "desc": "TASK-20: Fire-and-forget backfill of pattern_frequency -> KB. Returns job_id immediately. Poll backfill_status for result. batch_size=max per run (default 20)."},
-    "backfill_status":         {"fn": t_backfill_status,         "perm": "READ",    "args": [],
-                               "desc": "TASK-20: Poll backfill job status. Returns inserted count + done/running/error/idle. Call after backfill_patterns."},
     "ingest_knowledge":       {"fn": t_ingest_knowledge,       "perm": "EXECUTE", "args": ["topic", "sources", "max_per_source", "since_days"],
                                "desc": "Trigger knowledge ingestion pipeline. Fetches topic from public sources (arxiv/docs/medium/reddit/hackernews/stackoverflow), scores by engagement, writes to kb_* tables, injects hot_reflections for CORE to evolve. sources=comma-separated or 'all'. max_per_source=cap per fetcher (default 20). since_days=recency filter (default 7)."},
     "listen":                 {"fn": t_listen,                 "perm": "EXECUTE", "args": [],
@@ -4889,8 +5044,6 @@ TOOLS = {
                                "desc": "Log a completed change to the changelog table + Telegram notify. Call after every deploy. before/after describe what changed. change_type=bugfix|feature|config|refactor."},
     "bulk_apply":             {"fn": t_bulk_apply,             "perm": "WRITE",   "args": ["executor_override", "dry_run"],
                                "desc": "Apply ALL pending evolution_queue items. executor_override=claude_desktop routes knowledge types to KB. dry_run=true shows plan without applying. Returns slim results to prevent overflow."},
-    "repopulate":             {"fn": _repopulate_evolution_queue, "perm": "WRITE", "args": [],
-                               "desc": "DEPRECATED -- backlog change_type is retired. _repopulate_evolution_queue is a no-op stub. Do not use."},
     "list_templates":         {"fn": t_list_templates,         "perm": "READ",    "args": ["limit"],
                                "desc": "List script templates from script_templates table, ordered by use_count. Returns name, description, trigger_pattern. Check before starting a common task."},
     "run_template":           {"fn": t_run_template,           "perm": "EXECUTE", "args": ["name", "params"],
@@ -5652,9 +5805,9 @@ def t_get_behavioral_rules(domain: str = None, page: str = "1", page_size: str =
             pg, ps = 1, 200
         offset = (pg - 1) * ps
         if domain and domain.strip():
-            filters = f"active=eq.true&id=gt.1&domain=in.(universal,{domain.strip()})&order=priority.asc&limit={ps}&offset={offset}"
+            filters = f"active=eq.true&id=gt.1&confidence=gte.0.5&domain=in.(universal,{domain.strip()})&order=priority.asc&limit={ps}&offset={offset}"  # P1-07
         else:
-            filters = f"active=eq.true&id=gt.1&domain=eq.universal&order=priority.asc&limit={ps}&offset={offset}"
+            filters = f"active=eq.true&id=gt.1&confidence=gte.0.5&domain=eq.universal&order=priority.asc&limit={ps}&offset={offset}"  # P1-07
         rows = sb_get("behavioral_rules", f"select=trigger,pointer,full_rule,domain,priority,tested,confidence&{filters}", svc=True)
         if rows is None:
             return {"ok": True, "rules": [], "migration_needed": True, "warning": "behavioral_rules table may not exist yet"}
@@ -8187,6 +8340,502 @@ TOOLS["register_tool"] = {
     ),
 }
 
+# -- P1-04: Register previously unregistered AGI tools -----------------------
+TOOLS["circuit_breaker"] = {
+    "fn":   t_circuit_breaker,
+    "perm": "READ",
+    "args": [
+        {"name": "failed_step",      "type": "string", "description": "The step that failed"},
+        {"name": "dependent_steps",  "type": "string", "description": "Comma-separated downstream steps that depend on failed_step"},
+        {"name": "failure_reason",   "type": "string", "description": "Why the step failed"},
+    ],
+    "desc": (
+        "AGI-14: Failure cascade prevention. Given a failed step and its dependents, "
+        "returns cascade_risk per downstream step, safe_to_continue, steps_to_suspend. "
+        "Auto-wired by orchestrator on 3+ consecutive TOOL_FAILEDs. "
+        "Also call manually before abandoning a multi-step task mid-way."
+    ),
+}
+TOOLS["assert_source"] = {
+    "fn":   t_assert_source,
+    "perm": "READ",
+    "args": [
+        {"name": "value",            "type": "string", "description": "The value being asserted"},
+        {"name": "declared_source",  "type": "string", "description": "observed | inferred | assumed | skill_file"},
+        {"name": "field_name",       "type": "string", "description": "What field/variable this value is for"},
+    ],
+    "desc": (
+        "AGI-11: Assumption grounding. Tags a value with its certainty source. "
+        "Returns flagged=True if source=assumed or skill_file — forces a live query instead. "
+        "Use before any action that depends on a value you have not confirmed this session. "
+        "EXAMPLE: assert_source(value='task_id', declared_source='memory', field_name='task_id') → flagged=True → go query task_queue."
+    ),
+}
+TOOLS["scope_tracker"] = {
+    "fn":   t_scope_tracker,
+    "perm": "READ",
+    "args": [
+        {"name": "planned_scope",  "type": "string", "description": "Original task scope as described at start"},
+        {"name": "actions_taken",  "type": "string", "description": "Comma-separated list of actions taken so far"},
+        {"name": "task_id",        "type": "string", "description": "Optional task UUID for reference"},
+    ],
+    "desc": (
+        "AGI-12: Scope creep detection. Compares planned_scope vs actions_taken. "
+        "Returns scope_exceeded (bool), drift_level (none|minor|moderate|severe), "
+        "unplanned_items, overlap_percent, recommendation (continue|flag_owner|stop). "
+        "Call after every 5-10 tool calls on long tasks to catch goal drift early."
+    ),
+}
+
+
+# -- P2-03: Cross-session goal tracker ----------------------------------------
+
+def t_set_goal(goal: str = "", domain: str = "general") -> dict:
+    """P2-03: Register an active goal for cross-session tracking.
+    goal: description of the goal (e.g. 'Complete CORE Phase 2 by end of month').
+    domain: project domain (e.g. project:lsei, core_agi, general).
+    Deduplicates: if an active goal with the same text exists, returns existing.
+    Returns: {ok, goal_id, goal, domain, action: created|exists}
+    """
+    if not goal or not goal.strip():
+        return {"ok": False, "error": "goal text required"}
+    try:
+        existing = sb_get(
+            "session_goals",
+            "select=id,goal,domain&status=eq.active&limit=20",
+            svc=True,
+        ) or []
+        for ex in existing:
+            if ex.get("goal", "").strip().lower() == goal.strip().lower():
+                return {
+                    "ok": True, "action": "exists",
+                    "goal_id": ex["id"], "goal": ex["goal"], "domain": ex.get("domain", ""),
+                    "message": "Goal already active — use update_goal_progress to add notes.",
+                }
+        ok = sb_post("session_goals", {
+            "goal":       goal.strip(),
+            "domain":     domain.strip() or "general",
+            "progress":   "",
+            "status":     "active",
+            "created_at": datetime.utcnow().isoformat(),
+            "updated_at": datetime.utcnow().isoformat(),
+        })
+        if not ok:
+            return {"ok": False, "error": "Failed to insert goal"}
+        new_row = sb_get(
+            "session_goals",
+            "select=id,goal,domain&status=eq.active&order=id.desc&limit=1",
+            svc=True,
+        ) or []
+        goal_id = new_row[0]["id"] if new_row else None
+        return {"ok": True, "action": "created", "goal_id": goal_id, "goal": goal, "domain": domain}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def t_update_goal_progress(goal_id: str = "", progress_note: str = "",
+                            status: str = "") -> dict:
+    """P2-03: Append a timestamped progress note to an active goal. Optionally update status.
+    goal_id: ID from set_goal or get_active_goals.
+    progress_note: what happened this session toward this goal.
+    status: optional — active | completed | paused. Leave empty to keep current.
+    Returns: {ok, goal_id, appended, status}
+    """
+    if not goal_id or not progress_note.strip():
+        return {"ok": False, "error": "goal_id and progress_note required"}
+    try:
+        gid = int(goal_id)
+        rows = sb_get("session_goals", f"select=progress,status&id=eq.{gid}&limit=1", svc=True) or []
+        if not rows:
+            return {"ok": False, "error": f"Goal {gid} not found"}
+        existing_progress = rows[0].get("progress") or ""
+        ts = datetime.utcnow().strftime("%Y-%m-%d")
+        new_progress = (existing_progress + f"\n[{ts}] {progress_note.strip()}").strip()
+        updates = {"progress": new_progress, "updated_at": datetime.utcnow().isoformat()}
+        if status and status in ("active", "completed", "paused"):
+            updates["status"] = status
+        ok = sb_patch("session_goals", f"id=eq.{gid}", updates)
+        return {
+            "ok": ok, "goal_id": gid,
+            "appended": progress_note.strip()[:100],
+            "status": updates.get("status", rows[0].get("status")),
+        }
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def t_get_active_goals(domain: str = "") -> dict:
+    """P2-03: Return all active goals with progress history.
+    Automatically called by session_start — result is in the active_goals field.
+    domain: optional filter. Empty = all active goals.
+    Returns: {ok, goals: [{id, goal, domain, progress, status}], count}
+    """
+    try:
+        filters = "status=eq.active&order=created_at.asc&limit=20"
+        if domain and domain.strip():
+            filters = f"status=eq.active&domain=eq.{domain.strip()}&order=created_at.asc&limit=20"
+        rows = sb_get(
+            "session_goals",
+            f"select=id,goal,domain,progress,status,created_at,updated_at&{filters}",
+            svc=True,
+        ) or []
+        return {"ok": True, "goals": rows, "count": len(rows)}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+TOOLS["set_goal"] = {
+    "fn":   t_set_goal,
+    "perm": "WRITE",
+    "args": [
+        {"name": "goal",   "type": "string", "description": "Goal description"},
+        {"name": "domain", "type": "string", "description": "Domain/project context (e.g. core_agi, project:lsei, general)"},
+    ],
+    "desc": (
+        "P2-03: Register a cross-session goal. Persists across all sessions, injected into "
+        "session_start as active_goals. Deduplicates by goal text. "
+        "EXAMPLE: set_goal(goal='Complete Phase 2 by month end', domain='core_agi')"
+    ),
+}
+
+TOOLS["update_goal_progress"] = {
+    "fn":   t_update_goal_progress,
+    "perm": "WRITE",
+    "args": [
+        {"name": "goal_id",       "type": "string", "description": "Goal ID from set_goal or get_active_goals"},
+        {"name": "progress_note", "type": "string", "description": "What happened this session toward this goal"},
+        {"name": "status",        "type": "string", "description": "Optional: active | completed | paused"},
+    ],
+    "desc": (
+        "P2-03: Append a timestamped progress note to an active goal. Call at session_end "
+        "when work was done toward a tracked goal. Optionally mark completed or paused. "
+        "EXAMPLE: update_goal_progress(goal_id='3', progress_note='P2-02 done, behavioral rules auto-evolving')"
+    ),
+}
+
+TOOLS["get_active_goals"] = {
+    "fn":   t_get_active_goals,
+    "perm": "READ",
+    "args": [
+        {"name": "domain", "type": "string", "description": "Optional domain filter"},
+    ],
+    "desc": (
+        "P2-03: Return all active cross-session goals with progress history. "
+        "Auto-called by session_start (active_goals field). Call manually mid-session to check status. "
+        "EXAMPLE: get_active_goals() or get_active_goals(domain='core_agi')"
+    ),
+}
+
+# -- P3-01 / P3-04: Semantic KB + Episode memory tools -----------------------
+try:
+    from core_embeddings import (
+        t_embed_kb_entry, t_semantic_kb_search,
+        t_backfill_kb_embeddings, t_semantic_episode_search,
+    )
+    TOOLS["embed_kb_entry"] = {
+        "fn":   t_embed_kb_entry,
+        "perm": "WRITE",
+        "args": [{"name": "kb_id", "type": "string", "description": "knowledge_base row id to embed"}],
+        "desc": (
+            "P3-01: Embed a single KB entry using Gemini text-embedding-004. "
+            "Stores 768-dim vector in knowledge_base.embedding column. "
+            "REQUIRES: ALTER TABLE knowledge_base ADD COLUMN embedding vector(768). "
+            "Use backfill_kb_embeddings for bulk operation."
+        ),
+    }
+    TOOLS["semantic_kb_search"] = {
+        "fn":   t_semantic_kb_search,
+        "perm": "READ",
+        "args": [
+            {"name": "query",     "type": "string"},
+            {"name": "domain",    "type": "string"},
+            {"name": "limit",     "type": "string"},
+            {"name": "threshold", "type": "string", "description": "Cosine similarity threshold 0.0-1.0 (default 0.70)"},
+        ],
+        "desc": (
+            "P3-01: Semantic KB search via pgvector cosine similarity. "
+            "Finds conceptually related entries even when keywords don't match. "
+            "Falls back to ilike if embedding column not yet available. "
+            "EXAMPLE: semantic_kb_search(query='Railway build hanging on startup', threshold='0.65')"
+        ),
+    }
+    TOOLS["backfill_kb_embeddings"] = {
+        "fn":   t_backfill_kb_embeddings,
+        "perm": "WRITE",
+        "args": [
+            {"name": "batch_size", "type": "string", "description": "Entries per batch (default 20, max 50)"},
+            {"name": "domain",     "type": "string", "description": "Optional domain filter"},
+        ],
+        "desc": (
+            "P3-01: Batch embed all knowledge_base entries missing embeddings. "
+            "Run once after adding vector column, then periodically for new entries. "
+            "Safe to re-run — skips already-embedded entries. "
+            "Call multiple times until has_more=false."
+        ),
+    }
+    TOOLS["semantic_episode_search"] = {
+        "fn":   t_semantic_episode_search,
+        "perm": "READ",
+        "args": [
+            {"name": "chat_id", "type": "string"},
+            {"name": "query",   "type": "string"},
+            {"name": "limit",   "type": "string"},
+        ],
+        "desc": (
+            "P3-04: Search past conversation episodes by semantic similarity. "
+            "Returns summaries of relevant past conversations. "
+            "REQUIRES: conversation_episodes table + embedding column. "
+            "EXAMPLE: semantic_episode_search(chat_id='838737537', query='LSEI RMU commissioning')"
+        ),
+    }
+    print("[CORE] P3-01/P3-04 embedding tools registered")
+except ImportError as _emb_e:
+    print(f"[CORE] core_embeddings not found — P3-01/P3-04 tools skipped: {_emb_e}")
+
 # -- core_web tools registration ----------------------------------------------
 from core_web import _register_web_tools
 _register_web_tools(TOOLS)
+
+
+# =============================================================================
+# P3-02: OWNER PROFILE TOOLS
+# Structured model of Vux's working style, preferences, and patterns.
+# Populated by cold processor. Injected into session_start system prompt.
+# =============================================================================
+
+def t_get_owner_profile(dimension: str = "", limit: str = "10") -> dict:
+    """P3-02: Load active owner profile entries, optionally filtered by dimension.
+    dimension: communication_style | decision_pattern | recurring_concern |
+               working_habit | preference | trigger | frustration | (empty = all)
+    Returns entries sorted by confidence DESC, times_observed DESC.
+    Injected into session_start as OWNER PROFILE section.
+    """
+    try:
+        lim = min(int(limit) if limit else 10, 50)
+        if dimension and dimension.strip():
+            qs = (
+                f"select=id,dimension,value,confidence,domain,times_observed,last_seen"
+                f"&active=eq.true&dimension=eq.{dimension.strip()}"
+                f"&order=confidence.desc,times_observed.desc&limit={lim}"
+            )
+        else:
+            qs = (
+                f"select=id,dimension,value,confidence,domain,times_observed,last_seen"
+                f"&active=eq.true"
+                f"&order=confidence.desc,times_observed.desc&limit={lim}"
+            )
+        rows = sb_get("owner_profile", qs, svc=True) or []
+        return {
+            "ok":       True,
+            "count":    len(rows),
+            "dimension": dimension or "all",
+            "profile":  rows,
+        }
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def t_add_owner_observation(
+    dimension: str  = "",
+    value: str      = "",
+    confidence: str = "0.7",
+    evidence: str   = "",
+    domain: str     = "universal",
+    source: str     = "session_observation",
+) -> dict:
+    """P3-02: Add or reinforce an owner profile observation.
+    dimension: communication_style | decision_pattern | recurring_concern |
+               working_habit | preference | trigger | frustration
+    value: the observation text (min 10 chars).
+    If entry with same dimension+value already exists: increments times_observed,
+    updates confidence if higher, updates last_seen.
+    Use for real-time session observations and cold processor synthesis.
+    EXAMPLE: add_owner_observation(dimension='working_habit',
+               value='Prefers concise bullet-point summaries over prose', confidence='0.8')
+    """
+    VALID_DIMS = {
+        "communication_style", "decision_pattern", "recurring_concern",
+        "working_habit", "preference", "trigger", "frustration",
+    }
+    if not dimension or not value:
+        return {"ok": False, "error": "dimension and value are required"}
+    if dimension not in VALID_DIMS:
+        return {"ok": False, "error": f"dimension must be one of: {sorted(VALID_DIMS)}"}
+    try:
+        conf = max(0.0, min(1.0, float(confidence)))
+    except (TypeError, ValueError):
+        conf = 0.7
+
+    try:
+        val_slug = value.strip()[:50].replace("'", "").replace(" ", "%20")
+        existing = sb_get(
+            "owner_profile",
+            f"select=id,confidence,times_observed"
+            f"&dimension=eq.{dimension}&value=ilike.*{val_slug[:30]}*&limit=1",
+            svc=True,
+        ) or []
+
+        if existing:
+            row = existing[0]
+            new_conf  = max(float(row.get("confidence") or 0), conf)
+            new_count = int(row.get("times_observed") or 1) + 1
+            ok = sb_patch("owner_profile", f"id=eq.{row['id']}", {
+                "confidence":     round(new_conf, 3),
+                "times_observed": new_count,
+                "last_seen":      datetime.utcnow().isoformat(),
+                "updated_at":     datetime.utcnow().isoformat(),
+            })
+            return {
+                "ok":            ok,
+                "action":        "reinforced",
+                "id":            row["id"],
+                "times_observed": new_count,
+                "confidence":    round(new_conf, 3),
+            }
+        else:
+            ok = sb_post("owner_profile", {
+                "dimension":      dimension,
+                "value":          value.strip()[:1000],
+                "confidence":     round(conf, 3),
+                "evidence":       (evidence or "")[:500],
+                "domain":         domain.strip() or "universal",
+                "source":         source.strip() or "session_observation",
+                "active":         True,
+                "times_observed": 1,
+                "last_seen":      datetime.utcnow().isoformat(),
+                "created_at":     datetime.utcnow().isoformat(),
+                "updated_at":     datetime.utcnow().isoformat(),
+            })
+            return {"ok": ok, "action": "inserted", "dimension": dimension, "value": value[:80]}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+# =============================================================================
+# P3-07: CAPABILITY MODEL TOOLS
+# CORE's calibrated self-assessment of its own reliability per domain.
+# Updated weekly by _run_capability_calibration() in core_train.py.
+# =============================================================================
+
+def t_get_capability_model(domain: str = "") -> dict:
+    """P3-07: Load CORE's self-calibrated capability model.
+    domain: optional filter (e.g. 'code', 'deploy', 'training').
+    Empty = all domains, sorted by reliability ASC (weakest first).
+    Injected into session_start. Used by orchestrator to flag weak domains.
+    Returns weak_domains list (reliability < 0.60) for system prompt injection.
+    EXAMPLE: get_capability_model() or get_capability_model(domain='deploy')
+    """
+    try:
+        if domain and domain.strip():
+            qs = (
+                f"select=domain,capability,reliability,tool_count,avg_fail_rate,"
+                f"strong_tools,weak_tools,last_calibrated,notes"
+                f"&domain=eq.{domain.strip()}&order=reliability.asc&limit=50"
+            )
+        else:
+            qs = (
+                f"select=domain,capability,reliability,tool_count,avg_fail_rate,"
+                f"strong_tools,weak_tools,last_calibrated,notes"
+                f"&order=reliability.asc&limit=50"
+            )
+        rows = sb_get("capability_model", qs, svc=True) or []
+        weak_domains = [r["domain"] for r in rows if float(r.get("reliability") or 1.0) < 0.60]
+        return {
+            "ok":           True,
+            "count":        len(rows),
+            "domains":      rows,
+            "weak_domains": weak_domains,
+            "calibration_note": (
+                f"{len(weak_domains)} domain(s) below 0.60: "
+                + ", ".join(weak_domains)
+                if weak_domains else "All domains above 0.60 reliability."
+            ),
+        }
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def t_trigger_capability_calibration() -> dict:
+    """P3-07: Manually trigger the weekly capability calibration.
+    Reads tool_stats for last 30 days, computes per-domain reliability,
+    updates capability_model table. Notifies owner via Telegram.
+    Returns: {ok, updated (domain count), weak_domains}
+    """
+    try:
+        from core_train import _run_capability_calibration
+        return _run_capability_calibration()
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+# =============================================================================
+# TOOLS REGISTRATION — P3-02 + P3-07
+# Append these registrations to the TOOLS dict in core_tools.py.
+# =============================================================================
+
+TOOLS["get_owner_profile"] = {
+    "fn":   t_get_owner_profile,
+    "perm": "READ",
+    "args": [
+        {"name": "dimension", "type": "string",
+         "description": "communication_style | decision_pattern | recurring_concern | working_habit | preference | trigger | frustration | (empty=all)"},
+        {"name": "limit",     "type": "string", "description": "Max entries to return (default 10, max 50)"},
+    ],
+    "desc": (
+        "P3-02: Load active owner profile entries. Returns structured observations about "
+        "Vux's working style, preferences, and behavioral patterns. Sorted by confidence. "
+        "Auto-injected into session_start. Use directly when you need specific behavioral "
+        "context. EXAMPLE: get_owner_profile(dimension='preference')"
+    ),
+}
+
+TOOLS["add_owner_observation"] = {
+    "fn":   t_add_owner_observation,
+    "perm": "WRITE",
+    "args": [
+        {"name": "dimension",   "type": "string", "description": "communication_style | decision_pattern | recurring_concern | working_habit | preference | trigger | frustration"},
+        {"name": "value",       "type": "string", "description": "The observed behavioral pattern"},
+        {"name": "confidence",  "type": "string", "description": "Confidence 0.0-1.0 (default 0.7)"},
+        {"name": "evidence",    "type": "string", "description": "What session/event led to this observation"},
+        {"name": "domain",      "type": "string", "description": "Domain this applies to (default: universal)"},
+        {"name": "source",      "type": "string", "description": "session_observation | owner_stated | cold_processor"},
+    ],
+    "desc": (
+        "P3-02: Record a new behavioral observation about Vux. If same observation exists, "
+        "reinforces it (increments times_observed, updates confidence). Auto-deduplicates. "
+        "Call when you notice a pattern in how Vux works or communicates. "
+        "EXAMPLE: add_owner_observation(dimension='preference', "
+        "value='Prefers deploy then test sequence not test-in-advance', confidence='0.8')"
+    ),
+}
+
+TOOLS["get_capability_model"] = {
+    "fn":   t_get_capability_model,
+    "perm": "READ",
+    "args": [
+        {"name": "domain", "type": "string",
+         "description": "Filter by domain: deploy | code | training | knowledge | task | telegram | system | project | crypto | web | document | railway | agentic"},
+    ],
+    "desc": (
+        "P3-07: Load CORE's self-calibrated capability model. Returns reliability scores "
+        "per domain derived from tool_stats (0.0=always fails, 1.0=never fails). "
+        "Returns weak_domains list (reliability < 0.60). "
+        "Auto-injected into session_start. Use before starting work in a domain to "
+        "understand current reliability. Calibrated weekly by _run_capability_calibration(). "
+        "EXAMPLE: get_capability_model(domain='deploy') to check deploy reliability before patching."
+    ),
+}
+
+TOOLS["trigger_capability_calibration"] = {
+    "fn":   t_trigger_capability_calibration,
+    "perm": "WRITE",
+    "args": [],
+    "desc": (
+        "P3-07: Manually trigger weekly capability calibration. "
+        "Reads tool_stats (last 30 days), computes per-domain reliability, "
+        "updates capability_model table, notifies owner of weak domains. "
+        "Normally runs automatically every Thursday. Call manually after a major "
+        "tool fix session to get updated reliability scores."
+    ),
+}
+

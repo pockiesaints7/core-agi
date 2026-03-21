@@ -42,6 +42,31 @@ _PUBLIC_SOURCE_INTERVAL = 21600  # 6 hours
 # Source confidence multipliers (Phase 3)
 _SRC_CONF = {"real": 1.0, "simulation": 0.7, "both": 1.3}
 
+# ── P2-01: Approval tier assignment helper ────────────────────────────────────
+
+def _assign_approval_tier(confidence: float, change_type: str, src_key: str) -> str:
+    """Assign approval tier for a new evolution queue entry.
+    auto:   conf >= 0.85 AND knowledge AND real/both source -> apply immediately in cold processor
+    notify: conf >= 0.70 AND knowledge -> apply after 24h via evolution_tier_processor
+    owner:  everything else (code, schema, low confidence, simulation-only)
+    Safety valve: EVOLUTION_AUTO_TIER env var
+      - 'notify_only': demotes all auto -> notify (no immediate auto-apply)
+      - 'disabled':    forces all -> owner (pauses all autonomous apply)
+    """
+    safety = os.getenv("EVOLUTION_AUTO_TIER", "").strip().lower()
+    if safety == "disabled":
+        return "owner"
+    if change_type != "knowledge":
+        return "owner"
+    if confidence >= 0.85 and src_key in ("real", "both"):
+        if safety == "notify_only":
+            return "notify"
+        return "auto"
+    if confidence >= 0.70:
+        return "notify"
+    return "owner"
+
+
 # AGI-02: Nightly self-diagnosis
 # NOTE: _last_self_diagnosis_run is intentionally NOT initialised to 0.0 here.
 # It is seeded from Supabase at cold_processor_loop boot to survive Railway redeploys.
@@ -65,6 +90,56 @@ _CONSOLIDATION_DAY_UTC = 6               # Sunday UTC (weekday=6)
 _last_capability_report_run: float = 0.0
 _CAPABILITY_REPORT_INTERVAL = 6 * 24 * 3600  # 6 days
 _CAPABILITY_REPORT_DAY_UTC = 1               # Tuesday UTC (weekday=1)
+
+# ── P3-07: Weekly capability calibration ───────────────────────────────────────────────
+_last_capability_calibration_run: float = 0.0
+_CAPABILITY_CALIBRATION_INTERVAL = 6 * 24 * 3600  # 6 days
+
+_CAP_DOMAIN_MAP = {
+    "deploy":    ["redeploy", "deploy", "build_status", "validate_syntax", "patch_file",
+                  "multi_patch", "gh_search_replace", "railway_logs", "replace_fn",
+                  "smart_patch", "register_tool", "rollback", "verify_before_deploy"],
+    "code":      ["read_file", "write_file", "gh_read", "search_in_file", "core_py",
+                  "append_to_file", "diff", "gh_read_lines"],
+    "training":  ["cold_processor", "training_pipeline", "evolution", "reflection",
+                  "backfill", "synthesize", "trigger_cold"],
+    "system":    ["get_state", "health", "stats", "crash", "system_map",
+                  "sync_system", "session_start", "session_end", "checkpoint",
+                  "tool_health", "load_arch"],
+    "railway":   ["railway_env", "railway_service", "railway_logs"],
+    "knowledge": ["search_kb", "add_knowledge", "kb_update", "get_mistakes",
+                  "search_mistakes", "ask", "add_evolution_rule"],
+    "task":      ["task_add", "task_update", "task_health", "sb_query",
+                  "sb_insert", "sb_patch", "sb_upsert", "sb_delete"],
+    "telegram":  ["notify_owner", "notify"],
+    "crypto":    ["crypto_price", "crypto_balance", "crypto_trade"],
+    "project":   ["project_list", "project_get", "project_search", "project_register",
+                  "project_update", "project_index", "project_prepare", "project_consume"],
+    "web":       ["web_search", "web_fetch", "summarize_url"],
+    "document":  ["create_document", "create_spreadsheet", "create_presentation",
+                  "read_document", "convert_document", "read_pdf", "read_image"],
+    "agentic":   ["reason_chain", "lookahead", "decompose", "negative_space",
+                  "predict_failure", "action_gate", "loop_detect", "goal_check",
+                  "circuit_breaker", "mid_task", "assert_source"],
+}
+
+_CAP_DESCRIPTIONS = {
+    "deploy":    "GitHub push -> Railway redeploy -> health verify pipeline",
+    "code":      "Read/write/patch Python source files via GitHub Blobs API",
+    "training":  "Cold processor + pattern extraction + evolution queue management",
+    "knowledge": "KB search, add, update, dedup via search_kb and kb_update",
+    "task":      "Task queue CRUD: add, update status, priority management",
+    "telegram":  "Async owner notifications via Telegram bot",
+    "system":    "Session bootstrap, system_map sync, tool health scan",
+    "project":   "Project KB management, context prep, document extraction",
+    "crypto":    "Binance price monitoring, balance queries, trade execution",
+    "web":       "web_search, web_fetch, summarize_url via DDG/Bing scraping",
+    "document":  "Document creation, reading, format conversion",
+    "railway":   "Railway env vars, service info, live log fetching",
+    "agentic":   "Causal reasoning, task decomposition, loop detection, self-correction",
+}
+
+
 
 # ── TASK-4: Binance Price Monitor config ──────────────────────────────────────
 _PRICE_MONITOR_SYMBOLS  = os.getenv("BINANCE_WATCH_SYMBOLS", "BTCUSDT,ETHUSDT,BNBUSDT").split(",")
@@ -675,6 +750,107 @@ def _run_causal_quality_analysis():
         print(f"[COLD][CAUSAL] error (non-fatal): {e}")
 
 
+def _auto_evolve_behavioral_rule(pattern_key: str, domain: str, confidence: float, frequency: int) -> bool:
+    """P2-02: Auto-insert or update a behavioral rule when a pattern crosses the threshold.
+    Called from run_cold_processor() when frequency >= 10 AND confidence >= 0.85.
+    - If no rule exists for this trigger+domain: insert with source=cold_processor, tested=false
+    - If rule exists with lower confidence: update confidence, reset tested=false
+    - Notifies owner in both cases.
+    Returns True if a rule was inserted or updated.
+    """
+    try:
+        # Map CORE domain names to valid behavioral_rules domain enum
+        VALID_DOMAINS = {
+            "auth", "code", "failure_recovery", "github", "groq", "local_pc",
+            "postgres", "powershell", "project", "railway", "reasoning",
+            "supabase", "telegram", "universal", "zapier",
+        }
+        _DOMAIN_MAP = {
+            "db": "postgres", "code": "code", "bot": "telegram",
+            "mcp": "reasoning", "training": "reasoning", "kb": "reasoning",
+            "core_agi": "reasoning", "core_agi.patching": "code",
+            "core_agi.deploy": "railway", "core_agi.session": "reasoning",
+            "core_agi.architecture": "reasoning", "rarl": "reasoning",
+        }
+        br_domain = _DOMAIN_MAP.get(domain, domain if domain in VALID_DOMAINS else "universal")
+
+        # Derive a trigger from the pattern content
+        pattern_lower = pattern_key.lower()
+        if any(k in pattern_lower for k in ["deploy", "redeploy", "railway", "build"]):
+            trigger = "before_deploy"
+        elif any(k in pattern_lower for k in ["patch", "edit", "old_str", "new_str", "write"]):
+            trigger = "before_code"
+        elif any(k in pattern_lower for k in ["supabase", "sb_", "query", "insert", "table"]):
+            trigger = "before_supabase_write"
+        elif any(k in pattern_lower for k in ["verify", "check", "confirm", "validate"]):
+            trigger = "before_any_act"
+        elif any(k in pattern_lower for k in ["session", "close", "end"]):
+            trigger = "session_close"
+        elif any(k in pattern_lower for k in ["error", "fail", "broken", "fix"]):
+            trigger = "on_failure"
+        else:
+            trigger = "during_action"
+
+        pointer_slug = pattern_key[:80]
+
+        # Check if rule already exists for this trigger+domain
+        existing = sb_get(
+            "behavioral_rules",
+            f"select=id,confidence,active&active=eq.true&trigger=eq.{trigger}&domain=eq.{br_domain}&limit=5",
+            svc=True,
+        ) or []
+
+        for ex in existing:
+            ex_id   = ex.get("id")
+            ex_conf = float(ex.get("confidence") or 0)
+            if ex_conf < confidence:
+                # Update to higher confidence + reset tested flag
+                sb_patch("behavioral_rules", f"id=eq.{ex_id}", {
+                    "confidence": round(confidence, 3),
+                    "tested":     False,
+                    "source":     "cold_processor",
+                })
+                notify(
+                    f"[P2-02] Behavioral rule updated\n"
+                    f"Domain: {br_domain} | Trigger: {trigger}\n"
+                    f"Pattern ({frequency}x): {pattern_key[:120]}\n"
+                    f"Confidence: {ex_conf:.2f} → {confidence:.2f}"
+                )
+                print(f"[P2-02] Rule updated id={ex_id} conf {ex_conf:.2f}->{confidence:.2f}: {pattern_key[:60]}")
+                return True
+            else:
+                print(f"[P2-02] Skipped: rule exists with conf={ex_conf:.2f}: {pattern_key[:60]}")
+                return False
+
+        # No existing rule — insert new
+        ok = sb_post("behavioral_rules", {
+            "trigger":    trigger,
+            "pointer":    pointer_slug,
+            "full_rule":  (
+                f"Auto-evolved from {frequency} occurrences (confidence={confidence:.2f})."
+                f" Pattern: {pattern_key[:400]}. Domain: {domain}. Source: cold_processor."
+            ),
+            "domain":     br_domain,
+            "priority":   3,
+            "active":     True,
+            "tested":     False,
+            "source":     "cold_processor",
+            "confidence": round(confidence, 3),
+        })
+        if ok:
+            notify(
+                f"[P2-02] New behavioral rule auto-evolved\n"
+                f"Domain: {br_domain} | Trigger: {trigger}\n"
+                f"Pattern ({frequency}x, conf={confidence:.2f}): {pattern_key[:120]}\n"
+                f"Status: active=true, tested=false — review in next session"
+            )
+            print(f"[P2-02] New rule inserted: [{br_domain}/{trigger}] {pattern_key[:60]}")
+        return bool(ok)
+    except Exception as e:
+        print(f"[P2-02] _auto_evolve_behavioral_rule error (non-fatal): {e}")
+        return False
+
+
 def run_cold_processor():
     try:
         hots = sb_get("hot_reflections",
@@ -769,6 +945,8 @@ def run_cold_processor():
                         print(f"[COLD] Skipped duplicate evo (pending): {key[:80]}")
                     continue
 
+                # P2-01: Assign approval tier at queue time
+                _tier = _assign_approval_tier(final_conf, "knowledge", src_key)
                 ok = sb_post_critical("evolution_queue", {
                     "change_type":    "knowledge",
                     "change_summary": kb_content[:500],
@@ -778,13 +956,16 @@ def run_cold_processor():
                     "source":         src_key,
                     "impact":         domain,
                     "recommendation": f"Pattern appears {total_freq}x (src={src_key}). KB content Groq-generated.",
+                    "approval_tier":  _tier,
                 })
                 if ok:
                     evolutions_queued += 1
                     sb_upsert("pattern_frequency",
                               {"pattern_key": key, "auto_applied": True},
                               on_conflict="pattern_key")
-                    if final_conf >= 0.65 and src_key == "real":
+                    # P2-01: Tier-aware auto-apply — 'auto' tier applied immediately
+                    _safety = os.getenv("EVOLUTION_AUTO_TIER", "").strip().lower()
+                    if _tier == "auto" and _safety not in ("notify_only", "disabled"):
                         new_evo = sb_get("evolution_queue",
                             f"select=id&pattern_key=eq.{key[:100]}&status=eq.pending&order=id.desc&limit=1",
                             svc=True)
@@ -792,11 +973,43 @@ def run_cold_processor():
                             result = apply_evolution(new_evo[0]["id"])
                             if result.get("ok"):
                                 auto_applied_count += 1
-                                print(f"[COLD] Auto-applied evolution #{new_evo[0]['id']}: {key[:80]}")
+                                sb_patch("evolution_queue", f"id=eq.{new_evo[0]['id']}",
+                                         {"tier_applied_at": datetime.utcnow().isoformat()})
+                                print(f"[COLD] Auto-tier applied #{new_evo[0]['id']}: {key[:80]}")
+                    elif _tier == "notify" and final_conf >= 0.65 and src_key == "real" and _safety not in ("notify_only", "disabled"):
+                        # Legacy backward-compat: high-confidence notify-tier still auto-applies in cold processor
+                        new_evo = sb_get("evolution_queue",
+                            f"select=id&pattern_key=eq.{key[:100]}&status=eq.pending&order=id.desc&limit=1",
+                            svc=True)
+                        if new_evo:
+                            result = apply_evolution(new_evo[0]["id"])
+                            if result.get("ok"):
+                                auto_applied_count += 1
+                                print(f"[COLD] notify-tier (legacy compat) applied #{new_evo[0]['id']}: {key[:80]}")
+
+        # P2-02: Auto-evolve behavioral rules for high-frequency, high-confidence patterns
+        for key, total_freq in batch_counts.items():
+            if total_freq >= 10:
+                src_set  = batch_sources.get(key, {"real"})
+                src_key  = "both" if len(src_set) > 1 else next(iter(src_set))
+                src_mult = _SRC_CONF.get(src_key, 1.0)
+                base_conf = min(0.5 + total_freq * 0.05, 0.95)
+                final_conf = round(base_conf * src_mult, 3)
+                domain = batch_domain.get(key, "general")
+                if final_conf >= 0.85:
+                    _auto_evolve_behavioral_rule(key, domain, final_conf, total_freq)
 
         gaps_inserted = _reconcile_gaps(hots)
         evolutions_queued += gaps_inserted
         _backfill_patterns(batch_size=10)
+
+        # P3-02: Extract owner profile signals from this cold processor batch
+        try:
+            profile_inserted = _extract_owner_profile_signals(hots)
+            if profile_inserted:
+                print(f"[COLD][P3-02] {profile_inserted} owner profile entries updated")
+        except Exception as _p302e:
+            print(f"[COLD][P3-02] profile extraction error (non-fatal): {_p302e}")
 
         groq_summary = _groq_synthesize_cold(hots, batch_counts, batch_domain)
         counter_suffix = f" | hots={len(hots)} patterns={len(batch_counts)} evos={evolutions_queued}"
@@ -823,6 +1036,31 @@ def run_cold_processor():
                     _run_causal_quality_analysis()
         except Exception:
             pass
+
+        # P2-06: Record pattern outcomes for auto-applied patterns so we can track quality impact
+        try:
+            current_q = None
+            if hots:
+                qs = [float(h.get("quality_score") or 0) for h in hots if h.get("quality_score")]
+                current_q = round(sum(qs) / len(qs), 3) if qs else None
+            if current_q is not None and auto_applied_count > 0:
+                # Fetch the patterns that were just auto-applied (last auto_applied_count pattern entries)
+                for key, batch_count in list(batch_counts.items())[:auto_applied_count]:
+                    domain = batch_domain.get(key, "general")
+                    try:
+                        sb_post("pattern_outcome", {
+                            "pattern_key":    key[:400],
+                            "domain":         domain,
+                            "quality_before": current_q,
+                            "quality_after":  None,  # filled in by session_end hook
+                            "applied_at":     datetime.utcnow().isoformat(),
+                            "outcome":        "pending",  # updated when next session ends
+                        })
+                    except Exception:
+                        pass  # table may not exist yet -- non-fatal
+                print(f"[COLD] P2-06: recorded {auto_applied_count} pattern outcome baseline(s) (q_before={current_q})")
+        except Exception as _p26e:
+            print(f"[COLD] P2-06 outcome recording error (non-fatal): {_p26e}")
 
         print(f"[COLD] Done: processed={len(hots)} patterns={len(batch_counts)} evolutions={evolutions_queued} auto_applied={auto_applied_count}")
         return {"ok": True, "processed": len(hots), "patterns_found": len(batch_counts), "evolutions_queued": evolutions_queued, "auto_applied": auto_applied_count}
@@ -922,9 +1160,32 @@ def apply_evolution(evolution_id: int):
 
         elif change_type == "behavior":
             if not diff_content: return {"ok": False, "error": "behavior evolution requires diff_content"}
-            applied = gh_write("BEHAVIOR_UPDATES.md", diff_content,
-                               f"Behavior evolution #{evolution_id}: {change_summary[:60]}")
-            note = "Written to BEHAVIOR_UPDATES.md"
+            # P2-02: Write to behavioral_rules table (primary) + BEHAVIOR_UPDATES.md (archive)
+            try:
+                meta = json.loads(diff_content) if diff_content else {}
+            except Exception:
+                meta = {}
+            br_trigger = meta.get("trigger", "during_action")
+            br_domain  = meta.get("domain", evo.get("impact", "universal"))
+            br_pointer = meta.get("pointer", change_summary[:80])
+            br_rule    = meta.get("full_rule", change_summary)
+            br_conf    = float(evo.get("confidence") or 0.7)
+            br_ok = sb_post("behavioral_rules", {
+                "trigger":    br_trigger,
+                "pointer":    br_pointer,
+                "full_rule":  br_rule,
+                "domain":     br_domain,
+                "priority":   3,
+                "active":     True,
+                "tested":     False,
+                "source":     "evolution_queue",
+                "confidence": round(br_conf, 3),
+            })
+            # Also archive to GitHub for audit trail
+            gh_write("BEHAVIOR_UPDATES.md", diff_content,
+                     f"Behavior evolution #{evolution_id}: {change_summary[:60]}")
+            applied = br_ok
+            note = f"Behavioral rule inserted to behavioral_rules (domain={br_domain}, trigger={br_trigger}) + archived to BEHAVIOR_UPDATES.md"
 
         elif change_type == "backlog":
             reject_evolution(evolution_id, reason="backlog change_type retired — owner decides backlog", silent=True)
@@ -1139,6 +1400,16 @@ def cold_processor_loop():
                     _last_capability_report_run = time.time()
             except Exception as _cape:
                 print(f"[CAP] trigger error: {_cape}")
+            # P3-07: Weekly capability calibration on Thursday (weekday=3)
+            try:
+                global _last_capability_calibration_run
+                now_utc = datetime.utcnow()
+                time_since_cal = time.time() - _last_capability_calibration_run
+                if (now_utc.weekday() == 3 and
+                        time_since_cal >= _CAPABILITY_CALIBRATION_INTERVAL):
+                    _run_capability_calibration()
+            except Exception as _cale:
+                print(f"[CAP_CAL] trigger error: {_cale}")
             # GAP-DATA-01: Weekly backup check -- runs if last backup > 6 days ago
             try:
                 _BACKUP_INTERVAL = 6 * 24 * 3600  # 6 days in seconds
@@ -1487,9 +1758,16 @@ def _run_rarl_epoch() -> bool:
     except Exception:
         kb_total = 0
     try:
+        # P1-05: fetch richer mistake context — severity + root_cause, high/critical first
         recent_mistakes = sb_get(
-            "mistakes", "select=domain,what_failed&order=id.desc&limit=10&id=gt.1", svc=True
+            "mistakes",
+            "select=domain,what_failed,severity,root_cause&order=severity.desc,id.desc&limit=15&id=gt.1",
+            svc=True
         ) or []
+        # Prioritise high/critical — put them first in failure_block
+        _high = [m for m in recent_mistakes if m.get("severity") in ("high", "critical")]
+        _other = [m for m in recent_mistakes if m.get("severity") not in ("high", "critical")]
+        recent_mistakes = _high + _other
     except Exception:
         recent_mistakes = []
     try:
@@ -1533,8 +1811,11 @@ def _run_rarl_epoch() -> bool:
         research_goal, research_domain = _RARL_GOALS[(epoch_number - 1) % len(_RARL_GOALS)]
 
     ds_before = champion["discovery_score"] if champion else 0.0
+    # P1-05: include severity and root_cause so RARL epochs are grounded in real failures
     failure_block = "\n".join(
-        f"  - [{r.get('domain','?')}] {r.get('what_failed','')[:100]}" for r in recent_mistakes
+        f"  - [{r.get('domain','?')}][{r.get('severity','?'):<8}] {r.get('what_failed','')[:80]}"
+        + (f" | root: {r.get('root_cause','')[:60]}" if r.get("root_cause") else "")
+        for r in recent_mistakes[:10]
     ) or "  None recorded yet."
     kb_block = "\n".join(
         f"  - {r.get('topic','')[:100]}" for r in recent_kb
@@ -1555,6 +1836,7 @@ def _run_rarl_epoch() -> bool:
     )
     _json_schema = (
         '{"research_goal":"<one sentence confirming goal>",'
+        '"rarl_benchmark_task":"<name one SPECIFIC real CORE failure from the mistakes list above that this architecture would prevent — be exact>",'
         '"hypothesis":"<2-4 sentence architectural hypothesis>",'
         '"core_mechanism":"<4-6 sentence technical description>",'
         '"pseudocode":"<15-25 lines Python style>",'
@@ -1586,7 +1868,7 @@ def _run_rarl_epoch() -> bool:
         f"DOMAIN: {research_domain}\n\n"
         f"LIVE STATE:\n"
         f"  KB entries: {kb_total}\n"
-        f"  Recent mistakes:\n{failure_block}\n"
+        f"  Recent mistakes (ground your rarl_benchmark_task in one of these):\n{failure_block}\n"
         f"  RARL KB (do not repeat):\n{kb_block}\n"
         f"  {champion_block}\n\n"
         f"Discovery Score: DS = (benchmark+transfer+stability+sample_efficiency+reasoning_depth)"
@@ -1729,6 +2011,16 @@ def _run_rarl_epoch() -> bool:
 
     # Step 12: significant discovery -> evolution_queue + Telegram
     ds_improvement = ds - ds_before
+    # P1-05: Cap confidence if insight_for_core is vague (no specific file/table mentioned)
+    _SPECIFIC_MARKERS = ["core_tools.py", "core_train.py", "core_main.py",
+                         "behavioral_rules", "knowledge_base", "supabase",
+                         "schema", "table", "function", "def ", "tool"]
+    _insight_is_specific = any(m in (insight_for_core or "").lower() for m in _SPECIFIC_MARKERS)
+    _rarl_benchmark_task = parsed.get("rarl_benchmark_task", "")
+    _benchmark_is_grounded = bool(_rarl_benchmark_task and len(_rarl_benchmark_task) > 10)
+    if not _insight_is_specific or not _benchmark_is_grounded:
+        quality = min(quality, 0.3)  # Cap quality for vague/ungrounded epochs
+        print(f"[RARL] Epoch {epoch_number} quality capped at 0.3 — insight_specific={_insight_is_specific} benchmark_grounded={_benchmark_is_grounded}")
     if beats_champion and ds_improvement > 0.3:
         try:
             sb_post("evolution_queue", {
@@ -1753,6 +2045,63 @@ def _run_rarl_epoch() -> bool:
             )
         except Exception as e:
             print(f"[RARL] evolution_queue error (non-fatal): {e}")
+
+    # Step 13: P2-07 — insight_for_core -> task_queue (research-to-implementation pipeline)
+    # Only queue if insight is specific (already validated above) and not a duplicate
+    if insight_for_core and _insight_is_specific and len(insight_for_core) > 20:
+        try:
+            task_title = f"[RARL] {insight_for_core[:120]}"
+            # Dedup: skip if identical title already pending/in_progress
+            existing_tasks = sb_get(
+                "task_queue",
+                "select=id&status=in.(pending,in_progress)&limit=100",
+                svc=True,
+            ) or []
+            already_exists = False
+            for row in existing_tasks:
+                try:
+                    t = json.loads(row.get("task") or "{}")
+                    if t.get("title", "").strip().lower() == task_title.strip().lower():
+                        already_exists = True
+                        break
+                except Exception:
+                    pass
+            if not already_exists:
+                task_payload = json.dumps({
+                    "title": task_title,
+                    "description": (
+                        f"RARL Epoch {epoch_number} [{research_domain}] | "
+                        f"Arch: {arch_id} | DS: {ds:.3f} | "
+                        f"Full insight: {insight_for_core}"
+                    ),
+                    "source": "rarl",
+                    "epoch": epoch_number,
+                    "arch_id": arch_id,
+                    "discovery_score": ds,
+                })
+                task_ok = sb_post("task_queue", {
+                    "task":     task_payload,
+                    "status":   "pending",
+                    "priority": 3,  # lower priority than owner tasks
+                    "source":   "self_assigned",
+                })
+                # Store implementation_task_id back in rarl_architectures
+                if task_ok:
+                    try:
+                        new_task = sb_get(
+                            "task_queue",
+                            "select=id&source=eq.self_assigned&status=eq.pending"
+                            "&order=created_at.desc&limit=1",
+                            svc=True,
+                        ) or []
+                        if new_task:
+                            sb_patch("rarl_architectures", f"arch_id=eq.{arch_id}",
+                                     {"implementation_task_id": str(new_task[0]["id"])})
+                    except Exception:
+                        pass
+                    print(f"[RARL] P2-07: task queued for epoch {epoch_number}: {insight_for_core[:80]}")
+        except Exception as e:
+            print(f"[RARL] P2-07 task_add error (non-fatal): {e}")
 
     print(f"[RARL] Epoch {epoch_number} done. DS={ds:.3f} role={role} ok={ok} t={duration}s")
     return ok
@@ -1947,6 +2296,98 @@ def _groq_cluster_patterns(batch_counts: "Counter", batch_domain: dict, batch_so
         return batch_counts, batch_domain, batch_sources
 
 
+# ── P2-01: Evolution Tier Processor (background job) ─────────────────────────
+
+_EVOLUTION_TIER_CHECK_INTERVAL = 21600  # 6 hours
+
+
+def evolution_tier_processor():
+    """P2-01: Background job that applies tiered evolutions autonomously.
+
+    Runs every 6 hours.
+    - 'notify' tier:     applied after 24h if not rejected by owner
+    - 'auto' tier (net): safety-net catch for any auto-tier missed at queue time
+
+    Safety valve: set env var EVOLUTION_AUTO_TIER=notify_only or =disabled to reduce autonomy.
+      notify_only: demotes auto->notify (still applies after 24h, not immediately)
+      disabled:    pauses all autonomous application entirely
+    """
+    print("[TIER] Evolution tier processor started")
+    while True:
+        try:
+            safety = os.getenv("EVOLUTION_AUTO_TIER", "").strip().lower()
+            if safety == "disabled":
+                print("[TIER] EVOLUTION_AUTO_TIER=disabled -- tier processing paused")
+                time.sleep(_EVOLUTION_TIER_CHECK_INTERVAL)
+                continue
+
+            cutoff_24h = (datetime.utcnow() - timedelta(hours=24)).isoformat()
+            notify_applied = 0
+            auto_applied = 0
+
+            # 1. Apply 'notify' tier evolutions older than 24h, not owner-rejected
+            notify_rows = sb_get(
+                "evolution_queue",
+                f"select=id,change_summary,confidence,pattern_key,impact"
+                f"&status=eq.pending"
+                f"&approval_tier=eq.notify"
+                f"&rejected_by_owner=eq.false"
+                f"&created_at=lt.{cutoff_24h}"
+                f"&order=confidence.desc&limit=20",
+                svc=True,
+            ) or []
+
+            for evo in notify_rows:
+                try:
+                    result = apply_evolution(evo["id"])
+                    if result.get("ok"):
+                        notify_applied += 1
+                        sb_patch("evolution_queue", f"id=eq.{evo['id']}",
+                                 {"tier_applied_at": datetime.utcnow().isoformat()})
+                        print(f"[TIER] notify-tier applied #{evo['id']}: {evo.get('change_summary','')[:80]}")
+                    time.sleep(1)
+                except Exception as _te:
+                    print(f"[TIER] notify-tier error #{evo['id']}: {_te}")
+
+            # 2. Safety-net: apply any 'auto' tier still pending (missed at cold processor time)
+            if safety != "notify_only":
+                auto_rows = sb_get(
+                    "evolution_queue",
+                    "select=id,change_summary,confidence,pattern_key"
+                    "&status=eq.pending"
+                    "&approval_tier=eq.auto"
+                    "&rejected_by_owner=eq.false"
+                    "&order=confidence.desc&limit=10",
+                    svc=True,
+                ) or []
+
+                for evo in auto_rows:
+                    try:
+                        result = apply_evolution(evo["id"])
+                        if result.get("ok"):
+                            auto_applied += 1
+                            sb_patch("evolution_queue", f"id=eq.{evo['id']}",
+                                     {"tier_applied_at": datetime.utcnow().isoformat()})
+                            print(f"[TIER] auto-tier safety-net applied #{evo['id']}: {evo.get('change_summary','')[:80]}")
+                        time.sleep(1)
+                    except Exception as _te:
+                        print(f"[TIER] auto-tier error #{evo['id']}: {_te}")
+
+            total = notify_applied + auto_applied
+            if total > 0:
+                notify(
+                    f"[TIER PROCESSOR] Applied {total} evolution(s) autonomously\n"
+                    f"  notify-tier: {notify_applied} | auto-tier safety-net: {auto_applied}\n"
+                    f"Safety valve: EVOLUTION_AUTO_TIER=notify_only or =disabled"
+                )
+            print(f"[TIER] Cycle done: notify_applied={notify_applied} auto_applied={auto_applied}")
+
+        except Exception as e:
+            print(f"[TIER] loop error: {e}")
+
+        time.sleep(_EVOLUTION_TIER_CHECK_INTERVAL)
+
+
 # -- Listen Mode ---------------------------------------------------------------
 def listen_stream():
     import time as _time
@@ -2055,6 +2496,234 @@ def _fetch_price(symbol: str):
     except Exception as e:
         print(f"[PRICE] fetch error {symbol}: {e}")
         return None
+
+
+# =============================================================================
+# P3-07: CAPABILITY CALIBRATION JOB
+# =============================================================================
+
+def _cap_notes_from_tools(weak_tools: list, avg_fail_rate: float) -> str:
+    """Generate human-readable calibration notes."""
+    if not weak_tools and avg_fail_rate < 0.05:
+        return "Highly reliable -- all tools passing consistently."
+    parts = []
+    if avg_fail_rate >= 0.20:
+        parts.append(f"High avg fail rate ({avg_fail_rate:.0%}) -- domain needs attention.")
+    elif avg_fail_rate >= 0.10:
+        parts.append(f"Moderate fail rate ({avg_fail_rate:.0%}).")
+    if weak_tools:
+        parts.append(f"Weak tools: {', '.join(weak_tools[:5])}.")
+    return " ".join(parts) or "Calibrated from tool_stats."
+
+
+def _run_capability_calibration():
+    """P3-07: Calibrate CORE self-model from tool_stats. Runs weekly (Thursday).
+    For each domain: compute reliability from tool_stats, update capability_model.
+    Notifies owner of domains below 0.60 reliability threshold.
+    """
+    global _last_capability_calibration_run
+    print("[CAP_CAL] Starting capability calibration...")
+    try:
+        cutoff = (datetime.utcnow() - timedelta(days=30)).isoformat()
+        stats_rows = sb_get(
+            "tool_stats",
+            f"select=tool_name,call_count,success_count,fail_count,fail_rate"
+            f"&date=gte.{cutoff[:10]}&order=tool_name.asc",
+            svc=True,
+        ) or []
+        tool_agg: dict = {}
+        for row in stats_rows:
+            name = row.get("tool_name", "")
+            if not name:
+                continue
+            if name not in tool_agg:
+                tool_agg[name] = {"calls": 0, "failures": 0}
+            tool_agg[name]["calls"]    += int(row.get("call_count") or 0)
+            tool_agg[name]["failures"] += int(row.get("fail_count") or 0)
+        for name, d in tool_agg.items():
+            d["fail_rate"] = round(d["failures"] / d["calls"], 3) if d["calls"] > 0 else 0.0
+
+        def _tool_domain_local(tool_name: str) -> str:
+            for domain, keywords in _CAP_DOMAIN_MAP.items():
+                if any(kw in tool_name for kw in keywords):
+                    return domain
+            return "misc"
+
+        domain_tools: dict = {}
+        for tool_name, stat in tool_agg.items():
+            domain = _tool_domain_local(tool_name)
+            if domain == "misc":
+                continue
+            domain_tools.setdefault(domain, []).append({"tool": tool_name, **stat})
+
+        updated = []
+        weak_domains = []
+        for domain, tools in domain_tools.items():
+            if not tools:
+                continue
+            total_calls    = sum(t["calls"] for t in tools)
+            total_failures = sum(t["failures"] for t in tools)
+            avg_fail_rate  = round(total_failures / total_calls, 3) if total_calls > 0 else 0.0
+            reliability    = round(1.0 - avg_fail_rate, 3)
+            strong = [t["tool"] for t in tools if t["fail_rate"] < 0.10 and t["calls"] >= 3]
+            weak   = [t["tool"] for t in tools if t["fail_rate"] > 0.20]
+            notes  = _cap_notes_from_tools(weak, avg_fail_rate)
+            try:
+                existing = sb_get(
+                    "capability_model",
+                    f"select=id&domain=eq.{domain}&limit=1",
+                    svc=True,
+                ) or []
+                update_data = {
+                    "reliability":     reliability,
+                    "tool_count":      len(tools),
+                    "avg_fail_rate":   avg_fail_rate,
+                    "strong_tools":    json.dumps(strong[:10]),
+                    "weak_tools":      json.dumps(weak[:10]),
+                    "last_calibrated": datetime.utcnow().isoformat(),
+                    "notes":           notes,
+                }
+                if existing:
+                    sb_patch("capability_model", f"id=eq.{existing[0]['id']}", update_data)
+                else:
+                    sb_post("capability_model", {
+                        "domain":      domain,
+                        "capability":  _CAP_DESCRIPTIONS.get(domain, f"Tools in {domain} category"),
+                        **update_data,
+                        "created_at":  datetime.utcnow().isoformat(),
+                    })
+                updated.append(f"{domain}={reliability:.2f}")
+                if reliability < 0.60:
+                    weak_domains.append(f"{domain}({reliability:.2f})")
+                print(f"[CAP_CAL] {domain}: reliability={reliability:.3f} tools={len(tools)} weak={weak[:3]}")
+            except Exception as _ue:
+                print(f"[CAP_CAL] update error domain={domain}: {_ue}")
+
+        _last_capability_calibration_run = time.time()
+        if weak_domains:
+            notify(
+                f"[CAP_CAL] Weekly calibration done. {len(updated)} domains updated.\n"
+                f"Weak domains (< 0.60): {', '.join(weak_domains)}\n"
+                f"Use tool_health_scan + tool_improve to address."
+            )
+        else:
+            notify(f"[CAP_CAL] Weekly calibration done. {len(updated)} domains. All above 0.60.")
+        print(f"[CAP_CAL] Done. {len(updated)} domains calibrated. Weak: {weak_domains}")
+        return {"ok": True, "updated": len(updated), "weak_domains": weak_domains}
+    except Exception as e:
+        print(f"[CAP_CAL] error: {e}")
+        return {"ok": False, "error": str(e)}
+
+
+# =============================================================================
+# P3-02: OWNER PROFILE EXTRACTION (called from cold processor)
+# =============================================================================
+
+def _extract_owner_profile_signals(hots: list) -> int:
+    """P3-02: Extract Vux behavioral signals from hot_reflections.
+    Writes to owner_profile table. Returns count inserted/reinforced.
+    """
+    if not hots:
+        return 0
+    try:
+        session_summaries = "\n".join(
+            f"  [{h.get('domain', '?')}][q={h.get('quality_score', '?')}] "
+            f"{(h.get('task_summary') or '')[:150]}"
+            for h in hots[:15]
+        )
+        try:
+            existing = sb_get(
+                "owner_profile",
+                "select=dimension,value&active=eq.true&order=confidence.desc&limit=30",
+                svc=True,
+            ) or []
+            existing_vals = {(r["dimension"], r["value"][:50].lower()) for r in existing}
+        except Exception:
+            existing_vals = set()
+
+        system_p = (
+            "You are CORE's owner behavior analyst. Analyze recent session data to extract "
+            "structural observations about how the owner (Vux) works and communicates. "
+            "Focus on BEHAVIORAL patterns, not task content. "
+            'Output ONLY valid JSON: {"observations": [{"dimension": "...", "value": "...", '
+            '"confidence": 0.0-1.0, "domain": "universal|project|training|deploy|..."}]} '
+            "dimension must be one of: communication_style | decision_pattern | "
+            "working_habit | preference | trigger | frustration | recurring_concern "
+            "Confidence: 0.9+ = repeated clear evidence, 0.7-0.9 = probable, <0.7 = tentative. "
+            "Max 5 observations. Only output genuinely new signals not already known. "
+            "Output ONLY valid JSON, no preamble."
+        )
+        user_p = (
+            f"Recent {len(hots)} session summaries:\n{session_summaries}\n\n"
+            f"Already known patterns ({len(existing_vals)} entries):\n"
+            + "\n".join(f"  [{dim}] {val[:80]}" for dim, val in list(existing_vals)[:10])
+            + "\n\nWhat NEW behavioral signals about the owner can you infer?"
+        )
+
+        raw = gemini_chat(system=system_p, user=user_p, max_tokens=600, json_mode=True)
+        parsed = json.loads(raw.strip())
+        observations = parsed.get("observations", [])
+        if not isinstance(observations, list):
+            return 0
+
+        VALID_DIMS = {
+            "communication_style", "decision_pattern", "recurring_concern",
+            "working_habit", "preference", "trigger", "frustration",
+        }
+        inserted = 0
+        for obs in observations[:5]:
+            dim    = obs.get("dimension", "")
+            val    = (obs.get("value") or "").strip()
+            conf   = float(obs.get("confidence") or 0.5)
+            domain = obs.get("domain", "universal")
+            if not dim or not val or dim not in VALID_DIMS or len(val) < 10:
+                continue
+            val_key = (dim, val[:50].lower())
+            if val_key in existing_vals:
+                continue
+            try:
+                ok = sb_post("owner_profile", {
+                    "dimension":      dim,
+                    "value":          val[:1000],
+                    "confidence":     round(conf, 3),
+                    "evidence":       f"cold_processor:{datetime.utcnow().strftime('%Y-%m-%d')}",
+                    "domain":         domain,
+                    "source":         "cold_processor",
+                    "active":         True,
+                    "times_observed": 1,
+                    "last_seen":      datetime.utcnow().isoformat(),
+                    "created_at":     datetime.utcnow().isoformat(),
+                    "updated_at":     datetime.utcnow().isoformat(),
+                })
+                if ok:
+                    inserted += 1
+                    existing_vals.add(val_key)
+                    print(f"[P3-02] Profile inserted: [{dim}] {val[:80]}")
+            except Exception:
+                try:
+                    existing_row = sb_get(
+                        "owner_profile",
+                        f"select=id,confidence,times_observed&dimension=eq.{dim}&limit=1",
+                        svc=True,
+                    ) or []
+                    if existing_row:
+                        row = existing_row[0]
+                        sb_patch("owner_profile", f"id=eq.{row['id']}", {
+                            "confidence":     round(max(float(row.get("confidence") or 0), conf), 3),
+                            "times_observed": int(row.get("times_observed") or 1) + 1,
+                            "last_seen":      datetime.utcnow().isoformat(),
+                            "updated_at":     datetime.utcnow().isoformat(),
+                        })
+                        inserted += 1
+                except Exception:
+                    pass
+
+        print(f"[P3-02] Profile extraction: {len(observations)} proposed, {inserted} inserted/reinforced")
+        return inserted
+    except Exception as e:
+        print(f"[P3-02] _extract_owner_profile_signals error (non-fatal): {e}")
+        return 0
+
 
 
 def price_monitor_loop():
@@ -2461,3 +3130,162 @@ def _run_self_diagnosis():
         print(f"[DIAG] Done. {len(tasks_created)} self-assigned tasks created.")
     except Exception as e:
         print(f"[DIAG] notify error: {e}")
+
+
+# ── P2-04: Proactive Intelligence Surface ─────────────────────────────────────
+
+_PROACTIVE_INTERVAL = 7200       # 2 hours between surface checks
+_proactive_last_run: float = 0.0
+
+# Dedup: map alert_key -> last_sent_ts (in-memory, resets on redeploy — fine)
+_proactive_sent: dict = {}
+_PROACTIVE_DEDUP_TTL = 86400  # 24h — don't repeat same alert within a day
+
+
+def _proactive_should_send(key: str) -> bool:
+    last = _proactive_sent.get(key, 0)
+    return (time.time() - last) >= _PROACTIVE_DEDUP_TTL
+
+
+def _proactive_mark_sent(key: str):
+    _proactive_sent[key] = time.time()
+
+
+def _run_proactive_surface():
+    """P2-04: Check 5 conditions and notify owner if anything needs attention.
+    Conditions:
+      1. Quality drop: last 3 session quality scores avg < 0.70
+      2. Stale high-priority task: priority >= 7, pending > 48h
+      3. Pattern milestone: any pattern hits frequency 10 or 25
+      4. Evolution backlog: > 10 pending evolutions untouched > 48h
+      5. Broken tools: tool_health_scan finds new broken tools
+    All alerts are deduplicated (24h TTL). Non-blocking — never raises.
+    """
+    alerts = []
+
+    # 1. Quality drop alert
+    try:
+        recent_q = sb_get("hot_reflections",
+            "select=quality_score,created_at&source=eq.real&quality_score=not.is.null"
+            "&quality_score=lte.1.0&order=created_at.desc&limit=3",
+            svc=True) or []
+        if len(recent_q) >= 3:
+            avg = sum(float(r.get("quality_score", 0)) for r in recent_q) / 3
+            if avg < 0.70 and _proactive_should_send("quality_drop"):
+                alerts.append(
+                    f"⚠️ <b>Quality Drop</b>\n"
+                    f"Last 3 sessions avg quality: {avg:.2f} (threshold: 0.70)\n"
+                    f"Use check_evolutions or review recent mistakes."
+                )
+                _proactive_mark_sent("quality_drop")
+    except Exception as e:
+        print(f"[PROACTIVE] quality check error: {e}")
+
+    # 2. Stale high-priority task
+    try:
+        cutoff_48h = (datetime.utcnow() - timedelta(hours=48)).isoformat()
+        stale_tasks = sb_get("task_queue",
+            f"select=id,task,priority&status=eq.pending&priority=gte.7"
+            f"&created_at=lt.{cutoff_48h}&order=priority.desc&limit=3",
+            svc=True) or []
+        for row in stale_tasks:
+            tid = str(row.get("id", ""))
+            key = f"stale_task_{tid}"
+            if _proactive_should_send(key):
+                try:
+                    t = json.loads(row.get("task") or "{}")
+                    title = t.get("title", str(row.get("task", "?"))[:60])
+                except Exception:
+                    title = str(row.get("task", "?"))[:60]
+                pri = row.get("priority", "?")
+                alerts.append(
+                    f"📌 <b>Stale High-Priority Task (P{pri})</b>\n"
+                    f"Pending >48h: {title[:100]}\n"
+                    f"ID: {tid[:8]}"
+                )
+                _proactive_mark_sent(key)
+    except Exception as e:
+        print(f"[PROACTIVE] stale task check error: {e}")
+
+    # 3. Pattern milestone
+    try:
+        milestone_patterns = sb_get("pattern_frequency",
+            "select=pattern_key,frequency,domain&frequency=in.(10,25,50,100)"
+            "&stale=eq.false&order=frequency.desc&limit=5",
+            svc=True) or []
+        for row in milestone_patterns:
+            freq = row.get("frequency", 0)
+            key = f"pattern_milestone_{row.get('pattern_key','')[:80]}_{freq}"
+            if _proactive_should_send(key):
+                alerts.append(
+                    f"🔁 <b>Pattern Milestone: {freq}x</b>\n"
+                    f"[{row.get('domain','?')}] {row.get('pattern_key','')[:120]}\n"
+                    f"Consider applying as behavioral rule."
+                )
+                _proactive_mark_sent(key)
+    except Exception as e:
+        print(f"[PROACTIVE] pattern milestone check error: {e}")
+
+    # 4. Evolution backlog
+    try:
+        cutoff_48h = (datetime.utcnow() - timedelta(hours=48)).isoformat()
+        evo_count_rows = sb_get("evolution_queue",
+            f"select=id&status=eq.pending&created_at=lt.{cutoff_48h}",
+            svc=True) or []
+        evo_count = len(evo_count_rows)
+        if evo_count > 10 and _proactive_should_send("evo_backlog"):
+            alerts.append(
+                f"📥 <b>Evolution Backlog</b>\n"
+                f"{evo_count} pending evolutions untouched >48h.\n"
+                f"Use check_evolutions to review and act."
+            )
+            _proactive_mark_sent("evo_backlog")
+    except Exception as e:
+        print(f"[PROACTIVE] evolution backlog check error: {e}")
+
+    # 5. Broken tools (check tool_stats for new high fail-rate tools)
+    try:
+        from datetime import date as _date
+        today = _date.today().isoformat()
+        broken_today = sb_get("tool_stats",
+            f"select=tool_name,fail_rate&date=eq.{today}&fail_rate=gte.0.5",
+            svc=True) or []
+        for row in broken_today:
+            name = row.get("tool_name", "?")
+            key = f"broken_tool_{name}"
+            if _proactive_should_send(key):
+                alerts.append(
+                    f"🔴 <b>Broken Tool Detected</b>\n"
+                    f"{name}: fail_rate={row.get('fail_rate',0):.0%}\n"
+                    f"Use tool_improve(tool_name='{name}') to diagnose and fix."
+                )
+                _proactive_mark_sent(key)
+    except Exception as e:
+        print(f"[PROACTIVE] broken tool check error: {e}")
+
+    # Send combined alert if anything found
+    if alerts:
+        header = f"🧠 <b>CORE Proactive Alert</b> ({len(alerts)} item{'s' if len(alerts)>1 else ''})\n\n"
+        body = "\n\n".join(alerts)
+        try:
+            notify(header + body)
+            print(f"[PROACTIVE] Sent {len(alerts)} alert(s)")
+        except Exception as e:
+            print(f"[PROACTIVE] notify error: {e}")
+    else:
+        print(f"[PROACTIVE] No alerts — all systems nominal")
+
+
+def proactive_surface_loop():
+    """P2-04: Background thread — checks every 2h for proactive alerts."""
+    global _proactive_last_run
+    print("[PROACTIVE] Surface loop started")
+    # Stagger start by 10 min to avoid all loops hitting Supabase at once on boot
+    time.sleep(600)
+    while True:
+        try:
+            _run_proactive_surface()
+            _proactive_last_run = time.time()
+        except Exception as e:
+            print(f"[PROACTIVE] loop error: {e}")
+        time.sleep(_PROACTIVE_INTERVAL)

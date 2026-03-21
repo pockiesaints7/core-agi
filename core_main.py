@@ -32,7 +32,7 @@ from core_config import (
     _sbh, _sbh_count_svc, groq_chat,
 )
 from core_github import gh_read, gh_write, notify, set_webhook
-from core_train import cold_processor_loop, background_researcher
+from core_train import cold_processor_loop, background_researcher, evolution_tier_processor, proactive_surface_loop
 from core_tools import TOOLS, handle_jsonrpc
 from core_orchestrator import handle_telegram_message, start_orchestrator
 
@@ -972,6 +972,8 @@ def on_start():
     threading.Thread(target=cold_processor_loop, daemon=True).start()
     # self_sync_check disabled -- CORE_SELF.md is tombstoned, superseded by system_map
     threading.Thread(target=background_researcher, daemon=True).start()
+    threading.Thread(target=evolution_tier_processor, daemon=True).start()
+    threading.Thread(target=proactive_surface_loop,   daemon=True).start()  # P2-04
     start_orchestrator()
     counts = get_system_counts()
     resume = get_resume_task()
