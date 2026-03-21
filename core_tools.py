@@ -7054,44 +7054,64 @@ def t_circuit_breaker(failed_step: str = "", dependent_steps: str = "", failure_
 
 def t_loop_detect(action: str = "", context_hash: str = "", session_id: str = "default", clear: bool = False):
     """AGI-14/S6: Action loop detection within a session.
-    Maintains hash of actions taken. Returns loop_detected if same action+context attempted before.
+    Maintains hash of actions taken with timestamps. Returns loop_detected only if same
+    action+context was attempted within the last 60 seconds (TTL-based, not full session).
     clear=True resets the session action log."""
+    _LOOP_TTL_SECS = 60  # only flag as loop if repeated within this window
     if not action and not clear:
         return {"ok": False, "error": "action is required (or pass clear=True to reset)"}
     try:
         clear_bool = clear is True or str(clear).lower() in ("true", "1", "yes")
         # Build action fingerprint
         fingerprint = f"{action.lower().strip()}::{context_hash}"
+        now_ts = time.time()
         # Load existing action log from agentic_sessions
+        # Format: list of {"fp": fingerprint, "ts": timestamp}
         rows = sb_get("agentic_sessions", f"session_id=eq.{session_id}&select=action_log", svc=True)
         action_log = []
         row_exists = bool(rows)
         if rows and rows[0].get("action_log"):
-            action_log = json.loads(rows[0]["action_log"]) if isinstance(rows[0]["action_log"], str) else rows[0]["action_log"]
+            raw = rows[0]["action_log"]
+            parsed = json.loads(raw) if isinstance(raw, str) else raw
+            # Support both old format (list of strings) and new format (list of dicts)
+            for entry in parsed:
+                if isinstance(entry, dict):
+                    action_log.append(entry)
+                else:
+                    # Migrate old string format — assign old ts so it expires immediately
+                    action_log.append({"fp": entry, "ts": 0})
         if clear_bool:
             if row_exists:
-                # A.6: fix sb_patch arg order -- signature is (table, filter_str, data_dict)
                 sb_patch("agentic_sessions", f"session_id=eq.{session_id}", {"action_log": json.dumps([])})
             return {"ok": True, "cleared": True, "session_id": session_id}
-        # Check for loop
-        loop_detected = fingerprint in action_log
-        previous_attempt = action_log.count(fingerprint)
-        # Append to log
-        action_log.append(fingerprint)
+
+        # Evict expired entries (older than TTL)
+        action_log = [e for e in action_log if now_ts - e.get("ts", 0) < _LOOP_TTL_SECS]
+
+        # Check for loop — only within TTL window
+        recent_fps = [e["fp"] for e in action_log]
+        loop_detected = fingerprint in recent_fps
+        previous_attempt = recent_fps.count(fingerprint)
+
+        # Append new entry with timestamp
+        action_log.append({"fp": fingerprint, "ts": now_ts})
+        # Keep last 100 entries
+        action_log = action_log[-100:]
+
         if row_exists:
-            # A.6: fix sb_patch arg order
-            sb_patch("agentic_sessions", f"session_id=eq.{session_id}", {"action_log": json.dumps(action_log[-100:])})
+            sb_patch("agentic_sessions", f"session_id=eq.{session_id}", {"action_log": json.dumps(action_log)})
         else:
-            sb_post("agentic_sessions", {"session_id": session_id, "action_log": json.dumps(action_log[-100:]), "created_at": datetime.utcnow().isoformat()})
+            sb_post("agentic_sessions", {"session_id": session_id, "action_log": json.dumps(action_log), "created_at": datetime.utcnow().isoformat()})
         return {
             "ok": True,
             "action": action,
             "session_id": session_id,
             "loop_detected": loop_detected,
             "previous_attempts": previous_attempt,
+            "ttl_seconds": _LOOP_TTL_SECS,
             "total_actions_logged": len(action_log),
             "recommendation": "Change approach or surface to owner" if loop_detected else "No loop — proceed",
-            "instruction": "STOP — this exact action was already attempted this session" if loop_detected else "Safe to proceed"
+            "instruction": f"STOP — this exact action was attempted {previous_attempt}x in last {_LOOP_TTL_SECS}s" if loop_detected else "Safe to proceed"
         }
     except Exception as e:
         return {"ok": False, "error": str(e)}

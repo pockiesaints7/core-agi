@@ -204,6 +204,72 @@ _metrics: dict = {
 }
 _metrics_lock = threading.Lock()
 
+# ── FIX-2: Session scratchpad — value passing between tool calls ──────────────
+_scratchpad: dict = {}
+_scratchpad_lock = threading.Lock()
+
+def _scratchpad_set(cid: str, key: str, value: str):
+    with _scratchpad_lock:
+        if cid not in _scratchpad:
+            _scratchpad[cid] = {}
+        _scratchpad[cid][key] = value
+
+def _scratchpad_get(cid: str, key: str) -> str:
+    with _scratchpad_lock:
+        return _scratchpad.get(cid, {}).get(key, "")
+
+def _scratchpad_clear(cid: str):
+    with _scratchpad_lock:
+        _scratchpad.pop(cid, None)
+
+# ── FIX-3: Persistent metrics helpers ─────────────────────────────────────────
+_METRICS_PERSIST_INTERVAL = 300
+_metrics_last_flush = 0.0
+
+def _flush_metrics_to_db():
+    global _metrics_last_flush
+    try:
+        with _metrics_lock:
+            m = dict(_metrics)
+        for key, val in m.items():
+            if key == "loop_depths" or not isinstance(val, (int, float)):
+                continue
+            try:
+                from core_config import sb_upsert
+                sb_upsert("core_metrics", {
+                    "key": key, "value": int(val),
+                    "updated_at": datetime.utcnow().isoformat(),
+                }, on_conflict="key")
+            except Exception:
+                pass
+        _metrics_last_flush = time.time()
+    except Exception as e:
+        print(f"[METRICS] flush failed (non-fatal): {e}")
+
+def _load_metrics_from_db():
+    try:
+        from core_config import sb_get as _sb
+        rows = _sb("core_metrics", "select=key,value", svc=True) or []
+        with _metrics_lock:
+            for row in rows:
+                key = row.get("key")
+                val = row.get("value", 0)
+                if key and key in _metrics and isinstance(_metrics[key], int):
+                    _metrics[key] = int(val or 0)
+        print(f"[METRICS] Loaded {len(rows)} persisted metrics from DB")
+    except Exception as e:
+        print(f"[METRICS] load failed (non-fatal): {e}")
+
+# ── FIX-1: Railway-only tools — never routed to desktop ───────────────────────
+def _is_railway_only(tool_name: str) -> bool:
+    """Return True if this tool must run on Railway, never routed to desktop.
+    Logic: anything that does NOT start with 'desktop_' is Railway-side.
+    Desktop tools are explicitly prefixed 'desktop_' — everything else lives on Railway.
+    This is future-proof: new tools added to TOOLS registry are Railway by default
+    unless they are explicitly named desktop_*.
+    """
+    return not tool_name.startswith("desktop_")
+
 # ── P3-05: Implicit feedback tracking ─────────────────────────────────────────
 # Tracks last reply time + content per cid for follow-up behavior detection
 _last_reply: dict = {}          # cid → {ts, message, reply}
@@ -1808,6 +1874,10 @@ def _execute_railway_tool(tool_name: str, tool_args: dict, cid: str = "") -> str
             tool_args = tool_args["args"]
         print(f"[ORCH] {tool_name} args: {json.dumps(tool_args, default=str)[:200]}")
         try:
+            # FIX-2: auto-inject cid for scratchpad tools
+            if tool_name in ("set_var", "get_var") and cid:
+                tool_args = dict(tool_args or {})
+                tool_args["cid"] = cid
             result = fn(**tool_args) if tool_args else fn()
         except Exception as inner_e:
             print(f"[ORCH] {tool_name} INNER ERROR: {type(inner_e).__name__}: {str(inner_e)[:300]}")
@@ -2390,12 +2460,8 @@ def _agentic_loop(cid: str, user_message: str,
             "If any step hits a destructive action, pause and ask for confirmation first."
         )
 
-    # Can answer directly without tools? Only allow for truly trivial messages with no tool names
-    _has_explicit_tool = any(t in user_message for t in ["search_kb", "get_mistakes", "datetime_now",
-        "sb_query", "get_state", "stats", "search_mistakes", "task_health", "crypto_price",
-        "weather", "calc", "web_search", "run_python", "call ", "Call "])
-    if (pre_flight.get("can_answer_directly") and pre_flight.get("direct_answer")
-            and is_trivial and not _has_explicit_tool):
+    # Can answer directly without tools?
+    if pre_flight.get("can_answer_directly") and pre_flight.get("direct_answer"):
         direct = pre_flight["direct_answer"].strip()
         if direct:
             check = _validate_before_reply(user_message, direct, [], system_prompt)
@@ -2508,7 +2574,7 @@ def _agentic_loop(cid: str, user_message: str,
         reply      = response.get("reply", "")
         done       = response.get("done", False)
 
-        if not tool_calls and (done or tool_call_count == 0):
+        if not tool_calls:
             effective_reply = reply.strip() if reply else ""
 
             if not effective_reply and results_buffer:
@@ -2631,7 +2697,8 @@ def _agentic_loop(cid: str, user_message: str,
             except Exception as _ld_e:
                 print(f"[ORCH] loop_detect error (non-fatal): {_ld_e}")
 
-            is_desktop = tool_name.startswith("desktop_")
+            # FIX-1: only tools explicitly prefixed desktop_ go to PC, everything else is Railway
+            is_desktop = tool_name.startswith("desktop_") and not _is_railway_only(tool_name)
             if is_desktop:
                 _tg_send(cid, "🖥 <i>Sending to PC...</i>")
                 result_str = _execute_desktop_tool(tool_name, tool_args, cid)
@@ -3034,11 +3101,61 @@ def _desktop_result_poller():
 
 def start_orchestrator():
     """Start all orchestrator background threads."""
+    # FIX-3: Load persisted metrics from DB, start flush loop
+    threading.Thread(target=_load_metrics_from_db, daemon=True, name="orch_metrics_load").start()
+    threading.Thread(target=_metrics_flush_loop,   daemon=True, name="orch_metrics_flush").start()
     threading.Thread(target=_ensure_table,          daemon=True, name="orch_ensure_table").start()
     threading.Thread(target=_desktop_result_poller, daemon=True, name="orch_result_poller").start()
     threading.Thread(target=_run_predictive_loader, daemon=True, name="orch_predictive_loader").start()  # P3-06
+
+    # FIX-2: Register set_var / get_var into TOOLS
+    try:
+        from core_tools import TOOLS as _T
+        _T["set_var"] = {
+            "fn": t_set_var, "perm": "WRITE",
+            "args": [{"name": "key", "type": "string"}, {"name": "value", "type": "string"}],
+            "desc": "FIX-2: Store a value in session scratchpad. Use after any tool returns a value you need in a later call. EXAMPLE: set_var(key=\'token\', value=\'abc\') then get_var(key=\'token\').",
+        }
+        _T["get_var"] = {
+            "fn": t_get_var, "perm": "READ",
+            "args": [{"name": "key", "type": "string"}],
+            "desc": "FIX-2: Retrieve a value stored with set_var. Returns value field. EXAMPLE: get_var(key=\'token\') returns the stored token.",
+        }
+        print("[ORCH] set_var / get_var tools registered")
+    except Exception as e:
+        print(f"[ORCH] set_var/get_var registration failed (non-fatal): {e}")
+
     print(f"[ORCH] Started. Provider: OpenRouter ({OPENROUTER_MODEL}) | "
           f"Fast: {OPENROUTER_FAST_MODEL} | "
           f"Fallback: Gemini ({GEMINI_FALLBACK_MODEL}) → Groq ({GROQ_LAST_RESORT_MODEL}) | "
           f"P1-03 trivial fast-path: ON | P1-06 READ cache TTL: {_TOOL_CACHE_TTL}s | "
-          f"P3-03 autonomous: ON | P3-05 implicit feedback: ON | P3-06 predictive loader: ON")
+          f"P3-03 autonomous: ON | P3-05 implicit feedback: ON | P3-06 predictive loader: ON | "
+          f"FIX-1 routing: ON | FIX-2 scratchpad: ON | FIX-3 metrics: ON | FIX-4 loop TTL: ON")
+
+# ══════════════════════════════════════════════════════════════════════════════
+# FIX-2: SESSION SCRATCHPAD TOOLS
+# ══════════════════════════════════════════════════════════════════════════════
+
+def t_set_var(key: str = "", value: str = "", cid: str = "") -> dict:
+    """Store a value in session scratchpad for use in subsequent tool calls.
+    Use to pass values between tool calls without user workarounds.
+    EXAMPLE: set_var(key='token', value='abc123') then get_var(key='token')"""
+    if not key:
+        return {"ok": False, "error": "key required"}
+    _scratchpad_set(cid or "default", key, value or "")
+    return {"ok": True, "key": key, "stored": True}
+
+def t_get_var(key: str = "", cid: str = "") -> dict:
+    """Retrieve a value previously stored with set_var.
+    Returns value field with the stored string, empty string if not found."""
+    if not key:
+        return {"ok": False, "error": "key required"}
+    val = _scratchpad_get(cid or "default", key)
+    return {"ok": True, "key": key, "value": val, "found": bool(val)}
+
+def _metrics_flush_loop():
+    """Background thread: flush in-memory metrics to Supabase every 5 minutes."""
+    while True:
+        time.sleep(_METRICS_PERSIST_INTERVAL)
+        _flush_metrics_to_db()
+
