@@ -339,7 +339,18 @@ def _build_system_prompt(cid: str) -> str:
                 parts.append(f"BEHAVIORAL RULES:\n{r_lines}")
     except Exception as e:
         print(f"[ORCH] session_start error (non-fatal): {e}")
-
+# 
+  # Live tool inventory count
+    try:
+        from core_tools import TOOLS
+        parts.append(
+            f"TOOL INVENTORY: {len(TOOLS)} railway tools available. "
+            f"Categories: {', '.join(_TOOL_CATEGORIES.keys())}. "
+            f"Full list per category loaded dynamically per request."
+        )
+    except Exception:
+        pass
+      
     parts.append(
         "RAILWAY TOOLS (no prefix — run on server instantly):\n"
         "  web_search(query, max_results) — search web\n"
