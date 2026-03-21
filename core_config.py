@@ -342,4 +342,5 @@ TOOL_CATEGORY_KEYWORDS: dict = {
 TOOL_ALWAYS_INCLUDE: set = {
     "search_kb", "get_mistakes", "list_tools", "get_tool_info",
     "get_behavioral_rules", "get_table_schema",
+    "build_status",  # ← add this
 }
