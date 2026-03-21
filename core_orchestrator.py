@@ -137,9 +137,7 @@ _cache_lock            = threading.Lock()
 
 # Tools that are ALWAYS included regardless of message (core infra)
 _ALWAYS_TOOLS = {
-    "session_end", "search_kb", "get_mistakes",
-    "add_knowledge", "log_mistake", "notify_owner", "checkpoint",
-    "task_add", "task_update", "sb_query", "sb_patch",
+    "search_kb", "get_mistakes", "task_update", "sb_query"
 }
 
 # Tool category map — keyword → tool names
