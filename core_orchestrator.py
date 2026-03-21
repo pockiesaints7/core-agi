@@ -65,16 +65,44 @@ from core_config import (
     gemini_chat,
 )
 from core_github import notify  # notify(msg, cid=None)
-# Schema helper — imported lazily inside functions to avoid circular import at module load
-# Use: from core_tools import get_safe_select, get_table_cols
+# Schema helpers — lazily imported from core_tools to avoid circular import at module load
 def _sel(table: str, extra_cols: list = None) -> str:
-    """Thin wrapper — get live-merged safe SELECT string for a table.
-    Falls back to '*' if core_tools not yet loaded (e.g. during Railway cold start)."""
+    """Safe SELECT string from live-merged schema. Excludes fat_columns.
+    extra_cols that are fat_columns are silently dropped — use _sel_force if needed.
+    Falls back to conservative hardcoded strings (never '*') on cold-start import error."""
     try:
         from core_tools import get_safe_select
         return get_safe_select(table, extra_cols)
     except Exception:
-        return "*"
+        _COLD_SAFE = {
+            "knowledge_base":         "id,domain,topic,confidence,source,created_at",
+            "task_queue":             "id,status,priority,source,next_step,blocked_by,created_at",
+            "mistakes":               "id,domain,what_failed,severity,root_cause,created_at",
+            "sessions":               "id,summary,domain,quality_score,created_at,resume_task",
+            "hot_reflections":        "id,domain,quality_score,source,processed_by_cold,created_at",
+            "cold_reflections":       "id,period_start,period_end,hot_count,patterns_found,evolutions_queued,created_at",
+            "pattern_frequency":      "id,pattern_key,frequency,domain,auto_applied,last_seen",
+            "telegram_conversations": "id,chat_id,role,created_at",
+            "behavioral_rules":       "id,domain,trigger,confidence,active,source,created_at",
+            "evolution_queue":        "id,change_type,status,confidence,source,created_at",
+        }
+        return _COLD_SAFE.get(table, "id,created_at")
+
+
+def _sel_force(table: str, cols: list) -> str:
+    """SELECT string that includes specific columns regardless of fat_column status.
+    Use when you genuinely need a fat column (e.g. result, content, reflection_text).
+    Validates against live schema if available — falls back to cols as-is."""
+    try:
+        from core_tools import get_table_cols
+        known = get_table_cols(table)
+        if known:
+            valid = [c for c in cols if c in known]
+            return ",".join(valid) if valid else ",".join(cols)
+    except Exception:
+        pass
+    return ",".join(cols)
+
 
 def _has_col(table: str, col: str) -> bool:
     """Return True if column exists in live schema for table."""
@@ -519,7 +547,7 @@ def _sb_load_history(cid: str) -> list:
     try:
         rows = sb_get(
             "telegram_conversations",
-            f"select={_sel('telegram_conversations', ['role','content','created_at'])}"
+            f"select={_sel_force('telegram_conversations', ['id','role','content','created_at'])}"
             f"&chat_id=eq.{cid}"
             f"&deleted=eq.false"
             f"&order=created_at.desc"
@@ -674,7 +702,7 @@ def _reason_before_execute(user_message: str, system_prompt: str,
             # Query pattern_frequency directly
             pf_result = sb_get(
                 "pattern_frequency",
-                f"select={_sel('pattern_frequency', ['pattern'])}&id=gt.1&order=frequency.desc&limit=8",
+                f"select={_sel('pattern_frequency')}&id=gt.1&order=frequency.desc&limit=8",
             )
             if pf_result:
                 brain_context += "TOP PATTERNS (from training):\n" + "\n".join(
@@ -1158,7 +1186,7 @@ def _execute_desktop_tool(tool_name: str, tool_args: dict, cid: str) -> str:
         while time.time() < deadline:
             r = sb_get(
                 "task_queue",
-                f"select={_sel('task_queue', ['status','result','error'])}&id=eq.{task_id}&limit=1",
+                f"select={_sel_force('task_queue', ['id','status','result','error'])}&id=eq.{task_id}&limit=1",
             ) or []
             if r:
                 status = r[0].get("status")
@@ -1735,7 +1763,7 @@ CREATE INDEX IF NOT EXISTS idx_tgconv_created ON telegram_conversations(created_
         if not pat:
             rows = sb_get(
                 "knowledge_base",
-                f"select={_sel('knowledge_base', ['content'])}&domain=eq.system.config&topic=eq.supabase_pat&limit=1",
+                f"select={_sel_force('knowledge_base', ['content'])}&domain=eq.system.config&topic=eq.supabase_pat&limit=1",
                 svc=True,
             )
             pat = (rows[0].get("content", "") if rows else "").strip()
@@ -1767,7 +1795,7 @@ def _desktop_result_poller():
         try:
             rows = sb_get(
                 "task_queue",
-                f"select={_sel('task_queue', ['id','status','result','error','chat_id'])}"
+                f"select={_sel_force('task_queue', ['id','status','result','error','chat_id'])}"
                 "&source=eq.mcp_session"
                 "&status=in.(done,failed)"
                 "&order=updated_at.desc&limit=20",
