@@ -828,9 +828,14 @@ def handle_msg(msg):
             f"<b>CORE v6.0</b>\n{resume}\n"
             f"Knowledge: {counts.get('knowledge_base',0)} | Sessions: {counts.get('sessions',0)}\n\n"
             f"<b>Commands:</b>\n"
-            f"/status \u2014 health + system\n"
-            f"/tstatus \u2014 training pipeline detail\n"
-            f"/project [list|id] \u2014 project context",
+            f"/status \u2014 health check of all components\n"
+            f"/tstatus \u2014 training pipeline detailed status\n"
+            f"/project \u2014 list or prepare project context\n"
+            f"/metrics \u2014 orchestrator performance stats\n"
+            f"/p3status \u2014 phase 3 features status\n"
+            f"/model \u2014 current AI model info\n"
+            f"/refresh \u2014 clear session cache\n"
+            f"/cancel \u2014 stop active loop",
             cid
         )
 
