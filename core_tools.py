@@ -258,9 +258,21 @@ _SB_SCHEMA = {
 
 from core_config import build_live_schema
 _live = build_live_schema(SUPABASE_REF, SUPABASE_PAT)
-for table, live_data in _live.items():
-    if table in _SB_SCHEMA and table not in _SB_SCHEMA.get("_tombstone", set()):
-        _SB_SCHEMA[table]["columns"] = live_data["columns"]
+if _live:
+    _tombstones = _SB_SCHEMA.get("_tombstone", set())
+    _tables     = _SB_SCHEMA.get("tables", {})
+    for table, live_data in _live.items():
+        if table in _tombstones:
+            continue
+        if table in _tables:
+            _tables[table]["columns"] = live_data["columns"]
+            # Also update safe_select to only include columns that actually exist
+            existing_safe = _tables[table].get("safe_select", "")
+            if existing_safe:
+                valid_cols = [c for c in existing_safe.split(",") if c.strip() in live_data["columns"]]
+                if valid_cols:
+                    _tables[table]["safe_select"] = ",".join(valid_cols)
+    print(f"[SCHEMA] Patched {len(_live)} tables in _SB_SCHEMA with live columns")
 
 def _sb_schema(table: str) -> dict:
     """Return schema entry for a table, or empty dict if unknown."""
