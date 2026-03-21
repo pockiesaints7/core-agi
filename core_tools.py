@@ -847,7 +847,7 @@ def t_sb_bulk_insert(table: str, rows: str) -> dict:
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
-def t_debug_fn(fn_name: str, dry_run: bool = True, extra_args: dict = None) -> dict:
+def t_debug_fn(fn_name: str, dry_run: str = "true", extra_args: str = None) -> dict:
     """Battle-tested debug harness for any CORE function.
 
     DOCTRINE: Every CORE function must be debuggable without touching production data.
