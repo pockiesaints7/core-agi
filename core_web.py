@@ -1203,22 +1203,23 @@ def t_get_tool_info(name: str = "") -> dict:
         return {"ok": False, "error": str(e)}
 
 def t_get_table_schema(table: str = "") -> dict:
-    """Get actual column names and types from Supabase for any table."""
     if not table:
         return {"ok": False, "error": "table required"}
     try:
-        from core_config import sb_get
-        rows = sb_get(
-            "information_schema.columns",
-            f"select=column_name,data_type,is_nullable"
-            f"&table_name=eq.{table}"
-            f"&table_schema=eq.public"
-            f"&order=ordinal_position.asc",
-            svc=True,
+        import httpx, os
+        from core_config import SUPABASE_REF, SUPABASE_PAT
+        resp = httpx.post(
+            f"https://api.supabase.com/v1/projects/{SUPABASE_REF}/database/query",
+            headers={
+                "Authorization": f"Bearer {SUPABASE_PAT}",
+                "Content-Type": "application/json",
+            },
+            json={"query": f"SELECT column_name, data_type FROM information_schema.columns WHERE table_name='{table}' AND table_schema='public' ORDER BY ordinal_position"},
+            timeout=15,
         )
-        if not rows:
-            return {"ok": False, "error": f"table '{table}' not found in public schema"}
-        return {"ok": True, "table": table, "columns": rows}
+        if resp.status_code in (200, 201):
+            return {"ok": True, "table": table, "columns": resp.json()}
+        return {"ok": False, "error": f"{resp.status_code}: {resp.text[:200]}"}
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
