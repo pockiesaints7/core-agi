@@ -1077,7 +1077,11 @@ def _execute_railway_tool(tool_name: str, tool_args: dict) -> str:
         if tool_args and list(tool_args.keys()) == ["args"] and isinstance(tool_args.get("args"), dict):
             tool_args = tool_args["args"]
         print(f"[ORCH] {tool_name} args: {json.dumps(tool_args, default=str)[:200]}")
-        result = fn(**tool_args) if tool_args else fn()
+        try:
+            result = fn(**tool_args) if tool_args else fn()
+        except Exception as inner_e:
+            print(f"[ORCH] {tool_name} INNER ERROR: {type(inner_e).__name__}: {str(inner_e)[:300]}")
+            raise
         raw    = json.dumps(result, default=str)
         compressed = _compress_result(raw, tool_name)
         print(f"[ORCH] {tool_name} → {len(raw)}b raw, {len(compressed)}b compressed")
