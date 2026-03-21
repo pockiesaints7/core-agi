@@ -165,8 +165,9 @@ _pending_confirms: dict = {}
 _confirm_lock           = threading.Lock()
 _session_cache: dict    = {}
 _cache_lock             = threading.Lock()
-_active_loops: dict     = {}  # cid -> threading.Lock(); prevents concurrent agentic loops per cid
+_active_loops: dict     = {}  # cid -> {"lock": Lock, "started_at": float, "message": str}
 _active_lock            = threading.Lock()
+LOOP_HARD_TIMEOUT       = 180  # seconds — force-release lock after this regardless
 # ── Observability metrics (in-memory, reset on restart) ───────────────────────
 _metrics: dict = {
     "total_messages":     0,
@@ -1836,6 +1837,20 @@ def handle_telegram_message(msg: dict):
         _tg_send(cid, "🔄 Session cache cleared — reloads on next message.")
         return
 
+    if lower in ("/cancel", "cancel", "stop", "berhenti"):
+        with _active_lock:
+            entry = _active_loops.pop(cid, None)
+        if entry:
+            try:
+                entry["lock"].release()
+            except RuntimeError:
+                pass
+            elapsed = int(time.time() - entry.get("started_at", time.time()))
+            _tg_send(cid, f"🛑 Loop cancelled (was running {elapsed}s). Ready for next message.")
+        else:
+            _tg_send(cid, "ℹ️ No active loop to cancel.")
+        return
+
     if lower in ("/metrics", "metrics", "stats orch"):
         m = get_orchestrator_metrics()
         total = m.get("total_messages", 0)
@@ -1906,14 +1921,35 @@ def handle_telegram_message(msg: dict):
           + (f" [file:{file_mime}]" if file_b64 else ""))
     _append_history(cid, "user", text, image_b64=image_b64, image_mime=image_mime)
 
-    # Per-cid concurrency gate — queue messages instead of running concurrent loops
+    # Per-cid concurrency gate with hard timeout
     with _active_lock:
+        entry = _active_loops.get(cid)
+        # Auto-release stale lock if past hard timeout
+        if entry and (time.time() - entry["started_at"]) > LOOP_HARD_TIMEOUT:
+            print(f"[ORCH] Force-releasing stale lock for {cid} (>{LOOP_HARD_TIMEOUT}s)")
+            try:
+                entry["lock"].release()
+            except RuntimeError:
+                pass  # already released
+            del _active_loops[cid]
+            entry = None
         if cid not in _active_loops:
-            _active_loops[cid] = threading.Lock()
-    cid_lock = _active_loops[cid]
-    if not cid_lock.acquire(blocking=False):
-        _tg_send(cid, "⏳ Still processing previous message — please wait.")
+            lock = threading.Lock()
+            _active_loops[cid] = {"lock": lock, "started_at": time.time(), "message": text[:80]}
+        else:
+            lock = None
+
+    if lock is None:
+        # Still busy — tell owner how long it has been running
+        entry = _active_loops.get(cid, {})
+        elapsed = int(time.time() - entry.get("started_at", time.time()))
+        prev_msg = entry.get("message", "?")
+        wait_msg = f"⏳ Still processing (<b>{elapsed}s</b>): <i>{prev_msg}</i>\nSend /cancel to force-stop, or wait (auto-timeout {LOOP_HARD_TIMEOUT}s)."
+        _tg_send(cid, wait_msg)
         return
+
+    cid_lock = _active_loops[cid]["lock"]
+    cid_lock.acquire()
     try:
         _agentic_loop(
             cid, text,
@@ -1925,6 +1961,8 @@ def handle_telegram_message(msg: dict):
         print(f"[ORCH] agentic_loop error:\n{traceback.format_exc()}")
     finally:
         cid_lock.release()
+        with _active_lock:
+            _active_loops.pop(cid, None)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
