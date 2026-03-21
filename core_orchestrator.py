@@ -32,9 +32,10 @@ MOUNT IN core_main.py (3 changes):
       ).start()
 
 MODEL SWAP (one line):
-  OPENROUTER_MODEL = "google/gemini-2.5-flash-lite"   # current default
-  OPENROUTER_MODEL = "anthropic/claude-sonnet-4-5"     # if want Claude
-  OPENROUTER_MODEL = "openai/gpt-4o"                   # if want GPT
+  # Primary reasoning — pilih salah satu:
+OPENROUTER_MODEL = "google/gemini-2.5-flash"        # best value
+OPENROUTER_MODEL = "anthropic/claude-sonnet-4-5"    # best quality
+OPENROUTER_MODEL = "google/gemini-2.5-pro"          # best context                   # if want GPT
 
 VARIABLES VERIFIED AGAINST ACTUAL CODEBASE:
   core_config.py  : TELEGRAM_CHAT, SUPABASE_PAT, SUPABASE_REF,
@@ -118,7 +119,7 @@ def _has_col(table: str, col: str) -> bool:
 # ══════════════════════════════════════════════════════════════════════════════
 
 # Primary model for ALL calls — reasoning, tool selection, compression, metacognition
-OPENROUTER_MODEL       = "anthropic/claude-haiku-4-5"   # swap here to change model
+OPENROUTER_MODEL       = "google/gemini-2.5-flash"   # swap here to change model
 OPENROUTER_FAST_MODEL  = "google/gemini-2.5-flash-lite"   # cheap calls: tool select, compress
                                                            # swap to "meta-llama/llama-3.3-70b-instruct:free"
                                                            # or any fast OR model if needed
@@ -126,10 +127,10 @@ OPENROUTER_FAST_MODEL  = "google/gemini-2.5-flash-lite"   # cheap calls: tool se
 MODEL_PROVIDER = "openrouter"  # display label only
 
 # Gemini fallback model (direct API)
-GEMINI_FALLBACK_MODEL = "gemini-2.5-flash-lite"
+GEMINI_FALLBACK_MODEL = "gemini-2.5-flash"
 
 # Groq last resort
-GROQ_LAST_RESORT_MODEL = "llama-3.3-70b-versatile"
+GROQ_LAST_RESORT_MODEL = "meta-llama/llama-4-maverick"
 
 # Telegram document MIME types → extension hint
 _TG_MIME_EXT = {
