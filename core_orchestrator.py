@@ -830,7 +830,7 @@ def _build_tools_desc(selected_tool_names: list) -> str:
                 (a["name"] if isinstance(a, dict) else a)
                 for a in (tdef.get("args") or [])
             )
-            desc = tdef.get("desc", "")[:100]
+            desc = tdef.get("desc", "")[:4096]
             lines.append(f"  {name}({args_str}) — {desc}")
     except Exception:
         pass
