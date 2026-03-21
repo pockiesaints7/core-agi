@@ -1372,6 +1372,14 @@ _NARRATION_PATTERNS = [
     r"I will execute",
     r"Executing the",
     r"I am executing",
+    r"Retrying failed",
+    r"I will retry",
+    r"Once successful",
+    r"will calculate",
+    r"will compile",
+    r"will store",
+    r"will confirm",
+    r"will retrieve",
 ]
 _NARRATION_RE = [re.compile(p, re.IGNORECASE) for p in _NARRATION_PATTERNS]
 
