@@ -116,22 +116,10 @@ def sb_upsert(t, d, on_conflict):
     return r.is_success
 
 def sb_delete(t, m):
-    """Delete rows matching filter m from table t. m must be a non-empty PostgREST filter string.
-    Safety: refuses to run if m is empty -- never allows unfiltered full-table delete."""
-    if not m or not str(m).strip():
-        print(f"[SB DELETE] BLOCKED: empty filter on {t} -- full-table delete not allowed")
-        return False
-    if not L.sbw(): return False
-    r = httpx.delete(f"{SUPABASE_URL}/rest/v1/{t}?{m}", headers=_sbh(True), timeout=15)
-    if not r.is_success:
-        print(f"[SB DELETE] {t} failed: {r.status_code} {r.text[:200]}")
-    return r.is_success
-
-def sb_delete(t, m):
     """DELETE rows matching filter string m from table t.
     m must be a non-empty PostgREST filter string e.g. 'id=eq.123'.
     Returns False immediately if m is empty -- never allows full-table delete."""
-    if not m or not m.strip():
+    if not m or not str(m).strip():
         print(f"[SB DELETE] BLOCKED: empty filter on table {t} -- full-table delete not allowed")
         return False
     if not L.sbw(): return False
@@ -251,19 +239,28 @@ def gemini_chat(system: str, user: str, max_tokens: int = 2048, json_mode: bool 
 def build_live_schema(supabase_ref: str = "", supabase_pat: str = "") -> dict:
     """
     Build schema registry from actual Supabase tables at startup.
-    Replaces hardcoded _SB_SCHEMA columns with live data.
-    Falls back to hardcoded if Management API unavailable.
+    Merges live column definitions into _SB_SCHEMA at import time.
+    Falls back gracefully (returns {}) if Management API unavailable or PAT missing.
+
+    Args:
+        supabase_ref: Supabase project ref. Defaults to module-level SUPABASE_REF.
+        supabase_pat: Supabase Management API PAT. Defaults to module-level SUPABASE_PAT.
     """
     try:
-        import httpx, os
-        import SUPABASE_REF, SUPABASE_PAT
-        if not SUPABASE_PAT:
+        # Use passed args first, fall back to module-level constants
+        ref = supabase_ref or SUPABASE_REF
+        pat = supabase_pat or SUPABASE_PAT
+        if not pat:
+            print("[SCHEMA] build_live_schema: SUPABASE_PAT not set — skipping live fetch")
             return {}
-        
+        if not ref:
+            print("[SCHEMA] build_live_schema: SUPABASE_REF not set — skipping live fetch")
+            return {}
+
         resp = httpx.post(
-            f"https://api.supabase.com/v1/projects/{SUPABASE_REF}/database/query",
+            f"https://api.supabase.com/v1/projects/{ref}/database/query",
             headers={
-                "Authorization": f"Bearer {SUPABASE_PAT}",
+                "Authorization": f"Bearer {pat}",
                 "Content-Type": "application/json",
             },
             json={"query": """
@@ -275,20 +272,27 @@ def build_live_schema(supabase_ref: str = "", supabase_pat: str = "") -> dict:
             timeout=15,
         )
         if resp.status_code not in (200, 201):
+            print(f"[SCHEMA] Live schema fetch failed: {resp.status_code} {resp.text[:200]}")
             return {}
-        
+
         rows = resp.json()
-        live_schema = {}
+        if not isinstance(rows, list):
+            print(f"[SCHEMA] Unexpected response format: {type(rows)}")
+            return {}
+
+        live_schema: dict = {}
         for row in rows:
-            table = row["table_name"]
-            col   = row["column_name"]
-            dtype = row["data_type"]
+            table = row.get("table_name", "")
+            col   = row.get("column_name", "")
+            dtype = row.get("data_type", "text")
+            if not table or not col:
+                continue
             if table not in live_schema:
                 live_schema[table] = {"columns": {}}
             live_schema[table]["columns"][col] = dtype
-        
+
         print(f"[SCHEMA] Live schema loaded: {len(live_schema)} tables")
         return live_schema
     except Exception as e:
-        print(f"[SCHEMA] Live schema failed (using hardcoded): {e}")
+        print(f"[SCHEMA] Live schema failed (using hardcoded fallback): {e}")
         return {}

@@ -253,31 +253,98 @@ _SB_SCHEMA = {
             "on_conflict": "name",
             "notes": "Use id=gt.1."
         },
+        "telegram_conversations": {
+            "pk": "id", "pk_type": "bigserial",
+            "columns": {"id": "bigint", "chat_id": "text", "role": "text",
+                        "content": "text", "deleted": "boolean", "created_at": "timestamptz"},
+            "required": ["chat_id", "role"],
+            "enums": {"role": ["user", "assistant", "system"]},
+            "fat_columns": ["content"],
+            "safe_select": "id,chat_id,role,created_at",
+            "notes": "Use id=gt.1. Created by core_orchestrator._ensure_table() on first run."
+        },
     }
 }
 
-from core_config import build_live_schema
-_live = build_live_schema(SUPABASE_REF, SUPABASE_PAT)
-if _live:
-    _tombstones = _SB_SCHEMA.get("_tombstone", set())
-    _tables     = _SB_SCHEMA.get("tables", {})
-    for table, live_data in _live.items():
-        if table in _tombstones:
+# ── Live schema merge — runs once at import time ──────────────────────────────
+# Fetches real column definitions from Supabase information_schema and patches
+# _SB_SCHEMA["tables"] so all validators use live data, not hardcoded snapshots.
+# Falls back silently to hardcoded if PAT missing or Management API unavailable.
+from core_config import build_live_schema as _build_live_schema
+_live_schema = _build_live_schema(SUPABASE_REF, SUPABASE_PAT)
+if _live_schema:
+    _tombstones  = _SB_SCHEMA.get("_tombstone", set())
+    _schema_tbls = _SB_SCHEMA.setdefault("tables", {})
+    _patched = 0
+    _added   = 0
+    for _tname, _tdata in _live_schema.items():
+        if _tname in _tombstones:
             continue
-        if table in _tables:
-            _tables[table]["columns"] = live_data["columns"]
-            # Also update safe_select to only include columns that actually exist
-            existing_safe = _tables[table].get("safe_select", "")
-            if existing_safe:
-                valid_cols = [c for c in existing_safe.split(",") if c.strip() in live_data["columns"]]
-                if valid_cols:
-                    _tables[table]["safe_select"] = ",".join(valid_cols)
-    print(f"[SCHEMA] Patched {len(_live)} tables in _SB_SCHEMA with live columns")
+        _live_cols = _tdata.get("columns", {})
+        if not _live_cols:
+            continue
+        if _tname in _schema_tbls:
+            # Patch existing entry: update columns, trim safe_select to valid cols only
+            _schema_tbls[_tname]["columns"] = _live_cols
+            _existing_safe = _schema_tbls[_tname].get("safe_select", "")
+            if _existing_safe:
+                _valid = [c for c in _existing_safe.split(",") if c.strip() in _live_cols]
+                if _valid:
+                    _schema_tbls[_tname]["safe_select"] = ",".join(_valid)
+            _patched += 1
+        else:
+            # New table not in hardcoded registry — register it with minimal metadata
+            _schema_tbls[_tname] = {
+                "pk": "id",
+                "pk_type": "bigserial",  # conservative default; override if needed
+                "columns": _live_cols,
+                "required": [],
+                "enums": {},
+                "fat_columns": [],
+                "safe_select": ",".join(list(_live_cols.keys())[:8]),
+                "notes": f"Auto-registered from live schema at startup. {len(_live_cols)} columns.",
+            }
+            _added += 1
+    print(f"[SCHEMA] Live merge complete: {_patched} patched, {_added} new tables registered")
+else:
+    print("[SCHEMA] Live merge skipped — using hardcoded _SB_SCHEMA")
 
 def _sb_schema(table: str) -> dict:
     """Return schema entry for a table, or empty dict if unknown."""
     return _SB_SCHEMA["tables"].get(table, {})
 
+
+def get_safe_select(table: str, extra_cols: list = None) -> str:
+    """Return a safe SELECT string for a table based on live-merged _SB_SCHEMA.
+
+    Preference order:
+      1. schema safe_select (pre-validated, fat columns excluded)
+      2. all non-fat columns joined (if no safe_select defined)
+      3. '*' fallback (if table not in registry)
+
+    extra_cols: additional columns to append if present in live schema.
+    Never includes fat_columns or columns not in live schema.
+    """
+    schema = _sb_schema(table)
+    if not schema:
+        return "*"
+    known_cols = set(schema.get("columns", {}).keys())
+    fat        = set(schema.get("fat_columns", []))
+    base       = schema.get("safe_select", "")
+    if base:
+        cols = [c.strip() for c in base.split(",") if c.strip() in known_cols]
+    else:
+        cols = [c for c in schema.get("columns", {}) if c not in fat]
+    if extra_cols:
+        for c in extra_cols:
+            if c in known_cols and c not in fat and c not in cols:
+                cols.append(c)
+    return ",".join(cols) if cols else "*"
+
+
+def get_table_cols(table: str) -> set:
+    """Return set of all known column names for a table from live-merged schema."""
+    return set(_sb_schema(table).get("columns", {}).keys())
 def _load_schema_registry():
     """Compat shim -- returns _SB_SCHEMA in old format for _validate_write."""
     # Rebuild old format on the fly from unified schema

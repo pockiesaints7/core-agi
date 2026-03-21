@@ -65,6 +65,24 @@ from core_config import (
     gemini_chat,
 )
 from core_github import notify  # notify(msg, cid=None)
+# Schema helper — imported lazily inside functions to avoid circular import at module load
+# Use: from core_tools import get_safe_select, get_table_cols
+def _sel(table: str, extra_cols: list = None) -> str:
+    """Thin wrapper — get live-merged safe SELECT string for a table.
+    Falls back to '*' if core_tools not yet loaded (e.g. during Railway cold start)."""
+    try:
+        from core_tools import get_safe_select
+        return get_safe_select(table, extra_cols)
+    except Exception:
+        return "*"
+
+def _has_col(table: str, col: str) -> bool:
+    """Return True if column exists in live schema for table."""
+    try:
+        from core_tools import get_table_cols
+        return col in get_table_cols(table)
+    except Exception:
+        return True  # optimistic: don't block query if schema unavailable
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -501,7 +519,7 @@ def _sb_load_history(cid: str) -> list:
     try:
         rows = sb_get(
             "telegram_conversations",
-            f"select=role,content,created_at"
+            f"select={_sel('telegram_conversations', ['role','content','created_at'])}"
             f"&chat_id=eq.{cid}"
             f"&deleted=eq.false"
             f"&order=created_at.desc"
@@ -656,7 +674,7 @@ def _reason_before_execute(user_message: str, system_prompt: str,
             # Query pattern_frequency directly
             pf_result = sb_get(
                 "pattern_frequency",
-                "select=pattern,frequency,domain&id=gt.1&order=frequency.desc&limit=8",
+                f"select={_sel('pattern_frequency', ['pattern'])}&id=gt.1&order=frequency.desc&limit=8",
             )
             if pf_result:
                 brain_context += "TOP PATTERNS (from training):\n" + "\n".join(
@@ -666,21 +684,23 @@ def _reason_before_execute(user_message: str, system_prompt: str,
             # Query cold_reflections for distilled learnings
             cr_result = sb_get(
                 "cold_reflections",
-                "select=reflection,domain,created_at&id=gt.1&order=created_at.desc&limit=5",
+                f"select={_sel('cold_reflections')}&id=gt.1&order=created_at.desc&limit=5",
             )
             if cr_result:
+                summary_field = "summary_text" if _has_col("cold_reflections", "summary_text") else "summary"
                 brain_context += "RECENT REFLECTIONS:\n" + "\n".join(
-                    "  [" + r.get("domain","?") + "]  " + r.get("reflection","")[:120]
+                    "  [" + r.get("domain","?") + "]  " + r.get(summary_field,"")[:120]
                     for r in cr_result[:5]
                 ) + "\n"
             # Query mistakes with direct sb_get (bypasses search_kb issues)
             mk_result = sb_get(
                 "mistakes",
-                "select=domain,what_failed,fix,created_at&id=gt.1&order=created_at.desc&limit=5",
+                f"select={_sel('mistakes')}&id=gt.1&order=created_at.desc&limit=5",
             )
             if mk_result:
+                fix_field = "correct_approach" if _has_col("mistakes", "correct_approach") else "fix"
                 brain_context += "RECENT MISTAKES:\n" + "\n".join(
-                    "  [" + r.get("domain","?") + "]  " + r.get("what_failed","")[:80] + " → " + r.get("fix","")[:80]
+                    "  [" + r.get("domain","?") + "]  " + r.get("what_failed","")[:80] + " → " + r.get(fix_field,"")[:80]
                     for r in mk_result[:5]
                 ) + "\n"
 
@@ -692,20 +712,22 @@ def _reason_before_execute(user_message: str, system_prompt: str,
         if is_accountability:
             sess_result = sb_get(
                 "sessions",
-                "select=summary,quality_score,domain,created_at,resume_task&id=gt.1&order=created_at.desc&limit=3",
+                f"select={_sel('sessions')}&id=gt.1&order=created_at.desc&limit=3",
             )
             if sess_result:
+                q_field = "quality_score" if _has_col("sessions", "quality_score") else "quality"
                 brain_context += "RECENT SESSIONS:\n" + "\n".join(
-                    "  [" + r.get("domain","?") + "/q=" + str(r.get("quality","?")) + "] " + r.get("summary","")[:150]
+                    "  [" + r.get("domain","?") + "/q=" + str(r.get(q_field,"?")) + "] " + r.get("summary","")[:150]
                     for r in sess_result[:3]
                 ) + "\n"
             hr_result = sb_get(
                 "hot_reflections",
-                "select=reflection,domain,created_at&id=gt.1&processed_by_cold=eq.0&order=created_at.desc&limit=5",
+                f"select={_sel('hot_reflections')}&id=gt.1&processed_by_cold=eq.false&order=created_at.desc&limit=5",
             )
             if hr_result:
+                refl_field = "reflection_text" if _has_col("hot_reflections", "reflection_text") else "reflection"
                 brain_context += "UNPROCESSED REFLECTIONS:\n" + "\n".join(
-                    "  [" + r.get("domain","?") + "] " + r.get("reflection","")[:120]
+                    "  [" + r.get("domain","?") + "] " + r.get(refl_field,"")[:120]
                     for r in hr_result[:5]
                 ) + "\n"
 
@@ -1136,7 +1158,7 @@ def _execute_desktop_tool(tool_name: str, tool_args: dict, cid: str) -> str:
         while time.time() < deadline:
             r = sb_get(
                 "task_queue",
-                f"select=status,result,error&id=eq.{task_id}&limit=1",
+                f"select={_sel('task_queue', ['status','result','error'])}&id=eq.{task_id}&limit=1",
             ) or []
             if r:
                 status = r[0].get("status")
@@ -1375,12 +1397,12 @@ def _agentic_loop(cid: str, user_message: str,
             current_user += (
                 "\n\nKB_MISS_ALERT: KB search returned empty 2+ times. "
                 "You MUST try direct table queries now:\n"
-                "- mistakes table: sb_query(table='mistakes', filters='id=gt.1', order='created_at.desc', limit='5', select='domain,what_failed,fix,created_at')\n"
-                "- pattern_frequency: sb_query(table='pattern_frequency', filters='id=gt.1', order='frequency.desc', limit='8')\n"
-                "- cold_reflections: sb_query(table='cold_reflections', filters='id=gt.1', order='created_at.desc', limit='5')\n"
-                "- knowledge_base: sb_query(table='knowledge_base', filters='id=gt.1&domain=like.*core*', limit='10', select='domain,topic,content,created_at')\n"
-                "- sessions: sb_query(table='sessions', filters='id=gt.1', order='created_at.desc', limit='3', select='id,summary,quality_score,domain,created_at')\n"
-                "- hot_reflections: sb_query(table='hot_reflections', filters='id=gt.1&processed_by_cold=eq.0', order='created_at.desc', limit='5')\n"
+                f"- mistakes table: sb_query(table='mistakes', filters='id=gt.1', order='created_at.desc', limit='5', select='{_sel('mistakes')}')\n"
+                f"- pattern_frequency: sb_query(table='pattern_frequency', filters='id=gt.1', order='frequency.desc', limit='8', select='{_sel('pattern_frequency')}')\n"
+                f"- cold_reflections: sb_query(table='cold_reflections', filters='id=gt.1', order='created_at.desc', limit='5', select='{_sel('cold_reflections')}')\n"
+                f"- knowledge_base: sb_query(table='knowledge_base', filters='id=gt.1&domain=like.*core*', limit='10', select='{_sel('knowledge_base')}')\n"
+                f"- sessions: sb_query(table='sessions', filters='id=gt.1', order='created_at.desc', limit='3', select='{_sel('sessions')}')\n"
+                f"- hot_reflections: sb_query(table='hot_reflections', filters='id=gt.1&processed_by_cold=eq.false', order='created_at.desc', limit='5', select='{_sel('hot_reflections')}')\n"
                 "Do NOT call search_kb again with the same query. Use sb_query instead."
             )
 
@@ -1713,7 +1735,7 @@ CREATE INDEX IF NOT EXISTS idx_tgconv_created ON telegram_conversations(created_
         if not pat:
             rows = sb_get(
                 "knowledge_base",
-                "select=content&domain=eq.system.config&topic=eq.supabase_pat&limit=1",
+                f"select={_sel('knowledge_base', ['content'])}&domain=eq.system.config&topic=eq.supabase_pat&limit=1",
                 svc=True,
             )
             pat = (rows[0].get("content", "") if rows else "").strip()
@@ -1745,7 +1767,7 @@ def _desktop_result_poller():
         try:
             rows = sb_get(
                 "task_queue",
-                "select=id,status,result,error,chat_id"
+                f"select={_sel('task_queue', ['id','status','result','error','chat_id'])}"
                 "&source=eq.mcp_session"
                 "&status=in.(done,failed)"
                 "&order=updated_at.desc&limit=20",
