@@ -1097,7 +1097,7 @@ def t_run_python(code: str = "", timeout: str = "10") -> dict:
             r = subprocess.run(
                 ["python3", tmp],
                 capture_output=True, text=True, timeout=t,
-                env={k: v for k, v in os.environ.items() if k not in ("SUPABASE_SERVICE_KEY","SUPABASE_ANON_KEY","GITHUB_PAT","TELEGRAM_BOT_TOKEN","BINANCE_SECRET_KEY","MCP_SECRET")}, 
+                env=os.environ.copy(),
             )
             output = (r.stdout + r.stderr)[:5000]
             return {
