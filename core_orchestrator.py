@@ -211,8 +211,7 @@ def _or_text(system: str, user: str, model: str = None,
 # ══════════════════════════════════════════════════════════════════════════════
 
 _ALWAYS_TOOLS = {
-    "search_kb", "get_mistakes", "task_update", "sb_query",
-    "list_tools", "get_tool_info", "get_behavioral_rules", "get_table_schema",
+    "search_kb", "get_mistakes", "list_tools", "get_tool_info", "get_behavioral_rules", "get_table_schema",
 }
 
 _TOOL_CATEGORIES = {
