@@ -237,7 +237,8 @@ _TOOL_CATEGORIES = {
     "document":  ["create_document", "create_spreadsheet", "create_presentation",
                   "read_document", "convert_document"],
     "image":     ["generate_image", "image_process"],
-    "utils":     ["weather", "calc", "datetime_now", "currency", "translate", "run_python"],
+    "utils":     ["weather", "calc", "datetime_now", "currency", "translate", "run_python",
+                  "list_tools", "get_tool_info"]
 }
 
 
