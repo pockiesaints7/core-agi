@@ -198,6 +198,8 @@ _metrics: dict = {
     "autonomous_runs":    0,   # P3-03: autonomous multi-step executions
     "implicit_positive":  0,   # P3-05: clean endings (no follow-up correction)
     "implicit_negative":  0,   # P3-05: correction signals detected
+    "critic_fast_retries": 0,  # self-critique: fast pattern retries
+    "critic_deep_retries": 0,  # self-critique: deep LLM retries
     "predictive_hits":    0,   # P3-06: context served from predictive cache
 }
 _metrics_lock = threading.Lock()
@@ -1308,6 +1310,179 @@ def _validate_before_reply(user_message: str, reply: str,
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# SELF-CRITIQUE LAYER
+# Runs after every response before sending to Telegram.
+# Uses OPENROUTER_FAST_MODEL (cheap). Max retries: CRITIC_MAX_RETRIES (default 2).
+# Catches: narration instead of execution, wrong tool called, incomplete answer.
+# If critic says RETRY → injects correction back into _agentic_loop as new user message.
+# ══════════════════════════════════════════════════════════════════════════════
+
+import os as _os
+CRITIC_MAX_RETRIES = int(_os.environ.get("CRITIC_MAX_RETRIES", "2"))
+
+# Fast pattern-based checks — no LLM call needed
+_NARRATION_PATTERNS = [
+    r"I will now",
+    r"I am going to",
+    r"I'll call",
+    r"I would call",
+    r"I need to call",
+    r"Let me call",
+    r"I should call",
+    r"I'll use the",
+    r"I will use the",
+    r"To do this, I",
+    r"I'll execute",
+    r"I will execute",
+    r"Executing the",
+    r"I am executing",
+]
+_NARRATION_RE = [re.compile(p, re.IGNORECASE) for p in _NARRATION_PATTERNS]
+
+
+def _fast_critic(user_message: str, reply: str, tools_called: list) -> dict:
+    """Fast rule-based critic — no LLM call. Catches obvious failures.
+    Returns: {ok, issue, correction_hint}
+    ok=True means reply is acceptable. ok=False means retry needed."""
+    # Check 1: narration detected — CORE described what it would do instead of doing it
+    if reply:
+        for pattern in _NARRATION_RE:
+            if pattern.search(reply):
+                return {
+                    "ok": False,
+                    "issue": "narration_instead_of_execution",
+                    "correction_hint": (
+                        f"You narrated instead of executing. "
+                        f"Do NOT describe what you will do. "
+                        f"Call the tool directly right now. "
+                        f"Original request: {user_message[:200]}"
+                    ),
+                }
+
+    # Check 2: no tools called but message clearly requires one
+    _TOOL_REQUIRED_KW = [
+        "call the tool", "use the tool", "run", "execute", "search",
+        "get", "fetch", "query", "check", "show me", "list",
+        "backfill", "scan", "patch", "deploy", "update",
+    ]
+    if not tools_called and reply:
+        msg_lower = user_message.lower()
+        if any(kw in msg_lower for kw in _TOOL_REQUIRED_KW):
+            # Only flag if reply doesn't contain actual data (just text)
+            if len(reply) < 200 and not any(c in reply for c in ["{", "[", "✅", "⚙️"]):
+                return {
+                    "ok": False,
+                    "issue": "no_tool_called_but_required",
+                    "correction_hint": (
+                        f"You answered without calling any tool. "
+                        f"The request requires a tool call. "
+                        f"Execute the appropriate tool now: {user_message[:200]}"
+                    ),
+                }
+
+    # Check 3: reply is just the system prompt or context leaked
+    if reply and len(reply) > 500:
+        _PROMPT_LEAK_KW = ["CORE OPERATING MANDATE", "PRIME DIRECTIVE", "EXECUTION PHILOSOPHY",
+                           "You are CORE", "BEHAVIORAL RULES", "ACTIVE GOALS"]
+        if any(kw in reply for kw in _PROMPT_LEAK_KW):
+            return {
+                "ok": False,
+                "issue": "system_prompt_leaked",
+                "correction_hint": (
+                    f"Your response contained internal system context. "
+                    f"Send only the answer to the owner. "
+                    f"Original request: {user_message[:200]}"
+                ),
+            }
+
+    return {"ok": True, "issue": None, "correction_hint": None}
+
+
+def _deep_critic(user_message: str, reply: str, tools_called: list,
+                 results_buffer: list) -> dict:
+    """LLM-based critic using OPENROUTER_FAST_MODEL.
+    Only called when fast critic passes but reply still seems incomplete.
+    Returns: {ok, issue, correction_hint}
+    """
+    tools_summary = ", ".join(tools_called[-5:]) if tools_called else "none"
+    results_summary = "\n".join(
+        f"[{r['name']}] → {r['result'][:200]}" for r in results_buffer[-5:]
+    ) or "No tool results."
+
+    prompt = (
+        "You are a strict quality critic for CORE AGI, a personal assistant.\n"
+        "Evaluate if the response correctly and completely handled the request.\n\n"
+        f"OWNER REQUEST: {user_message[:300]}\n\n"
+        f"TOOLS CALLED: {tools_summary}\n"
+        f"TOOL RESULTS: {results_summary}\n\n"
+        f"RESPONSE SENT: {reply[:400] if reply else '(empty)'}\n\n"
+        "Output ONLY valid JSON:\n"
+        "{\n"
+        '  "ok": true/false,\n'
+        '  "issue": "one of: wrong_tool|incomplete|narration|off_topic|null if ok",\n'
+        '  "correction_hint": "exact instruction to fix — empty string if ok"\n'
+        "}\n"
+        "Be strict but fair. If the response is complete and correct, ok=true.\n"
+        "Only return ok=false if there is a clear, specific problem."
+    )
+    try:
+        raw = _or_text(
+            system=prompt,
+            user="Critique this response.",
+            max_tokens=300,
+            json_mode=True,
+        )
+        parsed = json.loads(_strip_json(raw))
+        return parsed if isinstance(parsed, dict) else {"ok": True}
+    except Exception as e:
+        print(f"[CRITIC] deep critic failed (non-fatal): {e}")
+        return {"ok": True}
+
+
+def _critic_pass(user_message: str, reply: str, tools_called: list,
+                 results_buffer: list, retry_count: int = 0) -> dict:
+    """Main critic entry point. Runs fast check first, deep check if needed.
+    Returns: {ok, retry, correction_message, issue}
+    retry=True means caller should re-enter the loop with correction_message.
+    """
+    if retry_count >= CRITIC_MAX_RETRIES:
+        print(f"[CRITIC] max retries ({CRITIC_MAX_RETRIES}) reached — accepting response")
+        return {"ok": True, "retry": False, "correction_message": None, "issue": None}
+
+    # Fast check first — no LLM cost
+    fast = _fast_critic(user_message, reply, tools_called)
+    if not fast["ok"]:
+        print(f"[CRITIC] fast critic failed: {fast['issue']} (retry {retry_count+1}/{CRITIC_MAX_RETRIES})")
+        with _metrics_lock:
+            _metrics["critic_fast_retries"] = _metrics.get("critic_fast_retries", 0) + 1
+        return {
+            "ok": False,
+            "retry": True,
+            "correction_message": fast["correction_hint"],
+            "issue": fast["issue"],
+        }
+
+    # Deep check only for non-trivial responses where tools were expected
+    _DEEP_CHECK_KW = ["tool", "call", "run", "execute", "search", "get", "fetch",
+                      "query", "check", "backfill", "scan", "patch", "deploy"]
+    needs_deep = any(kw in user_message.lower() for kw in _DEEP_CHECK_KW)
+    if needs_deep and not tools_called and retry_count == 0:
+        deep = _deep_critic(user_message, reply, tools_called, results_buffer)
+        if not deep.get("ok", True) and deep.get("correction_hint"):
+            print(f"[CRITIC] deep critic failed: {deep.get('issue')} (retry {retry_count+1}/{CRITIC_MAX_RETRIES})")
+            with _metrics_lock:
+                _metrics["critic_deep_retries"] = _metrics.get("critic_deep_retries", 0) + 1
+            return {
+                "ok": False,
+                "retry": True,
+                "correction_message": deep["correction_hint"],
+                "issue": deep.get("issue"),
+            }
+
+    return {"ok": True, "retry": False, "correction_message": None, "issue": None}
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # MODEL ABSTRACTION LAYER — main reasoning call
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -2228,10 +2403,11 @@ def _agentic_loop(cid: str, user_message: str,
             return
 
     # ── Phase 1+2: Agentic tool loop ───────────────────────────────────────────
-    tool_call_count = 0
-    _prev_count     = 0
+    tool_call_count  = 0
+    _prev_count      = 0
     results_buffer: list = []
     _seen_calls: set     = set()
+    _critic_retry_count  = 0  # self-critique retry counter
 
     while tool_call_count < MAX_TOOL_CALLS:
         _prev_count = tool_call_count
@@ -2360,6 +2536,25 @@ def _agentic_loop(cid: str, user_message: str,
                 if not check.get("is_valid", True) and check.get("corrected_reply"):
                     effective_reply = check["corrected_reply"].strip() or effective_reply
                     print(f"[ORCH] reply corrected by validator: {check.get('reason','')[:100]}")
+
+                # ── SELF-CRITIQUE LAYER ───────────────────────────────────────
+                tools_called_names = [r["name"] for r in results_buffer]
+                critic = _critic_pass(
+                    user_message, effective_reply, tools_called_names,
+                    results_buffer, _critic_retry_count,
+                )
+                if critic["retry"] and _critic_retry_count < CRITIC_MAX_RETRIES:
+                    _critic_retry_count += 1
+                    print(f"[CRITIC] retry {_critic_retry_count}/{CRITIC_MAX_RETRIES}: {critic['issue']}")
+                    # Inject correction as new context — preserve original user_message for history
+                    _critic_injection = critic["correction_message"]
+                    effective_reply = ""
+                    results_buffer  = []
+                    _seen_calls     = set()
+                    # Temporarily override current_user for this retry turn only
+                    user_message = f"{user_message}\n\n[CRITIC CORRECTION]: {_critic_injection}"
+                    continue  # re-enter while loop
+                # ── END SELF-CRITIQUE ─────────────────────────────────────────
 
                 _tg_send(cid, effective_reply)
                 _append_history(cid, "assistant", effective_reply)
@@ -2628,6 +2823,7 @@ def handle_telegram_message(msg: dict):
             f"P3-03 Autonomous runs: {m.get('autonomous_runs',0)}",
             f"P3-05 Feedback: +{m.get('implicit_positive',0)} / -{m.get('implicit_negative',0)}",
             f"P3-06 Predictive cache hits: {m.get('predictive_hits',0)}",
+            f"Critic retries: fast={m.get('critic_fast_retries',0)} deep={m.get('critic_deep_retries',0)}",
         ]
         _tg_send(cid, "\n".join(lines))
         return
