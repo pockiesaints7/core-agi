@@ -296,3 +296,50 @@ def build_live_schema(supabase_ref: str = "", supabase_pat: str = "") -> dict:
     except Exception as e:
         print(f"[SCHEMA] Live schema failed (using hardcoded fallback): {e}")
         return {}
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TOOL CATEGORY KEYWORDS — single source of truth
+# Used by: core_orchestrator._build_live_categories()
+#          core_web.t_list_tools()
+# Update here ONLY when adding a new tool category domain.
+# Keys are category names. Values are keyword fragments matched against tool names.
+# A tool is assigned to the first category whose keywords appear in the tool name.
+# Tools that match no keywords go to "misc" automatically.
+# ══════════════════════════════════════════════════════════════════════════════
+TOOL_CATEGORY_KEYWORDS: dict = {
+    "deploy":    ["redeploy", "deploy", "build_status", "validate_syntax",
+                  "patch_file", "multi_patch", "gh_search_replace", "railway_logs",
+                  "replace_fn", "smart_patch", "register_tool", "rollback"],
+    "code":      ["read_file", "write_file", "gh_read", "search_in_file",
+                  "core_py", "append_to_file", "diff"],
+    "training":  ["cold_processor", "training_pipeline", "evolution", "reflection",
+                  "backfill", "synthesize"],
+    "system":    ["get_state", "health", "stats", "crash", "system_map",
+                  "sync_system", "session_start", "session_end"],
+    "railway":   ["railway_env", "railway_service", "railway_logs"],
+    "knowledge": ["search_kb", "add_knowledge", "kb_update", "get_mistakes",
+                  "search_mistakes", "ask"],
+    "task":      ["task_add", "task_update", "task_health", "sb_query",
+                  "sb_insert", "sb_patch", "sb_upsert", "sb_delete"],
+    "crypto":    ["crypto", "binance"],
+    "project":   ["project_"],
+    "agentic":   ["reason_chain", "lookahead", "decompose", "negative_space",
+                  "predict_failure", "action_gate", "loop_detect", "goal_check",
+                  "circuit_breaker", "mid_task", "assert_source"],
+    "web":       ["web_search", "web_fetch", "summarize_url"],
+    "document":  ["create_document", "create_spreadsheet", "create_presentation",
+                  "read_document", "convert_document", "read_pdf", "read_image"],
+    "image":     ["generate_image", "image_process"],
+    "utils":     ["weather", "calc", "datetime", "currency", "translate",
+                  "run_python", "list_tools", "get_tool_info", "get_table_schema",
+                  "notify", "tool_stats", "tool_health", "debug_fn", "backlog",
+                  "changelog", "backup"],
+}
+
+# Tools always included in every model call regardless of category routing.
+# These are the core brain tools — they should always be available.
+TOOL_ALWAYS_INCLUDE: set = {
+    "search_kb", "get_mistakes", "list_tools", "get_tool_info",
+    "get_behavioral_rules", "get_table_schema",
+}

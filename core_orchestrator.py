@@ -72,6 +72,7 @@ from core_config import (
     TELEGRAM_TOKEN, TELEGRAM_CHAT,
     sb_get, sb_post, sb_patch,
     gemini_chat,
+    TOOL_CATEGORY_KEYWORDS, TOOL_ALWAYS_INCLUDE,
 )
 from core_github import notify  # notify(msg, cid=None)
 # Schema helpers — lazily imported from core_tools to avoid circular import at module load
@@ -542,41 +543,10 @@ def _or_text(system: str, user: str, model: str = None,
 # ══════════════════════════════════════════════════════════════════════════════
 
 # ── Tools always provided to model on every message ──────────────────────────
-_ALWAYS_TOOLS = {
-    "search_kb", "get_mistakes", "list_tools", "get_tool_info",
-    "get_behavioral_rules", "get_table_schema",
-}
-
-# ── Category keyword map — ONLY thing you ever update when adding a new domain ─
-_CATEGORY_KEYWORDS = {
-    "deploy":    ["redeploy", "deploy", "build_status", "validate_syntax",
-                  "patch_file", "multi_patch", "gh_search_replace", "railway_logs",
-                  "replace_fn", "smart_patch", "register_tool", "rollback"],
-    "code":      ["read_file", "write_file", "gh_read", "search_in_file",
-                  "core_py", "append_to_file", "diff"],
-    "training":  ["cold_processor", "training_pipeline", "evolution", "reflection",
-                  "backfill", "synthesize"],
-    "system":    ["get_state", "health", "stats", "crash", "system_map",
-                  "sync_system", "session_start", "session_end"],
-    "railway":   ["railway_env", "railway_service", "railway_logs"],
-    "knowledge": ["search_kb", "add_knowledge", "kb_update", "get_mistakes",
-                  "search_mistakes", "ask"],
-    "task":      ["task_add", "task_update", "task_health", "sb_query",
-                  "sb_insert", "sb_patch", "sb_upsert", "sb_delete"],
-    "crypto":    ["crypto", "binance"],
-    "project":   ["project_"],
-    "agentic":   ["reason_chain", "lookahead", "decompose", "negative_space",
-                  "predict_failure", "action_gate", "loop_detect", "goal_check",
-                  "circuit_breaker", "mid_task", "assert_source"],
-    "web":       ["web_search", "web_fetch", "summarize_url"],
-    "document":  ["create_document", "create_spreadsheet", "create_presentation",
-                  "read_document", "convert_document", "read_pdf", "read_image"],
-    "image":     ["generate_image", "image_process"],
-    "utils":     ["weather", "calc", "datetime", "currency", "translate",
-                  "run_python", "list_tools", "get_tool_info", "get_table_schema",
-                  "notify", "tool_stats", "tool_health", "debug_fn", "backlog",
-                  "changelog", "backup"],
-}
+# ── Tool categories and always-include set imported from core_config ──────────
+# Single source of truth — update TOOL_CATEGORY_KEYWORDS in core_config.py only.
+_ALWAYS_TOOLS = TOOL_ALWAYS_INCLUDE
+_CATEGORY_KEYWORDS = TOOL_CATEGORY_KEYWORDS
 
 # Module-level cache — rebuilt whenever TOOLS size changes
 _cat_cache: dict = {}
