@@ -1067,9 +1067,8 @@ def _execute_desktop_tool(tool_name: str, tool_args: dict, cid: str) -> str:
 # ══════════════════════════════════════════════════════════════════════════════
 
 _DESTRUCTIVE_KW = {
-    "delete", "remove", "drop", "format", "wipe", "overwrite",
-    "truncate", "purge", "rm -rf", "destroy", "erase",
-    "sb_delete", "permanent", "irreversible",
+    "drop", "format", "wipe", "truncate", "purge",
+    "rm -rf", "destroy", "sb_delete", "permanent", "irreversible",
 }
 
 
@@ -1201,11 +1200,15 @@ def _agentic_loop(cid: str, user_message: str,
     selected_tools   = _select_tools(user_message, history_text)
     tools_desc       = _build_tools_desc(selected_tools)
     tool_call_count  = 0
+    _prev_count      = 0
     # Accumulate tool results in a separate buffer (not full history)
     # This is the key token optimisation: results don't bloat history
     results_buffer: list = []
+    # Loop detection: track (tool_name, frozen_args) to catch infinite repeats
+    _seen_calls: set = set()
 
     while tool_call_count < MAX_TOOL_CALLS:
+        _prev_count = tool_call_count
         if tool_call_count > 0:
             time.sleep(3)
         _tg_typing(cid)
@@ -1264,17 +1267,18 @@ def _agentic_loop(cid: str, user_message: str,
         reply      = response.get("reply", "")
         done       = response.get("done", False)
 
-        # Show thought (italic) — goes to Telegram only, NOT back into context
-        if thought and len(thought.strip()) > 10:
-            _tg_send(cid, f"🧠 <i>{thought[:400]}</i>")
+        # Thoughts are suppressed — too noisy per turn
 
         # No tool calls — model is done or stuck
         if not tool_calls:
             if reply:
                 _tg_send(cid, reply)
                 _append_history(cid, "assistant", reply)
+            elif results_buffer:
+                # Model has results but gave no reply — summarise and exit
+                last = results_buffer[-1]
+                _tg_send(cid, f"✅ {last['name']}: {last['result'][:300]}")
             else:
-                # Model returned nothing useful — break to avoid infinite loop
                 _tg_send(cid, "✅ Done.")
             return
 
@@ -1284,11 +1288,21 @@ def _agentic_loop(cid: str, user_message: str,
             tool_args = tc.get("args") or {}
             if not tool_name:
                 continue
+
+            # Loop detection — skip exact duplicate calls within this agentic turn
+            call_key = (tool_name, json.dumps(tool_args, sort_keys=True, default=str))
+            if call_key in _seen_calls:
+                # Inject a fake "already done" result so model moves on
+                results_buffer.append({
+                    "name":   tool_name,
+                    "result": '{"ok": true, "note": "already called this turn — result cached above"}',
+                })
+                continue
+            _seen_calls.add(call_key)
+
             tool_call_count += 1
 
-            # Step notification to Telegram (NOT in context)
-            args_preview = json.dumps(tool_args, default=str)[:150]
-            _tg_send(cid, f"⚙️ <b>{tool_name}</b>\n<code>{args_preview}</code>")
+            # Step notification suppressed — batched summary sent after round
 
             # Destructive gate
             if _is_destructive(tool_name, tool_args):
@@ -1309,8 +1323,7 @@ def _agentic_loop(cid: str, user_message: str,
             else:
                 result_str = _execute_railway_tool(tool_name, tool_args)
 
-            # Show result preview to Telegram
-            _tg_send(cid, f"📋 <code>{result_str[:600]}</code>")
+            # Individual result preview suppressed — see round summary below
 
             # Auto-send screenshot if result contains base64 image
             try:
@@ -1333,6 +1346,21 @@ def _agentic_loop(cid: str, user_message: str,
                 "name":   tool_name,
                 "result": _compress_result(result_str, tool_name),
             })
+
+        # One summary per round — not per tool
+        if tool_calls:
+            names = ", ".join(tc.get("name","?") for tc in tool_calls)
+            _tg_send(cid, f"⚙️ <i>{names}</i>")
+
+        # Stall detection: if no new tool_call_count was incremented this round,
+        # every call was a duplicate — model is stuck, force exit
+        if tool_calls and tool_call_count == _prev_count:
+            if reply:
+                _tg_send(cid, reply)
+                _append_history(cid, "assistant", reply)
+            else:
+                _tg_send(cid, "✅ Done.")
+            return
 
         if done:
             if reply:
