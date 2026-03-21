@@ -354,6 +354,25 @@ def _build_system_prompt(cid: str) -> str:
         "Status: Living Document. Evolves with CORE.\n"
         "Principle-based, not rule-based. Technology-agnostic. Era-agnostic.\n\n"
 
+        "META-RULE — runs before EVERY response:\n"
+        "1. GROUND: query persistent brain before forming any response\n"
+        "2. CLASSIFY: knowledge query | planning request | execution request | ambiguous\n"
+        "3. REASON: real intent? what could go wrong? what is fallback?\n"
+        "4. GATE: destructive? irreversible? plan-only? ambiguous?\n"
+        "Only after all 4 pass → respond or execute.\n\n"
+        "CLASSIFY RULES:\n"
+        "- plan/how would you/what would/dry run/do not execute/plan only\n"
+        "  → TEXT response only. Zero execution tools. Brain queries always allowed.\n"
+        "- go/execute/do it/proceed/run it → full execution. Still run META-RULE 1-4 first.\n"
+        "- ambiguous → classify as planning. Ask owner to confirm before executing.\n\n"
+        "BRAIN QUERIES — always allowed, even in plan-only mode (thinking, not acting):\n"
+        "search_kb, get_mistakes, get_behavioral_rules, list_tools, get_tool_info,\n"
+        "sb_query on: mistakes, pattern_frequency, cold_reflections, knowledge_base\n\n"
+        "FALLBACK RULE — non-negotiable:\n"
+        "If any tool/query returns empty or fails: try at least one alternative.\n"
+        "search_kb empty → sb_query the underlying table directly.\n"
+        "Never declare UNKNOWN after a single failed attempt.\n\n"
+
         "IDENTITY:\n"
         "You are CORE — a sovereign, self-improving intelligence.\n"
         "Not a chatbot. Not a tool. An agent with memory, agency, and purpose.\n"
@@ -392,13 +411,17 @@ def _build_system_prompt(cid: str) -> str:
 
         "PRINCIPLE 4 — EPISTEMIC HONESTY:\n"
         "Confidence must match evidence at all times.\n"
-        "CONFIRMED = verified from source this session.\n"
+        "CONFIRMED = verified from tool result or persistent store this session.\n"
         "INFERRED = reasoned from available data, not directly verified.\n"
-        "UNKNOWN = not in any verified source.\n"
+        "UNKNOWN = not in any verified source after trying alternatives.\n"
+        "Label claims explicitly in responses when precision matters.\n"
         "Surface UNKNOWN to owner when it blocks progress or affects decisions.\n"
         "Handle UNKNOWN independently only when it is low-stakes and reversible.\n"
         "If persistent store and memory conflict: persistent store wins.\n"
-        "Knowledge has a timestamp. Old knowledge may be stale — verify if critical.\n\n"
+        "Knowledge has a timestamp. Old knowledge may be stale — verify if critical.\n"
+        "Principle citation is not reasoning. When citing a principle, explain:\n"
+        "  (a) which aspect of this situation triggers it, and\n"
+        "  (b) what specific action or restraint it requires here.\n\n"
 
         "PRINCIPLE 5 — CLOSE THE LOOP:\n"
         "Every action has an outcome. Report it explicitly — never just 'done'.\n"
@@ -621,6 +644,69 @@ def _reason_before_execute(user_message: str, system_prompt: str,
                     for t in lt["tools"][:8]
                 ) + "\n"
 
+        # Brain 5: Meta/self-knowledge — patterns + reflections
+        # Always query for meta questions (failure modes, patterns, self-awareness)
+        meta_keywords = ["pattern", "failure", "mistake", "learn", "improve",
+                         "session", "history", "trend", "reflect", "stale",
+                         "outdated", "know", "aware", "self"]
+        is_meta = any(kw in user_message.lower() for kw in meta_keywords)
+        if is_meta:
+            # Query pattern_frequency directly
+            pf_result = sb_get(
+                "pattern_frequency",
+                "select=pattern,frequency,domain&id=gt.1&order=frequency.desc&limit=8",
+            )
+            if pf_result:
+                brain_context += "TOP PATTERNS (from training):\n" + "\n".join(
+                    "  [" + r.get("domain","?") + "/" + str(r.get("frequency",0)) + "x] " + r.get("pattern","")[:120]
+                    for r in pf_result[:8]
+                ) + "\n"
+            # Query cold_reflections for distilled learnings
+            cr_result = sb_get(
+                "cold_reflections",
+                "select=reflection,domain,created_at&id=gt.1&order=created_at.desc&limit=5",
+            )
+            if cr_result:
+                brain_context += "RECENT REFLECTIONS:\n" + "\n".join(
+                    "  [" + r.get("domain","?") + "]  " + r.get("reflection","")[:120]
+                    for r in cr_result[:5]
+                ) + "\n"
+            # Query mistakes with direct sb_get (bypasses search_kb issues)
+            mk_result = sb_get(
+                "mistakes",
+                "select=domain,what_failed,fix,created_at&id=gt.1&order=created_at.desc&limit=5",
+            )
+            if mk_result:
+                brain_context += "RECENT MISTAKES:\n" + "\n".join(
+                    "  [" + r.get("domain","?") + "]  " + r.get("what_failed","")[:80] + " → " + r.get("fix","")[:80]
+                    for r in mk_result[:5]
+                ) + "\n"
+
+        # Brain 6: Accountability — sessions + hot_reflections for "why/deviation/past" questions
+        accountability_keywords = ["why", "deviat", "didn't", "did not", "fail", "past",
+                                    "previous", "log", "internal", "reason", "explain",
+                                    "not doing", "not follow", "supposed to"]
+        is_accountability = any(kw in user_message.lower() for kw in accountability_keywords)
+        if is_accountability:
+            sess_result = sb_get(
+                "sessions",
+                "select=summary,quality,domain,created_at&id=gt.1&order=created_at.desc&limit=3",
+            )
+            if sess_result:
+                brain_context += "RECENT SESSIONS:\n" + "\n".join(
+                    "  [" + r.get("domain","?") + "/q=" + str(r.get("quality","?")) + "] " + r.get("summary","")[:150]
+                    for r in sess_result[:3]
+                ) + "\n"
+            hr_result = sb_get(
+                "hot_reflections",
+                "select=reflection,domain,created_at&id=gt.1&processed_by_cold=eq.0&order=created_at.desc&limit=5",
+            )
+            if hr_result:
+                brain_context += "UNPROCESSED REFLECTIONS:\n" + "\n".join(
+                    "  [" + r.get("domain","?") + "] " + r.get("reflection","")[:120]
+                    for r in hr_result[:5]
+                ) + "\n"
+
     except Exception as e:
         print(f"[ORCH] brain query failed (non-fatal): {e}")
 
@@ -629,14 +715,17 @@ def _reason_before_execute(user_message: str, system_prompt: str,
         f"CONVERSATION:\n{history_text}\n\n"
         f"{brain_context}"
         "Before executing any tools, reason about the owner's request.\n"
+        "Label all knowledge claims as CONFIRMED/INFERRED/UNKNOWN.\n"
+        "If citing a principle, explain HOW it applies to this specific situation.\n"
+        "If tool returns empty/fails, always try at least one alternative before declaring unknown.\n"
         "Output ONLY valid JSON:\n"
         "{\n"
         '  "intent": "true intent behind the message",\n'
-        '  "known_context": "what you already know from brain queries above",\n'
+        '  "known_context": "what you know — label each fact CONFIRMED/INFERRED/UNKNOWN",\n'
         '  "can_answer_directly": true/false,\n'
         '  "direct_answer": "full answer if can_answer_directly=true, else empty string",\n'
         '  "plan": ["step 1", "step 2", ...],\n'
-        '  "fallback_strategy": "if primary tools return empty, what to try next"\n'
+        '  "fallback_strategy": "if primary approach fails, specific alternative to try next"\n'
         "}"
     )
     try:
@@ -730,7 +819,13 @@ def _build_reasoning_payload(system_prompt: str, history_text: str,
         "- done=true ONLY when task is fully complete AND reply is non-empty\n"
         "- tool_calls=[] when replying directly with no tools needed\n"
         "- Never invent tool results — always call the tool\n"
-        "- If KB search returns empty, use fallback_strategy — do NOT just say Done\n"
+        "- If a tool returns empty or fails: try at least one alternative before declaring unknown\n"
+        "- search_kb empty → try sb_query on the underlying table directly\n"
+        "- search_mistakes empty → try sb_query(table='mistakes', filters='id=gt.1', order='created_at.desc')\n"
+        "- stats() for patterns → also try sb_query(table='pattern_frequency') and sb_query(table='cold_reflections')\n"
+        "- For 'why did I / deviation / past behavior' questions → sb_query(table='sessions') and sb_query(table='hot_reflections')\n"
+        "- Label factual claims: CONFIRMED (from tool result this session) / INFERRED / UNKNOWN\n"
+        "- When citing a principle: explain HOW it applies, not just which principle number\n"
         "- Output ONLY valid JSON, no markdown fences"
     )
 
@@ -1263,10 +1358,15 @@ def _agentic_loop(cid: str, user_message: str,
         ]
         if len(kb_misses) >= 2:
             current_user += (
-                "\n\nKB_MISS_ALERT: KB returned empty 2+ times. "
-                "You MUST use the fallback_strategy from your pre-flight plan now. "
-                "Options: sb_query direct tables, web_search, or synthesize from session_start data. "
-                "Do NOT give up and do NOT call search_kb again with the same query."
+                "\n\nKB_MISS_ALERT: KB search returned empty 2+ times. "
+                "You MUST try direct table queries now:\n"
+                "- mistakes table: sb_query(table='mistakes', filters='id=gt.1', order='created_at.desc', limit='5', select='domain,what_failed,fix,created_at')\n"
+                "- pattern_frequency: sb_query(table='pattern_frequency', filters='id=gt.1', order='frequency.desc', limit='8')\n"
+                "- cold_reflections: sb_query(table='cold_reflections', filters='id=gt.1', order='created_at.desc', limit='5')\n"
+                "- knowledge_base: sb_query(table='knowledge_base', filters='id=gt.1&domain=like.*core*', limit='10', select='domain,topic,content,created_at')\n"
+                "- sessions: sb_query(table='sessions', filters='id=gt.1', order='created_at.desc', limit='3', select='summary,quality,domain,created_at')\n"
+                "- hot_reflections: sb_query(table='hot_reflections', filters='id=gt.1&processed_by_cold=eq.0', order='created_at.desc', limit='5')\n"
+                "Do NOT call search_kb again with the same query. Use sb_query instead."
             )
 
         try:
@@ -1349,6 +1449,9 @@ def _agentic_loop(cid: str, user_message: str,
             if not tool_name:
                 continue
 
+            # Normalize meta-tools with no meaningful args to prevent false duplicates
+            if tool_name in ("list_tools", "get_tool_info") and not tool_args.get("search") and not tool_args.get("category") and not tool_args.get("name"):
+                tool_args = {}
             call_key = (tool_name, json.dumps(tool_args, sort_keys=True, default=str))
             if call_key in _seen_calls:
                 results_buffer.append({
