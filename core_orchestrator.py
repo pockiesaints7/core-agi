@@ -2504,7 +2504,7 @@ def _agentic_loop(cid: str, user_message: str,
         reply      = response.get("reply", "")
         done       = response.get("done", False)
 
-        if not tool_calls:
+        if not tool_calls and (done or tool_call_count == 0):
             effective_reply = reply.strip() if reply else ""
 
             if not effective_reply and results_buffer:
