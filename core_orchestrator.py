@@ -210,7 +210,10 @@ def _or_text(system: str, user: str, model: str = None,
 # TOKEN-OPTIMISED TOOL SELECTION — via OpenRouter
 # ══════════════════════════════════════════════════════════════════════════════
 
-_ALWAYS_TOOLS = {"t_tools", "get_tool_info"}
+_ALWAYS_TOOLS = {
+    "search_kb", "get_mistakes",
+    "list_tools", "get_tool_info", "get_behavioral_rules",
+}
 
 _TOOL_CATEGORIES = {
     "deploy":    ["redeploy", "build_status", "deploy_and_wait", "validate_syntax",
@@ -255,6 +258,11 @@ def _select_tools(message: str, history_summary: str) -> list:
             system=(
                 "You are a tool router. Given a user message, output ONLY a JSON array "
                 f"of category names from: [{categories_text}]. "
+                "Rules:\n"
+                "- Always include 'utils' if message asks about tools, capabilities, or what you can do\n"
+                "- Always include 'knowledge' if message asks about KB, memory, or what you know\n"
+                "- Always include 'system' if message asks about health, status, or counts\n"
+                "- Always include 'task' if message mentions tasks, queue, or pending work\n"
                 "Output only valid JSON array of strings, no preamble."
             ),
             user=f"Message: {message[:300]}\nHistory: {history_summary[:200]}",
@@ -340,46 +348,8 @@ def _build_system_prompt(cid: str) -> str:
                 parts.append(f"BEHAVIORAL RULES:\n{r_lines}")
     except Exception as e:
         print(f"[ORCH] session_start error (non-fatal): {e}")
-# 
-  # Live tool inventory count
-    try:
-        from core_tools import TOOLS
-        parts.append(
-            f"TOOL INVENTORY: {len(TOOLS)} railway tools available. "
-            f"Categories: {', '.join(_TOOL_CATEGORIES.keys())}. "
-            f"Full list per category loaded dynamically per request."
-        )
-    except Exception:
-        pass
-      
-    parts.append(
-        "RAILWAY TOOLS (no prefix — run on server instantly):\n"
-        "  web_search(query, max_results) — search web\n"
-        "  web_fetch(url, max_chars) — fetch URL content\n"
-        "  summarize_url(url, focus) — fetch + summary\n"
-        "  create_document(content, filename, format) — docx|pdf|txt|md|csv\n"
-        "  create_spreadsheet(data, filename, format) — xlsx|csv\n"
-        "  create_presentation(slides, filename, theme) — pptx\n"
-        "  read_document(base64_content, format) — extract text\n"
-        "  convert_document(base64_content, from_format, to_format)\n"
-        "  generate_image(prompt, aspect_ratio) — Gemini Imagen\n"
-        "  image_process(base64_content, operation, params)\n"
-        "  weather(location) — default Jakarta\n"
-        "  calc(expression) — safe math\n"
-        "  datetime_now(timezone) — default Asia/Jakarta\n"
-        "  currency(amount, from_cur, to_cur) — live rate\n"
-        "  translate(text, target_language)\n"
-        "  run_python(code, timeout) — execute Python on Railway"
-    )
-    parts.append(
-        "DESKTOP TOOLS (prefix desktop_ — requires PC online):\n"
-        "  desktop_run_script:  {script, lang: powershell|python}\n"
-        "  desktop_file_ops:    {path, operation: read|write|list|delete|exists|move|mkdir|info|append, content?}\n"
-        "  desktop_browser:     {url?, steps: [{action, selector?, value?, script?}], screenshot?}\n"
-        "  desktop_search_web:  {query, max_results?}\n"
-        "  desktop_cmd:         {command?, script?}"
-    )
-    parts.append(
+    
+  parts.append(
         "CONSTITUTION: Owner=REINVAGNAR always. "
         "Never expose credentials. "
         "Never take destructive action without owner approval. "
@@ -515,24 +485,66 @@ def _history_to_text(history: list) -> str:
 def _reason_before_execute(user_message: str, system_prompt: str,
                             history_text: str, tools_desc: str) -> dict:
     """
-    Pre-execution reasoning pass (OpenRouter fast model).
-    Returns {
-        "can_answer_directly": bool,   # true if no tools needed
-        "direct_answer": str,          # if can_answer_directly
-        "intent": str,                 # true intent parsed from message
-        "plan": [str],                 # ordered steps
-        "known_context": str,          # what we already know relevant to this
-    }
-    Falls back to empty plan on any error — loop continues normally.
+    Pre-execution reasoning pass with active 4-brain query.
+    Queries KB + mistakes + behavioral_rules + list_tools before reasoning.
     """
+    # ── Active brain query sebelum reasoning ──────────────────────────────────
+    brain_context = ""
+    try:
+        from core_tools import TOOLS
+
+        # Brain 1: KB
+        kb_fn = TOOLS.get("search_kb", {}).get("fn")
+        if kb_fn:
+            kb = kb_fn(query=user_message[:100], domain="core_agi", limit="5")
+            if kb.get("ok") and kb.get("results"):
+                brain_context += "KB CONTEXT:\n" + "\n".join(
+                    f"  [{r.get('topic','')}] {r.get('content','')[:150]}"
+                    for r in kb["results"][:5]
+                ) + "\n"
+
+        # Brain 2: Mistakes
+        m_fn = TOOLS.get("get_mistakes", {}).get("fn")
+        if m_fn:
+            m = m_fn(domain="core_agi", limit="3")
+            if m.get("ok") and m.get("mistakes"):
+                brain_context += "RELEVANT MISTAKES:\n" + "\n".join(
+                    f"  {x.get('what_failed','')[:100]} → {x.get('fix','')[:100]}"
+                    for x in m["mistakes"][:3]
+                ) + "\n"
+
+        # Brain 3: Behavioral rules
+        br_fn = TOOLS.get("get_behavioral_rules", {}).get("fn")
+        if br_fn:
+            br = br_fn(domain="core_agi", page="1", page_size="5")
+            if br.get("ok") and br.get("rules"):
+                brain_context += "BEHAVIORAL RULES:\n" + "\n".join(
+                    f"  [{r.get('trigger','')}] {r.get('pointer','')[:100]}"
+                    for r in br["rules"][:5]
+                ) + "\n"
+
+        # Brain 4: Tool discovery — find tools relevant to this message
+        lt_fn = TOOLS.get("list_tools", {}).get("fn")
+        if lt_fn:
+            lt = lt_fn(search=user_message[:50])
+            if lt.get("ok") and lt.get("tools"):
+                brain_context += "RELEVANT TOOLS:\n" + "\n".join(
+                    f"  {t['name']}({t['args']}) — {t['desc'][:80]}"
+                    for t in lt["tools"][:8]
+                ) + "\n"
+
+    except Exception as e:
+        print(f"[ORCH] brain query failed (non-fatal): {e}")
+
     prompt = (
         f"{system_prompt}\n\n"
         f"CONVERSATION:\n{history_text}\n\n"
+        f"{brain_context}"
         "Before executing any tools, reason about the owner's request.\n"
         "Output ONLY valid JSON:\n"
         "{\n"
         '  "intent": "true intent behind the message",\n'
-        '  "known_context": "what you already know from session_start/history relevant to this",\n'
+        '  "known_context": "what you already know from brain queries above",\n'
         '  "can_answer_directly": true/false,\n'
         '  "direct_answer": "full answer if can_answer_directly=true, else empty string",\n'
         '  "plan": ["step 1", "step 2", ...],\n'
@@ -543,7 +555,7 @@ def _reason_before_execute(user_message: str, system_prompt: str,
         raw = _or_text(
             system=prompt,
             user=f"OWNER MESSAGE: {user_message}",
-            max_tokens=400,
+            max_tokens=500,
             json_mode=True,
         )
         parsed = json.loads(_strip_json(raw))
@@ -860,8 +872,9 @@ def _compress_result(result_str: str, tool_name: str) -> str:
                 else:
                     compressed[k] = v
             out = json.dumps(compressed, default=str)
-            if len(out) <= MAX_TOOL_RESULT_CHARS:
+            if len(out) <= limit:
                 return out
+    return result_str[:limit] + "…[truncated]"
     except Exception:
         pass
     return result_str[:MAX_TOOL_RESULT_CHARS] + "…[truncated]"
