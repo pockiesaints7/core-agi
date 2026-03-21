@@ -1070,7 +1070,8 @@ def _safe_result(r: str, tool_name: str = "") -> str:
             ok    = parsed.get("ok", "?")
             parts = [f"ok={ok}"]
             for k in ["status", "summary", "output", "result", "error",
-                      "count", "total", "commit", "path", "message"]:
+                      "count", "total", "commit", "path", "message",
+                      "tools", "filtered", "rules", "mistakes", "results"]:
                 v = parsed.get(k)
                 if v is not None:
                     parts.append(f"{k}={str(v)[:120]}")
@@ -1316,15 +1317,15 @@ def _agentic_loop(cid: str, user_message: str,
             _tg_send(cid, f"⚙️ <i>{names}</i>")
 
         if done:
-            final = reply.strip() if reply else ""
-            if final:
-                check = _validate_before_reply(user_message, final, results_buffer, system_prompt)
-                if not check.get("is_valid", True) and check.get("corrected_reply"):
-                    final = check["corrected_reply"].strip() or final
-            _tg_send(cid, final or "✅ Done.")
-            if final:
+            # done=True with tool_calls means tools ran this round but model signals finish
+            # Next loop iteration will have empty tool_calls and handle the reply properly
+            # If reply is already set here, send it directly (avoid double loop)
+            if reply and reply.strip():
+                final = reply.strip()
+                _tg_send(cid, final)
                 _append_history(cid, "assistant", final)
-            return
+                return
+            # No reply yet — let loop continue once more to synthesize
 
     _tg_send(
         cid,
