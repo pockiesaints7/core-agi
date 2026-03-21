@@ -47,11 +47,22 @@ import os
 import threading
 import time
 import traceback
+import re
 from collections import deque
+def _strip_json(s: str) -> str:
+    """Strip markdown code fences from model JSON output."""
+    s = s.strip()
+    if s.startswith("```"):
+        s = re.sub(r"^```[a-z]*\n?", "", s)
+        s = re.sub(r"```$", "", s)
+    return s.strip()
+
+
 from datetime import datetime
 from typing import Optional
 
 import httpx
+
 
 from core_config import (
     SUPABASE_URL, SUPABASE_SVC, SUPABASE_PAT, SUPABASE_REF,
@@ -168,6 +179,7 @@ def _select_tools(message: str, history_summary: str) -> list:
     Falls back to all tools if Groq fails.
     """
     try:
+        
         from core_config import groq_chat, GROQ_FAST
         from core_tools import TOOLS
 
@@ -187,7 +199,7 @@ def _select_tools(message: str, history_summary: str) -> list:
             model=GROQ_FAST,
             max_tokens=60,
         )
-        selected_cats = json.loads(raw.strip().lstrip("```json").lstrip("```").rstrip("```").strip())
+        selected_cats = json.loads(_strip_json(raw))
         if not isinstance(selected_cats, list):
             raise ValueError("not a list")
 
@@ -421,6 +433,7 @@ def _compress_history(q: deque):
         if q:
             oldest.append(q.popleft())
     try:
+        
         from core_config import groq_chat, GROQ_FAST
         text = "\n".join(
             f"{e['role'].upper()}: {e['content'][:200]}"
@@ -600,7 +613,7 @@ def _call_openrouter(system_prompt: str, history_text: str, user_message: str,
     finish     = choice.get("finish_reason", "")
     raw_text   = msg.get("content") or "{}"
     try:
-        parsed = json.loads(raw_text.strip().lstrip("```json").lstrip("```").rstrip("```").strip())
+        parsed = json.loads(_strip_json(raw_text))
     except Exception:
         # Model returned plain text — treat as final reply
         return {"thought": "", "tool_calls": [], "reply": raw_text, "done": True}
@@ -639,7 +652,7 @@ def _call_groq_model(system_prompt: str, history_text: str, user_message: str,
         max_tokens=1024,
     )
     try:
-        parsed = json.loads(raw.strip().lstrip("```json").lstrip("```").rstrip("```").strip())
+        parsed = json.loads(_strip_json(raw))
     except Exception:
         return {"thought": "", "tool_calls": [], "reply": raw, "done": True}
     return {
@@ -726,7 +739,7 @@ def _call_gemini(system_prompt: str, history_text: str, user_message: str,
                     last_err = "empty parts"
                     continue
                 raw = resp_parts[0]["text"].strip()
-                parsed = json.loads(raw.lstrip("```json").lstrip("```").rstrip("```").strip())
+                parsed = json.loads(_strip_json(raw))
                 return {
                     "thought":    parsed.get("thought", ""),
                     "tool_calls": parsed.get("tool_calls", []),
@@ -745,7 +758,7 @@ def _call_gemini(system_prompt: str, history_text: str, user_message: str,
             max_tokens=2048,
             json_mode=True,
         )
-        parsed = json.loads(raw.strip().lstrip("```json").lstrip("```").rstrip("```").strip())
+        parsed = json.loads(_strip_json(raw))
         return {
             "thought":    parsed.get("thought", ""),
             "tool_calls": parsed.get("tool_calls", []),
@@ -1207,44 +1220,66 @@ def _agentic_loop(cid: str, user_message: str,
     # Loop detection: track (tool_name, frozen_args) to catch infinite repeats
     _seen_calls: set = set()
 
+    def _safe_result(r: str) -> str:
+        """Sanitize tool result before injecting into model prompt.
+        Raw JSON with backslashes can break JSON output mode.
+        Also injects FAILED signal so model can react."""
+        try:
+            parsed = json.loads(r)
+            if isinstance(parsed, dict):
+                ok    = parsed.get("ok", "?")
+                parts = [f"ok={ok}"]
+                for k in ["status", "summary", "output", "result", "error",
+                          "count", "total", "commit", "path", "message"]:
+                    v = parsed.get(k)
+                    if v is not None:
+                        parts.append(f"{k}={str(v)[:120]}")
+                result_text = " | ".join(parts)
+                # Inject explicit failure signal — model must react, not ignore
+                if ok is False or ok == "false" or parsed.get("error"):
+                    return f"TOOL_FAILED: {result_text}"
+                return result_text
+        except Exception:
+            pass
+        return r.replace("\\", "/").replace('"', "'")[:400]
+
     while tool_call_count < MAX_TOOL_CALLS:
         _prev_count = tool_call_count
         if tool_call_count > 0:
-            time.sleep(3)
+            # Adaptive delay: deploy/build ops need more wait time
+            last_tool = results_buffer[-1]["name"] if results_buffer else ""
+            _sleep = 8 if last_tool in ("redeploy", "deploy_and_wait", "patch_file", "multi_patch") else 1
+            time.sleep(_sleep)
         _tg_typing(cid)
 
         # Build user content for this loop iteration
         if results_buffer:
-            def _safe_result(r: str) -> str:
-                """Sanitize tool result before injecting into Gemini prompt.
-                Raw JSON with backslashes breaks Gemini's JSON output mode.
-                Parse to plain text summary instead."""
-                try:
-                    parsed = json.loads(r)
-                    if isinstance(parsed, dict):
-                        ok    = parsed.get("ok", "?")
-                        parts = [f"ok={ok}"]
-                        for k in ["status", "summary", "output", "result", "error",
-                                  "count", "total", "commit", "path", "message"]:
-                            v = parsed.get(k)
-                            if v is not None:
-                                parts.append(f"{k}={str(v)[:120]}")
-                        return " | ".join(parts)
-                except Exception:
-                    pass
-                # Fallback: strip chars that break Gemini JSON output
-                return r.replace("\\", "/").replace('"', "'")[:400]
-
+            # Feed last 8 results to model; note count if more were dropped
+            visible = results_buffer[-8:]
+            dropped = len(results_buffer) - len(visible)
             tool_results_text = "\n".join(
                 f"[{r['name']}] → {_safe_result(r['result'])}"
-                for r in results_buffer[-5:]
+                for r in visible
             )
+            if dropped:
+                tool_results_text = f"[...{dropped} earlier results omitted...]\n" + tool_results_text
             current_user = (
                 f"{user_message}\n\n"
                 f"TOOL RESULTS SO FAR:\n{tool_results_text}"
             )
         else:
             current_user = user_message
+
+        # Error escalation: if last result was a failure, nudge model explicitly
+        failed_results = [r for r in results_buffer if _safe_result(r["result"]).startswith("TOOL_FAILED")]
+        if failed_results:
+            last_fail = failed_results[-1]
+            escalation = (
+                f"\n\nTOOL_FAILURE_ALERT: {last_fail['name']} failed — "
+                "decide: (1) retry with different args, (2) use alternative tool, "
+                "(3) ask owner for clarification. Do NOT repeat the same failing call."
+            )
+            current_user = current_user + escalation
 
         try:
             response = _call_model(
@@ -1347,24 +1382,25 @@ def _agentic_loop(cid: str, user_message: str,
                 "result": _compress_result(result_str, tool_name),
             })
 
-        # One summary per round — not per tool
-        if tool_calls:
-            names = ", ".join(tc.get("name","?") for tc in tool_calls)
-            _tg_send(cid, f"⚙️ <i>{names}</i>")
+        # One summary per round — not per tool (after stall check so it's not dangling)
 
         # Stall detection: if no new tool_call_count was incremented this round,
         # every call was a duplicate — model is stuck, force exit
         if tool_calls and tool_call_count == _prev_count:
+            final = reply or "✅ Done."
+            _tg_send(cid, final)
             if reply:
-                _tg_send(cid, reply)
                 _append_history(cid, "assistant", reply)
-            else:
-                _tg_send(cid, "✅ Done.")
             return
 
+        if tool_calls:
+            names = ", ".join(tc.get("name","?") for tc in tool_calls)
+            _tg_send(cid, f"⚙️ <i>{names}</i>")
+
         if done:
+            final = reply or "✅ Done."
+            _tg_send(cid, final)
             if reply:
-                _tg_send(cid, reply)
                 _append_history(cid, "assistant", reply)
             return
 
