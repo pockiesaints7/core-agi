@@ -4770,13 +4770,13 @@ TOOLS = {
     "get_training_status":    {"fn": t_training_status,        "perm": "READ",    "args": [],
                                "desc": "DEPRECATED -- use get_training_pipeline for full status. This thin wrapper returns a subset of fields and will be removed."},
     "search_kb":              {"fn": t_search_kb,              "perm": "READ",    "args": ["query", "domain", "limit"],
-                               "desc": "Search knowledge base by query (multi-word, searches topic+instruction+content) and optional domain. Returns domain, topic, instruction, content, confidence. Use before any write to check if knowledge already exists."},
+                           "desc": "Search knowledge base by query. Returns domain, topic, content, confidence. ALWAYS include id=gt.1 filter behavior is automatic. IF EMPTY: do NOT give up — try sb_query(table='knowledge_base', filters='id=gt.1&domain=like.*core*') as fallback. Use before any write to check duplicates. EXAMPLE: search_kb(query='railway deploy', domain='core_agi', limit='5')"},
     "get_mistakes":           {"fn": t_get_mistakes,           "perm": "READ",    "args": ["domain", "limit"],
-                               "desc": "Get recorded mistakes with full fields: context, what_failed, correct_approach, severity, root_cause, how_to_avoid. Call before any write op in a domain to avoid repeating known errors."},
+                           "desc": "Get recorded mistakes: what_failed, correct_approach, severity, root_cause. Call before any domain operation to avoid repeating known errors. IF EMPTY or fails: fallback to sb_query(table='mistakes', filters='id=gt.1', order='created_at.desc', limit='5', select='domain,what_failed,fix,created_at') — this ALWAYS works. EXAMPLE: get_mistakes(domain='core_agi', limit='5')"},
     "read_file":              {"fn": t_read_file,              "perm": "READ",    "args": ["path", "repo", "start_line", "end_line"],
                                "desc": "Read file from GitHub repo. Optional start_line/end_line for range. Returns total_line_count + truncated flag. Cap 8000 chars. For large files use gh_read_lines instead."},
     "sb_query":               {"fn": t_sb_query,               "perm": "READ",    "args": ["table", "filters", "limit", "order", "select"],
-                               "desc": "Raw Supabase query. table=table name. filters=PostgREST filter string (e.g. status=eq.pending). limit=row count (default 20). order=sort column (e.g. created_at.desc). select=columns (default *). Use dedicated tools first (search_kb, get_mistakes etc) -- this is the escape hatch for queries those tools cannot handle."},
+                           "desc": "Raw Supabase PostgREST query — use when dedicated tools return empty. CRITICAL: ALWAYS include id=gt.1 in filters (row id=1 is a probe row, excluding it returns garbage). filters format: 'field=eq.value&field2=gt.0&id=gt.1'. COMMON MISTAKE: forgetting id=gt.1. EXAMPLES: sb_query(table='mistakes', filters='id=gt.1', order='created_at.desc', limit='5', select='domain,what_failed,fix') | sb_query(table='pattern_frequency', filters='id=gt.1', order='frequency.desc', limit='8') | sb_query(table='sessions', filters='id=gt.1', order='created_at.desc', limit='3', select='summary,quality,domain')"},
     "list_evolutions":        {"fn": t_list_evolutions,        "perm": "READ",    "args": ["status"],
                                "desc": "List evolutions. status=pending|synthesized|applied|rejected (default: pending). Use synthesized to see items Claude has already read via synthesize_evolutions."},
     "update_state":           {"fn": t_update_state,           "perm": "WRITE",   "args": ["key", "value", "reason"],
@@ -5614,8 +5614,7 @@ TOOLS["get_behavioral_rules"] = {"fn": t_get_behavioral_rules, "perm": "READ",
         {"name": "page", "type": "string", "description": "Page number (1-based, default 1)"},
         {"name": "page_size", "type": "string", "description": "Rows per page (default 200, max 500)"},
     ],
-    "desc": "TASK-V8: Load active behavioral rules from behavioral_rules table. Pass domain= to get universal + domain-specific rules. Returns rules ordered by priority. Supports pagination (page, page_size). If table missing returns migration_needed=true."}
-
+    "desc": "Load active behavioral rules from behavioral_rules table. domain= filters to universal + domain-specific rules. Returns trigger, pointer, full_rule, priority. Supports pagination (page, page_size). IF question is about why CORE deviated from rules or did not follow protocol: (1) call this to get active rules, (2) then sb_query(table='sessions', filters='id=gt.1', order='created_at.desc', limit='3', select='summary,quality,domain,actions') to see what actually happened, (3) compare rules vs actual session actions to identify deviation. NOTE: domain='rarl' contains simulation research data NOT operational history — for CORE execution behavior use domain='core_agi'. EXAMPLE: get_behavioral_rules(domain='core_agi', page='1', page_size='20')"}
 
 def t_add_behavioral_rule(trigger: str = "", pointer: str = "", full_rule: str = "",
                            domain: str = "universal", priority: str = "5",
