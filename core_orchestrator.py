@@ -307,56 +307,109 @@ def _or_text(system: str, user: str, model: str = None,
 # TOKEN-OPTIMISED TOOL SELECTION — via OpenRouter
 # ══════════════════════════════════════════════════════════════════════════════
 
+# ── Tools always provided to model on every message ──────────────────────────
 _ALWAYS_TOOLS = {
-    "search_kb", "get_mistakes", "list_tools", "get_tool_info", "get_behavioral_rules", "get_table_schema",
+    "search_kb", "get_mistakes", "list_tools", "get_tool_info",
+    "get_behavioral_rules", "get_table_schema",
 }
 
-_TOOL_CATEGORIES = {
-    "deploy":    ["redeploy", "build_status", "deploy_and_wait", "validate_syntax",
-                  "patch_file", "multi_patch", "gh_search_replace", "railway_logs_live"],
-    "code":      ["read_file", "write_file", "gh_read_lines", "search_in_file",
-                  "core_py_fn", "core_py_validate", "append_to_file", "diff"],
-    "training":  ["trigger_cold_processor", "get_training_pipeline", "list_evolutions",
-                  "approve_evolution", "reject_evolution", "check_evolutions",
-                  "bulk_reject_evolutions", "backfill_patterns"],
-    "system":    ["get_state", "get_system_health", "stats", "build_status",
-                  "crash_report", "system_map_scan", "sync_system_map"],
-    "railway":   ["railway_env_get", "railway_env_set", "railway_logs_live",
-                  "railway_service_info", "redeploy", "build_status"],
+# ── Category keyword map — ONLY thing you ever update when adding a new domain ─
+# Keys = category names shown to LLM router.
+# Values = substrings matched against tool names (any substring match = assigned).
+# Any tool whose name matches no keyword → auto-assigned to "misc".
+# NO hardcoded tool lists. Adding a new tool requires zero changes here.
+_CATEGORY_KEYWORDS = {
+    "deploy":    ["redeploy", "deploy", "build_status", "validate_syntax",
+                  "patch_file", "multi_patch", "gh_search_replace", "railway_logs",
+                  "replace_fn", "smart_patch", "register_tool", "rollback"],
+    "code":      ["read_file", "write_file", "gh_read", "search_in_file",
+                  "core_py", "append_to_file", "diff"],
+    "training":  ["cold_processor", "training_pipeline", "evolution", "reflection",
+                  "backfill", "synthesize"],
+    "system":    ["get_state", "health", "stats", "crash", "system_map",
+                  "sync_system", "session_start", "session_end"],
+    "railway":   ["railway_env", "railway_service", "railway_logs"],
     "knowledge": ["search_kb", "add_knowledge", "kb_update", "get_mistakes",
                   "search_mistakes", "ask"],
-    "task":      ["task_add", "task_update", "task_health", "synthesize_evolutions",
-                  "sb_query", "sb_insert", "sb_patch"],
-    "crypto":    ["crypto_price", "crypto_balance", "crypto_trade"],
-    "project":   ["project_list", "project_get", "project_search", "project_register",
-                  "project_update_kb", "project_index"],
-    "agentic":   ["reason_chain", "lookahead", "decompose_task", "negative_space",
-                  "predict_failure", "action_gate", "loop_detect"],
+    "task":      ["task_add", "task_update", "task_health", "sb_query",
+                  "sb_insert", "sb_patch", "sb_upsert", "sb_delete"],
+    "crypto":    ["crypto", "binance"],
+    "project":   ["project_"],
+    "agentic":   ["reason_chain", "lookahead", "decompose", "negative_space",
+                  "predict_failure", "action_gate", "loop_detect", "goal_check",
+                  "circuit_breaker", "mid_task", "assert_source"],
     "web":       ["web_search", "web_fetch", "summarize_url"],
     "document":  ["create_document", "create_spreadsheet", "create_presentation",
-                  "read_document", "convert_document"],
+                  "read_document", "convert_document", "read_pdf", "read_image"],
     "image":     ["generate_image", "image_process"],
-    "utils":     ["weather", "calc", "datetime_now", "currency", "translate", "run_python",
-                  "list_tools", "get_tool_info", "get_table_schema"]
+    "utils":     ["weather", "calc", "datetime", "currency", "translate",
+                  "run_python", "list_tools", "get_tool_info", "get_table_schema",
+                  "notify", "tool_stats", "tool_health", "debug_fn", "backlog",
+                  "changelog", "backup"],
 }
+
+# Module-level cache — rebuilt whenever TOOLS size changes (e.g. after new tool registered)
+_cat_cache: dict = {}
+_cat_cache_size: int = 0
+
+
+def _build_live_categories() -> dict:
+    """Build tool→category mapping live from TOOLS dict using _CATEGORY_KEYWORDS.
+    Called on every _select_tools invocation. Cached until TOOLS size changes.
+
+    Rules:
+    - Each tool name is checked against _CATEGORY_KEYWORDS substring lists
+    - First matching category wins (order matters for ambiguous names)
+    - Unmatched tools go into "misc" — always visible to LLM router
+    - Empty categories are dropped from result
+
+    This means: adding a new tool to TOOLS dict makes it immediately available
+    to the router with ZERO changes to orchestrator code. It lands in "misc"
+    until you optionally add a keyword to _CATEGORY_KEYWORDS for a cleaner label.
+    """
+    global _cat_cache, _cat_cache_size
+    try:
+        from core_tools import TOOLS
+        current_size = len(TOOLS)
+        if _cat_cache and current_size == _cat_cache_size:
+            return _cat_cache
+
+        cats: dict = {cat: [] for cat in _CATEGORY_KEYWORDS}
+        cats["misc"] = []
+
+        for tool_name in TOOLS.keys():
+            assigned = False
+            for cat, keywords in _CATEGORY_KEYWORDS.items():
+                if any(kw in tool_name for kw in keywords):
+                    cats[cat].append(tool_name)
+                    assigned = True
+                    break
+            if not assigned:
+                cats["misc"].append(tool_name)
+
+        # Drop empty categories — cleaner prompt for LLM router
+        cats = {k: v for k, v in cats.items() if v}
+
+        _cat_cache = cats
+        _cat_cache_size = current_size
+        misc_count = len(cats.get("misc", []))
+        print(f"[ORCH] Categories built live: {len(cats)} cats, "
+              f"{current_size} tools total, {misc_count} in misc")
+        return cats
+    except Exception as e:
+        print(f"[ORCH] _build_live_categories error: {e}")
+        return {"misc": []}
 
 
 def _select_tools(message: str, history_summary: str) -> list:
-    """
-    Use OpenRouter fast model to pick relevant tool categories.
-    Fallback chain: OpenRouter → Gemini → Groq (handled by _or_text).
-    Dynamically adds 'misc' category for any live tools not in static categories.
+    """Select relevant tools for this message via LLM category routing.
+    Categories are built live from TOOLS dict — no hardcoded lists.
+    New tools appear automatically after deploy, no orchestrator changes needed.
     """
     try:
         from core_tools import TOOLS
         all_tool_names = set(TOOLS.keys())
-        # Populate misc with tools not in any static category (new tools from evolutions)
-        categorised = {t for tools in _TOOL_CATEGORIES.values() for t in tools}
-        misc_tools = [t for t in all_tool_names if t not in categorised]
-        # Use local merged dict — never mutate global _TOOL_CATEGORIES (not thread-safe)
-        tool_cats = dict(_TOOL_CATEGORIES)
-        if misc_tools:
-            tool_cats["misc"] = misc_tools
+        tool_cats = _build_live_categories()
         categories_text = ", ".join(tool_cats.keys())
         raw = _or_text(
             system=(
@@ -367,6 +420,7 @@ def _select_tools(message: str, history_summary: str) -> list:
                 "- Always include 'knowledge' if message asks about KB, memory, or what you know\n"
                 "- Always include 'system' if message asks about health, status, or counts\n"
                 "- Always include 'task' if message mentions tasks, queue, or pending work\n"
+                "- Include 'misc' if the request seems unusual or uncategorised\n"
                 "Output only valid JSON array of strings, no preamble."
             ),
             user=f"Message: {message[:300]}\nHistory: {history_summary[:200]}",
@@ -388,7 +442,6 @@ def _select_tools(message: str, history_summary: str) -> list:
             from core_tools import TOOLS
             return list(TOOLS.keys())
         except Exception:
-            # Absolute minimum — always return _ALWAYS_TOOLS so model can at least query KB
             return list(_ALWAYS_TOOLS)
 
 

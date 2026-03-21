@@ -7824,57 +7824,6 @@ TOOLS["load_arch_context"] = {
 
 
 
-def t_get_table_schema(table: str = "") -> dict:
-    """Return schema info for a Supabase table from live-merged _SB_SCHEMA.
-    If table="" returns summary of all registered tables.
-    Returns: columns, pk_type, fat_columns, safe_select, enums, notes.
-    Use before any sb_insert/sb_patch to verify column names and types."""
-    try:
-        if not table or table.strip() == "":
-            # Return summary of all tables
-            summary = {}
-            for tname, tdef in _SB_SCHEMA.get("tables", {}).items():
-                summary[tname] = {
-                    "pk_type":     tdef.get("pk_type", "?"),
-                    "columns":     sorted(tdef.get("columns", {}).keys()),
-                    "fat_columns": tdef.get("fat_columns", []),
-                    "safe_select": tdef.get("safe_select", "*"),
-                }
-            tombstones = sorted(_SB_SCHEMA.get("_tombstone", set()))
-            protected  = sorted(_SB_SCHEMA.get("_protected", set()))
-            return {
-                "ok": True,
-                "table_count": len(summary),
-                "tables": summary,
-                "tombstone_tables": tombstones,
-                "protected_tables": protected,
-                "note": "Pass table=<name> to get full schema for a specific table",
-            }
-        tdef = _SB_SCHEMA.get("tables", {}).get(table.strip())
-        if not tdef:
-            if table in _SB_SCHEMA.get("_tombstone", set()):
-                return {"ok": False, "error": f"TOMBSTONE: '{table}' is retired — never query"}
-            return {"ok": False, "error": f"Table '{table}' not in schema registry",
-                    "hint": "Call get_table_schema() with no args to see all known tables"}
-        return {
-            "ok": True,
-            "table": table,
-            "pk": tdef.get("pk", "id"),
-            "pk_type": tdef.get("pk_type", "?"),
-            "columns": tdef.get("columns", {}),
-            "required": tdef.get("required", []),
-            "enums": tdef.get("enums", {}),
-            "fat_columns": tdef.get("fat_columns", []),
-            "safe_select": tdef.get("safe_select", "*"),
-            "on_conflict": tdef.get("on_conflict", ""),
-            "notes": tdef.get("notes", ""),
-            "is_protected": table in _SB_SCHEMA.get("_protected", set()),
-            "is_tombstone": False,
-        }
-    except Exception as e:
-        return {"ok": False, "error": str(e)}
-
-
 TOOLS["get_table_schema"] = {
     "fn": t_get_table_schema,
     "perm": "READ",
