@@ -7525,7 +7525,7 @@ def t_tool_health_scan(force: str = "false") -> dict:
 
         # Pull all tool_stats rows
         stats_rows = sb_get("tool_stats",
-            "select=tool_name,total_calls,success_count,fail_count,fail_rate,last_error,last_called"
+            "select=tool_name,call_count,success_count,fail_count,fail_rate,last_error"
             "&order=fail_rate.desc",
             svc=True) or []
         stats_by_name = {r["tool_name"]: r for r in stats_rows}
@@ -7542,7 +7542,7 @@ def t_tool_health_scan(force: str = "false") -> dict:
 
         for tool_name in all_tool_names:
             stat = stats_by_name.get(tool_name)
-            if not stat or (stat.get("total_calls") or 0) == 0:
+            if not stat or (stat.get("call_count") or 0) == 0:
                 classification = "untested"
                 untested_tools.append(tool_name)
             else:
@@ -7563,7 +7563,7 @@ def t_tool_health_scan(force: str = "false") -> dict:
                 "tool": tool_name,
                 "status": classification,
                 "fail_rate": float((stat or {}).get("fail_rate") or 0),
-                "total_calls": int((stat or {}).get("total_calls") or 0),
+                "total_calls": int((stat or {}).get("call_count") or 0),
                 "last_error": str((stat or {}).get("last_error") or "")[:120],
             })
 
@@ -7698,7 +7698,7 @@ def t_tool_improve(tool_name: str = "") -> dict:
 
         # 2. tool_stats
         stat_rows = sb_get("tool_stats",
-            f"select=total_calls,fail_count,fail_rate,last_error,last_called"
+            f"select=call_count,fail_count,fail_rate,last_error"
             f"&tool_name=eq.{clean_name}",
             svc=True) or []
         stat = stat_rows[0] if stat_rows else {}
@@ -7743,7 +7743,7 @@ def t_tool_improve(tool_name: str = "") -> dict:
 
         user = (
             f"TOOL: {fn_name} (in {source_file})\n"
-            f"fail_rate={stat.get('fail_rate','?')} calls={stat.get('total_calls',0)} "
+            f"fail_rate={stat.get('fail_rate','?')} calls={stat.get('call_count',0)} "
             f"failures={stat.get('fail_count',0)}\n"
             f"last_error: {str(stat.get('last_error','none'))[:300]}\n\n"
             f"SOURCE:\n{fn_source[:3000]}\n\n"
