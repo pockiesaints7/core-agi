@@ -1286,20 +1286,26 @@ def _check_stale_patterns() -> int:
 def _restore_diag_timestamp():
     """Seed _last_self_diagnosis_run from Supabase on boot.
     Prevents Railway redeploy from resetting the 24h guard to zero.
-    Falls back to (now - 25h) so first real 19:00 UTC window triggers normally."""
+    Falls back to (now - 25h) so first real 19:00 UTC window triggers normally.
+    Uses summary column pattern matching t_get_state_key/t_update_state convention."""
     global _last_self_diagnosis_run
     try:
+        # sessions table stores state as: summary = "[state_update] key: value"
+        # URL-encode brackets: %5B = [ and %5D = ]
         rows = sb_get(
             "sessions",
-            f"select=state_value&state_key=eq.{_DIAG_STATE_KEY}&order=id.desc&limit=1",
+            f"select=summary&summary=like.*%5Bstate_update%5D+{_DIAG_STATE_KEY}:*&order=id.desc&limit=1",
             svc=True
         ) or []
         if rows:
-            stored = float(rows[0].get("state_value") or 0)
-            if stored > 0:
-                _last_self_diagnosis_run = stored
-                print(f"[DIAG] Restored last_diag_ts from Supabase: {datetime.utcfromtimestamp(stored).isoformat()}")
-                return
+            raw = rows[0].get("summary", "")
+            prefix = f"[state_update] {_DIAG_STATE_KEY}: "
+            if raw.startswith(prefix):
+                stored = float(raw[len(prefix):].strip())
+                if stored > 0:
+                    _last_self_diagnosis_run = stored
+                    print(f"[DIAG] Restored last_diag_ts from Supabase: {datetime.utcfromtimestamp(stored).isoformat()}")
+                    return
     except Exception as e:
         print(f"[DIAG] restore error: {e}")
     # Fallback: treat as ran 25h ago so it will fire at next scheduled window, not immediately
@@ -3108,10 +3114,11 @@ def _run_self_diagnosis():
     # Persist timestamp to Supabase so it survives Railway redeploys
     _last_self_diagnosis_run = time.time()
     try:
+        # Use summary column pattern matching t_update_state convention
         sb_post("sessions", {
-            "state_key": _DIAG_STATE_KEY,
-            "state_value": str(_last_self_diagnosis_run),
-            "summary": f"AGI-02 self-diagnosis ran at {datetime.utcnow().isoformat()} -- {len(tasks_created)} tasks created",
+            "summary": f"[state_update] {_DIAG_STATE_KEY}: {_last_self_diagnosis_run}",
+            "actions": [f"AGI-02 self-diagnosis ran at {datetime.utcnow().isoformat()} -- {len(tasks_created)} tasks created"],
+            "interface": "self_diagnosis",
         })
         print(f"[DIAG] Persisted last_diag_ts to Supabase: {_last_self_diagnosis_run}")
     except Exception as e:
