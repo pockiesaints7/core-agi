@@ -86,7 +86,7 @@ def _get_embedding(text: str) -> list:
                 timeout=15,
             )
             if r.status_code == 429:
-                time.sleep(2)
+                time.sleep(5)
                 r = httpx.post(
                     "https://api.voyageai.com/v1/embeddings",
                     headers={
@@ -296,7 +296,7 @@ def t_backfill_kb_embeddings(batch_size: str = "20", domain: str = "") -> dict:
                     embedded += 1
                 else:
                     errors.append(f"patch failed for id={rid}")
-                time.sleep(0.1)  # small delay to avoid burst
+                time.sleep(1.0)  # respect Voyage AI rate limit
             except Exception as e:
                 errors.append(f"id={rid}: {str(e)[:80]}")
                 time.sleep(_EMBED_SLEEP)
