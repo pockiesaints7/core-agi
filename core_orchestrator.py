@@ -130,7 +130,7 @@ MODEL_PROVIDER = "openrouter"  # display label only
 GEMINI_FALLBACK_MODEL = "gemini-2.5-flash"
 
 # Groq last resort
-GROQ_LAST_RESORT_MODEL = "meta-llama/llama-4-maverick"
+GROQ_LAST_RESORT_MODEL = "meta-llama/llama-4-scout"
 
 # Telegram document MIME types → extension hint
 _TG_MIME_EXT = {
