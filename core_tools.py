@@ -5337,41 +5337,46 @@ def _binance_signed_post(path: str, params: dict) -> dict:
 
 def t_crypto_price(symbol: str = "BTCUSDT") -> dict:
     """Get current Binance spot price for a symbol. symbol=e.g. BTCUSDT, BNBUSDT, ETHUSDT."""
-    symbol = symbol.upper().replace("/", "").replace("-", "")
-    data = _binance_get("/api/v3/ticker/price", {"symbol": symbol})
-    if "error" in data:
-        return {"ok": False, "error": data["error"]}
-    if "price" not in data:
-        return {"ok": False, "error": f"Symbol not found or invalid: {symbol}", "raw": data}
-    price = float(data["price"])
-    # Also fetch 24h stats
-    stats = _binance_get("/api/v3/ticker/24hr", {"symbol": symbol})
-    result = {"ok": True, "symbol": symbol, "price": price}
-    if "priceChangePercent" in stats:
-        result["change_24h_pct"] = float(stats["priceChangePercent"])
-        result["high_24h"] = float(stats["highPrice"])
-        result["low_24h"] = float(stats["lowPrice"])
-        result["volume_24h"] = float(stats["volume"])
-    return result
+    try:
+        symbol = symbol.upper().replace("/", "").replace("-", "")
+        data = _binance_get("/api/v3/ticker/price", {"symbol": symbol})
+        if "error" in data:
+            return {"ok": False, "error": data["error"]}
+        if "price" not in data:
+            return {"ok": False, "error": f"Symbol not found or invalid: {symbol}", "raw": data}
+        price = float(data["price"])
+        stats = _binance_get("/api/v3/ticker/24hr", {"symbol": symbol})
+        result = {"ok": True, "symbol": symbol, "price": price}
+        if "priceChangePercent" in stats:
+            result["change_24h_pct"] = float(stats["priceChangePercent"])
+            result["high_24h"] = float(stats["highPrice"])
+            result["low_24h"] = float(stats["lowPrice"])
+            result["volume_24h"] = float(stats["volume"])
+        return result
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
 
 
 
 
 def t_crypto_balance(asset: str = "") -> dict:
     """Get Binance account balances. asset=optional filter e.g. BTC. Returns all non-zero balances if empty."""
-    data = _binance_signed_get("/api/v3/account", {"recvWindow": 5000})
-    if "error" in data:
-        return {"ok": False, "error": data["error"]}
-    if "balances" not in data:
-        return {"ok": False, "error": "Unexpected response", "raw": data}
-    balances = [
-        {"asset": b["asset"], "free": float(b["free"]), "locked": float(b["locked"])}
-        for b in data["balances"]
-        if float(b["free"]) > 0 or float(b["locked"]) > 0
-    ]
-    if asset:
-        balances = [b for b in balances if b["asset"].upper() == asset.upper()]
-    return {"ok": True, "balances": balances, "count": len(balances)}
+    try:
+        data = _binance_signed_get("/api/v3/account", {"recvWindow": 5000})
+        if "error" in data:
+            return {"ok": False, "error": data["error"]}
+        if "balances" not in data:
+            return {"ok": False, "error": "Unexpected response", "raw": data}
+        balances = [
+            {"asset": b["asset"], "free": float(b["free"]), "locked": float(b["locked"])}
+            for b in data["balances"]
+            if float(b["free"]) > 0 or float(b["locked"]) > 0
+        ]
+        if asset:
+            balances = [b for b in balances if b["asset"].upper() == asset.upper()]
+        return {"ok": True, "balances": balances, "count": len(balances)}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
 
 
 

@@ -140,7 +140,7 @@ def t_web_search(query: str = "", max_results: str = "5") -> dict:
                 results = _bing(query, n)
                 source  = "bing_fallback"
             except Exception as _be:
-                return {"ok": False, "error": f"both DDG and Bing failed. DDG: {_de} Bing: {_be}"}
+                return {"ok": False, "error": f"both DDG and Bing failed. Bing: {_be}"}
 
         return {
             "ok":      True,
@@ -1131,14 +1131,47 @@ def t_list_tools(category: str = "", search: str = "") -> dict:
     """
     try:
         from core_tools import TOOLS
-        # Use live category build from orchestrator — always reflects deployed tools
-        # Falls back to keyword-based grouping if import fails
-        cats: dict = {}
-        try:
-            from core_orchestrator import _build_live_categories
-            cats = _build_live_categories()
-        except Exception:
-            pass  # fallback: no category filter, show all
+        # Build categories live from TOOLS dict using keyword matching
+        # Mirrors _CATEGORY_KEYWORDS in core_orchestrator — no cross-import to avoid circular deps
+        # core_web -> core_orchestrator -> core_tools -> core_web = circular
+        _KW = {
+            "deploy":    ["redeploy","deploy","build_status","validate_syntax","patch_file",
+                          "multi_patch","gh_search_replace","railway_logs","replace_fn",
+                          "smart_patch","register_tool","rollback"],
+            "code":      ["read_file","write_file","gh_read","search_in_file","core_py",
+                          "append_to_file","diff"],
+            "training":  ["cold_processor","training_pipeline","evolution","reflection",
+                          "backfill","synthesize"],
+            "system":    ["get_state","health","stats","crash","system_map","sync_system",
+                          "session_start","session_end"],
+            "railway":   ["railway_env","railway_service","railway_logs"],
+            "knowledge": ["search_kb","add_knowledge","kb_update","get_mistakes",
+                          "search_mistakes","ask"],
+            "task":      ["task_add","task_update","task_health","sb_query","sb_insert",
+                          "sb_patch","sb_upsert","sb_delete"],
+            "crypto":    ["crypto","binance"],
+            "project":   ["project_"],
+            "agentic":   ["reason_chain","lookahead","decompose","negative_space",
+                          "predict_failure","action_gate","loop_detect","goal_check",
+                          "circuit_breaker","mid_task","assert_source"],
+            "web":       ["web_search","web_fetch","summarize_url"],
+            "document":  ["create_document","create_spreadsheet","create_presentation",
+                          "read_document","convert_document","read_pdf","read_image"],
+            "image":     ["generate_image","image_process"],
+            "utils":     ["weather","calc","datetime","currency","translate","run_python",
+                          "list_tools","get_tool_info","get_table_schema","notify",
+                          "tool_stats","tool_health","debug_fn","backlog","changelog","backup"],
+        }
+        cats: dict = {cat: [] for cat in _KW}
+        cats["misc"] = []
+        for tn in TOOLS.keys():
+            placed = False
+            for cat, kws in _KW.items():
+                if any(kw in tn for kw in kws):
+                    cats[cat].append(tn); placed = True; break
+            if not placed:
+                cats["misc"].append(tn)
+        cats = {k: v for k, v in cats.items() if v}
 
         cat = category.lower().strip() if category else ""
         if cat:
