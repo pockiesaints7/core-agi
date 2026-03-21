@@ -2390,8 +2390,12 @@ def _agentic_loop(cid: str, user_message: str,
             "If any step hits a destructive action, pause and ask for confirmation first."
         )
 
-    # Can answer directly without tools?
-    if pre_flight.get("can_answer_directly") and pre_flight.get("direct_answer"):
+    # Can answer directly without tools? Only allow for truly trivial messages with no tool names
+    _has_explicit_tool = any(t in user_message for t in ["search_kb", "get_mistakes", "datetime_now",
+        "sb_query", "get_state", "stats", "search_mistakes", "task_health", "crypto_price",
+        "weather", "calc", "web_search", "run_python", "call ", "Call "])
+    if (pre_flight.get("can_answer_directly") and pre_flight.get("direct_answer")
+            and is_trivial and not _has_explicit_tool):
         direct = pre_flight["direct_answer"].strip()
         if direct:
             check = _validate_before_reply(user_message, direct, [], system_prompt)
