@@ -1077,10 +1077,16 @@ def _execute_railway_tool(tool_name: str, tool_args: dict) -> str:
         compressed = _compress_result(raw, tool_name)
         print(f"[ORCH] {tool_name} → {len(raw)}b raw, {len(compressed)}b compressed")
         return compressed
+    except TypeError as e:
+        # Wrong args — give model exact hint to fix
+        err = str(e)
+        hint = f"Wrong args for {tool_name}: {err}. Check get_tool_info(name='{tool_name}') for correct params."
+        print(f"[ORCH] {tool_name} TypeError: {err}")
+        return json.dumps({"ok": False, "error": hint, "fix": f"call get_tool_info(name='{tool_name}') to verify args"})
     except Exception:
         err = traceback.format_exc()[:400]
         print(f"[ORCH] {tool_name} EXCEPTION: {err[:200]}")
-        return json.dumps({"ok": False, "error": err})
+        return json.dumps({"ok": False, "error": err, "fix": f"check get_tool_info(name='{tool_name}') or try alternative tool"})
 
 
 def _execute_desktop_tool(tool_name: str, tool_args: dict, cid: str) -> str:
@@ -1506,10 +1512,38 @@ def _agentic_loop(cid: str, user_message: str,
             if reply and reply.strip():
                 _tg_send(cid, reply.strip())
                 _append_history(cid, "assistant", reply.strip())
+                return
+            elif results_buffer:
+                try:
+                    synth = _or_text(
+                        system=(
+                            f"{system_prompt}\n\n"
+                            "Tools were called and results are available. "
+                            "Synthesize a clear, direct answer from the tool results. "
+                            "Label facts as CONFIRMED/INFERRED/UNKNOWN."
+                        ),
+                        user=(
+                            f"OWNER QUESTION: {user_message}\n\n"
+                            f"TOOL RESULTS:\n" +
+                            "\n".join(
+                                f"[{r['name']}] → {r['result'][:400]}"
+                                for r in results_buffer[-6:]
+                            )
+                        ),
+                        max_tokens=600,
+                    )
+                    if synth.strip():
+                        _tg_send(cid, synth.strip())
+                        _append_history(cid, "assistant", synth.strip())
+                        return
+                except Exception:
+                    pass
+                stalled = ", ".join(tc.get("name", "?") for tc in tool_calls)
+                last_r = results_buffer[-1]["result"][:300]
+                _tg_send(cid, f"⚠️ Stalled — duplicate calls: {stalled}\nLast result: {last_r}")
             else:
                 stalled = ", ".join(tc.get("name", "?") for tc in tool_calls)
-                last_r = results_buffer[-1]["result"][:300] if results_buffer else "none"
-                _tg_send(cid, f"⚠️ Stalled — duplicate calls: {stalled}\nLast result: {last_r}")
+                _tg_send(cid, f"⚠️ Stalled — no results: {stalled}")
             return
 
         if tool_calls:
