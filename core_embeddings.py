@@ -75,11 +75,19 @@ def _get_embedding(text: str) -> list:
     # ── Primary: Voyage AI ────────────────────────────────────────────────────
     voyage_key = _os.environ.get("VOYAGE_API_KEY", "") or _VOYAGE_API_KEY
     if voyage_key:
-        # Exponential backoff: free tier = 3 RPM → need 20s between requests
-        # Backoff: 5s → 15s → 30s → 60s (4 attempts max)
-        _voyage_delays = [5, 15, 30, 60]
-        for attempt, delay in enumerate(_voyage_delays):
-            try:
+        try:
+            r = httpx.post(
+                "https://api.voyageai.com/v1/embeddings",
+                headers={
+                    "Authorization": f"Bearer {voyage_key}",
+                    "Content-Type": "application/json",
+                },
+                json={"model": "voyage-3-lite", "input": [text]},
+                timeout=15,
+            )
+            if r.status_code == 429:
+                print(f"[EMBED] Voyage 429 — waiting 20s (free tier = 3 RPM)")
+                time.sleep(20)
                 r = httpx.post(
                     "https://api.voyageai.com/v1/embeddings",
                     headers={
@@ -90,22 +98,16 @@ def _get_embedding(text: str) -> list:
                     timeout=15,
                 )
                 if r.status_code == 429:
-                    print(f"[EMBED] Voyage 429 rate limit — waiting {delay}s (attempt {attempt+1}/4)")
-                    time.sleep(delay)
-                    continue
-                r.raise_for_status()
-                values = r.json()["data"][0]["embedding"]
-                if not values:
-                    raise ValueError("empty embedding returned")
-                return values
-            except Exception as e:
-                if "429" in str(e):
-                    print(f"[EMBED] Voyage 429 — waiting {delay}s (attempt {attempt+1}/4)")
-                    time.sleep(delay)
-                    continue
-                last_err = f"Voyage: {e}"
-                print(f"[EMBED] Voyage failed: {e} — trying Gemini fallback")
-                break
+                    print(f"[EMBED] Voyage still 429 after retry — trying Gemini fallback")
+                    raise Exception("Voyage 429 after retry")
+            r.raise_for_status()
+            values = r.json()["data"][0]["embedding"]
+            if not values:
+                raise ValueError("empty embedding returned")
+            return values
+        except Exception as e:
+            last_err = f"Voyage: {e}"
+            print(f"[EMBED] Voyage failed: {e} — trying Gemini fallback")
 
     # ── Fallback: Gemini ──────────────────────────────────────────────────────
     keys = _cc._GEMINI_KEYS
@@ -115,7 +117,6 @@ def _get_embedding(text: str) -> list:
             _cc._GEMINI_KEY_INDEX = (_cc._GEMINI_KEY_INDEX + 1) % len(keys)
             try:
                 r = httpx.post(
-                    # v1beta is required for text-embedding-004 — v1 returns 404
                     "https://generativelanguage.googleapis.com/v1beta/models/text-embedding-004:embedContent",
                     params={"key": key},
                     headers={"Content-Type": "application/json"},
@@ -242,11 +243,11 @@ def t_semantic_kb_search(query: str = "", domain: str = "",
             f"&active=eq.true&id=gt.1"
             f"{domain_filter}"
             f"&embedding=not.is.null"
-            f"&order=embedding.<=>.[{','.join(str(v) for v in vec)}].asc"
             f"&limit={lim}"
         )
-        rows = sb_get("knowledge_base", qs, svc=True) or []
-        return {"ok": True, "mode": "semantic_direct", "count": len(rows), "results": rows}
+        # PostgREST does not support vector ordering - this query would 400
+        # Remove qs entirely, raise to trigger ilike fallback
+        raise ValueError("Direct vector query not supported — use RPC")
 
     except Exception as e:
         print(f"[EMBED] semantic search failed ({e}), falling back to ilike")
