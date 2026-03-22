@@ -20,6 +20,7 @@ from datetime import datetime, timedelta
 from typing import Optional
 
 import httpx
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -79,7 +80,7 @@ def get_resume_task() -> str:
 
 
 def get_latest_session():
-    d = sb_get("sessions", "select=summary,actions,created_at&order=created_at.desc&limit=1")
+    d = sb_get("sessions", "select=summary,created_at&order=created_at.desc&limit=1")
     return d[0] if d else {}
 
 
@@ -217,7 +218,14 @@ class PatchRequest(BaseModel):
 # ---------------------------------------------------------------------------
 # FastAPI app
 # ---------------------------------------------------------------------------
-app = FastAPI(title="CORE v6.0", version="6.0")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """FastAPI lifespan — replaces deprecated @app.on_event("startup")."""
+    on_start()
+    yield
+
+
+app = FastAPI(title="CORE v6.0", version="6.0", lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 _sse_sessions: dict = {}
@@ -283,7 +291,7 @@ async def ingest_status():
         last_ingest = None
         try:
             rows = sb_get("hot_reflections",
-                "select=created_at,task_summary&domain=eq.knowledge_ingestion&order=created_at.desc&limit=1",
+                "select=created_at&domain=eq.knowledge_ingestion&order=created_at.desc&limit=1",
                 svc=True)
             if rows:
                 last_ingest = {"ts": rows[0].get("created_at"), "summary": rows[0].get("task_summary", "")[:100]}
@@ -431,7 +439,7 @@ load();
 def api_evolutions():
     rows = sb_get(
         "evolution_queue",
-        "select=id,status,change_type,change_summary,confidence,pattern_key,diff_content,created_at"
+        "select=id,status,change_type,change_summary,confidence,pattern_key,created_at"
         "&status=eq.pending&id=gt.1&order=created_at.desc&limit=50",
         svc=True,
     )
@@ -970,7 +978,6 @@ def queue_poller():
 # ---------------------------------------------------------------------------
 # Startup
 # ---------------------------------------------------------------------------
-@app.on_event("startup")
 def on_start():
     set_webhook()
     threading.Thread(target=queue_poller, daemon=True).start()

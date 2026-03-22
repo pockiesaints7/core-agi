@@ -2029,8 +2029,20 @@ _DESTRUCTIVE_KW = {
     "rm -rf", "destroy", "sb_delete", "delete", "permanent", "irreversible",
 }
 
+# Tools exempt from destructive keyword check — they execute user code/queries
+# where words like "delete" appear naturally in code strings, not as operations
+_SKIP_DESTRUCTIVE_CHECK = {
+    "run_python", "calc", "translate", "web_search", "web_fetch",
+    "summarize_url", "ask", "search_kb", "search_mistakes",
+    "sb_query",  # filters contain "delete" as values, not operations
+}
+
 
 def _is_destructive(tool_name: str, tool_args: dict) -> bool:
+    # Tools that execute user code/queries are exempt — "delete" in code is not
+    # an operation, it's a string. Gate only direct destructive tool calls.
+    if tool_name in _SKIP_DESTRUCTIVE_CHECK:
+        return False
     tn = tool_name.lower()
     if any(tn == kw or tn.startswith(kw + "_") or tn.endswith("_" + kw)
            for kw in _DESTRUCTIVE_KW):
@@ -2153,6 +2165,17 @@ def _safe_result(r: str, tool_name: str = "") -> str:
     try:
         parsed = json.loads(r)
         if isinstance(parsed, dict):
+            # KB conflict auto-resolution hint — guide model to call kb_update
+            if tool_name == "add_knowledge" and parsed.get("conflict") is True:
+                domain   = parsed.get("domain",  "?")
+                topic    = parsed.get("topic",   "?")
+                existing = parsed.get("existing_instruction", "")[:120]
+                return (
+                    f"KB_CONFLICT: entry already exists at {domain}/{topic}. "
+                    f"Existing: '{existing}'. "
+                    f"Call kb_update(domain='{domain}', topic='{topic}', instruction='<new_value>') "
+                    f"to overwrite it. Do NOT call add_knowledge again for this topic."
+                )
             if parsed.get("ok") is False or parsed.get("error"):
                 return f"TOOL_FAILED: {json.dumps(parsed, default=str)[:300]}"
             if tool_name in ("search_kb", "search_mistakes", "ask"):
@@ -2945,9 +2968,10 @@ def handle_telegram_message(msg: dict):
     if lower in ("/metrics", "metrics", "stats orch"):
         m = get_orchestrator_metrics()
         total = m.get("total_messages", 0)
-        or_pct  = round(m["provider_or"]     / max(total,1) * 100)
-        gem_pct = round(m["provider_gemini"] / max(total,1) * 100)
-        grq_pct = round(m["provider_groq"]   / max(total,1) * 100)
+        total_provider_calls = max(m["provider_or"] + m["provider_gemini"] + m["provider_groq"], 1)
+        or_pct  = round(m["provider_or"]     / total_provider_calls * 100)
+        gem_pct = round(m["provider_gemini"] / total_provider_calls * 100)
+        grq_pct = round(m["provider_groq"]   / total_provider_calls * 100)
         fail_r  = round(m["tool_calls_failed"] / max(m["tool_calls_total"],1) * 100, 1)
         lines = [
             "📊 <b>Orchestrator Metrics</b>",
@@ -3071,7 +3095,10 @@ def handle_telegram_message(msg: dict):
         _tg_send(cid, f"❌ Error: {str(e)[:300]}")
         print(f"[ORCH] agentic_loop error:\n{traceback.format_exc()}")
     finally:
-        cid_lock.release()
+        try:
+            cid_lock.release()
+        except RuntimeError:
+            pass  # lock already released by /cancel — safe to ignore
         with _active_lock:
             _active_loops.pop(cid, None)
 

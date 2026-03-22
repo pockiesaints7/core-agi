@@ -31,6 +31,22 @@ from core_config import (
 )
 from core_github import notify, gh_write
 
+# -- Schema helpers (mirrors core_tools._sel_force) ---------------------------
+def _sel_force(table: str, cols: list) -> str:
+    """SELECT string with specific columns. Validates against core_tools._SB_SCHEMA.
+    Drops unknown columns to prevent 400 errors on schema changes."""
+    try:
+        from core_tools import _SB_SCHEMA
+        schema = _SB_SCHEMA.get("tables", {}).get(table, {})
+        known = set(schema.get("columns", {}).keys())
+        if known:
+            valid = [c for c in cols if c in known]
+            return ",".join(valid) if valid else ",".join(cols)
+    except Exception:
+        pass
+    return ",".join(cols)
+
+
 # Training globals
 _last_cold_run: float = 0.0
 _last_cold_kb_count: int = 0
@@ -172,7 +188,7 @@ def get_system_counts():
 
 
 def get_latest_session():
-    d = sb_get("sessions", "select=summary,actions,created_at&order=created_at.desc&limit=1")
+    d = sb_get("sessions", f"select={_sel_force('sessions', ['summary','actions','created_at'])}&order=created_at.desc&limit=1")
     return d[0] if d else {}
 
 
@@ -854,7 +870,7 @@ def _auto_evolve_behavioral_rule(pattern_key: str, domain: str, confidence: floa
 def run_cold_processor():
     try:
         hots = sb_get("hot_reflections",
-                      "select=id,domain,new_patterns,new_mistakes,quality_score,source,task_summary,gaps_identified&processed_by_cold=eq.0&id=gt.1&quality_score=gte.0.5&order=created_at.asc",
+                      f"select={_sel_force('hot_reflections', ['id','domain','new_patterns','new_mistakes','quality_score','source','task_summary','gaps_identified'])}&processed_by_cold=eq.0&id=gt.1&quality_score=gte.0.5&order=created_at.asc",
                       svc=True)
         skipped_low_quality = sb_get("hot_reflections",
                       "select=id&processed_by_cold=eq.0&id=gt.1&quality_score=lt.0.5",
@@ -1506,10 +1522,10 @@ def _extract_real_signal() -> bool:
             print(f"[RESEARCH/REAL] No state key found, soft-boot to yesterday: {since_ts}")
 
         sessions = sb_get("sessions",
-            f"select=summary,actions,interface&created_at=gte.{since_ts}&order=created_at.desc&limit=20",
+            f"select={_sel_force('sessions', ['summary','actions','interface'])}&created_at=gte.{since_ts}&order=created_at.desc&limit=20",
             svc=True)
         mistakes = sb_get("mistakes",
-            f"select=domain,what_failed,root_cause,how_to_avoid&created_at=gte.{since_ts}&order=id.desc&limit=20",
+            f"select={_sel_force('mistakes', ['domain','what_failed','root_cause','how_to_avoid'])}&created_at=gte.{since_ts}&order=id.desc&limit=20",
             svc=True)
 
         if not sessions and not mistakes:
@@ -1519,7 +1535,7 @@ def _extract_real_signal() -> bool:
                 f"select=summary,actions,interface&created_at=gte.{since_ts}&order=created_at.desc&limit=20",
                 svc=True)
             mistakes = sb_get("mistakes",
-                f"select=domain,what_failed,root_cause,how_to_avoid&created_at=gte.{since_ts}&order=id.desc&limit=20",
+                f"select={_sel_force('mistakes', ['domain','what_failed','root_cause','how_to_avoid'])}&created_at=gte.{since_ts}&order=id.desc&limit=20",
                 svc=True)
             if not sessions and not mistakes:
                 print("[RESEARCH/REAL] Still no data in 7d window -- skipping")
@@ -1658,7 +1674,7 @@ def _run_simulation_batch() -> bool:
 
         try:
             recent_evos = sb_get("evolution_queue",
-                "select=change_type,change_summary&status=eq.applied&order=id.desc&limit=5",
+                f"select={_sel_force('evolution_queue', ['change_type','change_summary'])}&status=eq.applied&order=id.desc&limit=5",
                 svc=True)
             evos_text = "\n".join(
                 f"  [{r.get('change_type','?')}] {r.get('change_summary','')[:100]}"
@@ -1789,7 +1805,7 @@ def _run_rarl_epoch() -> bool:
     try:
         recent_kb = sb_get(
             "knowledge_base",
-            "select=topic,instruction&domain=eq.rarl&id=gt.1&order=updated_at.desc&limit=10",
+            f"select={_sel_force('knowledge_base', ['topic','instruction'])}&domain=eq.rarl&id=gt.1&order=updated_at.desc&limit=10",
             svc=True
         ) or []
     except Exception:
@@ -2200,7 +2216,7 @@ def background_researcher():
                 try:
                     groq_pending = sb_get(
                         "evolution_queue",
-                        "select=id,change_type,change_summary,diff_content,confidence,pattern_key&status=eq.pending&order=id.asc&limit=20",
+                        f"select={_sel_force('evolution_queue', ['id','change_type','change_summary','diff_content','confidence','pattern_key'])}&status=eq.pending&order=id.asc&limit=20",
                         svc=True
                     )
                     auto_applied = 0
@@ -2334,7 +2350,7 @@ def evolution_tier_processor():
             # 1. Apply 'notify' tier evolutions older than 24h, not owner-rejected
             notify_rows = sb_get(
                 "evolution_queue",
-                f"select=id,change_summary,confidence,pattern_key,impact"
+                f"select={_sel_force('evolution_queue', ['id','change_summary','confidence','pattern_key','impact'])}"
                 f"&status=eq.pending"
                 f"&approval_tier=eq.notify"
                 f"&rejected_by_owner=eq.false"
@@ -2359,7 +2375,7 @@ def evolution_tier_processor():
             if safety != "notify_only":
                 auto_rows = sb_get(
                     "evolution_queue",
-                    "select=id,change_summary,confidence,pattern_key"
+                    f"select={_sel_force('evolution_queue', ['id','change_summary','confidence','pattern_key'])}"
                     "&status=eq.pending"
                     "&approval_tier=eq.auto"
                     "&rejected_by_owner=eq.false"
@@ -2429,7 +2445,7 @@ def listen_stream():
         try:
             evos = sb_get(
                 "evolution_queue",
-                "select=id,change_type,change_summary,confidence,pattern_key,domain"
+                f"select={_sel_force('evolution_queue', ['id','change_type','change_summary','confidence','pattern_key','domain'])}"
                 " &status=eq.pending&order=confidence.desc&limit=50",
                 svc=True
             ) or []
@@ -2460,7 +2476,7 @@ def listen_stream():
         try:
             hot_gaps = sb_get(
                 "hot_reflections",
-                "select=domain,quality_score,gaps_identified"
+                f"select={_sel_force('hot_reflections', ['domain','quality_score','gaps_identified'])}"
                 "&processed_by_cold=eq.0&id=gt.1&quality_score=gte.0.5"
                 "&order=created_at.desc&limit=10",
                 svc=True

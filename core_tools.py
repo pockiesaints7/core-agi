@@ -39,7 +39,7 @@ MCP_SECRET = os.environ.get("MCP_SECRET", "")
 
 # -- Helpers needed locally ---------------------------------------------------
 def get_latest_session():
-    rows = sb_get("sessions", "select=summary,actions,created_at&order=created_at.desc&limit=1", svc=True)
+    rows = sb_get("sessions", f"select={_sel_force('sessions', ['summary','actions','created_at'])}&order=created_at.desc&limit=1", svc=True)
     return rows[0] if rows else {}
 
 def get_system_counts():
@@ -336,6 +336,36 @@ def _sb_schema(table: str) -> dict:
     """Return schema entry for a table, or empty dict if unknown."""
     return _SB_SCHEMA["tables"].get(table, {})
 
+
+def _sel(table: str, extra_cols: list = None) -> str:
+    """Return safe SELECT string from _SB_SCHEMA. Excludes fat_columns.
+    extra_cols that are fat_columns are silently dropped — use _sel_force if needed.
+    Falls back to 'id,created_at' for unknown tables."""
+    schema = _SB_SCHEMA.get("tables", {}).get(table, {})
+    safe = schema.get("safe_select", "id,created_at")
+    if not extra_cols:
+        return safe
+    fat = set(schema.get("fat_columns", []))
+    known = set(schema.get("columns", {}).keys())
+    extra_valid = [c for c in extra_cols if c not in fat and (not known or c in known)]
+    if not extra_valid:
+        return safe
+    base_cols = safe.split(",")
+    all_cols = list(dict.fromkeys(base_cols + extra_valid))
+    return ",".join(all_cols)
+
+
+def _sel_force(table: str, cols: list) -> str:
+    """SELECT string including specific columns regardless of fat status.
+    Use when you genuinely need a fat column (e.g. content, reflection_text).
+    Validates against live schema — drops unknown columns to prevent 400 errors."""
+    schema = _SB_SCHEMA.get("tables", {}).get(table, {})
+    known = set(schema.get("columns", {}).keys())
+    if known:
+        valid = [c for c in cols if c in known]
+        return ",".join(valid) if valid else ",".join(cols)
+    return ",".join(cols)
+
 def _load_schema_registry():
     """Compat shim -- returns _SB_SCHEMA in old format for _validate_write."""
     # Rebuild old format on the fly from unified schema
@@ -546,7 +576,7 @@ def t_get_mistakes(domain="", limit=10):
     try: lim = int(limit) if limit else 10
     except: lim = 10
     # C.3: add id=gt.1 filter (consistent with all other bigserial table queries)
-    qs = f"select=domain,context,what_failed,correct_approach,severity,root_cause,how_to_avoid&order=created_at.desc&limit={lim}&id=gt.1"
+    qs = f"select={_sel_force('mistakes', ['domain','context','what_failed','correct_approach','severity','root_cause','how_to_avoid'])}&order=created_at.desc&limit={lim}&id=gt.1"
     if domain and domain not in ("all", ""): qs += f"&domain=eq.{domain}"
     return sb_get("mistakes", qs, svc=True)
 
@@ -565,7 +595,7 @@ def t_add_knowledge(domain="", topic="", instruction="", content="", tags="", co
     # TASK-27.B: Contradiction + duplicate check before insert
     try:
         existing = sb_get("knowledge_base",
-            f"select=instruction,content&domain=eq.{domain}&topic=eq.{topic}&limit=1",
+            f"select={_sel_force('knowledge_base', ['instruction','content'])}&domain=eq.{domain}&topic=eq.{topic}&limit=1",
             svc=True)
         if existing:
             ex = existing[0]
@@ -1034,7 +1064,7 @@ def t_get_training_pipeline() -> dict:
 
         # --- Cold processor ---
         cold_rows = sb_get("cold_reflections",
-            "select=id,created_at,hot_count,patterns_found,evolutions_queued,auto_applied,summary_text"
+            f"select={_sel_force('cold_reflections', ['id','created_at','hot_count','patterns_found','evolutions_queued','auto_applied','summary_text'])}"
             "&order=created_at.desc&limit=5", svc=True) or []
         last_cold = cold_rows[0] if cold_rows else None
         total_cold_runs = len(cold_rows)  # approximate from recent 5
@@ -1148,7 +1178,7 @@ def t_training_status():
         tp = t_get_training_pipeline()
         unprocessed_count = tp.get("hot", {}).get("unprocessed", 0)
         pending_evo_rows = sb_get("evolution_queue",
-            "select=id,change_type,change_summary,confidence&status=eq.pending&id=gt.1", svc=True) or []
+            f"select={_sel_force('evolution_queue', ['id','change_type','change_summary','confidence'])}&status=eq.pending&id=gt.1", svc=True) or []
         return {
             "status": "Training pipeline ACTIVE",
             "unprocessed_hot": unprocessed_count,
@@ -1326,7 +1356,7 @@ def t_list_evolutions(status="pending", limit="20"):
         # C.5: accept limit param (was hardcoded 20)
         lim = int(limit) if limit else 20
         rows = sb_get("evolution_queue",
-                  f"select=id,status,change_type,change_summary,confidence,pattern_key,created_at&status=eq.{status}&id=gt.1&order=created_at.desc&limit={lim}",
+                  f"select={_sel_force('evolution_queue', ['id','status','change_type','change_summary','confidence','pattern_key','created_at'])}&status=eq.{status}&id=gt.1&order=created_at.desc&limit={lim}",
                   svc=True)
         return {"evolutions": rows, "count": len(rows)}
 
@@ -1347,11 +1377,11 @@ def t_check_evolutions(limit: int = 20) -> dict:
     try:
         lim = int(limit) if limit else 20
         evolutions = sb_get("evolution_queue",
-            f"select=id,change_type,change_summary,confidence,source,recommendation,pattern_key,created_at"
+            f"select={_sel_force('evolution_queue', ['id','change_type','change_summary','confidence','source','recommendation','pattern_key','created_at'])}"
             f"&status=eq.pending&id=gt.1&order=confidence.desc&limit={lim}",
             svc=True)
         mistakes = sb_get("mistakes",
-            "select=domain,context,what_failed,correct_approach,root_cause,how_to_avoid,severity"
+            f"select={_sel_force('mistakes', ['domain','context','what_failed','correct_approach','root_cause','how_to_avoid','severity'])}"
             "&order=id.desc&limit=10",
             svc=True)
         patterns = sb_get("pattern_frequency",
@@ -1853,7 +1883,7 @@ def t_session_start() -> dict:
         detected_domain = _get_task_domain(resume_task_json)
         try:
             domain_mistakes_raw = sb_get("mistakes",
-                f"select=domain,context,what_failed,correct_approach,severity,root_cause,how_to_avoid&id=gt.1&domain=like.{detected_domain}%&order=severity.desc,created_at.desc&limit=5",
+                f"select={_sel_force('mistakes', ['domain','context','what_failed','correct_approach','severity','root_cause','how_to_avoid'])}&id=gt.1&domain=like.{detected_domain}%&order=severity.desc,created_at.desc&limit=5",
                 svc=True) or []
         except Exception:
             domain_mistakes_raw = []
@@ -1861,7 +1891,7 @@ def t_session_start() -> dict:
         if len(domain_mistakes_raw) < 3:
             try:
                 global_mistakes = sb_get("mistakes",
-                    "select=domain,context,what_failed,correct_approach,severity,root_cause,how_to_avoid&id=gt.1&order=created_at.desc&limit=10",
+                    f"select={_sel_force('mistakes', ['domain','context','what_failed','correct_approach','severity','root_cause','how_to_avoid'])}&id=gt.1&order=created_at.desc&limit=10",
                     svc=True) or []
                 seen = {m.get("context", "")[:80] for m in domain_mistakes_raw}
                 for m in global_mistakes:
@@ -1880,7 +1910,7 @@ def t_session_start() -> dict:
             top_patterns = []
         try:
             evolutions = sb_get("evolution_queue",
-                "select=id,change_summary,change_type,confidence&status=eq.pending&order=confidence.desc&limit=5")
+                f"select={_sel_force('evolution_queue', ['id','change_summary','change_type','confidence'])}&status=eq.pending&order=confidence.desc&limit=5")
             if not isinstance(evolutions, list):
                 evolutions = []
         except Exception:
@@ -2433,7 +2463,7 @@ def t_session_end(summary: str = "", actions: str = "", domain: str = "general",
             # E.2: 4h window -- session_start_at is the time session_end was CALLED, not when session started
             session_ts_anchor = (session_start_at - timedelta(hours=4)).isoformat()
             recent_mistakes = sb_get("mistakes",
-                f"select=id,domain,context,what_failed,correct_approach,root_cause,how_to_avoid,severity&created_at=gte.{session_ts_anchor}&order=created_at.desc&limit=10",
+                f"select={_sel_force('mistakes', ['id','domain','context','what_failed','correct_approach','root_cause','how_to_avoid','severity'])}&created_at=gte.{session_ts_anchor}&order=created_at.desc&limit=10",
                 svc=True) or []
             for m in recent_mistakes:
                 try:
@@ -3027,7 +3057,7 @@ def t_search_mistakes(query: str = "", domain: str = "", limit: int = 10):
     try:
         lim = int(limit) if limit else 10
         # C.4: add id=gt.1, expand search to root_cause+how_to_avoid fields
-        qs = f"select=domain,context,what_failed,correct_approach,root_cause,how_to_avoid,severity&order=created_at.desc&limit={lim}&id=gt.1"
+        qs = f"select={_sel_force('mistakes', ['domain','context','what_failed','correct_approach','root_cause','how_to_avoid','severity'])}&order=created_at.desc&limit={lim}&id=gt.1"
         if domain and domain not in ("all", ""): qs += f"&domain=eq.{domain}"
         if query:
             q = query.strip().replace("'", "").replace('"', "")
@@ -3367,7 +3397,7 @@ def t_bulk_apply(executor_override: str = "claude_desktop", dry_run: bool = Fals
     try:
         rows = sb_get("evolution_queue",
                       # H.1: slim select -- only fetch needed columns, not fat diff_content
-                      "select=id,change_type,change_summary,diff_content,status,source&status=in.(pending,pending_desktop)&order=id.asc",
+                      f"select={_sel_force('evolution_queue', ['id','change_type','change_summary','diff_content','status','source'])}&status=in.(pending,pending_desktop)&order=id.asc",
                       svc=True)
         if not rows:
             return {"ok": True, "message": "No pending evolutions", "applied": [], "total": 0}
@@ -3990,7 +4020,7 @@ def t_synthesize_evolutions() -> dict:
     try:
         # 1. All pending evolutions
         evolutions = sb_get("evolution_queue",
-            "select=id,change_type,change_summary,pattern_key,confidence,impact&status=eq.pending&order=confidence.desc",
+            f"select={_sel_force('evolution_queue', ['id','change_type','change_summary','pattern_key','confidence','impact'])}&status=eq.pending&order=confidence.desc",
             svc=True) or []
 
         # 2. Top patterns by frequency (top 40) -- exclude stale dead patterns
@@ -4000,12 +4030,12 @@ def t_synthesize_evolutions() -> dict:
 
         # 3. Recent cold_reflections (last 10)
         cold = sb_get("cold_reflections",
-            "select=summary_text,patterns_found,evolutions_queued,created_at&order=id.desc&limit=10",
+            f"select={_sel_force('cold_reflections', ['summary_text','patterns_found','evolutions_queued','created_at'])}&order=id.desc&limit=10",
             svc=True) or []
 
         # 4. Hot reflection gaps (last 20)
         gaps = sb_get("hot_reflections",
-            "select=gaps_identified,domain,quality_score&gaps_identified=not.is.null&order=id.desc&limit=20",
+            f"select={_sel_force('hot_reflections', ['gaps_identified','domain','quality_score'])}&gaps_identified=not.is.null&order=id.desc&limit=20",
             svc=True) or []
 
         # 5. Open task_queue items -- pending AND in_progress (full context for Q1+Q3 pre-flight checks)
@@ -4567,7 +4597,7 @@ def t_mistakes_since(hours: str = "24") -> dict:
         # A.5: compute cutoff in Python -- PostgREST interval syntax (now()-interval.Xhours) is invalid
         cutoff = (datetime.utcnow() - timedelta(hours=h)).isoformat()
         rows = sb_get("mistakes",
-            f"select=domain,context,what_failed,correct_approach,severity,root_cause,how_to_avoid"
+            f"select={_sel_force('mistakes', ['domain','context','what_failed','correct_approach','severity','root_cause','how_to_avoid'])}"
             f"&created_at=gte.{cutoff}&order=created_at.desc&limit=50",
             svc=True) or []
         return {"ok": True, "hours": h, "cutoff": cutoff, "count": len(rows), "mistakes": rows}
@@ -5808,7 +5838,7 @@ def t_get_behavioral_rules(domain: str = None, page: str = "1", page_size: str =
             filters = f"active=eq.true&id=gt.1&confidence=gte.0.5&domain=in.(universal,{domain.strip()})&order=priority.asc&limit={ps}&offset={offset}"  # P1-07
         else:
             filters = f"active=eq.true&id=gt.1&confidence=gte.0.5&domain=eq.universal&order=priority.asc&limit={ps}&offset={offset}"  # P1-07
-        rows = sb_get("behavioral_rules", f"select=trigger,pointer,full_rule,domain,priority,tested,confidence&{filters}", svc=True)
+        rows = sb_get("behavioral_rules", f"select={_sel_force('behavioral_rules', ['trigger','pointer','full_rule','domain','priority','tested','confidence'])}&{filters}", svc=True)
         if rows is None:
             return {"ok": True, "rules": [], "migration_needed": True, "warning": "behavioral_rules table may not exist yet"}
         result = {"ok": True, "rules": rows or [], "count": len(rows or []), "domain": domain or "universal", "page": pg, "page_size": ps}
@@ -5870,7 +5900,7 @@ def t_add_behavioral_rule(trigger: str = "", pointer: str = "", full_rule: str =
         if _br_counter >= 10:
             return {"ok": False, "error_code": "rate_limited", "message": f"Behavioral rule rate limit reached ({_br_counter}/10 this session). Prevents evolution queue flooding. Owner can reset by restarting session.", "retry_hint": False}
         # Duplicate check
-        existing = sb_get("behavioral_rules", f"select=id,pointer&active=eq.true&trigger=eq.{trigger}&domain=eq.{domain}&limit=5", svc=True) or []
+        existing = sb_get("behavioral_rules", f"select={_sel_force('behavioral_rules', ['id','pointer'])}&active=eq.true&trigger=eq.{trigger}&domain=eq.{domain}&limit=5", svc=True) or []
         for ex in existing:
             if (ex.get("pointer") or "").strip().lower() == (pointer or "").strip().lower():
                 return {"ok": True, "action": "skipped_duplicate", "message": "Rule with same trigger+domain+pointer already exists"}
@@ -7011,9 +7041,9 @@ def t_contradiction_check(new_instruction: str = "", domain: str = "general"):
     if not new_instruction:
         return {"ok": False, "error": "new_instruction is required"}
     try:
-        rules = sb_get("behavioral_rules", f"domain=eq.{domain}&active=eq.true&select=id,trigger,full_rule&id=gt.1", svc=True) or []
+        rules = sb_get("behavioral_rules", f"domain=eq.{domain}&active=eq.true&select={_sel_force('behavioral_rules', ['id','trigger','full_rule'])}&id=gt.1", svc=True) or []
         if not rules:
-            rules = sb_get("behavioral_rules", "domain=eq.universal&active=eq.true&select=id,trigger,full_rule&id=gt.1", svc=True) or []
+            rules = sb_get("behavioral_rules", f"domain=eq.universal&active=eq.true&select={_sel_force('behavioral_rules', ['id','trigger','full_rule'])}&id=gt.1", svc=True) or []
         return {
             "ok": True,
             "new_instruction": new_instruction,
@@ -7725,7 +7755,7 @@ def t_tool_improve(tool_name: str = "") -> dict:
 
         # 3. Mistakes mentioning this tool
         mistakes = sb_get("mistakes",
-            f"select=what_failed,root_cause,correct_approach,severity"
+            f"select={_sel_force('mistakes', ['what_failed','root_cause','correct_approach','severity'])}"
             f"&or=(context.ilike.*{clean_name[:25]}*,what_failed.ilike.*{clean_name[:25]}*)"
             f"&order=created_at.desc&limit=5&id=gt.1",
             svc=True) or []
@@ -7913,7 +7943,7 @@ def t_load_arch_context(domain: str = "general") -> dict:
 
         # 4. Behavioral rules
         rules = sb_get("behavioral_rules",
-            f"select=trigger,pointer,full_rule,priority,confidence"
+            f"select={_sel_force('behavioral_rules', ['trigger','pointer','full_rule','priority','confidence'])}"
             f"&active=eq.true"
             f"&or=(domain=eq.{domain},domain=eq.universal)"
             f"&order=priority.desc&limit=20&id=gt.1",
@@ -7921,7 +7951,7 @@ def t_load_arch_context(domain: str = "general") -> dict:
 
         # 5. Recent cold_reflections
         cold = sb_get("cold_reflections",
-            "select=created_at,patterns_found,evolutions_queued,summary_text"
+            f"select={_sel_force('cold_reflections', ['created_at','patterns_found','evolutions_queued','summary_text'])}"
             "&order=id.desc&limit=5",
             svc=True) or []
 
