@@ -75,18 +75,11 @@ def _get_embedding(text: str) -> list:
     # ── Primary: Voyage AI ────────────────────────────────────────────────────
     voyage_key = _os.environ.get("VOYAGE_API_KEY", "") or _VOYAGE_API_KEY
     if voyage_key:
-        try:
-            r = httpx.post(
-                "https://api.voyageai.com/v1/embeddings",
-                headers={
-                    "Authorization": f"Bearer {voyage_key}",
-                    "Content-Type": "application/json",
-                },
-                json={"model": "voyage-3-lite", "input": [text]},
-                timeout=15,
-            )
-            if r.status_code == 429:
-                time.sleep(5)
+        # Exponential backoff: free tier = 3 RPM → need 20s between requests
+        # Backoff: 5s → 15s → 30s → 60s (4 attempts max)
+        _voyage_delays = [5, 15, 30, 60]
+        for attempt, delay in enumerate(_voyage_delays):
+            try:
                 r = httpx.post(
                     "https://api.voyageai.com/v1/embeddings",
                     headers={
@@ -96,14 +89,23 @@ def _get_embedding(text: str) -> list:
                     json={"model": "voyage-3-lite", "input": [text]},
                     timeout=15,
                 )
-            r.raise_for_status()
-            values = r.json()["data"][0]["embedding"]
-            if not values:
-                raise ValueError("empty embedding returned")
-            return values
-        except Exception as e:
-            last_err = f"Voyage: {e}"
-            print(f"[EMBED] Voyage failed: {e} — trying Gemini fallback")
+                if r.status_code == 429:
+                    print(f"[EMBED] Voyage 429 rate limit — waiting {delay}s (attempt {attempt+1}/4)")
+                    time.sleep(delay)
+                    continue
+                r.raise_for_status()
+                values = r.json()["data"][0]["embedding"]
+                if not values:
+                    raise ValueError("empty embedding returned")
+                return values
+            except Exception as e:
+                if "429" in str(e):
+                    print(f"[EMBED] Voyage 429 — waiting {delay}s (attempt {attempt+1}/4)")
+                    time.sleep(delay)
+                    continue
+                last_err = f"Voyage: {e}"
+                print(f"[EMBED] Voyage failed: {e} — trying Gemini fallback")
+                break
 
     # ── Fallback: Gemini ──────────────────────────────────────────────────────
     keys = _cc._GEMINI_KEYS
@@ -113,7 +115,8 @@ def _get_embedding(text: str) -> list:
             _cc._GEMINI_KEY_INDEX = (_cc._GEMINI_KEY_INDEX + 1) % len(keys)
             try:
                 r = httpx.post(
-                    "https://generativelanguage.googleapis.com/v1/models/text-embedding-004:embedContent",
+                    # v1beta is required for text-embedding-004 — v1 returns 404
+                    "https://generativelanguage.googleapis.com/v1beta/models/text-embedding-004:embedContent",
                     params={"key": key},
                     headers={"Content-Type": "application/json"},
                     json={"model": "models/text-embedding-004",
