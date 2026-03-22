@@ -1075,17 +1075,12 @@ def handle_msg(msg):
             "trading_decisions",
             "order=created_at.desc&limit=1"
             "&select=strategy,symbol,confidence,action_taken,"
-            "market_regime,reasoning,key_signals,risk_level,created_at"
+            "market_regime,reasoning,created_at"
         )
         if not rows:
             notify("🧠 No decisions recorded yet.", cid)
         else:
             d = rows[0]
-            signals = d.get("key_signals") or []
-            if isinstance(signals, str):
-                try: signals = json.loads(signals)
-                except Exception: signals = [signals]
-            signals_text = "\n".join(f"• {s}" for s in signals) if signals else "none"
             notify(
                 f"🧠 <b>Last Decision</b>\n\n"
                 f"Time: {(d.get('created_at') or '')[:16]}\n"
@@ -1093,10 +1088,8 @@ def handle_msg(msg):
                 f"Strategy: {d.get('strategy','?')}\n"
                 f"Symbol: {d.get('symbol') or 'none'}\n"
                 f"Confidence: {float(d.get('confidence') or 0):.0%}\n"
-                f"Risk: {d.get('risk_level','?')}\n"
                 f"Action: {d.get('action_taken','?')}\n\n"
-                f"<b>Reasoning:</b>\n{d.get('reasoning','?')}\n\n"
-                f"<b>Key signals:</b>\n{signals_text}",
+                f"<b>Reasoning:</b>\n{d.get('reasoning','?')}",
                 cid
             )
 
@@ -1104,20 +1097,15 @@ def handle_msg(msg):
         rows = sb_get(
             "trading_decisions",
             "order=created_at.desc&limit=1"
-            "&select=strategy,reasoning,warnings,created_at"
+            "&select=strategy,reasoning,created_at"
         )
         if not rows:
             notify("💭 No decisions recorded yet.", cid)
         else:
             d = rows[0]
-            warnings = d.get("warnings") or []
-            if isinstance(warnings, str):
-                try: warnings = json.loads(warnings)
-                except Exception: warnings = [warnings]
             notify(
                 f"💭 <b>Why {d.get('strategy','?')}?</b>\n\n"
-                f"{d.get('reasoning','No reasoning available.')}\n\n"
-                f"Warnings: {', '.join(warnings) if warnings else 'none'}",
+                f"{d.get('reasoning','No reasoning available.')}",
                 cid
             )
 
