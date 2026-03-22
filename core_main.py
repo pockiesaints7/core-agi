@@ -303,7 +303,7 @@ async def ingest_status():
         return JSONResponse(status_code=500, content={"ok": False, "error": str(e)})
 
 
-@app.get("/")
+@app.api_route("/", methods=["GET", "HEAD"])
 def root():
     counts = get_system_counts()
     step = get_resume_task()
@@ -316,13 +316,13 @@ def root():
     }
 
 
-@app.get("/health")
+@app.api_route("/health", methods=["GET", "HEAD"])
 def health_ep():
     from core_tools import t_health
     return t_health()
 
 
-@app.get("/ping")
+@app.api_route("/ping", methods=["GET", "HEAD"])
 def ping():
     """Fast health check - just confirms server is responding."""
     return {"ok": True, "service": "CORE v6.0", "ts": datetime.utcnow().isoformat()}
