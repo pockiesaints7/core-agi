@@ -1,7 +1,8 @@
 """core_embeddings.py — CORE AGI Semantic Embedding Layer (P3-01 / P3-04)
 =========================================================================
-Provides vector embeddings via Voyage AI voyage-3-lite (1024-dim).
-Fallback: Gemini text-embedding-004 (768-dim, geo-blocked on Railway US-WEST).
+Provides vector embeddings via Voyage AI.
+Primary:  voyage-3      (1024-dim, high quality — Tier 1)
+Fallback: voyage-3-lite (1024-dim, lighter — same dim, safe fallback)
 Used by:
   - t_embed_kb_entry        — embed one KB entry and store in knowledge_base.embedding
   - t_semantic_kb_search    — cosine similarity search via pgvector <=> operator
@@ -34,7 +35,7 @@ SUPABASE DDL REQUIRED (run manually once):
     WITH (lists = 50);
 
 Depends on: core_config (SUPABASE_URL, _sbh, sb_get, sb_patch, sb_post)
-Env vars: VOYAGE_API_KEY (primary), GEMINI_KEYS (fallback, likely geo-blocked on Railway)
+Env vars: VOYAGE_API_KEY (required)
 """
 import json
 import time
@@ -49,8 +50,9 @@ from core_config import (
 )
 
 # ── Constants ──────────────────────────────────────────────────────────────────
-_EMBED_MODEL   = "voyage-3-lite"   # Voyage AI primary — 1024-dim, not geo-blocked
-_EMBED_DIM     = 1024              # Voyage voyage-3-lite output dimension
+_EMBED_MODEL          = "voyage-3"       # Voyage AI primary — 1024-dim, Tier 1
+_EMBED_MODEL_FALLBACK = "voyage-3-lite"  # Voyage AI fallback — 1024-dim, lighter
+_EMBED_DIM     = 1024              # Both voyage-3 and voyage-3-lite output dimension
 _EMBED_BATCH   = 20                # entries per backfill batch
 _EMBED_SLEEP   = 1.0               # seconds between batches (rate-limit buffer)
 
@@ -62,82 +64,65 @@ _VOYAGE_API_KEY = _os.environ.get("VOYAGE_API_KEY", "")
 # EMBEDDING API
 # ══════════════════════════════════════════════════════════════════════════════
 
+def _voyage_embed(text: str, model: str) -> list:
+    """Call Voyage AI embeddings API for a given model. Returns vector or raises."""
+    voyage_key = _os.environ.get("VOYAGE_API_KEY", "") or _VOYAGE_API_KEY
+    if not voyage_key:
+        raise RuntimeError("VOYAGE_API_KEY not set")
+    r = httpx.post(
+        "https://api.voyageai.com/v1/embeddings",
+        headers={
+            "Authorization": f"Bearer {voyage_key}",
+            "Content-Type": "application/json",
+        },
+        json={"model": model, "input": [text]},
+        timeout=15,
+    )
+    if r.status_code == 429:
+        print(f"[EMBED] Voyage 429 on {model} — waiting 10s then retry")
+        time.sleep(10)
+        r = httpx.post(
+            "https://api.voyageai.com/v1/embeddings",
+            headers={
+                "Authorization": f"Bearer {voyage_key}",
+                "Content-Type": "application/json",
+            },
+            json={"model": model, "input": [text]},
+            timeout=15,
+        )
+        if r.status_code == 429:
+            raise Exception(f"Voyage {model} 429 after retry")
+    r.raise_for_status()
+    values = r.json()["data"][0]["embedding"]
+    if not values:
+        raise ValueError(f"empty embedding returned from {model}")
+    return values
+
+
 def _get_embedding(text: str) -> list:
     """Return embedding vector for text.
-    Primary: Voyage AI voyage-3-lite (1024-dim) — not geo-blocked on Railway.
-    Fallback: Gemini text-embedding-004 (768-dim) — geo-blocked on Railway US-WEST.
-    Raises RuntimeError if all providers fail.
+    Primary:  voyage-3      (1024-dim, Tier 1 quality)
+    Fallback: voyage-3-lite (1024-dim, same dim — safe DB-compatible fallback)
+    Raises RuntimeError if both fail.
     """
-    import core_config as _cc
     text = text.strip()[:8000]
     last_err = None
 
-    # ── Primary: Voyage AI ────────────────────────────────────────────────────
-    voyage_key = _os.environ.get("VOYAGE_API_KEY", "") or _VOYAGE_API_KEY
-    if voyage_key:
-        try:
-            r = httpx.post(
-                "https://api.voyageai.com/v1/embeddings",
-                headers={
-                    "Authorization": f"Bearer {voyage_key}",
-                    "Content-Type": "application/json",
-                },
-                json={"model": "voyage-3-lite", "input": [text]},
-                timeout=15,
-            )
-            if r.status_code == 429:
-                print(f"[EMBED] Voyage 429 — waiting 20s (free tier = 3 RPM)")
-                time.sleep(20)
-                r = httpx.post(
-                    "https://api.voyageai.com/v1/embeddings",
-                    headers={
-                        "Authorization": f"Bearer {voyage_key}",
-                        "Content-Type": "application/json",
-                    },
-                    json={"model": "voyage-3-lite", "input": [text]},
-                    timeout=15,
-                )
-                if r.status_code == 429:
-                    print(f"[EMBED] Voyage still 429 after retry — trying Gemini fallback")
-                    raise Exception("Voyage 429 after retry")
-            r.raise_for_status()
-            values = r.json()["data"][0]["embedding"]
-            if not values:
-                raise ValueError("empty embedding returned")
-            return values
-        except Exception as e:
-            last_err = f"Voyage: {e}"
-            print(f"[EMBED] Voyage failed: {e} — trying Gemini fallback")
+    # ── Primary: voyage-3 ─────────────────────────────────────────────────────
+    try:
+        return _voyage_embed(text, _EMBED_MODEL)
+    except Exception as e:
+        last_err = f"voyage-3: {e}"
+        print(f"[EMBED] voyage-3 failed: {e} — falling back to voyage-3-lite")
 
-    # ── Fallback: Gemini ──────────────────────────────────────────────────────
-    keys = _cc._GEMINI_KEYS
-    if keys:
-        for _ in range(len(keys)):
-            key = keys[_cc._GEMINI_KEY_INDEX % len(keys)]
-            _cc._GEMINI_KEY_INDEX = (_cc._GEMINI_KEY_INDEX + 1) % len(keys)
-            try:
-                r = httpx.post(
-                    "https://generativelanguage.googleapis.com/v1beta/models/text-embedding-004:embedContent",
-                    params={"key": key},
-                    headers={"Content-Type": "application/json"},
-                    json={"model": "models/text-embedding-004",
-                          "content": {"parts": [{"text": text}]}},
-                    timeout=15,
-                )
-                if r.status_code == 429:
-                    last_err = "Gemini 429 rate limit"
-                    time.sleep(2)
-                    continue
-                r.raise_for_status()
-                values = r.json()["embedding"]["values"]
-                if not values:
-                    raise ValueError("empty embedding")
-                return values
-            except Exception as e:
-                last_err = f"Gemini: {e}"
-                continue
+    # ── Fallback: voyage-3-lite ───────────────────────────────────────────────
+    try:
+        return _voyage_embed(text, _EMBED_MODEL_FALLBACK)
+    except Exception as e:
+        last_err = f"voyage-3-lite: {e}"
+        print(f"[EMBED] voyage-3-lite fallback failed: {e}")
 
-    raise RuntimeError(f"All embedding providers failed. Last: {last_err}")
+    raise RuntimeError(f"All Voyage embedding attempts failed. Last: {last_err}")
 
 
 def _embed_text_safe(text: str) -> list:
@@ -164,7 +149,7 @@ def _kb_text(row: dict) -> str:
 
 def t_embed_kb_entry(kb_id: str = "") -> dict:
     """P3-01: Embed a single knowledge_base entry by id.
-    Calls Gemini text-embedding-004, stores result in knowledge_base.embedding column.
+    Calls voyage-3 (fallback: voyage-3-lite), stores result in knowledge_base.embedding column.
     REQUIRES: knowledge_base.embedding vector(1024) column to exist.
     Returns: {ok, id, dims, topic}
     """
@@ -300,7 +285,7 @@ def t_backfill_kb_embeddings(batch_size: str = "20", domain: str = "") -> dict:
                     embedded += 1
                 else:
                     errors.append(f"patch failed for id={rid}")
-                time.sleep(1.0)  # respect Voyage AI rate limit
+                time.sleep(0.5)  # Tier 1 rate limit buffer
             except Exception as e:
                 errors.append(f"id={rid}: {str(e)[:80]}")
                 time.sleep(_EMBED_SLEEP)
