@@ -1669,3 +1669,7 @@ INFO:     Application shutdown complete.
 [TIER] Cycle done: notify_applied=0 auto_applied=0
 [POLLING] Webhook deleted — polling mode active
 [CORE] v8.0 online :8081 - Resuming: Repo Documentation Cleanup (P10)
+INFO:     Started server process [36422]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://0.0.0.0:8081 (Press CTRL+C to quit)
