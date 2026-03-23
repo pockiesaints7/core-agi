@@ -32,7 +32,7 @@ from core_config import (
     L, sb_get, sb_post, sb_patch, sb_upsert, sb_post_critical,
     _sbh, _sbh_count_svc, groq_chat,
 )
-from core_github import gh_read, gh_write, notify, set_webhook
+from core_github import gh_read, gh_write, notify
 from core_train import cold_processor_loop, background_researcher, evolution_tier_processor, proactive_surface_loop
 from core_tools import TOOLS, handle_jsonrpc
 from core_orchestrator import handle_telegram_message, start_orchestrator
@@ -1250,8 +1250,40 @@ def queue_poller():
 # ---------------------------------------------------------------------------
 # Startup
 # ---------------------------------------------------------------------------
+def polling_loop():
+    """Poll Telegram getUpdates every 2s. No webhook/HTTPS needed for VM."""
+    from core_config import TELEGRAM_TOKEN
+    print("[POLLING] Telegram polling loop started")
+    try:
+        httpx.get(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/deleteWebhook", timeout=10)
+        print("[POLLING] Webhook deleted — polling mode active")
+    except Exception as e:
+        print(f"[POLLING] deleteWebhook warning: {e}")
+    offset = 0
+    while True:
+        try:
+            r = httpx.get(
+                f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates",
+                params={"timeout": 10, "offset": offset},
+                timeout=15,
+            )
+            if r.is_success:
+                updates = r.json().get("result", [])
+                for update in updates:
+                    offset = update["update_id"] + 1
+                    msg = update.get("message") or update.get("edited_message")
+                    if msg:
+                        try:
+                            threading.Thread(target=handle_msg, args=(msg,), daemon=True).start()
+                        except Exception as e:
+                            print(f"[POLLING] handle_msg error: {e}")
+        except Exception as e:
+            print(f"[POLLING] getUpdates error: {e}")
+        time.sleep(2)
+
+
 def on_start():
-    set_webhook()
+    threading.Thread(target=polling_loop, daemon=True).start()
     threading.Thread(target=queue_poller, daemon=True).start()
     threading.Thread(target=cold_processor_loop, daemon=True).start()
     # self_sync_check disabled -- CORE_SELF.md is tombstoned, superseded by system_map
