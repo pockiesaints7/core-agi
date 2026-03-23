@@ -52,8 +52,8 @@ GEMINI_MODEL       = "gemini-2.5-flash-lite"
 # FALLBACK 3: Groq
 GROQ_MODEL_ORCH    = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
 
-MAX_TOKENS_LOOP    = 2048
-MAX_TOKENS_JSON    = 800
+MAX_TOKENS_LOOP    = 4096   # raised: complex tasks need room to reason
+MAX_TOKENS_JSON    = 1200  # raised: self-critique pass needs more room
 MAX_TOKENS_SIMPLE  = 512
 MAX_TOOLS_DESC_CHARS = 12000
 
@@ -277,6 +277,22 @@ def _build_system_for_loop(ctx: dict, tools_desc: str,
     if fallback:
         lines.append(f"FALLBACK: {fallback}")
 
+    # Inject structured_steps if available (from L3 enriched plan)
+    structured_steps = execution_plan.get("structured_steps", [])
+    if structured_steps:
+        ss_lines = "\n".join(
+            f"  {s['idx']+1}. {s['step']}" + (f" [tool: {s['tool']}]" if s.get("tool") else "")
+            for s in structured_steps
+        )
+        lines.append(f"STRUCTURED PLAN:\n{ss_lines}")
+
+    # Inject conversation signals if available (from L3 multi-turn analysis)
+    conv_signals = execution_plan.get("conv_signals", {})
+    if conv_signals.get("is_repeat"):
+        lines.append("⚠️ REPEAT QUESTION: Previous answer was insufficient — must use tools, not memory.")
+    if conv_signals.get("consecutive_errors", 0) >= 2:
+        lines.append(f"⚠️ ERROR STREAK ({conv_signals['consecutive_errors']} turns) — be methodical, check tool args carefully.")
+
     lines += [
         "",
         f"AVAILABLE TOOLS:\n{tools_desc}",
@@ -288,12 +304,25 @@ def _build_system_for_loop(ctx: dict, tools_desc: str,
         "",
         "Respond ONLY with valid JSON (no markdown fences):",
         '{"thought":"your reasoning — WHY this approach","tool_calls":[{"name":"tool_name","args":{}}],"reply":"direct answer to owner","done":true/false}',
-        "Rules:",
-        "- done=true ONLY when task fully complete AND reply non-empty",
-        "- tool_calls=[] only when answering directly with no execution needed",
-        "- Never invent tool results — call the tool",
-        "- Tool fails → try alternative immediately. run_python is always a fallback.",
     ]
+
+    # Step-aware instruction: push tool use early, synthesis late
+    step_num = execution_plan.get("_step", 0)
+    if step_num == 0:
+        lines += [
+            "STEP 0 RULES — You are at the START:",
+            "- You MUST call at least one tool before setting done=true",
+            "- Do NOT answer from memory — fetch live data",
+            "- tool_calls must be non-empty on this step",
+        ]
+    else:
+        lines += [
+            "Rules:",
+            "- done=true ONLY when task fully complete AND reply non-empty",
+            "- tool_calls=[] only when answering directly with no execution needed",
+            "- Never invent tool results — call the tool",
+            "- Tool fails → try alternative immediately. run_python is always a fallback.",
+        ]
 
     return "\n".join(lines)
 
@@ -303,23 +332,30 @@ def _build_messages_for_loop(ctx: dict, tool_results: list,
     """Build messages array for Anthropic API from history + tool results."""
     messages = []
 
-    # Conversation history
+    # Conversation history — raise truncation from 500 to 1500 chars
     history = ctx.get("conversation", [])
     for h in history[-12:]:
         role    = h.get("role", "user")
-        content = h.get("content", "")[:500]
+        content = h.get("content", "")[:1500]
         if role in ("user", "assistant"):
             messages.append({"role": role, "content": content})
 
-    # Tool results from this loop (inject as user messages)
+    # Tool results — structured per call, not a wall of text
     if tool_results:
-        results_summary = "\n".join(
-            f"[{r.get('name','?')} step={r.get('step',0)}] → {r.get('result','')[:500]}"
-            for r in tool_results[-8:]
-        )
+        result_blocks = []
+        for r in tool_results[-10:]:
+            name   = r.get("name", "?")
+            ok     = "✅" if r.get("ok") else "❌"
+            res    = r.get("result", "")
+            # Give more space to recent results, less to older ones
+            cutoff = 1200 if r == tool_results[-1] else 400
+            result_blocks.append(
+                f"TOOL_RESULT [{ok} {name} @ step {r.get('step',0)}]:\n{res[:cutoff]}"
+            )
+        results_text = "\n\n".join(result_blocks)
         messages.append({
             "role":    "user",
-            "content": f"TOOL RESULTS SO FAR (step {step}):\n{results_summary}\n\nContinue."
+            "content": f"=== TOOL RESULTS (step {step}) ===\n{results_text}\n\nAnalyze results. If task complete → set done=true with reply. If more steps needed → call next tool.",
         })
 
     # Ensure last message is user
@@ -382,6 +418,10 @@ async def call_model_loop(
     """
     import asyncio
 
+    # Inject current step so system prompt can be step-aware
+    execution_plan = dict(execution_plan)
+    execution_plan["_step"] = step
+
     system   = _build_system_for_loop(ctx, tools_desc, execution_plan)
     messages = _build_messages_for_loop(ctx, tool_results, step)
     user     = messages[-1]["content"] if messages else ctx["intent"]["text"]
@@ -397,12 +437,34 @@ async def call_model_loop(
         cleaned = _strip_json(raw)
         parsed  = json.loads(cleaned)
     except Exception:
-        # Model returned non-JSON — treat as final reply
+        # Model returned non-JSON
+        # If this is step 0 with no tool results yet — it hasn't tried tools.
+        # Force a retry signal rather than treating as final answer.
+        if step == 0 and not tool_results:
+            print(f"[L8] Non-JSON at step 0 — model skipped tool calls, injecting retry")
+            return {
+                "thought": "Non-JSON response at step 0 — must use tools",
+                "tool_calls": [],
+                "reply": "",
+                "done": False,
+            }
         return {"thought": "", "tool_calls": [], "reply": raw, "done": True}
+
+    # Normalize tool_calls: handle object, list, or missing
+    raw_tc = parsed.get("tool_calls", []) or []
+    if isinstance(raw_tc, dict):
+        raw_tc = [raw_tc]   # model returned single object instead of list
+    elif not isinstance(raw_tc, list):
+        raw_tc = []
+    # Filter out malformed entries
+    tool_calls_clean = [
+        tc for tc in raw_tc
+        if isinstance(tc, dict) and tc.get("name")
+    ]
 
     result = {
         "thought":    parsed.get("thought", ""),
-        "tool_calls": parsed.get("tool_calls", []) or [],
+        "tool_calls": tool_calls_clean,
         "reply":      parsed.get("reply", ""),
         "done":       bool(parsed.get("done", False)),
     }

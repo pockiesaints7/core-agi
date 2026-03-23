@@ -164,8 +164,17 @@ def _build_system_prompt_for_preflight(ctx: dict) -> str:
     lines += [
         "",
         "PRE-FLIGHT: identify true intent, best approach, risk level.",
-        "Output ONLY valid JSON — no markdown fences:",
-        '{"intent_parsed":"true goal","can_direct":true/false,"direct_answer":"if can_direct","plan":["step1","step2"],"tool_hints":["tool_name"],"risk":"none/low/medium/high/critical","creative_path":"non-obvious solution or empty","fallback":"fallback approach"}',
+        "",
+        "CRITICAL RULE — can_direct MUST be false if the question requires live data:",
+        "  - counts/stats/numbers from Supabase (kb count, task count, tool count, etc.)",
+        "  - current status of any system, task, deploy, or service",
+        "  - anything needing search_kb, sb_query, get_state, list_tools, or any tool",
+        "  - any question about CORE's own memory, knowledge base, mistakes, or patterns",
+        "  can_direct=true ONLY for pure reasoning with NO live data needed.",
+        "  When in doubt -> can_direct=false, add correct tool to tool_hints.",
+        "",
+        "Output ONLY valid JSON, no markdown fences:",
+        '{"intent_parsed":"true goal","can_direct":true/false,"direct_answer":"only if can_direct and zero live data needed","plan":["step1","step2"],"tool_hints":["tool_name"],"risk":"none/low/medium/high/critical","creative_path":"non-obvious solution or empty","fallback":"fallback approach"}',
     ]
     return "\n".join(lines)
 
@@ -177,6 +186,55 @@ def _history_to_text(conversation: list) -> str:
         content = h.get("content", "")[:300]
         lines.append(f"{role.upper()}: {content}")
     return "\n".join(lines)
+
+
+def _extract_conversation_signals(conversation: list, text: str) -> dict:
+    """
+    Extract signals from conversation history that should influence L3 reasoning.
+    Returns dict of signals passed into the preflight prompt.
+    """
+    signals = {
+        "is_followup":        False,   # owner is following up on previous response
+        "is_repeat":          False,   # same question asked before (model failed)
+        "pending_confirm":    False,   # last CORE message asked for confirmation
+        "last_failed_tool":   "",      # tool that failed in last turn
+        "consecutive_errors": 0,       # how many turns in a row had errors
+    }
+    if not conversation:
+        return signals
+
+    text_lower = text.lower()
+    recent = conversation[-6:]
+
+    # Is this a follow-up? (short message after a long CORE response)
+    if len(recent) >= 2:
+        last_assistant = next(
+            (m for m in reversed(recent) if m.get("role") == "assistant"), None
+        )
+        if last_assistant and len(text) < 60:
+            signals["is_followup"] = True
+
+    # Is CORE waiting for confirmation?
+    confirm_phrases = ["confirm", "proceed?", "lanjutkan?", "are you sure", "yakin"]
+    if last_assistant:
+        last_text = last_assistant.get("content", "").lower()
+        if any(p in last_text for p in confirm_phrases):
+            signals["pending_confirm"] = True
+
+    # Repeat detection: same question in last 3 user turns
+    user_turns = [m.get("content", "").lower() for m in recent if m.get("role") == "user"]
+    if user_turns.count(text_lower) >= 1 and len(user_turns) > 1:
+        signals["is_repeat"] = True
+
+    # Error streak
+    error_count = sum(
+        1 for m in recent
+        if m.get("role") == "assistant" and
+        any(e in m.get("content", "").lower() for e in ["error", "failed", "⚠️", "❌"])
+    )
+    signals["consecutive_errors"] = error_count
+
+    return signals
 
 
 async def layer_3_reason(ctx: dict) -> None:
@@ -203,15 +261,32 @@ async def layer_3_reason(ctx: dict) -> None:
     # ── Pre-flight reasoning ──────────────────────────────────────────────────
     system_prompt = _build_system_prompt_for_preflight(ctx)
     history_text  = _history_to_text(ctx.get("conversation", []))
-    user_msg      = f"CONVERSATION SO FAR:\n{history_text}\n\nOWNER: {text}"
+    # user_msg_enriched is built after conv_signals extraction below
+
+    # Extract conversation signals before preflight
+    conv_signals = _extract_conversation_signals(ctx.get("conversation", []), text)
+
+    # Inject signals into user message for context-aware reasoning
+    signal_lines = []
+    if conv_signals["is_repeat"]:
+        signal_lines.append("⚠️ REPEAT: Owner asked this before — previous answer was insufficient. Must use tools.")
+    if conv_signals["pending_confirm"]:
+        signal_lines.append("⚠️ PENDING CONFIRM: Previous turn asked owner for confirmation.")
+    if conv_signals["consecutive_errors"] >= 2:
+        signal_lines.append(f"⚠️ ERROR STREAK: {conv_signals['consecutive_errors']} consecutive error turns — be extra careful.")
+    if conv_signals["is_followup"]:
+        signal_lines.append("ℹ️ FOLLOW-UP: Short message after long response — likely clarification or continuation.")
+
+    signal_block = ("\n" + "\n".join(signal_lines)) if signal_lines else ""
+    user_msg_enriched = f"CONVERSATION SO FAR:\n{history_text}{signal_block}\n\nOWNER: {text}"
 
     plan_data = {}
     try:
         from core_orch_layer8 import call_model_json
         raw = await call_model_json(
             system=system_prompt,
-            user=user_msg,
-            max_tokens=600,
+            user=user_msg_enriched,
+            max_tokens=700,
         )
         plan_data = raw if isinstance(raw, dict) else {}
     except Exception as e:
@@ -226,6 +301,59 @@ async def layer_3_reason(ctx: dict) -> None:
             "fallback": "use run_python as universal fallback",
         }
 
+    # Self-critique pass: if plan is empty or tool_hints empty on non-trivial message,
+    # run a second model call to recover a better plan
+    _plan_weak = (
+        not plan_data.get("plan") or
+        (not plan_data.get("tool_hints") and not plan_data.get("can_direct") and len(text) > 20)
+    )
+    if _plan_weak and not plan_data.get("can_direct"):
+        try:
+            critique_prompt = (
+                f"Your previous plan for: {text!r}\n"
+                f"was: {json.dumps(plan_data)}\n\n"
+                "The plan is missing steps or tool_hints. "
+                "Produce a better plan. Be specific about which tools to call. "
+                "Output ONLY valid JSON, same schema as before."
+            )
+            from core_orch_layer8 import call_model_json
+            raw2 = await call_model_json(
+                system=system_prompt,
+                user=critique_prompt,
+                max_tokens=700,
+            )
+            if isinstance(raw2, dict) and raw2.get("plan"):
+                print(f"[L3] Self-critique improved plan: {raw2.get('plan')}")
+                plan_data = raw2
+        except Exception as e:
+            print(f"[L3] Self-critique pass failed (non-fatal): {e}")
+
+    # Code-level guard: force can_direct=False when live data is needed.
+    # Uses intent classification, not raw keyword matching, to avoid blocking
+    # legitimate explanations like "what is a task queue?" (pure reasoning, no data).
+    _text_lower = text.lower()
+
+    # Pattern 1: explicit quantity/status queries about CORE's own data
+    import re as _re
+    _LIVE_DATA_PATTERNS = [
+        r'how many',                        # "how many kb/tasks/tools"
+        r'berapa',                          # Indonesian "how many"
+        r'count.{0,30}(kb|task|tool|mistake|pattern|evolution)',
+        r'(show|list|display|tampilkan|daftar).{0,40}(kb|task|tool|mistake|pattern|rule)',
+        r'what.{0,20}(my|your|current).{0,30}(status|task|kb|mistake|pattern)',
+        r'(status|health).{0,20}(of|for|system|core|deploy)',
+        r'(current|latest|terbaru|terkini).{0,30}(task|deploy|status|error)',
+    ]
+    _is_live_data_query = any(_re.search(p, _text_lower) for p in _LIVE_DATA_PATTERNS)
+
+    # Pattern 2: model returned tool_hints — if it listed tools, it knows data is needed
+    _model_wants_tools = bool(plan_data.get("tool_hints"))
+
+    if plan_data.get("can_direct") and (_is_live_data_query or _model_wants_tools):
+        reason = "live-data pattern" if _is_live_data_query else "model listed tool_hints"
+        print(f"[L3] Overriding can_direct=True ({reason}) — forcing tool path")
+        plan_data["can_direct"] = False
+
     # Fast path: model says it can answer directly
     if plan_data.get("can_direct") and plan_data.get("direct_answer"):
         preflight_ms = int((time.time() - t0) * 1000)
@@ -237,12 +365,38 @@ async def layer_3_reason(ctx: dict) -> None:
         await layer_9_log_turn(ctx, plan_data["direct_answer"], tool_results=[])
         return
 
+    # ── Enrich plan: bind tool_hints to steps ────────────────────────────────
+    plan_list  = plan_data.get("plan", [])
+    tool_hints = plan_data.get("tool_hints", [])
+
+    # Build structured steps: [{"step": str, "tool": str|None, "idx": int}]
+    structured_steps = []
+    for i, step_text in enumerate(plan_list):
+        # Try to bind a tool hint to this step by keyword overlap
+        bound_tool = None
+        step_lower = step_text.lower()
+        for th in tool_hints:
+            th_stem = th.replace("_", " ").lower()
+            if any(w in step_lower for w in th_stem.split()):
+                bound_tool = th
+                break
+        structured_steps.append({"step": step_text, "tool": bound_tool, "idx": i})
+
     # ── Risk assessment ───────────────────────────────────────────────────────
-    plan_list    = plan_data.get("plan", [])
+    # Check both message text AND plan steps AND tool_hints for risk signals
+    plan_str_full = " ".join(plan_list + tool_hints).lower()
     risk, req_confirm = _assess_risk(text, plan_list)
+
+    # Re-assess against plan+tools (catches sb_delete in plan even if not in message)
+    _combined_risk_text = text + " " + plan_str_full
+    plan_risk, plan_confirm = _assess_risk(_combined_risk_text, plan_list)
+    risk_order = ["none", "low", "medium", "high", "critical"]
+    if risk_order.index(plan_risk) > risk_order.index(risk):
+        risk = plan_risk
+        req_confirm = req_confirm or plan_confirm
+
     # Trust model risk if higher
     model_risk = plan_data.get("risk", "none")
-    risk_order = ["none", "low", "medium", "high", "critical"]
     if risk_order.index(model_risk) > risk_order.index(risk):
         risk = model_risk
         if risk in ("high", "critical"):
@@ -258,13 +412,15 @@ async def layer_3_reason(ctx: dict) -> None:
         "can_direct":       False,
         "direct_answer":    "",
         "plan":             plan_list,
-        "tool_hints":       plan_data.get("tool_hints", []),
+        "structured_steps": structured_steps,   # enriched: [{step, tool, idx}]
+        "tool_hints":       tool_hints,
         "risk":             risk,
         "requires_confirm": req_confirm,
         "creative_path":    plan_data.get("creative_path", ""),
         "fallback":         plan_data.get("fallback", ""),
         "constitution_ok":  True,
         "preflight_ms":     preflight_ms,
+        "conv_signals":     conv_signals,        # multi-turn context signals
     }
 
     # ── Route to L4 (execution) or L5 (confirmation gate) ────────────────────

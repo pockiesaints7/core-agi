@@ -183,11 +183,12 @@ async def layer_4_execute(execution_plan: dict) -> None:
     cid           = intent["sender_id"]
     text          = intent["text"]
 
-    tool_results:  list = []
-    tools_called:  list = []
-    step               = 0
-    start_ts           = time.time()
-    task_id            = intent["intent_id"]
+    tool_results:   list = []
+    tools_called:   list = []
+    step                = 0
+    start_ts            = time.time()
+    task_id             = intent["intent_id"]
+    _last_call_sig:str  = ""   # stall detection: track last (tool, args) signature
 
     # Build tool descriptions for this message
     from core_orch_layer8 import build_tools_desc, call_model_loop
@@ -239,6 +240,15 @@ async def layer_4_execute(execution_plan: dict) -> None:
 
                 # L6 validation: background-loop tools must not be called
                 # with elevated permissions from agentic loop
+                # Stall detection: same tool + same args twice in a row = infinite loop
+                _call_sig = f"{t_name}:{json.dumps(t_args, sort_keys=True, default=str)[:200]}"
+                if _call_sig == _last_call_sig:
+                    print(f"[L4] STALL detected — {t_name} called twice with same args, breaking")
+                    done  = True
+                    reply = reply or f"⚠️ Stall detected on tool `{t_name}` — stopped."
+                    break
+                _last_call_sig = _call_sig
+
                 result = _execute_tool_safe(t_name, t_args, cid)
                 tool_results.append({
                     "name":   t_name,
@@ -272,12 +282,18 @@ async def layer_4_execute(execution_plan: dict) -> None:
                             break
 
         # ── Done? ─────────────────────────────────────────────────────────
+        # Only break AFTER tool results are collected so model can synthesize reply
         if done and reply:
             break
 
         if done and not reply and not tool_calls:
             reply = "✅ Done."
             break
+
+        # If model set done=True but also called tools this step,
+        # do one more loop pass so it can synthesize tool results into reply
+        if done and tool_calls and not reply:
+            done = False   # let loop continue for synthesis pass
 
     else:
         # Hit max iterations
@@ -301,44 +317,101 @@ async def layer_4_execute(execution_plan: dict) -> None:
 
 # ── Tool selection (scoped to message) ───────────────────────────────────────
 
+# Explicit intent → tool mappings (covers cases keyword routing misses)
+_INTENT_TOOL_MAP = [
+    # Knowledge base queries
+    ({"how many kb", "knowledge base", "kb count", "berapa kb"}, ["search_kb", "sb_query"]),
+    ({"how many tools", "berapa tools", "list tools"}, ["list_tools", "get_tool_info"]),
+    ({"how many task", "task count", "berapa task"}, ["sb_query", "task_health"]),
+    ({"mistake", "error log", "what went wrong"}, ["get_mistakes", "search_kb"]),
+    ({"pattern", "trading pattern"}, ["search_kb", "sb_query"]),
+    ({"status", "health", "are you", "how are you"}, ["get_state", "build_status"]),
+    ({"deploy", "redeploy", "restart"}, ["redeploy", "build_status", "railway_logs_live"]),
+    ({"patch", "fix file", "edit file"}, ["patch_file", "read_file", "gh_search_replace"]),
+    ({"search", "find", "look up", "cari"}, ["search_kb", "web_search"]),
+    ({"rule", "behavioral", "aturan"}, ["get_behavioral_rules"]),
+    ({"infrastructure", "infra"}, ["get_infrastructure"]),
+    ({"evolution", "evolusi"}, ["sb_query"]),
+    ({"crypto", "price", "trade", "harga"}, ["crypto_price", "crypto_balance"]),
+    ({"weather", "cuaca"}, ["weather"]),
+    ({"calculate", "math", "hitung"}, ["calc"]),
+    ({"translate", "terjemah"}, ["translate"]),
+    ({"write", "create", "buat", "document", "spreadsheet", "presentation"}, 
+     ["write_file", "create_document", "create_spreadsheet", "create_presentation"]),
+    ({"run", "execute", "python", "script"}, ["run_python"]),
+    ({"web", "browse", "fetch", "url"}, ["web_fetch", "web_search", "summarize_url"]),
+    ({"github", "repo", "commit", "branch"}, ["read_file", "write_file", "gh_search_replace"]),
+    ({"session", "session_start", "session_end"}, ["sb_query", "get_state"]),
+    ({"table", "schema", "column"}, ["get_table_schema", "sb_query"]),
+]
+
+# Max tools to pass to the model — more than this hurts reasoning quality
+_MAX_TOOLS_TO_MODEL = 20
+
+
 def _select_tools(text: str, hints: list) -> list:
     """
-    Return list of tool names relevant to this message.
-    Uses hint from L3 + keyword-based category routing.
-    Falls back to all tools if selection fails.
+    Return a focused list of tool names relevant to this message.
+    Priority: (1) L3 hints, (2) intent map, (3) keyword category routing, (4) always_include.
+    Caps at _MAX_TOOLS_TO_MODEL to keep model focused.
+    Never returns more than all tools.
     """
     try:
         from core_tools import TOOLS
         from core_config import TOOL_CATEGORY_KEYWORDS, TOOL_ALWAYS_INCLUDE
 
         all_names   = set(TOOLS.keys())
-        always_incl = set(TOOL_ALWAYS_INCLUDE)
+        always_incl = set(TOOL_ALWAYS_INCLUDE) & all_names
         selected    = set(always_incl)
+        tl          = text.lower()
 
-        # Add hinted tools
+        # (1) L3 hints — fuzzy match: accept partial name matches too
         for h in (hints or []):
+            h_lower = h.lower()
             if h in all_names:
                 selected.add(h)
+            else:
+                # partial match e.g. "supabase_query" → "sb_query"
+                for name in all_names:
+                    if h_lower in name or name in h_lower:
+                        selected.add(name)
 
-        # Keyword-based category routing
-        tl = text.lower()
+        # (2) Explicit intent → tool map
+        for intent_kws, tool_names in _INTENT_TOOL_MAP:
+            if any(kw in tl for kw in intent_kws):
+                for t in tool_names:
+                    if t in all_names:
+                        selected.add(t)
+
+        # (3) Keyword-based category routing (fixed: map category → tool names correctly)
         for cat, kws in TOOL_CATEGORY_KEYWORDS.items():
             if any(kw in tl for kw in kws):
-                # Add all tools in category
                 for name in all_names:
+                    # tool name matches any keyword in the triggered category
                     if any(kw in name for kw in kws):
                         selected.add(name)
 
         result = [t for t in selected if t in all_names]
+
+        # (4) If still empty after all routing — use always_include only (not ALL tools)
         if not result:
-            result = list(all_names)
+            result = list(always_incl) or list(all_names)[:_MAX_TOOLS_TO_MODEL]
+
+        # Cap to avoid flooding model context — prioritise hints + always_include
+        if len(result) > _MAX_TOOLS_TO_MODEL:
+            priority = list((set(hints or []) | always_incl) & all_names)
+            rest     = [t for t in result if t not in priority]
+            result   = (priority + rest)[:_MAX_TOOLS_TO_MODEL]
+
+        print(f"[L4] Selected {len(result)} tools for: {text[:60]!r}")
         return result
 
     except Exception as e:
         print(f"[L4] Tool selection failed: {e}")
         try:
             from core_tools import TOOLS
-            return list(TOOLS.keys())
+            from core_config import TOOL_ALWAYS_INCLUDE
+            return list(set(TOOL_ALWAYS_INCLUDE) & set(TOOLS.keys()))
         except Exception:
             return []
 
