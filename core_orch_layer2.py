@@ -1,392 +1,359 @@
 """
-core_orch_layer2.py — CORE AGI Context Layer
-=============================================
-Gathers all context needed for reasoning:
-  - Knowledge Base entries
-  - Active tasks
-  - Recent mistakes
-  - Session history
-  - Behavioral rules
-  - Pattern frequency
+core_orch_layer2.py — L2: MEMORY / CONTEXT HYDRATION
+======================================================
+Hydrates the session context from Supabase before reasoning begins.
+Maintains conversation history (short-term), working memory (scratchpad),
+and loads long-term context (behavioral_rules, knowledge_base, mistakes,
+task_queue) into a SessionContext object passed downstream.
 
-Returns structured context dict that L3 uses for prompt construction.
+SessionContext structure:
+  {
+    "intent":           dict,          # Intent object from L1
+    "behavioral_rules": list,          # active rules for this domain
+    "recent_mistakes":  list,          # last N mistakes
+    "kb_snippets":      list,          # relevant KB entries for this message
+    "in_progress_tasks":list,          # tasks currently in_progress
+    "conversation":     list,          # recent turns [{role, content, ts}]
+    "working_memory":   dict,          # scratchpad for this conversation
+    "owner_profile":    list,          # owner dimension profile (P3-02)
+    "active_goals":     list,          # cross-session goals
+    "hydrated_at":      float,
+    "fast_path":        bool           # True = trivial, skip heavy brain
+  }
 
-DOES NOT:
-  - Make reasoning decisions (that's L3)
-  - Execute tools (that's L4)
-  - Access Supabase directly (uses L7)
+TOMBSTONED TABLES — never query:
+  playbook, memory, master_prompt, patterns, training_sessions,
+  training_sessions_v2, training_flags, session_learning, agent_registry,
+  knowledge_blocks, agi_mistakes, stack_registry, vault_logs, vault
 """
 
-from typing import Dict, List, Any, Optional
+import json
+import time
+import threading
+from collections import deque
 from datetime import datetime
+from typing import Optional
 
-# Import L7 for Supabase access
-try:
-    from core_orch_layer7 import query as sb_query
-except ImportError:
-    print("[L2] WARNING: L7 not available")
-    def sb_query(*args, **kwargs): return None
+from core_config import sb_get, SUPABASE_URL
+from core_config import _sbh
 
+# ── Short-term conversation buffer (in-memory, per chat_id) ──────────────────
+_conv_memory: dict = {}          # cid → deque[{role, content, ts}]
+_conv_lock          = threading.Lock()
+MAX_HISTORY         = 20
+COMPRESS_AT         = 12
 
-# ══════════════════════════════════════════════════════════════════════════════
-# CONTEXT GATHERING
-# ══════════════════════════════════════════════════════════════════════════════
+# ── Working memory (scratchpad, per chat_id) ─────────────────────────────────
+_working_mem: dict = {}          # cid → {key: value}
+_wm_lock            = threading.Lock()
 
-def gather_context(text: str, chat_id: str) -> Dict[str, Any]:
-    """
-    Gather all relevant context for a user message.
-    
-    Args:
-        text: User message text
-        chat_id: Telegram chat ID
-    
-    Returns:
-        Context dict with keys:
-        - kb_entries: List of relevant KB entries
-        - tasks: List of active tasks
-        - mistakes: List of recent mistakes
-        - patterns: List of top patterns
-        - rules: List of behavioral rules
-        - session_state: Current session info
-        - items: Total context items count
-    """
-    print(f"[L2] Gathering context for: {text[:50]}")
-    
-    context = {
-        "kb_entries": [],
-        "tasks": [],
-        "mistakes": [],
-        "patterns": [],
-        "rules": [],
-        "session_state": {},
-        "items": 0,
-    }
-    
-    # Extract keywords from message for targeted queries
-    keywords = _extract_keywords(text)
-    
-    # Gather KB entries
-    kb = _get_kb_context(keywords, text)
-    if kb:
-        context["kb_entries"] = kb
-        context["items"] += len(kb)
-    
-    # Gather active tasks
-    tasks = _get_task_context()
-    if tasks:
-        context["tasks"] = tasks
-        context["items"] += len(tasks)
-    
-    # Gather recent mistakes
-    mistakes = _get_mistake_context(keywords)
-    if mistakes:
-        context["mistakes"] = mistakes
-        context["items"] += len(mistakes)
-    
-    # Gather patterns
-    patterns = _get_pattern_context(keywords)
-    if patterns:
-        context["patterns"] = patterns
-        context["items"] += len(patterns)
-    
-    # Gather behavioral rules
-    rules = _get_rules_context()
-    if rules:
-        context["rules"] = rules
-        context["items"] += len(rules)
-    
-    # Get session state
-    session_state = _get_session_state(chat_id)
-    if session_state:
-        context["session_state"] = session_state
-    
-    print(f"[L2] Context gathered: {context['items']} items")
-    return context
+# ── Session context cache (avoid re-hydrating on every message) ──────────────
+_ctx_cache: dict    = {}         # cid → {ctx, loaded_at}
+_ctx_lock           = threading.Lock()
+CTX_CACHE_TTL       = 600        # 10 min — re-hydrate if stale
+
+# ── Tombstoned tables — guard against accidental queries ─────────────────────
+_TOMBSTONED = {
+    "playbook", "memory", "master_prompt", "patterns", "training_sessions",
+    "training_sessions_v2", "training_flags", "session_learning",
+    "agent_registry", "knowledge_blocks", "agi_mistakes", "stack_registry",
+    "vault_logs", "vault",
+}
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# CONTEXT HELPERS
-# ══════════════════════════════════════════════════════════════════════════════
-
-def _extract_keywords(text: str) -> List[str]:
-    """Extract meaningful keywords from text for targeted queries."""
-    import re
-    
-    # Stop words to filter out
-    stop_words = {
-        "the", "a", "an", "is", "are", "was", "were", "i", "you", "we", "it",
-        "to", "of", "and", "or", "in", "on", "at", "for", "with", "do", "did",
-        "can", "could", "would", "please", "what", "when", "where", "how", "why",
-    }
-    
-    # Extract words (5+ chars, not stop words)
-    words = re.findall(r'\b[a-zA-Z]{5,}\b', text.lower())
-    keywords = [w for w in words if w not in stop_words]
-    
-    # Return unique keywords (max 5)
-    return list(dict.fromkeys(keywords))[:5]
-
-
-def _get_kb_context(keywords: List[str], full_text: str) -> List[Dict]:
-    """Get relevant KB entries based on keywords or full text search."""
+def _safe_sb_get(table: str, qs: str, svc: bool = False) -> list:
+    """Wrapper that hard-blocks tombstoned tables."""
+    if table in _TOMBSTONED:
+        print(f"[L2] CRITICAL: attempted query on tombstoned table '{table}' — blocked.")
+        return []
     try:
-        if not keywords:
-            # No keywords - get recent high-confidence entries
-            result = sb_query(
-                "knowledge_base",
-                filters="active=eq.true&id=gt.1",
-                select="id,domain,topic,content,confidence",
-                order="confidence.desc,created_at.desc",
-                limit=5,
-                operation="get_kb_context"
+        return sb_get(table, qs, svc=svc) or []
+    except Exception as e:
+        print(f"[L2] sb_get({table}) error (non-fatal): {e}")
+        return []
+
+
+# ── Conversation history ──────────────────────────────────────────────────────
+
+def get_history(cid: str) -> list:
+    with _conv_lock:
+        if cid not in _conv_memory:
+            # Load recent turns from Supabase
+            rows = _safe_sb_get(
+                "telegram_conversations",
+                f"select=role,content,created_at"
+                f"&chat_id=eq.{cid}&deleted=eq.false"
+                f"&order=created_at.desc&limit={MAX_HISTORY}",
+                svc=True,
             )
-            return result or []
-        
-        # Keyword-based search
-        kw = keywords[0]
-        result = sb_query(
-            "knowledge_base",
-            filters=f"topic.ilike.*{kw}*&active=eq.true&id=gt.1",
-            select="id,domain,topic,content,confidence",
-            order="confidence.desc",
-            limit=5,
-            operation="get_kb_context"
-        )
-        
-        if result:
-            return result
-        
-        # Fallback to recent entries if no matches
-        result = sb_query(
-            "knowledge_base",
-            filters="active=eq.true&id=gt.1",
-            select="id,domain,topic,content,confidence",
-            order="created_at.desc",
-            limit=3,
-            operation="get_kb_context"
-        )
-        return result or []
-    
-    except Exception as e:
-        print(f"[L2] _get_kb_context failed: {e}")
-        return []
+            turns = list(reversed([
+                {"role": r["role"], "content": r["content"], "ts": r.get("created_at", "")}
+                for r in rows
+            ]))
+            _conv_memory[cid] = deque(turns, maxlen=MAX_HISTORY)
+        return list(_conv_memory[cid])
 
 
-def _get_task_context() -> List[Dict]:
-    """Get active and pending tasks."""
+def append_history(cid: str, role: str, content: str):
+    with _conv_lock:
+        if cid not in _conv_memory:
+            _conv_memory[cid] = deque(maxlen=MAX_HISTORY)
+        _conv_memory[cid].append({
+            "role": role,
+            "content": content[:1500],
+            "ts": datetime.utcnow().isoformat()
+        })
+    # Persist to Supabase (fire-and-forget)
     try:
-        # Get in_progress tasks first
-        in_progress = sb_query(
-            "task_queue",
-            filters="status=eq.in_progress&id=gt.1",
-            select="id,task,priority,status,domain",
-            order="priority.desc",
-            limit=3,
-            operation="get_task_context"
-        )
-        
-        if in_progress:
-            return in_progress
-        
-        # No in_progress - get pending
-        pending = sb_query(
-            "task_queue",
-            filters="status=eq.pending&id=gt.1",
-            select="id,task,priority,status,domain",
-            order="priority.desc",
-            limit=3,
-            operation="get_task_context"
-        )
-        return pending or []
-    
-    except Exception as e:
-        print(f"[L2] _get_task_context failed: {e}")
-        return []
+        from core_config import sb_post
+        sb_post("telegram_conversations", {
+            "chat_id":    cid,
+            "role":       role,
+            "content":    content[:1500],
+            "created_at": datetime.utcnow().isoformat(),
+        })
+    except Exception:
+        pass
 
 
-def _get_mistake_context(keywords: List[str]) -> List[Dict]:
-    """Get recent mistakes, optionally filtered by keywords."""
+def clear_history(cid: str):
+    with _conv_lock:
+        _conv_memory.pop(cid, None)
+    with _wm_lock:
+        _working_mem.pop(cid, None)
+    with _ctx_lock:
+        _ctx_cache.pop(cid, None)
     try:
-        if keywords:
-            # Keyword-scoped search
-            kw = keywords[0]
-            result = sb_query(
-                "mistakes",
-                filters=f"id=gt.1&what_failed.ilike.*{kw}*",
-                select="id,domain,what_failed,correct_approach,how_to_avoid,severity",
-                order="created_at.desc",
-                limit=4,
-                operation="get_mistake_context"
-            )
-            
-            if result:
-                return result
-        
-        # No keywords or no matches - get recent high-severity
-        result = sb_query(
-            "mistakes",
-            filters="id=gt.1",
-            select="id,domain,what_failed,correct_approach,how_to_avoid,severity",
-            order="created_at.desc",
-            limit=4,
-            operation="get_mistake_context"
-        )
-        return result or []
-    
-    except Exception as e:
-        print(f"[L2] _get_mistake_context failed: {e}")
-        return []
+        from core_config import sb_patch
+        sb_patch("telegram_conversations", f"chat_id=eq.{cid}", {"deleted": True})
+    except Exception:
+        pass
 
 
-def _get_pattern_context(keywords: List[str]) -> List[Dict]:
-    """Get top patterns, optionally filtered by keywords."""
+# ── Working memory ────────────────────────────────────────────────────────────
+
+def wm_set(cid: str, key: str, value):
+    with _wm_lock:
+        if cid not in _working_mem:
+            _working_mem[cid] = {}
+        _working_mem[cid][key] = value
+
+
+def wm_get(cid: str, key: str, default=None):
+    with _wm_lock:
+        return _working_mem.get(cid, {}).get(key, default)
+
+
+def wm_clear(cid: str):
+    with _wm_lock:
+        _working_mem.pop(cid, None)
+
+
+# ── Parallel brain fetch helpers ─────────────────────────────────────────────
+
+def _fetch_behavioral_rules(domain: str, results: dict):
     try:
-        if keywords:
-            # Keyword-scoped search
-            kw = keywords[0]
-            result = sb_query(
-                "pattern_frequency",
-                filters=f"id=gt.1&stale=eq.false&pattern_key.ilike.*{kw}*",
-                select="id,pattern_key,frequency,domain,description",
-                order="frequency.desc",
-                limit=5,
-                operation="get_pattern_context"
-            )
-            
-            if result:
-                return result
-        
-        # No keywords or no matches - get top by frequency
-        result = sb_query(
-            "pattern_frequency",
-            filters="id=gt.1&stale=eq.false",
-            select="id,pattern_key,frequency,domain,description",
-            order="frequency.desc",
-            limit=6,
-            operation="get_pattern_context"
-        )
-        return result or []
-    
-    except Exception as e:
-        print(f"[L2] _get_pattern_context failed: {e}")
-        return []
-
-
-def _get_rules_context() -> List[Dict]:
-    """Get active behavioral rules."""
-    try:
-        result = sb_query(
+        rows = _safe_sb_get(
             "behavioral_rules",
-            filters="active=eq.true&id=gt.1",
-            select="id,domain,trigger,pointer,confidence",
-            order="confidence.desc,created_at.desc",
-            limit=10,
-            operation="get_rules_context"
+            f"select=trigger,pointer,full_rule,domain,priority,confidence"
+            f"&active=eq.true"
+            f"&order=priority.asc,confidence.desc&limit=40",
+            svc=True,
         )
-        return result or []
-    
+        # Filter: universal rules + domain-specific
+        filtered = [r for r in rows
+                    if r.get("domain") in ("universal", domain, "general")]
+        results["behavioral_rules"] = filtered
     except Exception as e:
-        print(f"[L2] _get_rules_context failed: {e}")
-        return []
+        print(f"[L2] behavioral_rules fetch error: {e}")
+        results["behavioral_rules"] = []
 
 
-def _get_session_state(chat_id: str) -> Dict[str, Any]:
-    """Get current session state info."""
+def _fetch_recent_mistakes(domain: str, results: dict):
     try:
-        # Get latest session
-        sessions = sb_query(
-            "sessions",
-            filters="id=gt.1",
-            select="id,summary,domain,quality_score,created_at",
-            order="created_at.desc",
-            limit=1,
-            operation="get_session_state"
+        qs = (
+            f"select=domain,context,what_failed,root_cause,correct_approach,how_to_avoid,severity"
+            f"&order=created_at.desc&limit=8"
         )
-        
-        if sessions:
-            return sessions[0]
-        
-        return {}
-    
+        if domain and domain not in ("general", ""):
+            qs += f"&domain=eq.{domain}"
+        results["recent_mistakes"] = _safe_sb_get("mistakes", qs, svc=True)
     except Exception as e:
-        print(f"[L2] _get_session_state failed: {e}")
-        return {}
+        print(f"[L2] mistakes fetch error: {e}")
+        results["recent_mistakes"] = []
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# CONTEXT FORMATTING
-# ══════════════════════════════════════════════════════════════════════════════
+def _fetch_kb_snippets(text: str, results: dict):
+    try:
+        # Extract keywords
+        import re
+        stop = {"the","a","an","is","are","was","i","you","we","it","to","of",
+                "and","or","in","on","at","for","with","do","can","please",
+                "yang","ada","ini","itu","ke","dari","bisa","mau","tidak","saya"}
+        words = [w for w in re.findall(r"[a-zA-Z]{4,}", text.lower()) if w not in stop]
+        kws   = list(dict.fromkeys(words))[:3]
 
-def format_context_for_prompt(context: Dict[str, Any]) -> str:
+        if not kws:
+            results["kb_snippets"] = []
+            return
+
+        kw_filter = ",".join(f"topic.ilike.*{k}*" for k in kws[:2])
+        rows = _safe_sb_get(
+            "knowledge_base",
+            f"select=domain,topic,instruction,content,confidence"
+            f"&or=({kw_filter})"
+            f"&active=eq.true&order=confidence.desc&limit=6",
+            svc=True,
+        )
+        results["kb_snippets"] = rows
+    except Exception as e:
+        print(f"[L2] kb_snippets fetch error: {e}")
+        results["kb_snippets"] = []
+
+
+def _fetch_in_progress_tasks(results: dict):
+    try:
+        rows = _safe_sb_get(
+            "task_queue",
+            "select=id,task,priority,status,source,next_step"
+            "&source=in.(core_v6_registry,mcp_session)"
+            "&status=in.(pending,in_progress)"
+            "&order=priority.desc&limit=5",
+        )
+        results["in_progress_tasks"] = rows
+    except Exception as e:
+        print(f"[L2] task_queue fetch error: {e}")
+        results["in_progress_tasks"] = []
+
+
+def _fetch_owner_profile(results: dict):
+    try:
+        rows = _safe_sb_get(
+            "owner_profile",
+            "select=dimension,value,confidence&order=confidence.desc&limit=10",
+            svc=True,
+        )
+        results["owner_profile"] = rows
+    except Exception:
+        results["owner_profile"] = []
+
+
+def _fetch_active_goals(results: dict):
+    try:
+        rows = _safe_sb_get(
+            "session_goals",
+            "select=domain,goal,progress,status"
+            "&status=eq.active&order=created_at.desc&limit=5",
+            svc=True,
+        )
+        results["active_goals"] = rows
+    except Exception:
+        results["active_goals"] = []
+
+
+# ── Main hydration ────────────────────────────────────────────────────────────
+
+def _hydrate_sync(intent: dict) -> dict:
     """
-    Format context dict into readable string for LLM prompt.
-    
-    Args:
-        context: Context dict from gather_context()
-    
-    Returns:
-        Formatted string
+    Synchronous parallel Supabase hydration. Returns full SessionContext.
+    Runs 6 fetches in parallel threads — total wall-clock ~= slowest single fetch.
     """
-    sections = []
-    
-    # KB entries
-    if context.get("kb_entries"):
-        lines = []
-        for entry in context["kb_entries"][:5]:
-            topic = entry.get("topic", "")
-            content = entry.get("content", "")[:200]
-            domain = entry.get("domain", "")
-            lines.append(f"  [{domain}] {topic}: {content}")
-        sections.append("KNOWLEDGE BASE:\n" + "\n".join(lines))
-    
-    # Active tasks
-    if context.get("tasks"):
-        lines = []
-        for task in context["tasks"][:3]:
-            task_text = str(task.get("task", ""))[:100]
-            priority = task.get("priority", "?")
-            status = task.get("status", "?")
-            lines.append(f"  [P{priority}/{status}] {task_text}")
-        sections.append("ACTIVE TASKS:\n" + "\n".join(lines))
-    
-    # Recent mistakes
-    if context.get("mistakes"):
-        lines = []
-        for mistake in context["mistakes"][:4]:
-            what = mistake.get("what_failed", "")[:80]
-            fix = mistake.get("correct_approach") or mistake.get("how_to_avoid", "")
-            domain = mistake.get("domain", "?")
-            lines.append(f"  [{domain}] AVOID: {what} → {fix[:80]}")
-        sections.append("RECENT MISTAKES:\n" + "\n".join(lines))
-    
-    # Top patterns
-    if context.get("patterns"):
-        lines = []
-        for pattern in context["patterns"][:5]:
-            key = pattern.get("pattern_key", "")
-            freq = pattern.get("frequency", 0)
-            domain = pattern.get("domain", "")
-            desc = pattern.get("description", "")[:100]
-            lines.append(f"  [{domain}/{freq}x] {key}: {desc}")
-        sections.append("TOP PATTERNS:\n" + "\n".join(lines))
-    
-    # Behavioral rules
-    if context.get("rules"):
-        lines = []
-        for rule in context["rules"][:10]:
-            trigger = rule.get("trigger", "")
-            pointer = rule.get("pointer", "")[:80]
-            lines.append(f"  [{trigger}] {pointer}")
-        sections.append("BEHAVIORAL RULES:\n" + "\n".join(lines))
-    
-    if not sections:
-        return ""
-    
-    return "\n\n".join(sections)
+    cid   = intent["sender_id"]
+    text  = intent["text"]
+
+    # Guess domain from text for behavioral_rules filter
+    _dom_map = [
+        (["supabase","sb_query","database","table"],        "db"),
+        (["github","patch","deploy","railway","commit"],    "code"),
+        (["telegram","notify","bot"],                       "bot"),
+        (["mcp","tool","session"],                          "mcp"),
+        (["training","cold","hot","evolution","pattern"],   "training"),
+        (["knowledge","kb","learn"],                        "kb"),
+    ]
+    domain = "general"
+    tl = text.lower()
+    for kws, d in _dom_map:
+        if any(k in tl for k in kws):
+            domain = d
+            break
+
+    # Check cache
+    with _ctx_lock:
+        cached = _ctx_cache.get(cid)
+        if cached and (time.time() - cached["loaded_at"]) < CTX_CACHE_TTL:
+            # Return cached context with fresh intent + history
+            ctx = dict(cached["ctx"])
+            ctx["intent"]       = intent
+            ctx["conversation"] = get_history(cid)
+            ctx["working_memory"] = dict(_working_mem.get(cid, {}))
+            ctx["fast_path"]    = intent.get("is_trivial", False)
+            return ctx
+
+    # Parallel fetch
+    results = {}
+    threads = [
+        threading.Thread(target=_fetch_behavioral_rules,  args=(domain, results), daemon=True),
+        threading.Thread(target=_fetch_recent_mistakes,   args=(domain, results), daemon=True),
+        threading.Thread(target=_fetch_kb_snippets,       args=(text, results),   daemon=True),
+        threading.Thread(target=_fetch_in_progress_tasks, args=(results,),         daemon=True),
+        threading.Thread(target=_fetch_owner_profile,     args=(results,),         daemon=True),
+        threading.Thread(target=_fetch_active_goals,      args=(results,),         daemon=True),
+    ]
+    for t in threads: t.start()
+    for t in threads: t.join(timeout=4)
+
+    ctx = {
+        "intent":            intent,
+        "behavioral_rules":  results.get("behavioral_rules", []),
+        "recent_mistakes":   results.get("recent_mistakes", []),
+        "kb_snippets":       results.get("kb_snippets", []),
+        "in_progress_tasks": results.get("in_progress_tasks", []),
+        "owner_profile":     results.get("owner_profile", []),
+        "active_goals":      results.get("active_goals", []),
+        "conversation":      get_history(cid),
+        "working_memory":    dict(_working_mem.get(cid, {})),
+        "hydrated_at":       time.time(),
+        "fast_path":         intent.get("is_trivial", False),
+    }
+
+    # Cache (without intent — per-message fields)
+    cacheable = {k: v for k, v in ctx.items()
+                 if k not in ("intent", "conversation", "working_memory", "fast_path")}
+    with _ctx_lock:
+        _ctx_cache[cid] = {"ctx": cacheable, "loaded_at": time.time()}
+
+    print(f"[L2] Hydrated: rules={len(ctx['behavioral_rules'])} "
+          f"kb={len(ctx['kb_snippets'])} mistakes={len(ctx['recent_mistakes'])} "
+          f"tasks={len(ctx['in_progress_tasks'])}")
+    return ctx
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# INITIALIZATION
-# ══════════════════════════════════════════════════════════════════════════════
+async def layer_2_hydrate(intent: dict):
+    """
+    Async entry point from L1. Hydrates context then passes to L3 reasoning.
+    """
+    try:
+        # Run sync hydration in executor (non-blocking)
+        import asyncio
+        loop    = asyncio.get_event_loop()
+        ctx     = await loop.run_in_executor(None, _hydrate_sync, intent)
 
-print("[L2] Context Layer loaded")
+        # Pass to L3: Reasoning
+        from core_orch_layer3 import layer_3_reason
+        await layer_3_reason(ctx)
+
+    except Exception as e:
+        print(f"[L2] Hydration error: {e}")
+        cid = intent.get("sender_id", "")
+        from core_config import notify
+        notify(f"⚠️ Context hydration failed: {e}", cid)
+
+
+def invalidate_cache(cid: str):
+    """Call when behavioral rules or KB changes during a session."""
+    with _ctx_lock:
+        _ctx_cache.pop(cid, None)
+
+
+if __name__ == "__main__":
+    print("🛰️ Layer 2: Memory / Context Hydration — Online.")

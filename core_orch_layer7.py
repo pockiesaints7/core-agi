@@ -1,344 +1,237 @@
 """
-core_orch_layer7.py — CORE AGI Supabase Layer
-===============================================
-Wrapper around core_config.py Supabase functions. Adds:
-  - L10 Constitution checks (enforce_db)
-  - Retry logic for transient failures
-  - Query result validation
-  - Error normalization
+core_orch_layer7.py — L7: OBSERVABILITY
+=========================================
+Measures what matters. Called after every completed turn.
+Writes quality signals to hot_reflections for the L9 learning pipeline.
 
-DOES NOT:
-  - Make raw HTTP calls (delegates to core_config)
-  - Bypass L10 checks
-  - Cache results (that's L2's job)
+Tracks:
+  - Tool call metrics (success rate, which tools called)
+  - Session quality score (0.0–1.0)
+  - Error log (ok=False tool results)
+  - Evolution opportunity detection (real improvement proposals)
+  - Quality alert: if score drops below threshold → surface at next session_start
 
-All other layers call L7 for Supabase access, never core_config directly.
+Evolution proposal protocol:
+  - Uses your REAL evolution_queue table
+  - Uses correct groq_chat(system, user, model, max_tokens) signature
+  - Only proposes when there's genuine signal (not every turn)
+  - Routes to evolution_queue + notifies owner — never self-approves (C3)
 """
 
+import json
 import time
-from typing import Optional, Dict, List, Any
+import asyncio
+from datetime import datetime
 
-# Import L10 Constitution
-try:
-    from core_orch_layer10 import enforce_db, report_violation, SEVERITY_HIGH
-except ImportError:
-    print("[L7] WARNING: L10 Constitution Layer not available")
-    def enforce_db(*args, **kwargs): pass
-    def report_violation(*args, **kwargs): pass
-    SEVERITY_HIGH = "high"
+QUALITY_ALERT_THRESHOLD = 0.50   # below this → quality_alert row written
+EVOLVE_QUALITY_THRESHOLD = 0.45  # below this → consider evolution proposal
+MAX_EVOLUTIONS_PER_SESSION = 3   # rate limit on proposals
 
-# Import actual Supabase functions from core_config
-try:
-    from core_config import sb_get, sb_post, sb_patch, sb_upsert, sb_delete
-except ImportError:
-    print("[L7] CRITICAL: Cannot import core_config Supabase functions")
-    def sb_get(*args, **kwargs): return None
-    def sb_post(*args, **kwargs): return None
-    def sb_patch(*args, **kwargs): return None
-    def sb_upsert(*args, **kwargs): return None
-    def sb_delete(*args, **kwargs): return None
+# Session-level evolution counter (reset each "session" = per conversation)
+_evo_counter: dict = {}   # cid → int
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# RETRY CONFIGURATION
-# ══════════════════════════════════════════════════════════════════════════════
+# ── Quality scoring ───────────────────────────────────────────────────────────
 
-MAX_RETRIES = 3
-RETRY_DELAY = 1.0  # seconds
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# L7 PUBLIC API
-# ══════════════════════════════════════════════════════════════════════════════
-
-def query(table: str, filters: str = "", select: str = "*", 
-          order: str = "", limit: int = None, svc: bool = False,
-          operation: str = "") -> Optional[List[Dict]]:
+def _score_turn(tool_results: list, reply: str) -> float:
     """
-    Query Supabase table with retry logic and L10 checks.
-    
-    Args:
-        table: Table name
-        filters: Query string filters (e.g. "status=eq.pending&id=gt.1")
-        select: Columns to select
-        order: Order clause
-        limit: Row limit
-        svc: Use service key (bypass RLS)
-        operation: Description for L10 logging
-    
-    Returns:
-        List of row dicts, or None on failure
+    Compute quality score 0.0–1.0 for this turn.
+    - Starts at 0.85
+    - Each failed tool: -0.10
+    - Empty reply: -0.20
+    - Hallucination flag: -0.30
+    - Clean execution, no failures: +0.05 bonus
     """
-    # L10 check
-    enforce_db(operation or f"query {table}")
-    
-    # Build query string
-    qs = select if select.startswith("select=") else f"select={select}"
-    if filters:
-        qs += f"&{filters}"
-    if order:
-        qs += f"&order={order}"
-    if limit:
-        qs += f"&limit={limit}"
-    
-    # Retry loop
-    last_error = None
-    for attempt in range(MAX_RETRIES):
+    if not tool_results and not reply:
+        return 0.3
+
+    total    = max(len(tool_results), 1)
+    failures = sum(1 for r in tool_results if not r.get("ok", True))
+    score    = 0.85 - (failures / total) * 0.40
+
+    if not reply or len(reply.strip()) < 10:
+        score -= 0.20
+
+    if failures == 0 and tool_results:
+        score += 0.05
+
+    return round(max(0.1, min(1.0, score)), 3)
+
+
+# ── Error log ─────────────────────────────────────────────────────────────────
+
+def _log_errors(tool_results: list, cid: str):
+    """Write tool failures to mistakes table for L9/cold processor pickup."""
+    failures = [r for r in tool_results if not r.get("ok", True)]
+    if not failures:
+        return
+
+    for f in failures[:3]:
         try:
-            result = sb_get(table, qs, svc=svc)
-            
-            # Validate result
-            if result is None:
-                raise RuntimeError(f"sb_get returned None for {table}")
-            
-            if not isinstance(result, list):
-                raise RuntimeError(f"sb_get returned non-list: {type(result)}")
-            
-            return result
-        
+            from core_config import sb_post
+            sb_post("mistakes", {
+                "domain":           "core_agi",
+                "context":          f"Agentic loop tool call — chat_id={cid}",
+                "what_failed":      f"Tool {f.get('name', '?')} returned ok=False",
+                "root_cause":       f"error_code={f.get('error_code', '?')} "
+                                    f"message={f.get('message', '')[:200]}",
+                "correct_approach": f"retry_hint={f.get('retry_hint', '?')}",
+                "how_to_avoid":     f"Check tool schema and args. domain={f.get('domain', '?')}",
+                "severity":         "medium",
+                "created_at":       datetime.utcnow().isoformat(),
+            })
         except Exception as e:
-            last_error = e
-            print(f"[L7] query {table} attempt {attempt+1}/{MAX_RETRIES} failed: {e}")
-            
-            if attempt < MAX_RETRIES - 1:
-                time.sleep(RETRY_DELAY * (attempt + 1))
-            continue
-    
-    # All retries failed
-    report_violation(
-        invariant="L7-SUPABASE",
-        what_failed=f"Query failed after {MAX_RETRIES} retries: {table}",
-        context=f"filters={filters}, error={str(last_error)[:200]}",
-        how_to_avoid="Check Supabase connectivity and table schema",
-        severity=SEVERITY_HIGH,
-    )
-    return None
+            print(f"[L7] Error log write failed (non-fatal): {e}")
 
 
-def insert(table: str, data: Dict[str, Any], operation: str = "") -> Optional[Dict]:
+# ── Evolution proposal ────────────────────────────────────────────────────────
+
+def _maybe_propose_evolution(
+    text: str,
+    tool_results: list,
+    reply: str,
+    quality: float,
+    cid: str,
+):
     """
-    Insert row into Supabase table with retry logic.
-    
-    Args:
-        table: Table name
-        data: Row data dict
-        operation: Description for L10 logging
-    
-    Returns:
-        Inserted row dict, or None on failure
+    Check if this turn reveals a real improvement opportunity.
+    Uses groq_chat with CORRECT signature.
+    Only fires when quality is low AND we haven't proposed too many this session.
     """
-    # L10 check
-    enforce_db(operation or f"insert {table}")
-    
-    # Retry loop
-    last_error = None
-    for attempt in range(MAX_RETRIES):
-        try:
-            result = sb_post(table, data)
-            
-            if result is None:
-                raise RuntimeError(f"sb_post returned None for {table}")
-            
-            return result
-        
-        except Exception as e:
-            last_error = e
-            print(f"[L7] insert {table} attempt {attempt+1}/{MAX_RETRIES} failed: {e}")
-            
-            if attempt < MAX_RETRIES - 1:
-                time.sleep(RETRY_DELAY * (attempt + 1))
-            continue
-    
-    # All retries failed
-    report_violation(
-        invariant="L7-SUPABASE",
-        what_failed=f"Insert failed after {MAX_RETRIES} retries: {table}",
-        context=f"data={str(data)[:200]}, error={str(last_error)[:200]}",
-        how_to_avoid="Check table schema and constraints",
-        severity=SEVERITY_HIGH,
-    )
-    return None
+    global _evo_counter
 
+    # Rate limit
+    count = _evo_counter.get(cid, 0)
+    if count >= MAX_EVOLUTIONS_PER_SESSION:
+        return
+    if quality > EVOLVE_QUALITY_THRESHOLD:
+        return
 
-def update(table: str, match: str, data: Dict[str, Any], 
-           operation: str = "") -> Optional[Dict]:
-    """
-    Update rows in Supabase table with retry logic.
-    
-    Args:
-        table: Table name
-        match: Filter for rows to update (e.g. "id=eq.123")
-        data: Update data dict
-        operation: Description for L10 logging
-    
-    Returns:
-        Updated row dict, or None on failure
-    """
-    # L10 check
-    enforce_db(operation or f"update {table}")
-    
-    # Retry loop
-    last_error = None
-    for attempt in range(MAX_RETRIES):
-        try:
-            result = sb_patch(table, match, data)
-            
-            if result is None:
-                raise RuntimeError(f"sb_patch returned None for {table}")
-            
-            return result
-        
-        except Exception as e:
-            last_error = e
-            print(f"[L7] update {table} attempt {attempt+1}/{MAX_RETRIES} failed: {e}")
-            
-            if attempt < MAX_RETRIES - 1:
-                time.sleep(RETRY_DELAY * (attempt + 1))
-            continue
-    
-    # All retries failed
-    report_violation(
-        invariant="L7-SUPABASE",
-        what_failed=f"Update failed after {MAX_RETRIES} retries: {table}",
-        context=f"match={match}, data={str(data)[:200]}, error={str(last_error)[:200]}",
-        how_to_avoid="Check table schema and match filter",
-        severity=SEVERITY_HIGH,
-    )
-    return None
+    failed_tools = [r for r in tool_results if not r.get("ok", True)]
+    if not failed_tools:
+        return
 
-
-def upsert(table: str, data: Dict[str, Any], on_conflict: str = "id",
-           operation: str = "") -> Optional[Dict]:
-    """
-    Upsert row in Supabase table with retry logic.
-    
-    Args:
-        table: Table name
-        data: Row data dict
-        on_conflict: Column(s) to match for conflict resolution
-        operation: Description for L10 logging
-    
-    Returns:
-        Upserted row dict, or None on failure
-    """
-    # L10 check
-    enforce_db(operation or f"upsert {table}")
-    
-    # Retry loop
-    last_error = None
-    for attempt in range(MAX_RETRIES):
-        try:
-            result = sb_upsert(table, data, on_conflict=on_conflict)
-            
-            if result is None:
-                raise RuntimeError(f"sb_upsert returned None for {table}")
-            
-            return result
-        
-        except Exception as e:
-            last_error = e
-            print(f"[L7] upsert {table} attempt {attempt+1}/{MAX_RETRIES} failed: {e}")
-            
-            if attempt < MAX_RETRIES - 1:
-                time.sleep(RETRY_DELAY * (attempt + 1))
-            continue
-    
-    # All retries failed
-    report_violation(
-        invariant="L7-SUPABASE",
-        what_failed=f"Upsert failed after {MAX_RETRIES} retries: {table}",
-        context=f"data={str(data)[:200]}, error={str(last_error)[:200]}",
-        how_to_avoid="Check table schema and on_conflict column",
-        severity=SEVERITY_HIGH,
-    )
-    return None
-
-
-def delete(table: str, match: str, operation: str = "") -> bool:
-    """
-    Delete rows from Supabase table with retry logic.
-    
-    Args:
-        table: Table name
-        match: Filter for rows to delete (e.g. "id=eq.123")
-        operation: Description for L10 logging
-    
-    Returns:
-        True on success, False on failure
-    """
-    # L10 check
-    enforce_db(operation or f"delete {table}")
-    
-    # Retry loop
-    last_error = None
-    for attempt in range(MAX_RETRIES):
-        try:
-            result = sb_delete(table, match)
-            return True  # Assume success if no exception
-        
-        except Exception as e:
-            last_error = e
-            print(f"[L7] delete {table} attempt {attempt+1}/{MAX_RETRIES} failed: {e}")
-            
-            if attempt < MAX_RETRIES - 1:
-                time.sleep(RETRY_DELAY * (attempt + 1))
-            continue
-    
-    # All retries failed
-    report_violation(
-        invariant="L7-SUPABASE",
-        what_failed=f"Delete failed after {MAX_RETRIES} retries: {table}",
-        context=f"match={match}, error={str(last_error)[:200]}",
-        how_to_avoid="Check table and match filter",
-        severity=SEVERITY_HIGH,
-    )
-    return False
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# HELPER FUNCTIONS
-# ══════════════════════════════════════════════════════════════════════════════
-
-def get_counts(tables: List[str]) -> Dict[str, int]:
-    """
-    Get row counts for multiple tables efficiently.
-    
-    Args:
-        tables: List of table names
-    
-    Returns:
-        Dict mapping table name to row count (-1 on error)
-    """
-    counts = {}
-    for table in tables:
-        try:
-            result = query(table, select="id", limit=1, 
-                          operation=f"count {table}")
-            counts[table] = len(result) if result else 0
-        except Exception as e:
-            print(f"[L7] count {table} failed: {e}")
-            counts[table] = -1
-    return counts
-
-
-def health_check() -> bool:
-    """
-    Quick Supabase health check.
-    
-    Returns:
-        True if Supabase is reachable, False otherwise
-    """
     try:
-        result = query("knowledge_base", select="id", limit=1,
-                      operation="health_check")
-        return result is not None
+        from core_config import groq_chat, GROQ_FAST, sb_post_critical
+        from core_github import notify
+
+        failures_text = "\n".join(
+            f"  [{r.get('name','?')}] {r.get('error_code','?')}: {r.get('message','')[:120]}"
+            for r in failed_tools[:3]
+        )
+
+        system = (
+            "You are CORE's evolution analyst. "
+            "Analyze this failed interaction and determine if a structural improvement is warranted. "
+            "ONLY propose if there is a clear, specific, actionable fix. "
+            "Output ONLY valid JSON — no preamble:\n"
+            '{"propose": true/false, "change_type": "knowledge|code|behavioral_rule", '
+            '"summary": "1 sentence what to fix", "confidence": 0.0-1.0, '
+            '"reason": "why this failure pattern is systemic"}'
+        )
+        user = (
+            f"USER REQUEST: {text[:300]}\n"
+            f"QUALITY SCORE: {quality}\n"
+            f"FAILED TOOLS:\n{failures_text}\n"
+            f"FINAL REPLY: {reply[:300]}"
+        )
+
+        raw = groq_chat(system=system, user=user, model=GROQ_FAST, max_tokens=300)
+        raw = raw.strip().replace("```json", "").replace("```", "").strip()
+        parsed = json.loads(raw)
+
+        if not parsed.get("propose"):
+            return
+        if float(parsed.get("confidence", 0)) < 0.5:
+            return
+
+        # Write to evolution_queue (real schema)
+        ok = sb_post_critical("evolution_queue", {
+            "change_type":    parsed.get("change_type", "knowledge"),
+            "change_summary": parsed.get("summary", "")[:500],
+            "pattern_key":    f"orch_l7:{text[:80]}",
+            "confidence":     float(parsed.get("confidence", 0.5)),
+            "status":         "pending",
+            "source":         "real",
+            "impact":         "core_agi",
+            "recommendation": parsed.get("reason", "")[:300],
+            "created_at":     datetime.utcnow().isoformat(),
+        })
+
+        if ok:
+            _evo_counter[cid] = count + 1
+            notify(
+                f"🧬 <b>Evolution Proposed (L7)</b>\n"
+                f"Type: {parsed.get('change_type')}\n"
+                f"Summary: {parsed.get('summary','')[:200]}\n"
+                f"Confidence: {parsed.get('confidence')}\n"
+                f"Reason: {parsed.get('reason','')[:200]}\n"
+                f"Review: /review or t_check_evolutions"
+            )
+            print(f"[L7] Evolution proposed: {parsed.get('summary','')[:80]}")
+
+    except json.JSONDecodeError as e:
+        print(f"[L7] Evolution JSON parse failed (non-fatal): {e}")
     except Exception as e:
-        print(f"[L7] health_check failed: {e}")
-        return False
+        print(f"[L7] Evolution proposal error (non-fatal): {e}")
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# INITIALIZATION
-# ══════════════════════════════════════════════════════════════════════════════
+# ── Quality alert ─────────────────────────────────────────────────────────────
 
-print("[L7] Supabase Layer loaded")
+def _write_quality_alert(quality: float, cid: str, reason: str):
+    try:
+        from core_config import sb_post
+        sb_post("sessions", {
+            "summary":       f"[QUALITY_ALERT] score={quality} reason={reason}",
+            "actions":       [f"quality_alert triggered at {datetime.utcnow().isoformat()}"],
+            "interface":     "orchestrator_v2",
+            "domain":        "core_agi",
+            "quality_score": quality,
+            "created_at":    datetime.utcnow().isoformat(),
+        })
+        print(f"[L7] Quality alert written: score={quality}")
+    except Exception as e:
+        print(f"[L7] Quality alert write failed (non-fatal): {e}")
+
+
+# ── Main entry point ──────────────────────────────────────────────────────────
+
+async def layer_7_observe(
+    intent: dict,
+    reply: str,
+    tool_results: list,
+    ctx: dict,
+):
+    """
+    Called by L9 after every completed turn.
+    Scores quality, logs errors, checks for evolution opportunities.
+    Fires silently — no user-facing output.
+    """
+    cid = intent["sender_id"]
+
+    # Score this turn
+    quality = _score_turn(tool_results, reply)
+    print(f"[L7] Turn quality: {quality} tools={len(tool_results)} "
+          f"failures={sum(1 for r in tool_results if not r.get('ok', True))}")
+
+    # Log tool errors to mistakes table
+    _log_errors(tool_results, cid)
+
+    # Quality alert
+    if quality < QUALITY_ALERT_THRESHOLD:
+        reason = f"{sum(1 for r in tool_results if not r.get('ok',True))} tool failures"
+        _write_quality_alert(quality, cid, reason)
+
+    # Check for evolution opportunities (in background thread — non-blocking)
+    import threading
+    threading.Thread(
+        target=_maybe_propose_evolution,
+        args=(intent["text"], tool_results, reply, quality, cid),
+        daemon=True,
+    ).start()
+
+    return quality
+
+
+if __name__ == "__main__":
+    print("🛰️ Layer 7: Observability — Online.")

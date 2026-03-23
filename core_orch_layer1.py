@@ -1,350 +1,240 @@
 """
-core_orch_layer1.py — CORE AGI Orchestration Layer
-===================================================
-The brain of the orchestrator. Receives validated requests from L0, makes
-high-level decisions, coordinates L2-L9, and returns results.
+core_orch_layer1.py — L1: INPUT / TRIAGE
+=========================================
+Receives the raw Telegram message, builds a typed Intent object,
+classifies it (trivial vs. non-trivial), and routes it.
 
-RESPONSIBILITIES:
-  - Route commands to appropriate handlers (/status, /train, /deploy, etc.)
-  - Decide which reasoning mode to use (hot/cold/autonomous)
-  - Coordinate layer interactions (L2 Context → L3 Reasoning → L4 Execution → L5 Output)
-  - Manage conversation state and multi-turn flows
-  - Handle errors gracefully with user-facing messages
-  - Log orchestration decisions to Supabase
+Routes:
+  command      → /start /status /tstatus etc. → handled inline
+  trivial      → short factual query → skip brain hydration, go L2 fast-path
+  conversation → normal message → full L2 context hydration
+  confirm      → CONFIRM/REJECT reply to a pending gate → confirmation handler
+  file/image   → attachment → extract + route to conversation
 
-DOES NOT:
-  - Execute tools directly (delegates to L4)
-  - Generate LLM responses (delegates to L3)
-  - Access raw Telegram API (L0 and L5 handle I/O)
-  - Bypass L10 Constitution checks
-
-LAYER COORDINATION:
-  L0 → L1 → L2 (gather context) → L3 (reason) → L4 (execute) → L5 (output) → L0
-           ↓
-          L10 (enforce constitution at each step)
+Intent object passed downstream:
+  {
+    "intent_id":   str,          # uuid
+    "source":      "telegram",
+    "sender_id":   str,          # chat_id
+    "sender_name": str,          # username
+    "tier":        "owner|trusted|anon",
+    "type":        "command|message|file|image|voice|confirm",
+    "text":        str,          # cleaned text
+    "raw_msg":     dict,         # original telegram message object
+    "attachments": list,         # [{type, file_id, mime_type}]
+    "route":       "command|trivial|conversation|confirm",
+    "is_trivial":  bool,
+    "ts":          float
+  }
 """
 
 import os
-import json
-import traceback
-from typing import Dict, Any, Optional
-from datetime import datetime
+import re
+import time
+import uuid
+import asyncio
+from typing import Optional
 
-# Import other layers
-try:
-    from core_orch_layer10 import enforce_db, report_violation, SEVERITY_HIGH
-except ImportError:
-    print("[L1] WARNING: L10 Constitution Layer not available")
-    def enforce_db(*args, **kwargs): pass
-    def report_violation(*args, **kwargs): pass
-    SEVERITY_HIGH = "high"
+# ── Constants ─────────────────────────────────────────────────────────────────
+OWNER_ID = os.environ.get("TELEGRAM_CHAT", "")
 
+# Patterns that mean: skip expensive brain hydration, answer directly
+_TRIVIAL_PATTERNS = [
+    r'^\s*(hi|hello|hey|halo|hai|selamat|good\s)',
+    r'\bping\b',
+    r'\btime\b|\bjam\b|\bwaktu\b',
+    r'\bweather\b|\bcuaca\b',
+    r'^\s*[\d\s\+\-\*\/\(\)\.%]+\s*$',   # pure math
+    r'\btranslate\b|\bterjemah',
+    r'\bprice\b|\bharga\b',
+    r'\bcurrency\b|\bkurs\b',
+]
+_TRIVIAL_RE = [re.compile(p, re.IGNORECASE) for p in _TRIVIAL_PATTERNS]
+_TRIVIAL_MAX_LEN = 35
 
-# ══════════════════════════════════════════════════════════════════════════════
-# ORCHESTRATION RESULT
-# ══════════════════════════════════════════════════════════════════════════════
+# Keywords that force non-trivial even on short messages
+_NON_TRIVIAL_KW = [
+    "task", "deploy", "patch", "error", "fix", "broken", "kb", "knowledge",
+    "mistake", "pattern", "session", "analyze", "train", "cold", "hot",
+    "build", "railway", "supabase", "github", "tool", "code", "why", "how",
+    "tugas", "kenapa", "gimana", "tolong", "coba", "salah",
+]
 
-class OrchResult:
-    """Standard result format for orchestration."""
-    def __init__(
-        self,
-        status: str = "ok",
-        message: str = "",
-        data: Optional[Dict] = None,
-        error: Optional[str] = None,
-    ):
-        self.status  = status  # "ok", "error", "pending", "processing"
-        self.message = message  # User-facing message
-        self.data    = data or {}
-        self.error   = error
-    
-    def to_dict(self) -> Dict[str, Any]:
-        return {
-            "status": self.status,
-            "message": self.message,
-            "data": self.data,
-            "error": self.error,
-        }
+# Confirmation keywords (responding to a destructive-op gate)
+_CONFIRM_YES  = {"confirm", "yes", "y", "ok", "go", "do it", "proceed", "lanjut"}
+_CONFIRM_NO   = {"reject", "cancel", "no", "n", "stop", "abort", "skip", "batal"}
+
+# Command prefixes
+_COMMANDS = {"/start", "/status", "/tstatus", "/project", "/help",
+             "/clear", "/listen", "/backfill", "/mine"}
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# COMMAND HANDLERS
-# ══════════════════════════════════════════════════════════════════════════════
-
-def handle_status(chat_id: str, args: str) -> OrchResult:
-    """Handle /status command — report CORE health across all layers."""
-    print("[L1] /status requested")
-    
-    try:
-        # Check L10 Constitution
-        from core_orch_layer10 import boot_check
-        boot = boot_check()
-        
-        # Check Supabase connectivity (L7)
-        enforce_db("status_check")
-        
-        # TODO: Check other layers when implemented
-        # - L2 Context availability
-        # - L3 Reasoning (Groq/OpenRouter health)
-        # - L4 Execution (tool registry)
-        # - L9 Training (cold processor status)
-        
-        status_msg = (
-            "✅ <b>CORE Status</b>\n\n"
-            f"L10 Constitution: {'✅ OK' if boot['ok'] else '⚠️ Issues'}\n"
-            f"L7 Supabase: ✅ Connected\n"
-            f"Timestamp: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')}"
-        )
-        
-        return OrchResult(status="ok", message=status_msg, data=boot)
-    
-    except Exception as e:
-        print(f"[L1] /status failed: {e}")
-        return OrchResult(
-            status="error",
-            message=f"⚠️ Status check failed: {str(e)[:200]}",
-            error=str(e)
-        )
+def _is_trivial(text: str) -> bool:
+    t = text.strip()
+    lower = t.lower()
+    if any(kw in lower for kw in _NON_TRIVIAL_KW):
+        return False
+    for p in _TRIVIAL_RE:
+        if p.search(t):
+            return True
+    return len(t) <= _TRIVIAL_MAX_LEN
 
 
-def handle_train(chat_id: str, args: str) -> OrchResult:
-    """Handle /train command — trigger training pipeline (L9)."""
-    print(f"[L1] /train requested | args={args}")
-    
-    try:
-        # Import L9 Training Layer
-        from core_orch_layer9 import run_training_cycle
-        
-        # Trigger training
-        result = run_training_cycle(mode=args or "hot")
-        
-        return OrchResult(
-            status="ok",
-            message=f"✅ Training cycle started: {args or 'hot'} mode",
-            data=result
-        )
-    
-    except ImportError:
-        return OrchResult(
-            status="error",
-            message="⚠️ L9 Training Layer not available",
-            error="L9 missing"
-        )
-    except Exception as e:
-        print(f"[L1] /train failed: {e}")
-        return OrchResult(
-            status="error",
-            message=f"⚠️ Training failed: {str(e)[:200]}",
-            error=str(e)
-        )
+def _get_tier(sender_id: str) -> str:
+    """Owner vs anon. Extend with trusted list in Supabase later."""
+    if str(sender_id) == str(OWNER_ID):
+        return "owner"
+    return "anon"
 
 
-def handle_deploy(chat_id: str, args: str) -> OrchResult:
-    """Handle /deploy command — trigger Railway deployment (L8)."""
-    print(f"[L1] /deploy requested | args={args}")
-    
-    try:
-        # Import L8 Deployment Layer
-        from core_orch_layer8 import deploy_to_railway
-        
-        result = deploy_to_railway(
-            commit_message=args or "Manual deploy via /deploy",
-            auto_confirm=False  # Requires owner confirmation
-        )
-        
-        return OrchResult(
-            status="ok",
-            message="✅ Deploy initiated",
-            data=result
-        )
-    
-    except ImportError:
-        return OrchResult(
-            status="error",
-            message="⚠️ L8 Deployment Layer not available",
-            error="L8 missing"
-        )
-    except Exception as e:
-        print(f"[L1] /deploy failed: {e}")
-        return OrchResult(
-            status="error",
-            message=f"⚠️ Deploy failed: {str(e)[:200]}",
-            error=str(e)
-        )
+def _extract_attachments(msg: dict) -> list:
+    atts = []
+    if "photo" in msg:
+        photos = msg["photo"]
+        best = max(photos, key=lambda p: p.get("file_size", 0))
+        atts.append({"type": "image", "file_id": best["file_id"], "mime_type": "image/jpeg"})
+    if "document" in msg:
+        doc = msg["document"]
+        atts.append({"type": "file", "file_id": doc["file_id"],
+                     "mime_type": doc.get("mime_type", "application/octet-stream"),
+                     "file_name": doc.get("file_name", "")})
+    if "voice" in msg:
+        atts.append({"type": "voice", "file_id": msg["voice"]["file_id"],
+                     "mime_type": "audio/ogg"})
+    return atts
 
 
-def handle_task(chat_id: str, args: str) -> OrchResult:
-    """Handle /task command — query or manage task queue."""
-    print(f"[L1] /task requested | args={args}")
-    
-    try:
-        from core_config import sb_query
-        
-        if not args or args == "list":
-            # List active tasks
-            tasks = sb_query(
-                "task_queue",
-                filters={"status": "eq.pending"},
-                select="id,title,priority,domain,created_at",
-                order="priority.desc,created_at.asc",
-                limit=10
-            )
-            
-            if not tasks:
-                return OrchResult(status="ok", message="✅ Task queue empty")
-            
-            msg = "📋 <b>Active Tasks</b>\n\n"
-            for t in tasks[:5]:
-                msg += f"• {t['title'][:60]}\n"
-            
-            return OrchResult(status="ok", message=msg, data={"tasks": tasks})
-        
-        else:
-            # TODO: Support /task <id> for details
-            return OrchResult(
-                status="ok",
-                message="⚠️ Task details not yet implemented"
-            )
-    
-    except Exception as e:
-        print(f"[L1] /task failed: {e}")
-        return OrchResult(
-            status="error",
-            message=f"⚠️ Task query failed: {str(e)[:200]}",
-            error=str(e)
-        )
+def build_intent(msg: dict) -> dict:
+    """Build typed Intent object from raw Telegram message."""
+    sender_id   = str(msg.get("chat", {}).get("id", ""))
+    sender_name = msg.get("from", {}).get("username", "") or msg.get("from", {}).get("first_name", "unknown")
+    raw_text    = (msg.get("text") or msg.get("caption") or "").strip()
+    attachments = _extract_attachments(msg)
+    ts          = msg.get("date", time.time())
+
+    # Strip @botname suffix from commands
+    if raw_text.startswith("/") and "@" in raw_text:
+        raw_text = raw_text.split("@")[0]
+
+    # Determine message type
+    if attachments:
+        msg_type = attachments[0]["type"]    # image / file / voice
+    elif raw_text.startswith("/"):
+        msg_type = "command"
+    else:
+        msg_type = "message"
+
+    # Determine route
+    lower = raw_text.strip().lower()
+    if msg_type == "command":
+        route = "command"
+    elif lower in _CONFIRM_YES or lower in _CONFIRM_NO:
+        route = "confirm"
+    elif _is_trivial(raw_text) and not attachments:
+        route = "trivial"
+    else:
+        route = "conversation"
+
+    return {
+        "intent_id":   str(uuid.uuid4()),
+        "source":      "telegram",
+        "sender_id":   sender_id,
+        "sender_name": sender_name,
+        "tier":        _get_tier(sender_id),
+        "type":        msg_type,
+        "text":        raw_text,
+        "raw_msg":     msg,
+        "attachments": attachments,
+        "route":       route,
+        "is_trivial":  route == "trivial",
+        "ts":          float(ts),
+    }
 
 
-def handle_raw_text(chat_id: str, text: str) -> OrchResult:
-    """Handle non-command text — route to L3 Reasoning for LLM response."""
-    print(f"[L1] Raw text routing to L3 | text={text[:50]}")
-    
-    try:
-        # Import L2 Context and L3 Reasoning
-        from core_orch_layer2 import gather_context
-        from core_orch_layer3 import generate_response
-        
-        # Step 1: Gather context (L2)
-        context = gather_context(text, chat_id)
-        
-        # Step 2: Generate response (L3)
-        response = generate_response(text, context)
-        
-        # Step 3: Send via L5 Output
-        from core_orch_layer5 import send_reply
-        send_reply(chat_id, response)
-        
-        return OrchResult(
-            status="ok",
-            message=response,
-            data={"context_items": len(context.get("items", []))}
-        )
-    
-    except ImportError as ie:
-        missing_layer = str(ie).split("'")[-2] if "'" in str(ie) else "unknown"
-        return OrchResult(
-            status="error",
-            message=f"⚠️ Layer not available: {missing_layer}",
-            error=str(ie)
-        )
-    except Exception as e:
-        print(f"[L1] Raw text handling failed: {e}")
-        print(traceback.format_exc())
-        return OrchResult(
-            status="error",
-            message=f"⚠️ Processing failed: {str(e)[:200]}",
-            error=str(e)
-        )
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# MAIN ORCHESTRATION FUNCTION
-# ══════════════════════════════════════════════════════════════════════════════
-
-def orchestrate(
-    text: str,
-    chat_id: str,
-    is_command: bool = False,
-    command: str = "",
-    args: str = "",
-) -> Dict[str, Any]:
-    """Main orchestration entry point called by L0.
-    
-    Args:
-        text: Full message text from Telegram
-        chat_id: Telegram chat ID (already validated by L0)
-        is_command: Whether text starts with /
-        command: Parsed command name (without /)
-        args: Command arguments
-    
-    Returns:
-        Dict with status, message, data, error
+async def layer_1_triage(msg: dict):
     """
-    start_ts = datetime.utcnow()
-    print(f"[L1] Orchestrating | command={command or 'text'} | args={args[:30] if args else 'none'}")
-    
+    Entry point. Builds Intent, applies L0 rate-limit, routes to correct handler.
+    Called from core_main.py handle_msg() in a thread.
+    """
+    from core_orch_layer0 import LIMITER, OWNER_ID as L0_OWNER
+
+    # L0 gate: rate limit
+    if not LIMITER.consume():
+        print(f"[L1] Rate limit hit — dropping message")
+        return
+
+    intent = build_intent(msg)
+    cid    = intent["sender_id"]
+
+    print(f"[L1] intent_id={intent['intent_id'][:8]} route={intent['route']} "
+          f"tier={intent['tier']} text={intent['text'][:60]!r}")
+
+    # L0 gate: owner-only for non-anon actions
+    if intent["tier"] == "anon" and intent["route"] != "trivial":
+        print(f"[L1] Blocked: anon sender {cid} tried non-trivial route")
+        from core_config import notify
+        notify("⛔ Unauthorized.", cid)
+        return
+
     try:
-        # ═══════════════════════════════════════════════════════════════════════
-        # COMMAND ROUTING
-        # ═══════════════════════════════════════════════════════════════════════
-        if is_command:
-            # Map commands to handlers
-            handlers = {
-                "status": handle_status,
-                "train": handle_train,
-                "deploy": handle_deploy,
-                "task": handle_task,
-                "tasks": handle_task,
-            }
-            
-            handler = handlers.get(command)
-            
-            if handler:
-                result = handler(chat_id, args)
-            else:
-                result = OrchResult(
-                    status="error",
-                    message=f"⚠️ Unknown command: /{command}"
-                )
-        
-        # ═══════════════════════════════════════════════════════════════════════
-        # RAW TEXT ROUTING
-        # ═══════════════════════════════════════════════════════════════════════
+        if intent["route"] == "command":
+            await _handle_command(intent)
+        elif intent["route"] == "confirm":
+            await _handle_confirm(intent)
+        elif intent["route"] == "trivial":
+            await _handle_trivial(intent)
         else:
-            result = handle_raw_text(chat_id, text)
-        
-        # ═══════════════════════════════════════════════════════════════════════
-        # LOG ORCHESTRATION DECISION
-        # ═══════════════════════════════════════════════════════════════════════
-        elapsed_ms = int((datetime.utcnow() - start_ts).total_seconds() * 1000)
-        print(f"[L1] Orchestration complete | status={result.status} | {elapsed_ms}ms")
-        
-        # TODO: Log to Supabase orchestration_log table when L7 is ready
-        
-        return result.to_dict()
-    
+            # Full pipeline: L2 → L3 → L4 → L5 → ... → L9
+            from core_orch_layer2 import layer_2_hydrate
+            await layer_2_hydrate(intent)
+
     except Exception as e:
-        print(f"[L1] ORCHESTRATION FAILED: {e}")
-        print(traceback.format_exc())
-        
-        # Report violation to L10 if this is unexpected
-        report_violation(
-            invariant="L1-ORCHESTRATION",
-            what_failed=f"Unhandled exception in orchestrate(): {str(e)[:200]}",
-            context=f"text={text[:100]}, command={command}",
-            how_to_avoid="Add proper error handling for this code path",
-            severity=SEVERITY_HIGH
-        )
-        
-        return OrchResult(
-            status="error",
-            message="⚠️ Internal orchestration error",
-            error=str(e)
-        ).to_dict()
+        print(f"[L1] Unhandled error: {e}")
+        from core_config import notify
+        notify(f"⚠️ Internal error at L1: {e}", cid)
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# INITIALIZATION
-# ══════════════════════════════════════════════════════════════════════════════
+# ── Route handlers ─────────────────────────────────────────────────────────────
 
-print("[L1] Orchestration Layer loaded")
+async def _handle_command(intent: dict):
+    """Delegate slash commands to core_main command handler (existing logic)."""
+    from core_main import handle_msg as _legacy_handle
+    import threading
+    # Run existing command handling synchronously in thread
+    threading.Thread(target=_legacy_handle, args=(intent["raw_msg"],), daemon=True).start()
+
+
+async def _handle_confirm(intent: dict):
+    """Route CONFIRM/REJECT to the pending confirmation gate."""
+    from core_orch_layer5 import receive_confirmation
+    await receive_confirmation(intent["sender_id"], intent["text"])
+
+
+async def _handle_trivial(intent: dict):
+    """
+    Fast path: skip brain hydration.
+    Inject minimal context → L8 model call → L5 output.
+    """
+    from core_orch_layer8 import call_model_simple
+    from core_orch_layer5 import layer_5_output
+
+    print(f"[L1] Trivial fast-path for: {intent['text'][:50]!r}")
+
+    minimal_context = {
+        "system": (
+            "You are CORE — a sovereign intelligence, not a generic assistant. "
+            "Owner: REINVAGNAR (Jakarta, WIB/UTC+7). Answer directly and concisely."
+        ),
+        "history": [],
+        "tools": [],
+    }
+    try:
+        reply = await call_model_simple(intent["text"], minimal_context)
+    except Exception as e:
+        reply = f"Error: {e}"
+
+    await layer_5_output(intent, reply, tool_results=[])
+
+
+if __name__ == "__main__":
+    print("🛰️ Layer 1: Input / Triage — Online.")
