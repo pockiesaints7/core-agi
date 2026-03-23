@@ -1,0 +1,42 @@
+column_name,data_type,column_default,is_nullable
+id,bigint,nextval('behavioral_rules_id_seq'::regclass),NO
+trigger,text,null,NO
+pointer,text,null,NO
+full_rule,text,null,NO
+domain,text,'universal'::text,NO
+priority,integer,5,NO
+active,boolean,true,NO
+tested,boolean,false,NO
+source,text,'core_discovered'::text,NO
+confidence,double precision,0.8,NO
+expires_at,timestamp with time zone,null,YES
+created_at,timestamp with time zone,now(),NO
+updated_at,timestamp with time zone,now(),NO
+id,integer,nextval('knowledge_base_id_seq'::regclass),NO
+domain,text,null,NO
+topic,text,null,NO
+content,text,null,NO
+source,text,null,YES
+confidence,text,'medium'::text,YES
+tags,ARRAY,null,YES
+project_id,integer,null,YES
+created_at,timestamp with time zone,now(),YES
+updated_at,timestamp with time zone,now(),YES
+instruction,text,null,YES
+source_type,text,null,YES
+source_ref,text,null,YES
+source_ts,timestamp with time zone,null,YES
+active,boolean,true,YES
+access_count,integer,0,YES
+last_accessed,timestamp with time zone,null,YES
+embedding,USER-DEFINED,null,YES
+id,integer,nextval('mistakes_id_seq'::regclass),NO
+context,text,null,NO
+what_failed,text,null,NO
+root_cause,text,null,NO
+correct_approach,text,null,NO
+tags,ARRAY,null,YES
+created_at,timestamp with time zone,now(),YES
+domain,text,'general'::text,YES
+how_to_avoid,text,null,YES
+severity,text,'medium'::text,YES

@@ -24,6 +24,7 @@ Outputs an ExecutionPlan passed to L4:
 import json
 import time
 import asyncio
+from datetime import datetime, timezone
 from typing import Optional
 
 # ── Constitution invariants — enforced as code, not just prompt ───────────────
@@ -54,7 +55,7 @@ _PERM_RISK = {"READ": "none", "WRITE": "low", "EXECUTE": "medium", "DESTROY": "c
 
 # Keywords that suggest a destructive intent even without exact match
 _HIGH_RISK_WORDS = {"delete", "drop", "remove", "overwrite", "reset", "wipe",
-                    "hapus", "reset", "truncate"}
+                    "hapus", "truncate"}
 
 
 def _constitution_check(intent: dict, text: str) -> tuple[bool, str]:
@@ -64,10 +65,16 @@ def _constitution_check(intent: dict, text: str) -> tuple[bool, str]:
     """
     lower = text.lower()
 
-    # C4: credentials
+    # C4: credentials — block only if asking CORE to reveal/echo/print credentials
+    # Allow discussion/questions about credential types without blocking
+    _reveal_verbs = {"print", "echo", "log", "show", "display", "send", "output",
+                     "kirim", "tampilkan", "cetak", "share", "expose", "dump"}
+    _has_reveal_verb = any(v in lower for v in _reveal_verbs)
     for kw in _CREDENTIAL_KW:
         if kw.lower() in lower:
-            return False, f"C4_VIOLATION: message references credential keyword '{kw}'"
+            if _has_reveal_verb:
+                return False, f"C4_VIOLATION: message requests revealing credential '{kw}'"
+            # Just mentioning a credential type is OK (e.g. "what token does X use?")
 
     # C3: self-approve
     for kw in _EVOLUTION_SELF_APPROVE:
@@ -75,7 +82,9 @@ def _constitution_check(intent: dict, text: str) -> tuple[bool, str]:
             return False, "C3_VIOLATION: CORE cannot self-approve evolutions"
 
     # C5: identity drift — if someone tells CORE to "act as", "pretend to be"
-    if any(p in lower for p in ["act as", "pretend you are", "you are now", "forget you are core"]):
+    if any(p in lower for p in ["act as", "pretend you are", "you are now", "forget you are core",
+                                          "ignore previous instructions", "disregard your", "new persona",
+                                          "abaikan instruksi", "lupakan identitas"]):
         return False, "C5_VIOLATION: CORE identity is immutable — cannot role-play as different system"
 
     # C8: force_close
@@ -127,6 +136,7 @@ def _build_system_prompt_for_preflight(ctx: dict) -> str:
 
     lines = [
         "You are CORE — a sovereign intelligence. Owner: REINVAGNAR (Jakarta, WIB/UTC+7).",
+        f"Current UTC time: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M')} | Jakarta (WIB): UTC+7.",
         "You own problems end-to-end. Execute, don't ask permission for low-risk actions.",
         "",
     ]
@@ -135,21 +145,22 @@ def _build_system_prompt_for_preflight(ctx: dict) -> str:
         t = tasks[0]
         raw = t.get("task", "")
         try:
-            title = json.loads(raw).get("title", raw[:80]) if isinstance(raw, str) else str(raw)[:80]
+            _stripped = raw.strip().lstrip("```json").lstrip("```").rstrip("```").strip() if isinstance(raw, str) else ""
+            title = json.loads(_stripped).get("title", raw[:80]) if _stripped else str(raw)[:80]
         except Exception:
             title = str(raw)[:80]
         lines.append(f"ACTIVE TASK: {title} (P{t.get('priority','?')})")
 
     if mistakes:
         m_lines = " | ".join(
-            f"[{m.get('domain','?')}] AVOID: {m.get('what_failed','')[:80]}"
-            for m in mistakes[:3]
+            f"[{m.get('domain','?')}] AVOID: {m.get('what_failed','')[:120]}"
+            for m in mistakes[:5]
         )
         lines.append(f"RECENT MISTAKES — {m_lines}")
 
     if kb:
         kb_lines = "\n".join(
-            f"  [{e.get('domain','?')}] {e.get('topic','')}: {(e.get('instruction') or e.get('content',''))[:120]}"
+            f"  [{e.get('domain','?')}] {e.get('topic','')}: {(e.get('instruction') or e.get('content',''))[:200]}"
             for e in kb[:4]
         )
         lines.append(f"RELEVANT KB:\n{kb_lines}")
@@ -157,7 +168,7 @@ def _build_system_prompt_for_preflight(ctx: dict) -> str:
     if rules:
         r_lines = "\n".join(
             f"  [{r.get('trigger','?')}] {r.get('pointer','')[:100]}"
-            for r in rules[:20]
+            for r in rules[:30]
         )
         lines.append(f"BEHAVIORAL RULES:\n{r_lines}")
 
@@ -207,6 +218,7 @@ def _extract_conversation_signals(conversation: list, text: str) -> dict:
     recent = conversation[-6:]
 
     # Is this a follow-up? (short message after a long CORE response)
+    last_assistant = None   # always initialise — used below outside the if block
     if len(recent) >= 2:
         last_assistant = next(
             (m for m in reversed(recent) if m.get("role") == "assistant"), None
@@ -221,17 +233,28 @@ def _extract_conversation_signals(conversation: list, text: str) -> dict:
         if any(p in last_text for p in confirm_phrases):
             signals["pending_confirm"] = True
 
-    # Repeat detection: same question in last 3 user turns
+    # Repeat detection: same question in last 3 user turns (exclude current message)
     user_turns = [m.get("content", "").lower() for m in recent if m.get("role") == "user"]
-    if user_turns.count(text_lower) >= 1 and len(user_turns) > 1:
+    # Remove one instance of current message (it may already be in history from L2)
+    _turns_excl_current = list(user_turns)
+    if text_lower in _turns_excl_current:
+        _turns_excl_current.remove(text_lower)
+    if _turns_excl_current.count(text_lower) >= 1 and len(user_turns) > 1:
         signals["is_repeat"] = True
 
-    # Error streak
-    error_count = sum(
-        1 for m in recent
-        if m.get("role") == "assistant" and
-        any(e in m.get("content", "").lower() for e in ["error", "failed", "⚠️", "❌"])
-    )
+    # Error streak + last failed tool detection
+    error_count = 0
+    for m in recent:
+        if m.get("role") != "assistant":
+            continue
+        content_lower = m.get("content", "").lower()
+        if any(e in content_lower for e in ["error", "failed", "⚠️", "❌"]):
+            error_count += 1
+            # Try to extract tool name from error messages like "Tool X failed"
+            import re as _re2
+            tool_match = _re2.search(r"tool[\s:]+([a-z_]+)[\s]*(?:failed|error)", content_lower)
+            if tool_match and not signals["last_failed_tool"]:
+                signals["last_failed_tool"] = tool_match.group(1)
     signals["consecutive_errors"] = error_count
 
     return signals
@@ -305,6 +328,7 @@ async def layer_3_reason(ctx: dict) -> None:
     # run a second model call to recover a better plan
     _plan_weak = (
         not plan_data.get("plan") or
+        not any(s.strip() for s in plan_data.get("plan", [])) or   # plan=[""]
         (not plan_data.get("tool_hints") and not plan_data.get("can_direct") and len(text) > 20)
     )
     if _plan_weak and not plan_data.get("can_direct"):
@@ -336,13 +360,15 @@ async def layer_3_reason(ctx: dict) -> None:
     # Pattern 1: explicit quantity/status queries about CORE's own data
     import re as _re
     _LIVE_DATA_PATTERNS = [
-        r'how many',                        # "how many kb/tasks/tools"
-        r'berapa',                          # Indonesian "how many"
-        r'count.{0,30}(kb|task|tool|mistake|pattern|evolution)',
-        r'(show|list|display|tampilkan|daftar).{0,40}(kb|task|tool|mistake|pattern|rule)',
-        r'what.{0,20}(my|your|current).{0,30}(status|task|kb|mistake|pattern)',
-        r'(status|health).{0,20}(of|for|system|core|deploy)',
-        r'(current|latest|terbaru|terkini).{0,30}(task|deploy|status|error)',
+        r'how many\b',
+        r'berapa\b',
+        r'\bcount\b.{0,30}\b(kb|task|tool|mistake|pattern|evolution)',
+        r'\b(show|list|display|tampilkan|daftar|lihat)\b.{0,40}\b(kb|task|tool|mistake|pattern|rule)',
+        r'\bwhat.{0,20}\b(my|your|current)\b.{0,30}\b(status|task|kb|mistake|pattern)',
+        r'\b(status|health)\b.{0,20}\b(of|for|system|core|deploy)',
+        r'\b(current|latest|terbaru|terkini)\b.{0,30}\b(task|deploy|status|error)',
+        r'\bcek\b',
+        r'\bmonitor\b',
     ]
     _is_live_data_query = any(_re.search(p, _text_lower) for p in _LIVE_DATA_PATTERNS)
 
@@ -383,20 +409,13 @@ async def layer_3_reason(ctx: dict) -> None:
         structured_steps.append({"step": step_text, "tool": bound_tool, "idx": i})
 
     # ── Risk assessment ───────────────────────────────────────────────────────
-    # Check both message text AND plan steps AND tool_hints for risk signals
-    plan_str_full = " ".join(plan_list + tool_hints).lower()
-    risk, req_confirm = _assess_risk(text, plan_list)
-
-    # Re-assess against plan+tools (catches sb_delete in plan even if not in message)
-    _combined_risk_text = text + " " + plan_str_full
-    plan_risk, plan_confirm = _assess_risk(_combined_risk_text, plan_list)
-    risk_order = ["none", "low", "medium", "high", "critical"]
-    if risk_order.index(plan_risk) > risk_order.index(risk):
-        risk = plan_risk
-        req_confirm = req_confirm or plan_confirm
+    # Single pass: combine message + plan + tool_hints to avoid double-counting
+    _combined_risk_text = text + " " + " ".join(plan_list + tool_hints).lower()
+    risk, req_confirm = _assess_risk(_combined_risk_text, plan_list)
 
     # Trust model risk if higher
     model_risk = plan_data.get("risk", "none")
+    risk_order = ["none", "low", "medium", "high", "critical"]
     if risk_order.index(model_risk) > risk_order.index(risk):
         risk = model_risk
         if risk in ("high", "critical"):

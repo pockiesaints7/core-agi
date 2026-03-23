@@ -107,7 +107,40 @@ def _execute_tool_safe(tool_name: str, tool_args: dict, cid: str = "") -> dict:
             tool_args["cid"] = cid
 
         print(f"[L4] CALL {tool_name}({json.dumps(tool_args, default=str)[:120]})")
-        result = fn(**tool_args) if tool_args else fn()
+
+        # Per-tool timeout: 60s hard cap — prevents single slow tool blowing the loop budget
+        import concurrent.futures as _cf
+        import inspect as _inspect
+
+        _PER_TOOL_TIMEOUT = 60
+
+        def _run_tool():
+            return fn(**tool_args) if tool_args else fn()
+
+        with _cf.ThreadPoolExecutor(max_workers=1) as _tex:
+            _future = _tex.submit(_run_tool)
+            try:
+                result = _future.result(timeout=_PER_TOOL_TIMEOUT)
+            except _cf.TimeoutError:
+                return _wrap_error(
+                    "TOOL_TIMEOUT",
+                    f"Tool '{tool_name}' exceeded {_PER_TOOL_TIMEOUT}s timeout.",
+                    retry_hint="use_fallback",
+                    domain="tool_registry",
+                )
+
+        # Handle async tools: if fn() returned a coroutine, run it
+        if _inspect.iscoroutine(result):
+            import asyncio as _asyncio
+            import concurrent.futures as _cf2
+            # Always use a fresh thread to avoid "event loop already running" errors
+            with _cf2.ThreadPoolExecutor(max_workers=1) as ex:
+                future2 = ex.submit(_asyncio.run, (fn(**tool_args) if tool_args else fn()))
+                result = future2.result(timeout=_PER_TOOL_TIMEOUT)
+
+        # Normalize None return — model sees "(no output)" instead of "null"
+        if result is None:
+            result = {"ok": True, "result": "(no output)"}
         raw    = json.dumps(result, default=str)
 
         # Truncate massive results
@@ -123,8 +156,10 @@ def _execute_tool_safe(tool_name: str, tool_args: dict, cid: str = "") -> dict:
             except Exception:
                 raw = raw[:16000] + "…[truncated]"
 
-        normalized = _normalize_result(json.loads(raw) if raw.startswith("{") else raw,
-                                       tool_name)
+        normalized = _normalize_result(
+            json.loads(raw) if (raw.startswith("{") or raw.startswith("[")) else raw,
+            tool_name,
+        )
         print(f"[L4] RESULT {tool_name}: ok={normalized.get('ok')} "
               f"({len(raw)}b)")
         return normalized
@@ -151,11 +186,13 @@ def _execute_tool_safe(tool_name: str, tool_args: dict, cid: str = "") -> dict:
 # ── Checkpoint ────────────────────────────────────────────────────────────────
 
 def _checkpoint(task_id: str, step: int, tool_results: list, cid: str):
-    """Write execution state to Supabase so a crash is recoverable."""
+    """Write execution state to Supabase so a crash is recoverable.
+    Uses upsert-style: updates existing task row instead of inserting new rows.
+    """
     try:
-        from core_config import sb_post
-        sb_post("task_queue", {
-            "task":       json.dumps({
+        from core_config import sb_patch, sb_post
+        payload = {
+            "task": json.dumps({
                 "checkpoint": True,
                 "task_id":    task_id,
                 "step":       step,
@@ -163,10 +200,19 @@ def _checkpoint(task_id: str, step: int, tool_results: list, cid: str):
                 "tools_used": [r["name"] for r in tool_results[-5:]],
             }),
             "status":     "in_progress",
-            "source":     "orch_checkpoint",
-            "priority":   3,
-            "created_at": datetime.utcnow().isoformat(),
-        })
+            "updated_at": datetime.utcnow().isoformat(),
+        }
+        # Try to update existing task first; fall back to insert if UPDATE not available
+        try:
+            sb_patch("task_queue", filters=f"source=eq.orch_checkpoint&task=like.*{task_id}*",
+                     data=payload)
+        except Exception:
+            sb_post("task_queue", {
+                **payload,
+                "source":     "orch_checkpoint",
+                "priority":   3,
+                "created_at": datetime.utcnow().isoformat(),
+            })
     except Exception as e:
         print(f"[L4] Checkpoint write failed (non-fatal): {e}")
 
@@ -187,8 +233,9 @@ async def layer_4_execute(execution_plan: dict) -> None:
     tools_called:   list = []
     step                = 0
     start_ts            = time.time()
-    task_id             = intent["intent_id"]
-    _last_call_sig:str  = ""   # stall detection: track last (tool, args) signature
+    task_id             = str(intent.get("intent_id") or "unknown")
+    _last_call_sig:str  = ""   # stall detection: consecutive identical call
+    _call_history: list = []   # stall detection: rolling window for A->B->A->B pattern
 
     # Build tool descriptions for this message
     from core_orch_layer8 import build_tools_desc, call_model_loop
@@ -240,10 +287,23 @@ async def layer_4_execute(execution_plan: dict) -> None:
 
                 # L6 validation: background-loop tools must not be called
                 # with elevated permissions from agentic loop
-                # Stall detection: same tool + same args twice in a row = infinite loop
+                # Stall detection: same tool+args back-to-back (A→A)
+                # AND alternating loop (A→B→A→B) via rolling 6-sig window
                 _call_sig = f"{t_name}:{json.dumps(t_args, sort_keys=True, default=str)[:200]}"
+                _call_history.append(_call_sig)
+                _is_stall = False
                 if _call_sig == _last_call_sig:
-                    print(f"[L4] STALL detected — {t_name} called twice with same args, breaking")
+                    _is_stall = True   # A→A
+                elif len(_call_history) >= 4:
+                    # Check if last 4 sigs form A→B→A→B pattern
+                    w = _call_history[-4:]
+                    if w[0] == w[2] and w[1] == w[3] and w[0] != w[1]:
+                        _is_stall = True  # A→B→A→B
+                if len(_call_history) > 6:
+                    _call_history = _call_history[-6:]
+
+                if _is_stall:
+                    print(f"[L4] STALL detected — {t_name} in repeating pattern, breaking")
                     done  = True
                     reply = reply or f"⚠️ Stall detected on tool `{t_name}` — stopped."
                     break
@@ -303,6 +363,24 @@ async def layer_4_execute(execution_plan: dict) -> None:
         reply = reply or f"Stopped after {MAX_TOOL_CALLS} tool calls."
 
     elapsed = int((time.time() - start_ts) * 1000)
+
+    # Guarantee reply is never empty before L5 — covers timeout + any other break path
+    if not reply or not reply.strip():
+        if tool_results:
+            last_ok  = next((r for r in reversed(tool_results) if r.get("ok")), None)
+            last_err = next((r for r in reversed(tool_results) if not r.get("ok")), None)
+            if last_ok:
+                reply = f"✅ Completed {len(tools_called)} tool(s). Last: `{last_ok['name']}`."
+            elif last_err:
+                reply = f"⚠️ Task stopped. Last error from `{last_err['name']}`: {last_err.get('result','')[:200]}"
+            else:
+                reply = f"⚠️ Task stopped after {step} step(s) with no output."
+        else:
+            reply = f"⚠️ Task stopped after {step} step(s) — no tools executed."
+    
+    # Final safety net — reply must be a non-empty string
+    reply = str(reply).strip() or "⚠️ Task completed with no output."
+
     print(f"[L4] Loop complete: steps={step} tools={len(tools_called)} "
           f"elapsed={elapsed}ms reply_len={len(reply)}")
 
@@ -310,9 +388,10 @@ async def layer_4_execute(execution_plan: dict) -> None:
     from core_orch_layer5 import layer_5_output
     await layer_5_output(intent, reply, tool_results=tool_results)
 
-    # ── Pass to L9 learning (session logging) ─────────────────────────────
-    from core_orch_layer9 import layer_9_log_turn
-    await layer_9_log_turn(ctx, reply, tool_results=tool_results)
+    # ── Pass to L9 learning (session logging) — only if reply is non-empty ──
+    if reply and reply.strip():
+        from core_orch_layer9 import layer_9_log_turn
+        await layer_9_log_turn(ctx, reply, tool_results=tool_results)
 
 
 # ── Tool selection (scoped to message) ───────────────────────────────────────

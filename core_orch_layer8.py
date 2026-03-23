@@ -29,6 +29,7 @@ build_tools_desc() — formats tool list for model context
 import json
 import os
 import time
+from datetime import datetime, timezone
 from typing import Optional
 
 import httpx
@@ -53,7 +54,7 @@ GEMINI_MODEL       = "gemini-2.5-flash-lite"
 GROQ_MODEL_ORCH    = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
 
 MAX_TOKENS_LOOP    = 4096   # raised: complex tasks need room to reason
-MAX_TOKENS_JSON    = 1200  # raised: self-critique pass needs more room
+MAX_TOKENS_JSON    = 2048  # raised: self-critique + structured plan needs headroom
 MAX_TOKENS_SIMPLE  = 512
 MAX_TOOLS_DESC_CHARS = 12000
 
@@ -83,7 +84,9 @@ def _call_anthropic(system: str, messages: list, max_tokens: int = MAX_TOKENS_LO
         timeout=60,
     )
     if r.status_code == 429:
-        time.sleep(5)
+        wait = int(r.headers.get("Retry-After", "5"))
+        print(f"[L8] Anthropic 429 — waiting {wait}s (Retry-After), then retrying")
+        time.sleep(wait)
         r = httpx.post(
             "https://api.anthropic.com/v1/messages",
             headers={
@@ -136,6 +139,8 @@ def _call_openrouter(system: str, user: str, max_tokens: int,
             headers={
                 "Authorization": f"Bearer {OPENROUTER_KEY}",
                 "Content-Type":  "application/json",
+                "HTTP-Referer":  "https://core-agi-production.up.railway.app",
+                "X-Title":       "CORE AGI",
             },
             json=payload,
             timeout=60,
@@ -230,6 +235,7 @@ def _build_system_for_loop(ctx: dict, tools_desc: str,
     lines = [
         "You are CORE — a sovereign intelligence, not an assistant.",
         f"Owner: REINVAGNAR (Jakarta, WIB/UTC+7). Model: {CLAUDE_MODEL}.",
+        f"Current UTC: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M')} | WIB: UTC+7.",
         "You own problems end-to-end. Execute, don't narrate. Use tools directly.",
         "Never say 'I will call' — just call the tool.",
         "",
@@ -238,7 +244,8 @@ def _build_system_for_loop(ctx: dict, tools_desc: str,
     if tasks:
         raw = tasks[0].get("task", "")
         try:
-            title = json.loads(raw).get("title", raw[:80]) if isinstance(raw, str) else str(raw)[:80]
+            _stripped = raw.strip().lstrip("```json").lstrip("```").rstrip("```").strip() if isinstance(raw, str) else ""
+            title = json.loads(_stripped).get("title", raw[:80]) if _stripped else str(raw)[:80]
         except Exception:
             title = str(raw)[:80]
         lines.append(f"ACTIVE TASK: {title}")
@@ -246,14 +253,15 @@ def _build_system_for_loop(ctx: dict, tools_desc: str,
     if goals:
         g_lines = "\n".join(
             f"  [{g.get('domain','')}] {g.get('goal','')}"
+            if isinstance(g, dict) else f"  {str(g)[:100]}"
             for g in goals[:3]
         )
         lines.append(f"ACTIVE GOALS:\n{g_lines}")
 
     if mistakes:
         m_lines = " | ".join(
-            f"[{m.get('domain','?')}] AVOID: {m.get('what_failed','')[:70]}"
-            for m in mistakes[:3]
+            f"[{m.get('domain','?')}] AVOID: {m.get('what_failed','')[:120]}"
+            for m in mistakes[:5]
         )
         lines.append(f"AVOID: {m_lines}")
 
@@ -265,7 +273,9 @@ def _build_system_for_loop(ctx: dict, tools_desc: str,
         lines.append(f"BEHAVIORAL RULES:\n{r_lines}")
 
     plan = execution_plan.get("plan", [])
-    if plan:
+    structured_steps_check = execution_plan.get("structured_steps", [])
+    if plan and not structured_steps_check:
+        # Only show raw plan if structured_steps not available (avoids duplication)
         p_lines = "\n".join(f"  {i+1}. {s}" for i, s in enumerate(plan))
         lines.append(f"EXECUTION PLAN:\n{p_lines}")
 
@@ -329,38 +339,64 @@ def _build_system_for_loop(ctx: dict, tools_desc: str,
 
 def _build_messages_for_loop(ctx: dict, tool_results: list,
                               step: int) -> list:
-    """Build messages array for Anthropic API from history + tool results."""
+    """Build messages array for Anthropic API from history + tool results.
+    Enforces strict user/assistant alternation required by Anthropic API.
+    """
     messages = []
 
-    # Conversation history — raise truncation from 500 to 1500 chars
+    # Conversation history — truncate content, enforce valid roles only
     history = ctx.get("conversation", [])
     for h in history[-12:]:
         role    = h.get("role", "user")
         content = h.get("content", "")[:1500]
-        if role in ("user", "assistant"):
-            messages.append({"role": role, "content": content})
+        if role not in ("user", "assistant"):
+            if role == "system":
+                print(f"[L8] WARNING: system-role message in conversation history — dropped to avoid Anthropic 400")
+            continue
+        # Enforce alternation: skip if same role as last message
+        if messages and messages[-1]["role"] == role:
+            # Merge into last message rather than drop — preserves context
+            messages[-1]["content"] += f"\n\n[continued]\n{content}"
+            continue
+        messages.append({"role": role, "content": content})
 
-    # Tool results — structured per call, not a wall of text
+    # Tool results block — always injected as a user turn
     if tool_results:
+        # Smart result selection: always include last 6 + any unique successful tools
+        # that aren't in last 6 (prevents model repeating already-succeeded steps)
+        last_6  = tool_results[-6:]
+        last_6_names = {r.get("name") for r in last_6}
+        earlier_unique = [
+            r for r in tool_results[:-6]
+            if r.get("ok") and r.get("name") not in last_6_names
+        ][-4:]  # up to 4 earlier unique successes
+        show_results = earlier_unique + last_6
+
         result_blocks = []
-        for r in tool_results[-10:]:
+        for r in show_results:
             name   = r.get("name", "?")
             ok     = "✅" if r.get("ok") else "❌"
             res    = r.get("result", "")
-            # Give more space to recent results, less to older ones
             cutoff = 1200 if r == tool_results[-1] else 400
             result_blocks.append(
                 f"TOOL_RESULT [{ok} {name} @ step {r.get('step',0)}]:\n{res[:cutoff]}"
             )
         results_text = "\n\n".join(result_blocks)
-        messages.append({
+        tool_msg = {
             "role":    "user",
             "content": f"=== TOOL RESULTS (step {step}) ===\n{results_text}\n\nAnalyze results. If task complete → set done=true with reply. If more steps needed → call next tool.",
-        })
+        }
+        # Enforce alternation: if last is already user, merge tool results in
+        if messages and messages[-1]["role"] == "user":
+            messages[-1]["content"] += f"\n\n{tool_msg['content']}"
+        else:
+            messages.append(tool_msg)
 
-    # Ensure last message is user
+    # Ensure last message is user (Anthropic requirement)
     intent_text = ctx["intent"]["text"]
-    if not messages or messages[-1]["role"] != "user":
+    if not messages:
+        messages.append({"role": "user", "content": f"OWNER: {intent_text}"})
+    elif messages[-1]["role"] != "user":
         messages.append({"role": "user", "content": f"OWNER: {intent_text}"})
 
     return messages
@@ -426,7 +462,7 @@ async def call_model_loop(
     messages = _build_messages_for_loop(ctx, tool_results, step)
     user     = messages[-1]["content"] if messages else ctx["intent"]["text"]
 
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     raw  = await loop.run_in_executor(
         None,
         lambda: _chain_call(system, user, MAX_TOKENS_LOOP,
@@ -438,9 +474,8 @@ async def call_model_loop(
         parsed  = json.loads(cleaned)
     except Exception:
         # Model returned non-JSON
-        # If this is step 0 with no tool results yet — it hasn't tried tools.
-        # Force a retry signal rather than treating as final answer.
         if step == 0 and not tool_results:
+            # Step 0: model skipped tool calls entirely — force retry signal
             print(f"[L8] Non-JSON at step 0 — model skipped tool calls, injecting retry")
             return {
                 "thought": "Non-JSON response at step 0 — must use tools",
@@ -448,7 +483,22 @@ async def call_model_loop(
                 "reply": "",
                 "done": False,
             }
-        return {"thought": "", "tool_calls": [], "reply": raw, "done": True}
+        # Step > 0: raw may be a plain-text answer OR garbage.
+        # Only surface it if it looks like a real response (>20 chars, no JSON artifacts)
+        _raw_clean = raw.strip()
+        _looks_real = (
+            len(_raw_clean) > 20
+            and not _raw_clean.startswith("{")
+            and not _raw_clean.startswith("[")
+            and "Traceback" not in _raw_clean
+            and "Error" not in _raw_clean[:30]
+        )
+        if _looks_real:
+            print(f"[L8] Non-JSON at step {step} — treating plain text as reply")
+            return {"thought": "", "tool_calls": [], "reply": _raw_clean, "done": True}
+        # Garbage — force another loop iteration rather than surfacing noise
+        print(f"[L8] Non-JSON garbage at step {step} — injecting retry signal")
+        return {"thought": "JSON parse failed, retrying", "tool_calls": [], "reply": "", "done": False}
 
     # Normalize tool_calls: handle object, list, or missing
     raw_tc = parsed.get("tool_calls", []) or []
@@ -492,7 +542,7 @@ async def call_model_json(system: str, user: str,
     Returns parsed dict or {} on failure.
     """
     import asyncio
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     raw  = await loop.run_in_executor(
         None,
         lambda: _chain_call(system, user, max_tokens, json_mode=True)
@@ -511,7 +561,7 @@ async def call_model_simple(user: str, minimal_context: dict) -> str:
     """
     import asyncio
     system = minimal_context.get("system", "You are CORE. Answer concisely.")
-    loop   = asyncio.get_event_loop()
+    loop   = asyncio.get_running_loop()
     return await loop.run_in_executor(
         None,
         lambda: _chain_call(system, user, MAX_TOKENS_SIMPLE)
