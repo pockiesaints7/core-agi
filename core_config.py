@@ -11,6 +11,8 @@ import time
 from collections import defaultdict
 
 import httpx
+from dotenv import load_dotenv
+load_dotenv()  # loads ~/core-agi/.env automatically
 
 # -- Env vars ------------------------------------------------------------------
 GROQ_API_KEY   = os.environ["GROQ_API_KEY"]
