@@ -8889,3 +8889,320 @@ TOOLS["trigger_capability_calibration"] = {
     ),
 }
 
+
+# ══════════════════════════════════════════════════════════════════════════════
+# VM TOOLS — Direct execution on Oracle VM
+# No routing, no queuing — CORE runs ON the VM so these execute immediately.
+# ══════════════════════════════════════════════════════════════════════════════
+
+import subprocess as _subprocess
+from pathlib import Path as _Path
+
+_VM_WORK_DIR = "/home/ubuntu/core-agi"
+
+
+def t_shell(command: str = "", timeout: str = "60", sudo: str = "false") -> dict:
+    """Run any bash command on the VM. Full shell access."""
+    if not command:
+        return {"ok": False, "error": "command required"}
+    try:
+        use_sudo = sudo.lower() == "true"
+        cmd = f"sudo {command}" if use_sudo and not command.strip().startswith("sudo") else command
+        result = _subprocess.run(
+            cmd, shell=True, capture_output=True, text=True,
+            timeout=int(timeout), cwd=_VM_WORK_DIR
+        )
+        output = (result.stdout + result.stderr).strip()[:4000]
+        return {"ok": result.returncode == 0, "output": output, "returncode": result.returncode}
+    except _subprocess.TimeoutExpired:
+        return {"ok": False, "error": f"timed out after {timeout}s"}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def t_run_script(script: str = "", lang: str = "bash", timeout: str = "60") -> dict:
+    """Write a bash or python script to a temp file and execute it on the VM."""
+    if not script:
+        return {"ok": False, "error": "script required"}
+    try:
+        import time as _time
+        ext = ".sh" if lang == "bash" else ".py"
+        tmp = _Path(f"/tmp/core_script_{int(_time.time())}{ext}")
+        tmp.write_text(script)
+        tmp.chmod(0o755)
+        import sys as _sys
+        cmd = ["bash", str(tmp)] if lang == "bash" else [_sys.executable, str(tmp)]
+        result = _subprocess.run(
+            cmd, capture_output=True, text=True,
+            timeout=int(timeout), cwd=_VM_WORK_DIR
+        )
+        tmp.unlink(missing_ok=True)
+        output = (result.stdout + result.stderr).strip()[:4000]
+        return {"ok": result.returncode == 0, "output": output}
+    except _subprocess.TimeoutExpired:
+        return {"ok": False, "error": f"script timed out after {timeout}s"}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def t_file_read(path: str = "", lines: str = "0") -> dict:
+    """Read a file from the VM filesystem."""
+    if not path:
+        return {"ok": False, "error": "path required"}
+    try:
+        p = _Path(path)
+        if not p.exists():
+            return {"ok": False, "error": f"not found: {path}"}
+        content = p.read_text(errors="replace")
+        n = int(lines)
+        if n > 0:
+            content = "\n".join(content.splitlines()[:n])
+        return {"ok": True, "path": path, "content": content[:10000], "size": p.stat().st_size}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def t_file_write(path: str = "", content: str = "", mode: str = "write") -> dict:
+    """Write or append content to a file on the VM."""
+    if not path:
+        return {"ok": False, "error": "path required"}
+    try:
+        p = _Path(path)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        if mode == "append":
+            with open(p, "a") as f:
+                f.write(content)
+        else:
+            p.write_text(content)
+        return {"ok": True, "path": path, "size": p.stat().st_size, "mode": mode}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def t_file_list(path: str = "", pattern: str = "*") -> dict:
+    """List files in a directory on the VM."""
+    try:
+        p = _Path(path or _VM_WORK_DIR)
+        if not p.exists():
+            return {"ok": False, "error": f"path not found: {path}"}
+        import os as _os
+        files = []
+        for f in sorted(p.glob(pattern))[:200]:
+            try:
+                st = f.stat()
+                files.append({
+                    "name": f.name, "path": str(f),
+                    "type": "file" if f.is_file() else "dir",
+                    "size": st.st_size if f.is_file() else 0,
+                })
+            except Exception:
+                pass
+        return {"ok": True, "path": str(p), "count": len(files), "files": files}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def t_git(repo_path: str = "", operation: str = "status", message: str = "CORE auto-commit") -> dict:
+    """Git operations on any repo on the VM: pull, push, status, log, commit, diff."""
+    repo = repo_path or _VM_WORK_DIR
+    ops = {
+        "pull":   ["git", "pull"],
+        "status": ["git", "status", "--short"],
+        "log":    ["git", "log", "--oneline", "-10"],
+        "push":   ["git", "push"],
+        "diff":   ["git", "diff", "--stat"],
+        "commit": ["git", "commit", "-am", message],
+    }
+    if operation not in ops:
+        return {"ok": False, "error": f"unknown operation: {operation}. Use: {list(ops.keys())}"}
+    try:
+        result = _subprocess.run(
+            ops[operation], capture_output=True, text=True, timeout=60, cwd=repo
+        )
+        return {"ok": result.returncode == 0, "operation": operation,
+                "output": (result.stdout + result.stderr).strip()[:2000]}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def t_service(service: str = "core-agi", operation: str = "status") -> dict:
+    """Manage systemd services on the VM: start, stop, restart, status, reload."""
+    allowed = ["start", "stop", "restart", "status", "reload", "enable", "disable"]
+    if operation not in allowed:
+        return {"ok": False, "error": f"operation must be one of {allowed}"}
+    try:
+        result = _subprocess.run(
+            ["sudo", "systemctl", operation, service],
+            capture_output=True, text=True, timeout=30
+        )
+        return {"ok": result.returncode == 0, "service": service, "operation": operation,
+                "output": (result.stdout + result.stderr).strip()[:500]}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def t_vm_info() -> dict:
+    """Get VM system info: disk, memory, CPU load, uptime, running services."""
+    try:
+        result = _subprocess.run(
+            "echo '=DISK=' && df -h / && "
+            "echo '=MEMORY=' && free -h && "
+            "echo '=UPTIME=' && uptime && "
+            "echo '=SERVICES=' && systemctl list-units --type=service --state=running --no-pager | head -15",
+            shell=True, capture_output=True, text=True, timeout=15
+        )
+        return {"ok": True, "info": result.stdout.strip()[:3000]}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def t_install_package(package: str = "", manager: str = "pip") -> dict:
+    """Install a package via apt or pip on the VM."""
+    if not package:
+        return {"ok": False, "error": "package required"}
+    try:
+        import sys as _sys
+        if manager == "apt":
+            cmd = ["sudo", "apt", "install", "-y", package]
+        else:
+            cmd = [_sys.executable, "-m", "pip", "install", package, "--break-system-packages"]
+        result = _subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+        output = (result.stdout + result.stderr).strip()[-1000:]
+        return {"ok": result.returncode == 0, "package": package, "output": output}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+# ── Register VM tools ─────────────────────────────────────────────────────────
+
+TOOLS["shell"] = {
+    "fn":   t_shell,
+    "perm": "EXECUTE",
+    "args": [
+        {"name": "command", "type": "string", "description": "Bash command to run on VM"},
+        {"name": "timeout", "type": "string", "description": "Timeout in seconds (default 60)"},
+        {"name": "sudo",    "type": "string", "description": "Run with sudo: true|false (default false)"},
+    ],
+    "desc": (
+        "Run any bash command directly on the Oracle VM. Full shell access. "
+        "CORE runs on this VM so output is immediate — no queuing. "
+        "EXAMPLE: shell(command='df -h') to check disk space. "
+        "EXAMPLE: shell(command='cat /var/log/syslog | tail -50') to read logs. "
+        "EXAMPLE: shell(command='apt list --installed', sudo='true') for installed packages."
+    ),
+}
+
+TOOLS["run_script"] = {
+    "fn":   t_run_script,
+    "perm": "EXECUTE",
+    "args": [
+        {"name": "script",  "type": "string", "description": "Script content to execute"},
+        {"name": "lang",    "type": "string", "description": "bash or python (default bash)"},
+        {"name": "timeout", "type": "string", "description": "Timeout in seconds (default 60)"},
+    ],
+    "desc": (
+        "Write and execute a bash or python script on the VM. "
+        "Writes to /tmp, executes, returns output. "
+        "EXAMPLE: run_script(script='#!/bin/bash\\necho hello\\nls -la', lang='bash'). "
+        "EXAMPLE: run_script(script='import os\\nprint(os.listdir(\".\")), lang='python')"
+    ),
+}
+
+TOOLS["file_read"] = {
+    "fn":   t_file_read,
+    "perm": "READ",
+    "args": [
+        {"name": "path",  "type": "string", "description": "Absolute path to file on VM"},
+        {"name": "lines", "type": "string", "description": "Number of lines to read (0=full file)"},
+    ],
+    "desc": (
+        "Read any file from the VM filesystem. "
+        "EXAMPLE: file_read(path='/home/ubuntu/core-agi/core_config.py', lines='50') "
+        "to read first 50 lines. file_read(path='/var/log/nginx/error.log') for full log."
+    ),
+}
+
+TOOLS["file_write"] = {
+    "fn":   t_file_write,
+    "perm": "WRITE",
+    "args": [
+        {"name": "path",    "type": "string", "description": "Absolute path to write to"},
+        {"name": "content", "type": "string", "description": "Content to write"},
+        {"name": "mode",    "type": "string", "description": "write (overwrite) or append (default: write)"},
+    ],
+    "desc": (
+        "Write or append content to any file on the VM. Creates parent dirs if needed. "
+        "EXAMPLE: file_write(path='/home/ubuntu/core-agi/test.py', content='print(1)') "
+        "EXAMPLE: file_write(path='/home/ubuntu/notes.txt', content='new line\\n', mode='append')"
+    ),
+}
+
+TOOLS["file_list"] = {
+    "fn":   t_file_list,
+    "perm": "READ",
+    "args": [
+        {"name": "path",    "type": "string", "description": "Directory path (default: core-agi folder)"},
+        {"name": "pattern", "type": "string", "description": "Glob pattern (default: *)"},
+    ],
+    "desc": (
+        "List files in any directory on the VM. "
+        "EXAMPLE: file_list(path='/home/ubuntu/core-agi', pattern='*.py') "
+        "to list all Python files."
+    ),
+}
+
+TOOLS["git"] = {
+    "fn":   t_git,
+    "perm": "EXECUTE",
+    "args": [
+        {"name": "repo_path",  "type": "string", "description": "Path to git repo (default: core-agi)"},
+        {"name": "operation",  "type": "string", "description": "pull | push | status | log | commit | diff"},
+        {"name": "message",    "type": "string", "description": "Commit message (for commit operation)"},
+    ],
+    "desc": (
+        "Git operations on any repo on the VM. "
+        "EXAMPLE: git(operation='pull') to pull latest from GitHub. "
+        "EXAMPLE: git(operation='status') to see changed files. "
+        "EXAMPLE: git(operation='commit', message='fix: update config') to commit all changes."
+    ),
+}
+
+TOOLS["service"] = {
+    "fn":   t_service,
+    "perm": "EXECUTE",
+    "args": [
+        {"name": "service",   "type": "string", "description": "systemd service name (default: core-agi)"},
+        {"name": "operation", "type": "string", "description": "start | stop | restart | status | reload"},
+    ],
+    "desc": (
+        "Manage systemd services on the VM. "
+        "EXAMPLE: service(service='core-agi', operation='restart') to restart CORE. "
+        "EXAMPLE: service(service='nginx', operation='status') to check nginx. "
+        "EXAMPLE: service(service='core-agi', operation='stop') to stop CORE."
+    ),
+}
+
+TOOLS["vm_info"] = {
+    "fn":   t_vm_info,
+    "perm": "READ",
+    "args": [],
+    "desc": (
+        "Get VM system status: disk usage, memory, CPU load, uptime, running services. "
+        "Call this to check VM health or before major operations. "
+        "EXAMPLE: vm_info()"
+    ),
+}
+
+TOOLS["install_package"] = {
+    "fn":   t_install_package,
+    "perm": "EXECUTE",
+    "args": [
+        {"name": "package", "type": "string", "description": "Package name to install"},
+        {"name": "manager", "type": "string", "description": "pip or apt (default: pip)"},
+    ],
+    "desc": (
+        "Install a Python or system package on the VM. "
+        "EXAMPLE: install_package(package='httpx') for pip. "
+        "EXAMPLE: install_package(package='htop', manager='apt') for system package."
+    ),
+}
