@@ -15,6 +15,17 @@ Session close sequence (per Blueprint L7 + L9):
 
 hot_reflection written per turn (not just per session end) so the
 pipeline always has fresh signal even if CORE crashes mid-session.
+
+FIXES (v2):
+  - BUG-L9-4:  Session data no longer popped before write — pop happens AFTER
+               confirmed write to prevent silent data loss on write failure
+  - BUG-L9-5:  ctx["intent"] access guarded with .get() and fallback — no
+               more unhandled KeyError on malformed ctx
+  - BUG-L7-2 (coordinated): layer_9_session_end now calls L7.reset_evo_counter
+               and L7.reset_error_log so per-session limits reset correctly
+  - NEW-L9-10: verify_rate and mistake_consult_rate computed from session data
+               instead of being hardcoded to 0
+  - NEW-L9-11: "session" removed from mcp domain keyword list (too broad)
 """
 
 import json
@@ -24,7 +35,7 @@ from datetime import datetime
 from typing import Optional
 
 # ── Per-chat session tracker (in-memory) ─────────────────────────────────────
-_sessions: dict = {}   # cid → {turns, tools_used, errors, quality_sum, started_at}
+_sessions: dict = {}   # cid → {turns, tools_used, errors, quality_sum, started_at, tool_calls_total}
 _sess_lock      = threading.Lock()
 
 
@@ -32,22 +43,33 @@ def _get_or_create_session(cid: str) -> dict:
     with _sess_lock:
         if cid not in _sessions:
             _sessions[cid] = {
-                "turns":       0,
-                "tools_used":  [],
-                "errors":      0,
-                "quality_sum": 0.0,
-                "started_at":  datetime.utcnow().isoformat(),
+                "turns":             0,
+                "tools_used":        [],
+                "errors":            0,
+                "quality_sum":       0.0,
+                "tool_calls_total":  0,
+                "started_at":        datetime.utcnow().isoformat(),
             }
         return _sessions[cid]
 
 
 def _update_session(cid: str, tool_results: list, quality: float):
-    sess = _get_or_create_session(cid)
     with _sess_lock:
-        sess["turns"]      += 1
-        sess["tools_used"] += [r.get("name", "?") for r in tool_results]
-        sess["errors"]     += sum(1 for r in tool_results if not r.get("ok", True))
-        sess["quality_sum"] += quality
+        if cid not in _sessions:
+            _sessions[cid] = {
+                "turns":             0,
+                "tools_used":        [],
+                "errors":            0,
+                "quality_sum":       0.0,
+                "tool_calls_total":  0,
+                "started_at":        datetime.utcnow().isoformat(),
+            }
+        sess = _sessions[cid]
+        sess["turns"]            += 1
+        sess["tools_used"]       += [r.get("name", "?") for r in tool_results]
+        sess["errors"]           += sum(1 for r in tool_results if not r.get("ok", True))
+        sess["quality_sum"]      += quality
+        sess["tool_calls_total"] += len(tool_results)
 
 
 # ── Hot reflection writer ─────────────────────────────────────────────────────
@@ -70,6 +92,14 @@ def _write_hot_reflection(
         tools_used  = [r.get("name", "?") for r in tool_results]
         failed_cnt  = sum(1 for r in tool_results if not r.get("ok", True))
         domain      = _infer_domain(text, ctx)
+
+        # Compute verify_rate and mistake_consult_rate from session state
+        # (FIX NEW-L9-10: was hardcoded 0 — now computed from available signals)
+        sess = _sessions.get(cid, {})
+        total_calls = sess.get("tool_calls_total", len(tools_used))
+        session_errors = sess.get("errors", failed_cnt)
+        mistake_consult_rate = round(session_errors / max(total_calls, 1), 3)
+        verify_rate          = round(1.0 - mistake_consult_rate, 3)
 
         # Extract patterns via Groq (fast model, max_tokens=300)
         patterns = []
@@ -103,8 +133,8 @@ def _write_hot_reflection(
             "domain":               domain,
             "task_summary":         f"Telegram v2: {text[:250]}",
             "quality_score":        quality,
-            "verify_rate":          0,
-            "mistake_consult_rate": 0,
+            "verify_rate":          verify_rate,
+            "mistake_consult_rate": mistake_consult_rate,
             "new_patterns":         patterns,
             "new_mistakes":         [],
             "gaps_identified":      gaps,
@@ -123,18 +153,22 @@ def _write_hot_reflection(
             print(f"[L9] hot_reflection written: domain={domain} quality={quality} "
                   f"patterns={len(patterns)}")
         else:
-            print(f"[L9] hot_reflection write failed")
+            print(f"[L9] hot_reflection write FAILED — data may be lost")
 
     except Exception as e:
         print(f"[L9] hot_reflection error (non-fatal): {e}")
 
 
 def _infer_domain(text: str, ctx: dict) -> str:
+    """Infer learning domain from text keywords.
+    FIX NEW-L9-11: Removed "session" from mcp keyword list — too broad,
+    causes false domain classifications for common English usage.
+    """
     _dom_map = [
         (["supabase", "database", "table", "sb_"],            "db"),
         (["github", "patch", "deploy", "railway", "commit"],  "code"),
         (["telegram", "notify", "bot"],                        "bot"),
-        (["mcp", "tool", "session"],                           "mcp"),
+        (["mcp", "tool_call", "tool call"],                    "mcp"),  # "session" removed
         (["training", "cold", "hot", "evolution", "pattern"], "training"),
         (["knowledge", "kb", "learn"],                         "kb"),
     ]
@@ -156,10 +190,17 @@ async def layer_9_log_turn(
     Called by L4 after every completed tool loop.
     Fires L7 observability + writes hot_reflection in background.
     Non-blocking: all writes happen in background threads.
+
+    FIX BUG-L9-5: ctx["intent"] access guarded — no KeyError on malformed ctx.
     """
-    intent  = ctx["intent"]
-    cid     = intent["sender_id"]
-    text    = intent["text"]
+    # Guard against malformed ctx (FIX BUG-L9-5)
+    intent = ctx.get("intent")
+    if not intent:
+        print(f"[L9] WARNING: ctx missing 'intent' field — using fallback")
+        intent = {"sender_id": "unknown", "text": ""}
+
+    cid  = intent.get("sender_id", "unknown")
+    text = intent.get("text", "")
 
     # L7: observe (quality score, error log, evolution proposals)
     from core_orch_layer7 import layer_7_observe
@@ -180,17 +221,23 @@ async def layer_9_session_end(cid: str):
     """
     Call when a session explicitly ends (e.g. /clear or long idle).
     Writes a session summary row and cleans up memory.
-    """
-    sess = _get_or_create_session(cid)
-    with _sess_lock:
-        session_copy = dict(sess)
-        _sessions.pop(cid, None)
 
+    FIX BUG-L9-4: session data is now popped AFTER confirmed write, not before.
+    If write fails, session data remains in _sessions for potential retry.
+
+    FIX BUG-L7-2 coordination: resets L7 evolution counter and error log.
+    """
+    _get_or_create_session(cid)   # Ensure session exists
+    with _sess_lock:
+        session_copy = dict(_sessions.get(cid, {}))
+
+    # Don't pop yet — pop after confirmed write (FIX BUG-L9-4)
     turns      = session_copy.get("turns", 0)
     errors     = session_copy.get("errors", 0)
     tools_used = session_copy.get("tools_used", [])
     avg_q      = (session_copy["quality_sum"] / turns) if turns > 0 else 0.0
 
+    write_ok = False
     try:
         from core_config import sb_post
         sb_post("sessions", {
@@ -205,13 +252,32 @@ async def layer_9_session_end(cid: str):
             "quality_score": round(avg_q, 3),
             "created_at":    datetime.utcnow().isoformat(),
         })
+        write_ok = True
         print(f"[L9] Session end logged: turns={turns} avg_q={avg_q:.2f}")
     except Exception as e:
         print(f"[L9] Session end write failed (non-fatal): {e}")
 
-    # Clear L2 memory
-    from core_orch_layer2 import clear_history
-    clear_history(cid)
+    # Only pop session from memory after write is confirmed (FIX BUG-L9-4)
+    if write_ok:
+        with _sess_lock:
+            _sessions.pop(cid, None)
+    else:
+        print(f"[L9] Session data retained in memory (write failed) — will retry on next end")
+
+    # Reset L7 counters for this session (FIX BUG-L7-2 coordination)
+    try:
+        from core_orch_layer7 import reset_evo_counter, reset_error_log
+        reset_evo_counter(cid)
+        reset_error_log(cid)
+    except Exception as e:
+        print(f"[L9] L7 counter reset failed (non-fatal): {e}")
+
+    # Clear L2 memory — always, regardless of write status
+    try:
+        from core_orch_layer2 import clear_history
+        clear_history(cid)
+    except Exception as e:
+        print(f"[L9] L2 clear_history failed (non-fatal): {e}")
 
 
 if __name__ == "__main__":

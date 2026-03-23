@@ -21,26 +21,50 @@ ON VIOLATION:
   1. Log to Supabase mistakes table
   2. Notify owner via Telegram
   3. Hard stop the violating operation
+
+FIXES (v2):
+  - BUG-L10-2:  Dead `import __file__ as _self` code removed
+  - BUG-L10-3:  Violation logger is rate-limited — no more thread flood on
+                repeated violations (e.g. DDoS of unauthorized requests)
+  - BUG-L10-4:  OWNER_CHAT_ID resolved lazily on each check, not only at import
+                time — prevents lock-out when env vars set after import
+  - BUG-L10-6:  "delete" added to _DESTRUCTIVE_KEYWORDS — was in _DESTRUCTIVE_TOOLS
+                only, so tool args containing "delete" were not caught
+  - NEW-L10-11: Groq key pattern quantifier adjusted from {40,} to {20,}
+                to catch truncated keys in logs
+  - NEW-L10-13: boot_check() no longer auto-called at import — called explicitly
+                by startup to avoid import-time side effects
+  - NEW-L10-14: OWNER_CHAT_ID comparison strips whitespace on both sides
 """
 
 import os
 import re
 import json
+import time
 import threading
 from datetime import datetime
 from typing import Optional
 
-# ── Constants ──────────────────────────────────────────────────────────────────
-OWNER_CHAT_ID = str(os.environ.get("TELEGRAM_CHAT", ""))
+# ── Violation rate limiting ────────────────────────────────────────────────────
+# Prevents thread flood on repeated identical violations (FIX BUG-L10-3)
+_violation_log: dict  = {}  # invariant → last_log_ts
+_violation_lock       = threading.Lock()
+_VIOLATION_MIN_INTERVAL_S = 60  # max 1 log per invariant per 60 seconds
 
-# Patterns that indicate credential leakage in any output string
+
+# ── Credential patterns ────────────────────────────────────────────────────────
+
 _CREDENTIAL_PATTERNS = [
     re.compile(r"ghp_[a-zA-Z0-9]{36}"),                          # GitHub PAT
     re.compile(r"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9\.[a-zA-Z0-9\-_]+\.[a-zA-Z0-9\-_]+"),  # Supabase JWT
     re.compile(r"sk-or-v1-[a-zA-Z0-9\-]{40,}"),                  # OpenRouter key
-    re.compile(r"gsk_[a-zA-Z0-9]{40,}"),                          # Groq key
+    re.compile(r"gsk_[a-zA-Z0-9]{20,}"),                          # Groq key (FIX NEW-L10-11: was {40,})
     re.compile(r"AIza[a-zA-Z0-9\-_]{35}"),                        # Google/Gemini key
-    re.compile(r"(?i)(api[_\-]?key|secret|password|token)\s*[:=]\s*['\"]?[a-zA-Z0-9\-_]{20,}"),
+    re.compile(r"sbp_[a-zA-Z0-9]{40,}"),                          # Supabase PAT
+    re.compile(r"\d{8,10}:[a-zA-Z0-9\-_]{35}"),                   # Telegram bot token
+    re.compile(r"(?i)(api[_\-]?key|secret|password)\s*[:=]\s*['\"]?[a-zA-Z0-9\-_]{20,}"),
+    # NOTE: "token" deliberately excluded from the generic pattern to avoid
+    # false positives on Telegram update tokens, JWT claims, etc.
 ]
 
 # Tools that are unconditionally destructive — always require confirmation
@@ -50,15 +74,25 @@ _DESTRUCTIVE_TOOLS = {
 }
 
 # Keywords in tool args that signal destructive intent
+# FIX BUG-L10-6: "delete" added — was in _DESTRUCTIVE_TOOLS only, not here
 _DESTRUCTIVE_KEYWORDS = {
     "drop", "truncate", "purge", "wipe", "rm -rf",
     "destroy", "delete", "permanent", "irreversible",
 }
 
 # ── Violation severity levels ──────────────────────────────────────────────────
-SEVERITY_CRITICAL = "critical"   # Hard stop, owner notified immediately
-SEVERITY_HIGH     = "high"       # Hard stop, logged
-SEVERITY_MEDIUM   = "medium"     # Log + warn, operation may continue
+SEVERITY_CRITICAL = "critical"
+SEVERITY_HIGH     = "high"
+SEVERITY_MEDIUM   = "medium"
+
+
+def _get_owner_chat_id() -> str:
+    """Resolve OWNER_CHAT_ID lazily and strip whitespace.
+    FIX BUG-L10-4: was read only at import time causing lock-out if env
+    var set after module import.
+    FIX NEW-L10-14: strips whitespace to handle accidental spaces in env var.
+    """
+    return str(os.environ.get("TELEGRAM_CHAT", "")).strip()
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -73,9 +107,18 @@ def _log_violation(
     severity: str = SEVERITY_HIGH,
 ):
     """Log constitution violation to Supabase mistakes table + notify owner.
-    Runs in background thread to avoid blocking the hard stop.
+    Runs in background thread. Rate-limited per invariant to prevent thread floods
+    (FIX BUG-L10-3).
     Non-fatal to the logger itself — if Supabase is down, prints to console.
     """
+    # Rate limiting per invariant (FIX BUG-L10-3)
+    with _violation_lock:
+        last = _violation_log.get(invariant, 0)
+        if time.time() - last < _VIOLATION_MIN_INTERVAL_S:
+            print(f"[L10] Violation rate-limited (already logged recently): {invariant}")
+            return
+        _violation_log[invariant] = time.time()
+
     def _run():
         payload = {
             "domain":           "constitution",
@@ -130,8 +173,12 @@ class ConstitutionViolation(Exception):
 def check_owner(chat_id: str) -> bool:
     """Return True if chat_id matches the configured owner.
     Raises ConstitutionViolation if not — hard stop.
+    FIX BUG-L10-4: owner ID resolved lazily per call (not at import time).
+    FIX NEW-L10-14: strips whitespace from both sides.
     """
-    if not OWNER_CHAT_ID:
+    owner_id = _get_owner_chat_id()
+
+    if not owner_id:
         _log_violation(
             invariant   = "C1-OWNER",
             what_failed = "TELEGRAM_CHAT not configured — cannot verify owner",
@@ -141,11 +188,11 @@ def check_owner(chat_id: str) -> bool:
         )
         raise ConstitutionViolation("C1-OWNER", "TELEGRAM_CHAT not configured")
 
-    if str(chat_id) != OWNER_CHAT_ID:
+    if str(chat_id).strip() != owner_id:
         _log_violation(
             invariant   = "C1-OWNER",
             what_failed = f"Unauthorized access attempt from chat_id={chat_id}",
-            context     = f"Owner={OWNER_CHAT_ID}, Caller={chat_id}",
+            context     = f"Owner={owner_id}, Caller={chat_id}",
             how_to_avoid= "Only owner chat_id is permitted to invoke CORE",
             severity    = SEVERITY_CRITICAL,
         )
@@ -205,7 +252,10 @@ def assert_no_credentials(text: str, context: str = "") -> None:
 # ══════════════════════════════════════════════════════════════════════════════
 
 def is_destructive(tool_name: str, tool_args: dict) -> bool:
-    """Return True if this tool call is potentially destructive."""
+    """Return True if this tool call is potentially destructive.
+    FIX BUG-L10-6: 'delete' now in _DESTRUCTIVE_KEYWORDS so tool args
+    containing 'delete' are correctly flagged.
+    """
     # Direct tool name match
     if tool_name.lower() in _DESTRUCTIVE_TOOLS:
         return True
@@ -282,7 +332,7 @@ def assert_db_available(operation: str = "") -> None:
     """
     try:
         from core_config import sb_get
-        result = sb_get("knowledge_base", "select=id&limit=1")
+        result = sb_get("knowledge_base", "select=id&limit=1&order=id.asc")
         # sb_get returns None or [] on failure
         if result is None:
             raise RuntimeError("sb_get returned None")
@@ -298,37 +348,38 @@ def assert_db_available(operation: str = "") -> None:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# BOOT VALIDATION — run once at startup
+# BOOT VALIDATION — call explicitly at startup, NOT at import time
 # ══════════════════════════════════════════════════════════════════════════════
 
 def boot_check() -> dict:
     """Run all constitution invariant checks at boot time.
     Returns {ok, violations} — does NOT raise, so startup can continue
     with degraded mode if needed.
+
+    FIX BUG-L10-2: Dead __file__ import code removed.
+    FIX NEW-L10-13: boot_check() is NO LONGER called at module import time.
+    It must be called explicitly by startup code. This prevents import-time
+    side effects and double-invocation.
     """
     violations = []
 
     # C1: Owner configured
-    if not OWNER_CHAT_ID:
+    owner_id = _get_owner_chat_id()
+    if not owner_id:
         violations.append("C1: TELEGRAM_CHAT not set")
 
-    # C2: No credentials in environment variable names being logged
-    sensitive_env = ["OPENROUTER_API_KEY", "GROQ_API_KEY", "SUPABASE_SERVICE_KEY",
-                     "GITHUB_PAT", "TELEGRAM_TOKEN", "SUPABASE_PAT"]
+    # C2: Check that sensitive env vars are present (don't log values)
+    sensitive_env = [
+        "OPENROUTER_API_KEY", "GROQ_API_KEY", "SUPABASE_SERVICE_KEY",
+        "GITHUB_PAT", "TELEGRAM_TOKEN", "SUPABASE_PAT",
+    ]
     for key in sensitive_env:
         val = os.environ.get(key, "")
-        if val and len(val) > 8:
-            # Just verify they exist — don't log the values
-            pass
-        elif not val:
+        if not val:
             violations.append(f"C2-warning: {key} not set — some features may fail")
 
-    # C6: Constitution file should not be writable by CORE process
-    # (we check if this file itself is readable — write protection is OS-level)
-    try:
-        import __file__ as _self
-    except Exception:
-        pass  # Non-fatal
+    # C6: Constitution integrity note (OS-level write protection only — not verifiable in Python)
+    # No code check possible here — rely on Railway deployment pipeline
 
     ok = len([v for v in violations if not v.startswith("C2-warning")]) == 0
 
@@ -387,5 +438,6 @@ def report_violation(
     _log_violation(invariant, what_failed, context, how_to_avoid, severity)
 
 
-# ── Run boot check on import ───────────────────────────────────────────────────
-_boot_result = boot_check()
+# ── FIX NEW-L10-13: boot_check() is NOT auto-called here anymore ─────────────
+# Startup code (L0 __main__ or core_orch_main.startup_v2) must call it explicitly.
+# This prevents double-invocation and import-time side effects.

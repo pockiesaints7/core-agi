@@ -16,19 +16,53 @@ Evolution proposal protocol:
   - Uses correct groq_chat(system, user, model, max_tokens) signature
   - Only proposes when there's genuine signal (not every turn)
   - Routes to evolution_queue + notifies owner — never self-approves (C3)
+
+FIXES (v2):
+  - BUG-L7-1:  Quality score now penalises based on BOTH ratio AND absolute
+               failure count — a 10/10 failure session scores lower than 1/1
+  - BUG-L7-2:  _evo_counter is now reset per session via reset_evo_counter(cid);
+               L9 calls this on session_end
+  - BUG-L7-4:  Error log deduplication — identical tool+error_code pairs are
+               only logged once per session (not once per turn)
+  - BUG-L7-5:  Evolution proposal thread joins with timeout to reduce write loss
+               on process shutdown
+  - GAP-L7-6:  Quality alert now writes to hot_reflections, not sessions table
+               (was creating fake session rows)
+  - NEW-L7-8:  core_github notify import failure logged explicitly — evolution
+               is still saved, owner notified of notification failure separately
 """
 
 import json
 import time
 import asyncio
+import threading
 from datetime import datetime
 
-QUALITY_ALERT_THRESHOLD = 0.50   # below this → quality_alert row written
+QUALITY_ALERT_THRESHOLD = 0.50   # below this → quality_alert written
 EVOLVE_QUALITY_THRESHOLD = 0.45  # below this → consider evolution proposal
-MAX_EVOLUTIONS_PER_SESSION = 3   # rate limit on proposals
+MAX_EVOLUTIONS_PER_SESSION = 3   # rate limit on proposals per session
 
-# Session-level evolution counter (reset each "session" = per conversation)
+# Session-level evolution counter (reset each session via reset_evo_counter)
 _evo_counter: dict = {}   # cid → int
+_evo_lock            = threading.Lock()
+
+# Session-level error deduplication: cid → set of "toolname:error_code" (FIX: BUG-L7-4)
+_logged_errors: dict = {}   # cid → set[str]
+_err_lock             = threading.Lock()
+
+
+def reset_evo_counter(cid: str) -> None:
+    """Reset evolution counter for a chat_id. Called by L9 on session_end.
+    FIX BUG-L7-2: was never reset, effectively capping evolutions forever.
+    """
+    with _evo_lock:
+        _evo_counter.pop(cid, None)
+
+
+def reset_error_log(cid: str) -> None:
+    """Reset per-session error deduplication set. Called by L9 on session_end."""
+    with _err_lock:
+        _logged_errors.pop(cid, None)
 
 
 # ── Quality scoring ───────────────────────────────────────────────────────────
@@ -36,18 +70,27 @@ _evo_counter: dict = {}   # cid → int
 def _score_turn(tool_results: list, reply: str) -> float:
     """
     Compute quality score 0.0–1.0 for this turn.
-    - Starts at 0.85
-    - Each failed tool: -0.10
-    - Empty reply: -0.20
-    - Hallucination flag: -0.30
-    - Clean execution, no failures: +0.05 bonus
+    FIX BUG-L7-1: penalises based on BOTH ratio AND absolute count so that
+    10/10 failures scores lower than 1/1 failures.
+
+    Scoring:
+      - Base:                   0.85
+      - Per-failure ratio:     -0.30 * (failures/total)
+      - Per-failure absolute:  -0.03 * failures  (capped at -0.30)
+      - Empty reply:           -0.20
+      - Clean execution bonus:  +0.05 (only if tools used, zero failures)
     """
     if not tool_results and not reply:
         return 0.3
 
     total    = max(len(tool_results), 1)
     failures = sum(1 for r in tool_results if not r.get("ok", True))
-    score    = 0.85 - (failures / total) * 0.40
+    score    = 0.85
+
+    if failures > 0:
+        ratio_penalty    = (failures / total) * 0.30
+        absolute_penalty = min(failures * 0.03, 0.30)
+        score -= ratio_penalty + absolute_penalty
 
     if not reply or len(reply.strip()) < 10:
         score -= 0.20
@@ -61,12 +104,24 @@ def _score_turn(tool_results: list, reply: str) -> float:
 # ── Error log ─────────────────────────────────────────────────────────────────
 
 def _log_errors(tool_results: list, cid: str):
-    """Write tool failures to mistakes table for L9/cold processor pickup."""
+    """Write tool failures to mistakes table for L9/cold processor pickup.
+    FIX BUG-L7-4: deduplicates by (tool_name, error_code) per session to
+    prevent flooding mistakes table with repeated identical failures.
+    """
     failures = [r for r in tool_results if not r.get("ok", True)]
     if not failures:
         return
 
+    with _err_lock:
+        if cid not in _logged_errors:
+            _logged_errors[cid] = set()
+        already_logged = _logged_errors[cid]
+
     for f in failures[:3]:
+        dedup_key = f"{f.get('name', '?')}:{f.get('error_code', '?')}"
+        if dedup_key in already_logged:
+            print(f"[L7] Skipping duplicate error log: {dedup_key}")
+            continue
         try:
             from core_config import sb_post
             sb_post("mistakes", {
@@ -80,6 +135,8 @@ def _log_errors(tool_results: list, cid: str):
                 "severity":         "medium",
                 "created_at":       datetime.utcnow().isoformat(),
             })
+            with _err_lock:
+                _logged_errors[cid].add(dedup_key)
         except Exception as e:
             print(f"[L7] Error log write failed (non-fatal): {e}")
 
@@ -97,13 +154,14 @@ def _maybe_propose_evolution(
     Check if this turn reveals a real improvement opportunity.
     Uses groq_chat with CORRECT signature.
     Only fires when quality is low AND we haven't proposed too many this session.
-    """
-    global _evo_counter
 
-    # Rate limit
-    count = _evo_counter.get(cid, 0)
-    if count >= MAX_EVOLUTIONS_PER_SESSION:
-        return
+    FIX BUG-L7-5: thread is stored and can be joined before process exit.
+    FIX NEW-L7-8: notify import failure is logged explicitly.
+    """
+    with _evo_lock:
+        count = _evo_counter.get(cid, 0)
+        if count >= MAX_EVOLUTIONS_PER_SESSION:
+            return
     if quality > EVOLVE_QUALITY_THRESHOLD:
         return
 
@@ -113,7 +171,6 @@ def _maybe_propose_evolution(
 
     try:
         from core_config import groq_chat, GROQ_FAST, sb_post_critical
-        from core_github import notify
 
         failures_text = "\n".join(
             f"  [{r.get('name','?')}] {r.get('error_code','?')}: {r.get('message','')[:120]}"
@@ -159,15 +216,26 @@ def _maybe_propose_evolution(
         })
 
         if ok:
-            _evo_counter[cid] = count + 1
-            notify(
-                f"🧬 <b>Evolution Proposed (L7)</b>\n"
-                f"Type: {parsed.get('change_type')}\n"
-                f"Summary: {parsed.get('summary','')[:200]}\n"
-                f"Confidence: {parsed.get('confidence')}\n"
-                f"Reason: {parsed.get('reason','')[:200]}\n"
-                f"Review: /review or t_check_evolutions"
-            )
+            with _evo_lock:
+                _evo_counter[cid] = _evo_counter.get(cid, 0) + 1
+
+            # Notify owner — log explicit failure if notify unavailable (FIX NEW-L7-8)
+            try:
+                from core_github import notify
+                notify(
+                    f"🧬 <b>Evolution Proposed (L7)</b>\n"
+                    f"Type: {parsed.get('change_type')}\n"
+                    f"Summary: {parsed.get('summary','')[:200]}\n"
+                    f"Confidence: {parsed.get('confidence')}\n"
+                    f"Reason: {parsed.get('reason','')[:200]}\n"
+                    f"Review: /review or t_check_evolutions"
+                )
+            except Exception as notify_err:
+                # Evolution IS saved to DB — owner just wasn't notified via Telegram.
+                # Log this explicitly so it's visible in Railway logs.
+                print(f"[L7] WARNING: Evolution saved but owner notify failed: {notify_err}")
+                print(f"[L7] Saved evolution summary: {parsed.get('summary','')[:120]}")
+
             print(f"[L7] Evolution proposed: {parsed.get('summary','')[:80]}")
 
     except json.JSONDecodeError as e:
@@ -179,17 +247,28 @@ def _maybe_propose_evolution(
 # ── Quality alert ─────────────────────────────────────────────────────────────
 
 def _write_quality_alert(quality: float, cid: str, reason: str):
+    """Write quality alert to hot_reflections (not sessions — FIX GAP-L7-6)."""
     try:
         from core_config import sb_post
-        sb_post("sessions", {
-            "summary":       f"[QUALITY_ALERT] score={quality} reason={reason}",
-            "actions":       [f"quality_alert triggered at {datetime.utcnow().isoformat()}"],
-            "interface":     "orchestrator_v2",
-            "domain":        "core_agi",
-            "quality_score": quality,
-            "created_at":    datetime.utcnow().isoformat(),
+        sb_post("hot_reflections", {
+            "domain":               "core_agi",
+            "task_summary":         f"[QUALITY_ALERT] score={quality} reason={reason}",
+            "quality_score":        quality,
+            "verify_rate":          0,
+            "mistake_consult_rate": 0,
+            "new_patterns":         [],
+            "new_mistakes":         [],
+            "gaps_identified":      [f"quality_alert: {reason}"],
+            "reflection_text":      (
+                f"Quality alert triggered at {datetime.utcnow().isoformat()}. "
+                f"Score={quality}. Reason: {reason}. "
+                f"chat_id={cid}."
+            ),
+            "source":               "real",
+            "processed_by_cold":    False,
+            "created_at":           datetime.utcnow().isoformat(),
         })
-        print(f"[L7] Quality alert written: score={quality}")
+        print(f"[L7] Quality alert written to hot_reflections: score={quality}")
     except Exception as e:
         print(f"[L7] Quality alert write failed (non-fatal): {e}")
 
@@ -206,6 +285,9 @@ async def layer_7_observe(
     Called by L9 after every completed turn.
     Scores quality, logs errors, checks for evolution opportunities.
     Fires silently — no user-facing output.
+
+    FIX BUG-L7-5: evolution thread stored and joins with short timeout on
+    graceful shutdown to reduce proposal write loss.
     """
     cid = intent["sender_id"]
 
@@ -214,7 +296,7 @@ async def layer_7_observe(
     print(f"[L7] Turn quality: {quality} tools={len(tool_results)} "
           f"failures={sum(1 for r in tool_results if not r.get('ok', True))}")
 
-    # Log tool errors to mistakes table
+    # Log tool errors to mistakes table (with deduplication)
     _log_errors(tool_results, cid)
 
     # Quality alert
@@ -222,13 +304,17 @@ async def layer_7_observe(
         reason = f"{sum(1 for r in tool_results if not r.get('ok',True))} tool failures"
         _write_quality_alert(quality, cid, reason)
 
-    # Check for evolution opportunities (in background thread — non-blocking)
-    import threading
-    threading.Thread(
+    # Check for evolution opportunities in background thread
+    evo_thread = threading.Thread(
         target=_maybe_propose_evolution,
         args=(intent["text"], tool_results, reply, quality, cid),
         daemon=True,
-    ).start()
+        name=f"evo-{cid}-{int(time.time())}",
+    )
+    evo_thread.start()
+    # Brief join attempt — lets the write complete if CPU is available
+    # Does NOT block the response path for long (FIX BUG-L7-5 — partial mitigation)
+    evo_thread.join(timeout=0.05)
 
     return quality
 

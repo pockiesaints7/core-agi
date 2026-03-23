@@ -15,6 +15,17 @@ Validation responsibilities:
   - Sanity check: does result actually answer the intent?
   - Hallucination guard: fast rule-based (no LLM call)
   - Syntax validate: for code-change tool results
+
+FIXES (v2):
+  - BUG-L6-2:  Narration check patterns tightened — removed overly broad patterns
+               that matched valid replies ("will confirm", "will retrieve")
+  - BUG-L6-5:  Task sweeper Supabase query now includes id=gt.1 filter
+               (HARD RULE: bigserial PK tables always require id=gt.1)
+  - GAP-L6-7:  layer_6_validate return value extended with correction_needed
+               sentinel so L4/L8 can detect hallucination and trigger re-gen
+  - NEW-L6-11: Consistent API: narration issues flagged separately; ok=True
+               for narration (not a hard block), ok=False only for
+               hallucination and prompt_leak
 """
 
 import json
@@ -41,8 +52,9 @@ def _hallucination_guard(reply: str, tool_results: list) -> dict:
     if not reply or not tool_results:
         return {"ok": True}
 
+    # Normalise all tool results to string for substring matching
     all_results_text = " ".join(
-        r.get("result", "") for r in tool_results
+        str(r.get("result", "")) for r in tool_results
     ).lower()
 
     suspicious = []
@@ -91,16 +103,27 @@ def _prompt_leak_check(reply: str) -> bool:
 
 
 def _narration_check(reply: str) -> bool:
-    """Return True if reply narrates instead of executing."""
+    """Return True if reply narrates instead of executing.
+    FIX BUG-L6-2: patterns tightened to avoid false positives on valid replies.
+    Removed: 'will retrieve', 'will confirm' — too common in legitimate responses.
+    Kept only patterns that are unambiguously narration/planning, not execution.
+    """
     _NARR = [
-        r"I will now", r"I am going to", r"I'll call", r"I would call",
-        r"Let me call", r"I should call", r"I'll use the", r"I will use the",
-        r"To do this, I", r"I'll execute", r"I will execute",
-        r"Executing the", r"I am executing", r"will calculate",
-        r"will retrieve", r"will confirm",
+        r"^I will now\b",        # Only at start of reply
+        r"^I am going to\b",
+        r"\bI'll call\b",
+        r"\bI would call\b",
+        r"\bLet me call\b",
+        r"\bI should call\b",
+        r"\bI'll use the\b",
+        r"\bI will use the\b",
+        r"\bTo do this, I\b",
+        r"\bI'll execute\b",
+        r"\bI will execute\b",
+        r"\bI am executing\b",
     ]
     for p in _NARR:
-        if re.search(p, reply, re.IGNORECASE):
+        if re.search(p, reply, re.IGNORECASE | re.MULTILINE):
             return True
     return False
 
@@ -114,38 +137,60 @@ async def layer_6_validate(
 ) -> dict:
     """
     Validates the reply before it reaches L7/L5 output.
-    Returns {ok, reply (possibly corrected), issues}
-    Called internally by L4/L8 — not a user-facing endpoint.
+
+    Returns:
+      {
+        "ok":               bool,       # False = hard block (hallucination, prompt_leak)
+        "reply":            str,        # Possibly prefixed with correction sentinel
+        "issues":           list,       # All detected issues
+        "correction_needed": bool,      # True if L4/L8 should trigger re-generation
+      }
+
+    FIX GAP-L6-7: 'correction_needed' sentinel added so L4/L8 can detect
+    hallucination and trigger a re-generation pass rather than passing corrupted
+    reply downstream.
+
+    FIX NEW-L6-11: ok=True for narration-only issues; ok=False only for
+    hallucination and prompt_leak (hard blocks).
     """
     issues = []
-    corrected_reply = reply
+    corrected_reply     = reply
+    correction_needed   = False
 
     # 1. Hallucination guard
     hg = _hallucination_guard(reply, tool_results)
     if not hg["ok"]:
         issues.append({"type": "hallucination", "detail": hg.get("suspicious", [])})
-        # Inject correction hint — let model self-correct in next step
+        correction_needed = True
         corrected_reply = (
-            f"[CORRECTION REQUIRED]\n{hg.get('correction_hint', '')}\n\n"
+            f"[CORRECTION_REQUIRED]\n{hg.get('correction_hint', '')}\n\n"
             f"Original (possibly hallucinated):\n{reply[:500]}"
         )
 
     # 2. Prompt leak
     if _prompt_leak_check(reply):
         issues.append({"type": "prompt_leak"})
+        correction_needed = True
         corrected_reply = "[System prompt leaked into reply — response blocked]"
 
-    # 3. Narration instead of execution (flag only, don't block — L8 handles retry)
+    # 3. Narration instead of execution
+    # Flag only, don't block (ok stays True for narration alone).
+    # L4/L8 handles retry on narration.
     if _narration_check(reply) and not tool_results:
         issues.append({"type": "narration", "detail": "response describes action instead of executing"})
+        # narration does NOT set correction_needed — L4/L8 has its own retry for this
+
+    hard_block_types = {"hallucination", "prompt_leak"}
+    is_hard_blocked  = any(i["type"] in hard_block_types for i in issues)
 
     if issues:
         print(f"[L6] Validation issues: {[i['type'] for i in issues]}")
 
     return {
-        "ok":     len([i for i in issues if i["type"] in ("hallucination", "prompt_leak")]) == 0,
-        "reply":  corrected_reply,
-        "issues": issues,
+        "ok":               not is_hard_blocked,
+        "reply":            corrected_reply,
+        "issues":           issues,
+        "correction_needed": correction_needed,
     }
 
 
@@ -203,7 +248,9 @@ def start_heartbeat(interval_s: int = 300):
 
 
 def start_task_sweeper(interval_s: int = 900):
-    """Checks task_queue for stale in_progress tasks. Flags and alerts."""
+    """Checks task_queue for stale in_progress tasks. Flags and alerts.
+    FIX BUG-L6-5: Added id=gt.1 filter — required HARD RULE for bigserial PK tables.
+    """
     STALE_THRESHOLD_H = 4
 
     def _run():
@@ -215,20 +262,25 @@ def start_task_sweeper(interval_s: int = 900):
                 cutoff = (datetime.utcnow() - timedelta(hours=STALE_THRESHOLD_H)).isoformat()
                 stale = sb_get(
                     "task_queue",
+                    # FIX: id=gt.1 required for bigserial PK tables (HARD RULE)
                     f"select=id,task,priority,updated_at"
+                    f"&id=gt.1"
                     f"&status=eq.in_progress"
                     f"&updated_at=lt.{cutoff}"
                     f"&order=priority.desc&limit=5",
                 ) or []
                 if stale:
                     lines = []
-                    for t in stale:
-                        raw = t.get("task", "")
+                    for task_row in stale:
+                        raw = task_row.get("task", "")
                         try:
-                            title = json.loads(raw).get("title", raw[:60]) if isinstance(raw, str) else str(raw)[:60]
+                            title = (
+                                json.loads(raw).get("title", raw[:60])
+                                if isinstance(raw, str) else str(raw)[:60]
+                            )
                         except Exception:
                             title = str(raw)[:60]
-                        lines.append(f"  P{t.get('priority','?')} — {title}")
+                        lines.append(f"  P{task_row.get('priority', '?')} — {title}")
                     _bg_notify(
                         f"⚠️ <b>Stale Tasks Detected</b>\n"
                         f"{len(stale)} task(s) stuck in_progress >{STALE_THRESHOLD_H}h:\n"
