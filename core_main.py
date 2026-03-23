@@ -1208,8 +1208,9 @@ def handle_msg(msg):
             "Use /tradestatus to see your current progress.",
             cid
         )
-    else:
-    threading.Thread(target=handle_telegram_message, args=(msg,), daemon=True).start()
+      
+      else:
+         threading.Thread(target=handle_telegram_message, args=(msg,), daemon=True).start()
     # else:
        # threading.Thread(target=handle_telegram_message, args=(msg,), daemon=True).start()
 
