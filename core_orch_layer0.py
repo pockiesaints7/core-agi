@@ -43,6 +43,30 @@ app = Flask(__name__)
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "")
 TELEGRAM_CHAT  = os.environ.get("TELEGRAM_CHAT", "")
 
+# OWNER_ID — alias for TELEGRAM_CHAT, used by core_orch_main.py startup notify
+OWNER_ID = TELEGRAM_CHAT
+
+# Required environment variables
+_REQUIRED_ENV_VARS = [
+    "TELEGRAM_TOKEN",
+    "TELEGRAM_CHAT",
+]
+
+def validate_environment() -> None:
+    """
+    Validate that all required environment variables are present.
+    Called from core_orch_main.startup_v2() at boot.
+    Raises EnvironmentError listing all missing vars (non-fatal warning if
+    TELEGRAM_TOKEN is missing — bot simply cannot send messages).
+    """
+    missing = [v for v in _REQUIRED_ENV_VARS if not os.environ.get(v)]
+    if missing:
+        msg = f"[L0] WARNING: Missing environment variables: {', '.join(missing)}"
+        print(msg)
+        # Non-fatal — Railway may inject these after first deploy
+    else:
+        print(f"[L0] Environment validated ✅ (TOKEN={'set'}, CHAT={TELEGRAM_CHAT})")
+
 # ── Telegram reply helper ──────────────────────────────────────────────────────
 def tg_reply(chat_id: str, text: str):
     """Send reply to Telegram. Non-blocking, logs errors."""
