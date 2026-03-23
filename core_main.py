@@ -35,7 +35,8 @@ from core_config import (
 from core_github import gh_read, gh_write, notify
 from core_train import cold_processor_loop, background_researcher, evolution_tier_processor, proactive_surface_loop
 from core_tools import TOOLS, handle_jsonrpc
-from core_orchestrator import handle_telegram_message, start_orchestrator
+# from core_orchestrator import handle_telegram_message, start_orchestrator
+from core_orch_main import handle_telegram_message, startup_v2
 
 # ---------------------------------------------------------------------------
 # Shared helpers (used by routes + tools — defined here, imported by core_tools)
@@ -1207,9 +1208,10 @@ def handle_msg(msg):
             "Use /tradestatus to see your current progress.",
             cid
         )
-
     else:
-        threading.Thread(target=handle_telegram_message, args=(msg,), daemon=True).start()
+    threading.Thread(target=handle_telegram_message, args=(msg,), daemon=True).start()
+    # else:
+       # threading.Thread(target=handle_telegram_message, args=(msg,), daemon=True).start()
 
 
 # ---------------------------------------------------------------------------
@@ -1290,7 +1292,8 @@ def on_start():
     threading.Thread(target=background_researcher, daemon=True).start()
     threading.Thread(target=evolution_tier_processor, daemon=True).start()
     threading.Thread(target=proactive_surface_loop,   daemon=True).start()  # P2-04
-    start_orchestrator()
+    startup_v2()
+    # start_orchestrator()
     counts = get_system_counts()
     resume = get_resume_task()
     evo_pending  = counts.get('evolution_pending', 0)
