@@ -1638,8 +1638,7 @@ def _build_reasoning_payload(system_prompt: str, history_text: str,
         "CREATIVE EXECUTION PATHS — try these before giving up:\n"
         "• No HTTP/API tool? → run_python with requests: works for Telegram Bot API, GitHub API, any REST endpoint\n"
         "• Need to process data? → run_python: parse JSON/CSV/HTML, compute, transform\n"
-        "• Need to run shell commands? → shell(command=\"...\")
-"
+        "• Need to run shell commands? → shell(command=\"...\")\n"
         "• Need web info? → web_fetch\n"
         "• Need VM status? → vm_info()\n"
         "• Complex multi-step? → chain tools: fetch → process with run_python → store → notify\n"
