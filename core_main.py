@@ -1211,10 +1211,7 @@ def handle_msg(msg):
       
       else:
          threading.Thread(target=handle_telegram_message, args=(msg,), daemon=True).start()
-    # else:
-       # threading.Thread(target=handle_telegram_message, args=(msg,), daemon=True).start()
-
-
+        
 # ---------------------------------------------------------------------------
 # Background pollers
 # ---------------------------------------------------------------------------
