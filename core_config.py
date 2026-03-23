@@ -26,7 +26,7 @@ GITHUB_REPO    = os.environ.get("GITHUB_USERNAME", "pockiesaints7") + "/core-agi
 MCP_SECRET     = os.environ["MCP_SECRET"]
 SUPABASE_PAT   = os.environ.get("SUPABASE_PAT", "")  # Management API PAT for DB introspection
 SUPABASE_REF   = "qbfaplqiakwjvrtwpbmr"  # Project ref
-PORT           = int(os.environ.get("PORT", 8080))
+PORT           = int(os.environ.get("PORT", 8081))
 SESSION_TTL_H  = 8
 
 MCP_PROTOCOL_VERSION = "2024-11-05"
