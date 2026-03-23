@@ -11,8 +11,6 @@ import time
 from collections import defaultdict
 
 import httpx
-from dotenv import load_dotenv
-load_dotenv()
 
 # -- Env vars ------------------------------------------------------------------
 GROQ_API_KEY   = os.environ["GROQ_API_KEY"]
@@ -129,6 +127,26 @@ def sb_delete(t, m):
     if not r.is_success:
         print(f"[SB DELETE] {t} failed: {r.status_code} {r.text[:200]}")
     return r.is_success
+
+# -- Telegram notify helper ----------------------------------------------------
+def notify(text: str, chat_id: str = "") -> bool:
+    """Send a Telegram message. Falls back to TELEGRAM_CHAT if chat_id not given.
+    Non-blocking on failure — always returns bool."""
+    cid = chat_id or TELEGRAM_CHAT
+    if not TELEGRAM_TOKEN or not cid:
+        print(f"[NOTIFY] Cannot send — TOKEN or chat_id missing")
+        return False
+    try:
+        r = httpx.post(
+            f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
+            json={"chat_id": cid, "text": text[:4096], "parse_mode": "HTML"},
+            timeout=10,
+        )
+        return r.is_success
+    except Exception as e:
+        print(f"[NOTIFY] Failed: {e}")
+        return False
+
 
 # -- Groq chat helper ----------------------------------------------------------
 def groq_chat(system: str, user: str, model: str = None, max_tokens: int = 1024) -> str:
