@@ -46,6 +46,29 @@ TELEGRAM_CHAT  = os.environ.get("TELEGRAM_CHAT", "")
 # OWNER_ID — alias for TELEGRAM_CHAT, used by core_orch_main.py startup notify
 OWNER_ID = TELEGRAM_CHAT
 
+# LIMITER — rate limiter instance used by L1 triage (LIMITER.consume())
+class _TelegramRateLimiter:
+    """Thin wrapper exposing .consume() for L1 triage gate."""
+    def __init__(self):
+        import json as _json, time as _time
+        self._time = _time
+        self._calls: list = []
+        try:
+            c = _json.load(open("resource_ceilings.json"))
+            self._limit = c.get("telegram_messages_per_hour", 30)
+        except Exception:
+            self._limit = 30
+
+    def consume(self) -> bool:
+        now = self._time.time()
+        self._calls = [t for t in self._calls if now - t < 3600]
+        if len(self._calls) >= self._limit:
+            return False
+        self._calls.append(now)
+        return True
+
+LIMITER = _TelegramRateLimiter()
+
 # Required environment variables
 _REQUIRED_ENV_VARS = [
     "TELEGRAM_TOKEN",
