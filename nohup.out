@@ -1,0 +1,4 @@
+Traceback (most recent call last):
+  File "/home/ubuntu/core-agi/core_main.py", line 24, in <module>
+    from fastapi import FastAPI, HTTPException, Request
+ModuleNotFoundError: No module named 'fastapi'
