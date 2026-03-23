@@ -262,14 +262,7 @@ def _load_metrics_from_db():
         print(f"[METRICS] load failed (non-fatal): {e}")
 
 # ── FIX-1: Railway-only tools — never routed to desktop ───────────────────────
-def _is_railway_only(tool_name: str) -> bool:
-    """Return True if this tool must run on Railway, never routed to desktop.
-    Logic: anything that does NOT start with 'desktop_' is Railway-side.
-    Desktop tools are explicitly prefixed 'desktop_' — everything else lives on Railway.
-    This is future-proof: new tools added to TOOLS registry are Railway by default
-    unless they are explicitly named desktop_*.
-    """
-    return not tool_name.startswith("desktop_")
+# _is_railway_only removed — CORE runs on VM, all tools execute directly
 
 # ── P3-05: Implicit feedback tracking ─────────────────────────────────────────
 # Tracks last reply time + content per cid for follow-up behavior detection
@@ -952,7 +945,7 @@ def _build_system_prompt(cid: str, recent_text: str = "") -> str:
         "• run_python → parse files, process data, generate reports, automate tasks\n"
         "• run_python + web_fetch → scrape + process any web content\n"
         "• run_python + sb_query → analytics on any Supabase table\n"
-        "• desktop_run_script → PowerShell/Python on owner's PC for local operations\n"
+        "• shell(command) → run bash on VM | file_read/write → VM filesystem | vm_info() → system status\n"
         "• Chaining: read_file → run_python(process) → write_file → notify owner\n"
         "• Telegram Bot API: run_python calling api.telegram.org — setMyCommands, sendMessage, etc\n"
         "• No dedicated tool exists? run_python IS the tool. Always try this first.\n\n"
@@ -1645,8 +1638,10 @@ def _build_reasoning_payload(system_prompt: str, history_text: str,
         "CREATIVE EXECUTION PATHS — try these before giving up:\n"
         "• No HTTP/API tool? → run_python with requests: works for Telegram Bot API, GitHub API, any REST endpoint\n"
         "• Need to process data? → run_python: parse JSON/CSV/HTML, compute, transform\n"
-        "• Need to automate on PC? → desktop_run_script(PowerShell or Python)\n"
-        "• Need web info? → web_fetch or desktop_search_web\n"
+        "• Need to run shell commands? → shell(command=\"...\")
+"
+        "• Need web info? → web_fetch\n"
+        "• Need VM status? → vm_info()\n"
         "• Complex multi-step? → chain tools: fetch → process with run_python → store → notify\n"
         "• Always ask: what does run_python + {any API} enable here?\n\n"
         "Respond ONLY with valid JSON:\n"
@@ -1873,11 +1868,14 @@ def _build_tools_desc(selected_tool_names: list) -> str:
     except Exception as e:
         print(f"[ORCH] _build_tools_desc failed: {e}")
     lines += [
-        "  desktop_run_script(script, lang) — run PowerShell/Python on PC",
-        "  desktop_file_ops(path, operation, content?) — read/write/list/delete/move/mkdir/info",
-        "  desktop_browser(url?, steps, screenshot?) — Puppeteer browser on PC",
-        "  desktop_search_web(query, max_results?) — web search from PC",
-        "  desktop_cmd(command?, script?) — shell command on PC",
+        "  shell(command, sudo?, timeout?) — run any bash command on VM",
+        "  run_script(script, lang?, timeout?) — run bash/python script on VM",
+        "  file_read(path, lines?) — read any file on VM",
+        "  file_write(path, content, mode?) — write/append file on VM",
+        "  file_list(path?, pattern?) — list VM directory",
+        "  git(operation, repo_path?, message?) — git pull/push/status/log",
+        "  service(service?, operation?) — systemctl start/stop/restart",
+        "  vm_info() — VM disk/memory/CPU/uptime",
     ]
     return "\n".join(lines)
 
@@ -1917,8 +1915,8 @@ def _compress_result(result_str: str, tool_name: str) -> str:
     return result_str[:limit] + "…[truncated]"
 
 
-def _execute_railway_tool(tool_name: str, tool_args: dict, cid: str = "") -> str:
-    """Execute a Railway-side tool. P1-06: checks cache for READ tools first."""
+def _execute_tool(tool_name: str, tool_args: dict, cid: str = "") -> str:
+    """Execute any tool directly. CORE runs on VM — no routing needed."""
     # P1-06: READ tool cache check
     if cid and _is_cacheable_tool(tool_name):
         cached = _cache_get(cid, tool_name, tool_args)
@@ -1966,58 +1964,6 @@ def _execute_railway_tool(tool_name: str, tool_args: dict, cid: str = "") -> str
         print(f"[ORCH] {tool_name} EXCEPTION: {err[:200]}")
         return json.dumps({"ok": False, "error": err, "fix": f"check get_tool_info(name='{tool_name}') or try alternative tool"})
 
-
-def _execute_desktop_tool(tool_name: str, tool_args: dict, cid: str) -> str:
-    action = tool_name.replace("desktop_", "", 1)
-    if action == "browser":
-        if isinstance(tool_args.get("steps"), str):
-            try:
-                tool_args["steps"] = json.loads(tool_args["steps"])
-            except Exception:
-                pass
-        if isinstance(tool_args.get("screenshot"), str):
-            tool_args["screenshot"] = tool_args["screenshot"].lower() == "true"
-    try:
-        task_payload = json.dumps({
-            "desktop_agent": True,
-            "action":        action,
-            "payload":       tool_args,
-            "chat_id":       cid,
-            "queued_at":     datetime.utcnow().isoformat(),
-        })
-        ok = sb_post("task_queue", {
-            "task":     task_payload,
-            "status":   "pending",
-            "priority": 9,
-            "source":   "mcp_session",
-            "chat_id":  cid,
-        })
-        if not ok:
-            return json.dumps({"ok": False, "error": "sb_post failed for task_queue"})
-        rows = sb_get(
-            "task_queue",
-            f"select=id&source=eq.mcp_session&status=eq.pending"
-            f"&chat_id=eq.{cid}&order=created_at.desc&limit=1",
-        ) or []
-        if not rows:
-            return json.dumps({"ok": False, "error": "task queued but id not found"})
-        task_id  = str(rows[0]["id"])
-        deadline = time.time() + DESKTOP_TASK_TIMEOUT
-        while time.time() < deadline:
-            r = sb_get(
-                "task_queue",
-                f"select={_sel_force('task_queue', ['id','status','result','error'])}&id=eq.{task_id}&limit=1",
-            ) or []
-            if r:
-                status = r[0].get("status")
-                if status == "done":
-                    return _compress_result(r[0].get("result") or "Done.", tool_name)
-                elif status == "failed":
-                    return json.dumps({"ok": False, "error": r[0].get("error", "unknown")})
-            time.sleep(5)
-        return json.dumps({"ok": False, "error": f"desktop task timed out after {DESKTOP_TASK_TIMEOUT}s"})
-    except Exception as e:
-        return json.dumps({"ok": False, "error": str(e)})
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -2577,7 +2523,7 @@ def _agentic_loop(cid: str, user_message: str,
                 _sleep = 15
             elif last_tool in ("patch_file", "multi_patch", "gh_search_replace", "write_file"):
                 _sleep = 5
-            elif last_tool.startswith("desktop_"):
+            elif False:  # desktop routing removed
                 _sleep = 3
             else:
                 _sleep = 1
@@ -2787,13 +2733,8 @@ def _agentic_loop(cid: str, user_message: str,
             except Exception as _ld_e:
                 print(f"[ORCH] loop_detect error (non-fatal): {_ld_e}")
 
-            # FIX-1: only tools explicitly prefixed desktop_ go to PC, everything else is Railway
-            is_desktop = tool_name.startswith("desktop_") and not _is_railway_only(tool_name)
-            if is_desktop:
-                _tg_send(cid, "🖥 <i>Sending to PC...</i>")
-                result_str = _execute_desktop_tool(tool_name, tool_args, cid)
-            else:
-                result_str = _execute_railway_tool(tool_name, tool_args, cid=cid)  # P1-06: pass cid
+            # All tools execute directly — CORE runs on VM, no routing needed
+            result_str = _execute_tool(tool_name, tool_args, cid=cid)
 
             # Auto-send screenshot
             try:
@@ -3146,48 +3087,6 @@ CREATE INDEX IF NOT EXISTS idx_tgconv_created ON telegram_conversations(created_
         print(f"[ORCH] _ensure_table error (non-fatal): {e}")
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# ASYNC DESKTOP RESULT POLLER
-# ══════════════════════════════════════════════════════════════════════════════
-
-def _desktop_result_poller():
-    from collections import deque as _deque
-    notified_dq: _deque = _deque(maxlen=500)
-    notified: set = set()
-    print("[ORCH] Desktop result poller started")
-    while True:
-        try:
-            rows = sb_get(
-                "task_queue",
-                f"select={_sel_force('task_queue', ['id','status','result','error','chat_id','updated_at','created_at'])}"
-                "&source=eq.mcp_session"
-                "&status=in.(done,failed)"
-                "&order=created_at.desc&limit=20",
-            ) or []
-            for row in rows:
-                tid = str(row.get("id", ""))
-                if tid in notified:
-                    continue
-                cid = row.get("chat_id")
-                if not cid:
-                    notified.add(tid)
-                    continue
-                status = row.get("status")
-                result = row.get("result") or row.get("error") or "no result"
-                icon   = "✅" if status == "done" else "❌"
-                _tg_send(
-                    cid,
-                    f"{icon} Async task <code>{tid[:8]}</code> {status}:\n"
-                    f"<code>{result[:500]}</code>"
-                )
-                notified.add(tid)
-                notified_dq.append(tid)
-                if len(notified_dq) == 500:
-                    notified = set(notified_dq)
-        except Exception as e:
-            print(f"[ORCH] poller error: {e}")
-        time.sleep(15)
-
 
 # ══════════════════════════════════════════════════════════════════════════════
 # STARTUP
@@ -3199,7 +3098,7 @@ def start_orchestrator():
     threading.Thread(target=_load_metrics_from_db, daemon=True, name="orch_metrics_load").start()
     threading.Thread(target=_metrics_flush_loop,   daemon=True, name="orch_metrics_flush").start()
     threading.Thread(target=_ensure_table,          daemon=True, name="orch_ensure_table").start()
-    threading.Thread(target=_desktop_result_poller, daemon=True, name="orch_result_poller").start()
+    # desktop_result_poller removed — no async desktop tasks needed on VM
     threading.Thread(target=_run_predictive_loader, daemon=True, name="orch_predictive_loader").start()  # P3-06
 
     # FIX-2: Register set_var / get_var into TOOLS
