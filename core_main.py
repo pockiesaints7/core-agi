@@ -28,7 +28,7 @@ from pydantic import BaseModel
 
 from core_config import (
     MCP_SECRET, MCP_PROTOCOL_VERSION, PORT, SESSION_TTL_H,
-    SUPABASE_URL, COLD_KB_GROWTH_THRESHOLD,
+    SUPABASE_URL, COLD_KB_GROWTH_THRESHOLD, GROQ_API_KEY,
     L, sb_get, sb_post, sb_patch, sb_upsert, sb_post_critical,
     _sbh, _sbh_count_svc, groq_chat,
 )
