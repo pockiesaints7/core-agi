@@ -1,0 +1,1542 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CORE AGI — Orchestrator Blueprint</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Syne:wght@400;600;700;800&display=swap');
+
+  :root {
+    --bg: #07080a;
+    --surface: #0d0f13;
+    --border: #1a1d24;
+    --border-bright: #2a2e3a;
+    --text: #c8cdd8;
+    --text-dim: #5a6070;
+    --text-bright: #eef0f5;
+    --accent: #00e5ff;
+    --accent2: #7b61ff;
+    --accent3: #ff6b6b;
+    --accent4: #39d98a;
+    --accent5: #ffd166;
+    --mono: 'Space Mono', monospace;
+    --sans: 'Syne', sans-serif;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  /* GRID BACKGROUND */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background-image:
+      linear-gradient(rgba(0,229,255,0.03) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(0,229,255,0.03) 1px, transparent 1px);
+    background-size: 40px 40px;
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  .container {
+    max-width: 1100px;
+    margin: 0 auto;
+    padding: 60px 32px;
+    position: relative;
+    z-index: 1;
+  }
+
+  /* HEADER */
+  header {
+    margin-bottom: 72px;
+    border-bottom: 1px solid var(--border-bright);
+    padding-bottom: 48px;
+  }
+
+  .header-tag {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--accent);
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    margin-bottom: 20px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .header-tag::before {
+    content: '';
+    display: inline-block;
+    width: 24px;
+    height: 1px;
+    background: var(--accent);
+  }
+
+  h1 {
+    font-family: var(--sans);
+    font-size: clamp(36px, 6vw, 72px);
+    font-weight: 800;
+    color: var(--text-bright);
+    line-height: 1.05;
+    letter-spacing: -0.02em;
+    margin-bottom: 24px;
+  }
+
+  h1 span {
+    color: var(--accent);
+  }
+
+  .header-meta {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 24px;
+    margin-top: 40px;
+  }
+
+  .meta-item {
+    border-left: 2px solid var(--border-bright);
+    padding-left: 16px;
+  }
+
+  .meta-label {
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--text-dim);
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    margin-bottom: 6px;
+  }
+
+  .meta-value {
+    font-size: 13px;
+    color: var(--text-bright);
+    font-weight: 600;
+  }
+
+  /* STACK DIAGRAM */
+  .stack-section {
+    margin-bottom: 72px;
+  }
+
+  .section-header {
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--text-dim);
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    margin-bottom: 24px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .section-header::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: var(--border);
+  }
+
+  .stack-visual {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    margin-bottom: 16px;
+  }
+
+  .stack-row {
+    display: flex;
+    align-items: stretch;
+    gap: 3px;
+    height: 44px;
+    cursor: pointer;
+    transition: transform 0.15s;
+  }
+
+  .stack-row:hover {
+    transform: translateX(4px);
+  }
+
+  .stack-num {
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--text-dim);
+    width: 28px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+  }
+
+  .stack-bar {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    padding: 0 20px;
+    border: 1px solid;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .stack-bar::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    width: 3px;
+  }
+
+  .stack-bar-name {
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    flex: 1;
+  }
+
+  .stack-bar-desc {
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--text-dim);
+    text-align: right;
+  }
+
+  /* Layer color themes */
+  .l0  { border-color: #2a2e3a; background: rgba(255,107,107,0.05); }
+  .l0 .stack-bar::before, .l0-accent { background: #ff6b6b; }
+  .l0 .stack-bar-name { color: #ff6b6b; }
+
+  .l1  { border-color: #2a2e3a; background: rgba(0,229,255,0.05); }
+  .l1 .stack-bar::before, .l1-accent { background: #00e5ff; }
+  .l1 .stack-bar-name { color: #00e5ff; }
+
+  .l2  { border-color: #2a2e3a; background: rgba(123,97,255,0.05); }
+  .l2 .stack-bar::before, .l2-accent { background: #7b61ff; }
+  .l2 .stack-bar-name { color: #7b61ff; }
+
+  .l3  { border-color: #2a2e3a; background: rgba(57,217,138,0.05); }
+  .l3 .stack-bar::before, .l3-accent { background: #39d98a; }
+  .l3 .stack-bar-name { color: #39d98a; }
+
+  .l4  { border-color: #2a2e3a; background: rgba(255,209,102,0.05); }
+  .l4 .stack-bar::before, .l4-accent { background: #ffd166; }
+  .l4 .stack-bar-name { color: #ffd166; }
+
+  .l5  { border-color: #2a2e3a; background: rgba(255,107,148,0.05); }
+  .l5 .stack-bar::before, .l5-accent { background: #ff6b94; }
+  .l5 .stack-bar-name { color: #ff6b94; }
+
+  .l6  { border-color: #2a2e3a; background: rgba(0,229,255,0.08); }
+  .l6 .stack-bar::before, .l6-accent { background: #00bcd4; }
+  .l6 .stack-bar-name { color: #00bcd4; }
+
+  .l7  { border-color: #2a2e3a; background: rgba(255,152,0,0.05); }
+  .l7 .stack-bar::before, .l7-accent { background: #ff9800; }
+  .l7 .stack-bar-name { color: #ff9800; }
+
+  .l8  { border-color: #2a2e3a; background: rgba(233,30,99,0.05); }
+  .l8 .stack-bar::before, .l8-accent { background: #e91e63; }
+  .l8 .stack-bar-name { color: #e91e63; }
+
+  .l9  { border-color: #2a2e3a; background: rgba(76,175,80,0.05); }
+  .l9 .stack-bar::before, .l9-accent { background: #4caf50; }
+  .l9 .stack-bar-name { color: #4caf50; }
+
+  .l10 { border-color: #2a2e3a; background: rgba(255,255,255,0.04); }
+  .l10 .stack-bar::before, .l10-accent { background: #ffffff; }
+  .l10 .stack-bar-name { color: #ffffff; }
+
+  /* LAYER CARDS */
+  .layers {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+  }
+
+  .layer-card {
+    border: 1px solid var(--border);
+    background: var(--surface);
+    overflow: hidden;
+    transition: border-color 0.2s;
+  }
+
+  .layer-card:hover {
+    border-color: var(--border-bright);
+  }
+
+  .layer-header {
+    display: grid;
+    grid-template-columns: 48px 1fr auto;
+    align-items: center;
+    padding: 20px 24px;
+    cursor: pointer;
+    gap: 16px;
+    user-select: none;
+  }
+
+  .layer-num {
+    font-family: var(--mono);
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--text-dim);
+    text-align: center;
+  }
+
+  .layer-title-wrap {}
+
+  .layer-title {
+    font-size: 14px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    margin-bottom: 2px;
+  }
+
+  .layer-subtitle {
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--text-dim);
+  }
+
+  .layer-toggle {
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--text-dim);
+    transition: transform 0.2s;
+  }
+
+  .layer-card.open .layer-toggle {
+    transform: rotate(45deg);
+  }
+
+  .layer-body {
+    display: none;
+    border-top: 1px solid var(--border);
+    padding: 28px 24px 28px 72px;
+  }
+
+  .layer-card.open .layer-body {
+    display: block;
+  }
+
+  /* Sub-sections inside layer body */
+  .sub-section {
+    margin-bottom: 28px;
+  }
+
+  .sub-section:last-child {
+    margin-bottom: 0;
+  }
+
+  .sub-title {
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--text-dim);
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    margin-bottom: 12px;
+    padding-bottom: 6px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .item-list {
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .item-list li {
+    display: flex;
+    gap: 10px;
+    font-size: 13px;
+    line-height: 1.6;
+    color: var(--text);
+  }
+
+  .item-list li::before {
+    content: '→';
+    font-family: var(--mono);
+    color: var(--text-dim);
+    flex-shrink: 0;
+    margin-top: 1px;
+  }
+
+  .item-list li strong {
+    color: var(--text-bright);
+  }
+
+  /* Interfaces grid */
+  .interfaces-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 8px;
+  }
+
+  .iface-box {
+    border: 1px solid var(--border);
+    padding: 12px 14px;
+    background: var(--bg);
+  }
+
+  .iface-name {
+    font-family: var(--mono);
+    font-size: 11px;
+    font-weight: 700;
+    margin-bottom: 4px;
+  }
+
+  .iface-desc {
+    font-size: 11px;
+    color: var(--text-dim);
+    line-height: 1.5;
+  }
+
+  /* Error schema */
+  .code-block {
+    background: #060709;
+    border: 1px solid var(--border);
+    padding: 16px 20px;
+    font-family: var(--mono);
+    font-size: 11px;
+    line-height: 1.8;
+    color: #8892a4;
+    overflow-x: auto;
+  }
+
+  .code-block .key { color: #7b61ff; }
+  .code-block .val { color: #39d98a; }
+  .code-block .str { color: #ffd166; }
+  .code-block .comment { color: #3a3f4e; }
+
+  /* State machine */
+  .state-flow {
+    display: flex;
+    align-items: center;
+    gap: 0;
+    flex-wrap: wrap;
+    margin-top: 8px;
+  }
+
+  .state-node {
+    font-family: var(--mono);
+    font-size: 10px;
+    padding: 6px 12px;
+    border: 1px solid var(--border-bright);
+    background: var(--bg);
+    color: var(--text-bright);
+    white-space: nowrap;
+  }
+
+  .state-arrow {
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--text-dim);
+    padding: 0 6px;
+  }
+
+  /* CONSTITUTION SPECIAL */
+  .constitution-wrap {
+    border: 1px solid rgba(255,255,255,0.15);
+    background: rgba(255,255,255,0.02);
+    padding: 24px;
+    margin-top: 12px;
+  }
+
+  .const-item {
+    display: flex;
+    gap: 16px;
+    padding: 10px 0;
+    border-bottom: 1px solid var(--border);
+    font-size: 13px;
+    line-height: 1.5;
+  }
+
+  .const-item:last-child {
+    border-bottom: none;
+    padding-bottom: 0;
+  }
+
+  .const-num {
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--text-dim);
+    min-width: 24px;
+    padding-top: 2px;
+  }
+
+  /* FLOW SECTION */
+  .flow-section {
+    margin-top: 72px;
+    padding-top: 48px;
+    border-top: 1px solid var(--border-bright);
+  }
+
+  .flow-title {
+    font-size: 28px;
+    font-weight: 800;
+    color: var(--text-bright);
+    margin-bottom: 8px;
+    letter-spacing: -0.02em;
+  }
+
+  .flow-desc {
+    font-size: 13px;
+    color: var(--text-dim);
+    margin-bottom: 40px;
+    font-family: var(--mono);
+  }
+
+  .flow-diagram {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .flow-step {
+    display: grid;
+    grid-template-columns: 32px 1fr 200px;
+    gap: 16px;
+    align-items: start;
+    padding: 14px 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .flow-step:last-child {
+    border-bottom: none;
+  }
+
+  .flow-step-num {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--text-dim);
+    padding-top: 1px;
+  }
+
+  .flow-step-main {
+    font-size: 13px;
+    color: var(--text-bright);
+    font-weight: 600;
+    line-height: 1.4;
+  }
+
+  .flow-step-detail {
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--text-dim);
+    margin-top: 4px;
+    font-weight: 400;
+  }
+
+  .flow-step-layer {
+    font-family: var(--mono);
+    font-size: 10px;
+    padding: 3px 8px;
+    border: 1px solid var(--border-bright);
+    text-align: center;
+    align-self: start;
+    margin-top: 2px;
+  }
+
+  /* GAP ANALYSIS */
+  .gap-section {
+    margin-top: 72px;
+    padding-top: 48px;
+    border-top: 1px solid var(--border-bright);
+  }
+
+  .gap-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 12px;
+    margin-top: 24px;
+  }
+
+  .gap-card {
+    border: 1px solid var(--border);
+    padding: 20px;
+    background: var(--surface);
+  }
+
+  .gap-card-title {
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    margin-bottom: 8px;
+  }
+
+  .gap-card-body {
+    font-size: 12px;
+    color: var(--text-dim);
+    line-height: 1.6;
+  }
+
+  .gap-card.resolved .gap-card-title::after {
+    content: ' ✓';
+    color: var(--accent4);
+  }
+
+  .gap-card.resolved {
+    border-color: rgba(57, 217, 138, 0.2);
+  }
+
+  /* FOOTER */
+  footer {
+    margin-top: 80px;
+    padding-top: 32px;
+    border-top: 1px solid var(--border);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: gap;
+  }
+
+  .footer-left {
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--text-dim);
+    line-height: 1.8;
+  }
+
+  .footer-right {
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--text-dim);
+    text-align: right;
+  }
+
+  .badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-family: var(--mono);
+    font-size: 9px;
+    padding: 3px 8px;
+    border: 1px solid var(--border-bright);
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+    margin-right: 6px;
+    margin-bottom: 6px;
+  }
+
+  .badge-dot {
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+  }
+
+  .expand-all {
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--text-dim);
+    background: none;
+    border: 1px solid var(--border-bright);
+    padding: 6px 14px;
+    cursor: pointer;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    transition: color 0.2s, border-color 0.2s;
+    margin-bottom: 16px;
+  }
+
+  .expand-all:hover {
+    color: var(--accent);
+    border-color: var(--accent);
+  }
+
+  /* SCROLL FADE IN */
+  .fade-in {
+    opacity: 0;
+    transform: translateY(16px);
+    transition: opacity 0.5s, transform 0.5s;
+  }
+
+  .fade-in.visible {
+    opacity: 1;
+    transform: none;
+  }
+
+  @media (max-width: 640px) {
+    .flow-step { grid-template-columns: 28px 1fr; }
+    .flow-step-layer { display: none; }
+    .layer-body { padding-left: 24px; }
+    .header-meta { grid-template-columns: 1fr 1fr; }
+  }
+</style>
+</head>
+<body>
+<div class="container">
+
+  <!-- HEADER -->
+  <header class="fade-in">
+    <div class="header-tag">CORE AGI — Internal Architecture Document</div>
+    <h1>Orchestrator<br><span>Blueprint</span></h1>
+    <div>
+      <span class="badge"><span class="badge-dot" style="background:#39d98a"></span>v1.0</span>
+      <span class="badge"><span class="badge-dot" style="background:#00e5ff"></span>11 Layers</span>
+      <span class="badge"><span class="badge-dot" style="background:#ffd166"></span>Gap-closed</span>
+    </div>
+    <div class="header-meta">
+      <div class="meta-item">
+        <div class="meta-label">Owner</div>
+        <div class="meta-value">REINVAGNAR / Ki</div>
+      </div>
+      <div class="meta-item">
+        <div class="meta-label">Substrate</div>
+        <div class="meta-value">Oracle VM / Python</div>
+      </div>
+      <div class="meta-item">
+        <div class="meta-label">Primary LLM</div>
+        <div class="meta-value">Groq (Claude fallback)</div>
+      </div>
+      <div class="meta-item">
+        <div class="meta-label">Memory</div>
+        <div class="meta-value">Supabase</div>
+      </div>
+      <div class="meta-item">
+        <div class="meta-label">Interfaces</div>
+        <div class="meta-value">Telegram · Claude Desktop · API</div>
+      </div>
+      <div class="meta-item">
+        <div class="meta-label">Revision</div>
+        <div class="meta-value">2026-03-23</div>
+      </div>
+    </div>
+  </header>
+
+  <!-- STACK VISUAL -->
+  <div class="stack-section fade-in">
+    <div class="section-header">Layer Stack — Top to Bottom = High to Low Coupling</div>
+    <div class="stack-visual">
+      <div class="stack-row">
+        <div class="stack-num">L10</div>
+        <div class="stack-bar l10"><span class="stack-bar-name">CONSTITUTION</span><span class="stack-bar-desc">Immutable invariants · overrides all</span></div>
+      </div>
+      <div class="stack-row">
+        <div class="stack-num">L9</div>
+        <div class="stack-bar l9"><span class="stack-bar-name">LEARNING</span><span class="stack-bar-desc">Self-improvement · evolution pipeline</span></div>
+      </div>
+      <div class="stack-row">
+        <div class="stack-num">L8</div>
+        <div class="stack-bar l8"><span class="stack-bar-name">COORDINATION</span><span class="stack-bar-desc">Multi-agent · task delegation</span></div>
+      </div>
+      <div class="stack-row">
+        <div class="stack-num">L7</div>
+        <div class="stack-bar l7"><span class="stack-bar-name">OBSERVABILITY</span><span class="stack-bar-desc">Metrics · errors · quality scoring</span></div>
+      </div>
+      <div class="stack-row">
+        <div class="stack-num">L6</div>
+        <div class="stack-bar l6"><span class="stack-bar-name">AUTONOMY</span><span class="stack-bar-desc">Background loops · proactive outreach</span></div>
+      </div>
+      <div class="stack-row">
+        <div class="stack-num">L5</div>
+        <div class="stack-bar l5"><span class="stack-bar-name">OUTPUT</span><span class="stack-bar-desc">Format · chunk · confirm</span></div>
+      </div>
+      <div class="stack-row">
+        <div class="stack-num">L4</div>
+        <div class="stack-bar l4"><span class="stack-bar-name">EXECUTION</span><span class="stack-bar-desc">Tool registry · loop control · error recovery</span></div>
+      </div>
+      <div class="stack-row">
+        <div class="stack-num">L3</div>
+        <div class="stack-bar l3"><span class="stack-bar-name">REASONING</span><span class="stack-bar-desc">Pre-flight · plan · validate</span></div>
+      </div>
+      <div class="stack-row">
+        <div class="stack-num">L2</div>
+        <div class="stack-bar l2"><span class="stack-bar-name">MEMORY</span><span class="stack-bar-desc">Short / long / working / episodic</span></div>
+      </div>
+      <div class="stack-row">
+        <div class="stack-num">L1</div>
+        <div class="stack-bar l1"><span class="stack-bar-name">INPUT</span><span class="stack-bar-desc">Receive · identify · route</span></div>
+      </div>
+      <div class="stack-row">
+        <div class="stack-num">L0</div>
+        <div class="stack-bar l0"><span class="stack-bar-name">SECURITY / POLICY</span><span class="stack-bar-desc">Auth · rate-limit · sandbox · permission</span></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- LAYER CARDS -->
+  <div class="stack-section fade-in">
+    <div class="section-header">Layer Specifications</div>
+    <div style="margin-bottom:12px">
+      <button class="expand-all" onclick="toggleAll()">Expand All</button>
+    </div>
+
+    <div class="layers">
+
+      <!-- L0: SECURITY / POLICY -->
+      <div class="layer-card" id="card-0">
+        <div class="layer-header" onclick="toggle(0)">
+          <div class="layer-num l0-accent" style="color:#ff6b6b">L0</div>
+          <div class="layer-title-wrap">
+            <div class="layer-title" style="color:#ff6b6b">Security / Policy</div>
+            <div class="layer-subtitle">auth · rate-limiting · sandbox · permission gates</div>
+          </div>
+          <div class="layer-toggle">+</div>
+        </div>
+        <div class="layer-body">
+          <div class="sub-section">
+            <div class="sub-title">Purpose</div>
+            <p style="font-size:13px;line-height:1.7;color:var(--text)">The foundation that runs before anything else. Every inbound message and every outbound action passes through L0. It cannot be bypassed by any other layer — including the reasoning layer or autonomy loops. If L0 rejects, nothing proceeds.</p>
+          </div>
+          <div class="sub-section">
+            <div class="sub-title">Responsibilities</div>
+            <ul class="item-list">
+              <li><strong>Identity verification</strong> — validate sender identity (Telegram user ID, API key, Claude session token)</li>
+              <li><strong>Permission model</strong> — owner vs. trusted vs. anonymous; each maps to allowed action set</li>
+              <li><strong>Rate limiting</strong> — per-sender and per-tool call budgets; prevent runaway loops</li>
+              <li><strong>Sandboxing</strong> — tool calls that touch filesystem or exec code run in isolated scope</li>
+              <li><strong>Secret handling</strong> — credentials never logged, never passed in plaintext through pipeline</li>
+              <li><strong>Audit log</strong> — every rejected request logged with reason, timestamp, sender</li>
+              <li><strong>IP / source allowlist</strong> — for API interface, validate origin before routing to L1</li>
+            </ul>
+          </div>
+          <div class="sub-section">
+            <div class="sub-title">Permission Tiers</div>
+            <div class="interfaces-grid">
+              <div class="iface-box">
+                <div class="iface-name" style="color:#ff6b6b">OWNER</div>
+                <div class="iface-desc">All actions. Destructive ops. Evolution approval. Force-close. Constitution override request.</div>
+              </div>
+              <div class="iface-box">
+                <div class="iface-name" style="color:#ffd166">TRUSTED</div>
+                <div class="iface-desc">Read + trigger non-destructive tasks. Cannot modify behavioral rules or deploy.</div>
+              </div>
+              <div class="iface-box">
+                <div class="iface-name" style="color:#5a6070">ANONYMOUS</div>
+                <div class="iface-desc">Query-only. Read public KB. No tool execution. No memory write.</div>
+              </div>
+            </div>
+          </div>
+          <div class="sub-section">
+            <div class="sub-title">CORE Implementation</div>
+            <ul class="item-list">
+              <li>Telegram: <strong>CHAT_ID allowlist</strong> in Supabase <code>owner_config</code></li>
+              <li>MCP: <strong>X-MCP-Secret header</strong> validated before any tool execution</li>
+              <li>API: <strong>Bearer token</strong> with scope field checked against permission tier</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+
+      <!-- L1: INPUT -->
+      <div class="layer-card" id="card-1">
+        <div class="layer-header" onclick="toggle(1)">
+          <div class="layer-num" style="color:#00e5ff">L1</div>
+          <div class="layer-title-wrap">
+            <div class="layer-title" style="color:#00e5ff">Input</div>
+            <div class="layer-subtitle">receive · parse · identify · route</div>
+          </div>
+          <div class="layer-toggle">+</div>
+        </div>
+        <div class="layer-body">
+          <div class="sub-section">
+            <div class="sub-title">Purpose</div>
+            <p style="font-size:13px;line-height:1.7;color:var(--text)">First layer after L0 clears. Transforms raw inbound signals into structured <strong>Intent objects</strong> that downstream layers can act on uniformly, regardless of interface.</p>
+          </div>
+          <div class="sub-section">
+            <div class="sub-title">Input Interfaces</div>
+            <div class="interfaces-grid">
+              <div class="iface-box">
+                <div class="iface-name" style="color:#00e5ff">Telegram</div>
+                <div class="iface-desc">Primary human interface. Text, voice, file, image. Slash commands. Inline buttons.</div>
+              </div>
+              <div class="iface-box">
+                <div class="iface-name" style="color:#7b61ff">Claude Desktop MCP</div>
+                <div class="iface-desc">Tool calls from Claude sessions. Structured JSON payload. Cached tool list at session open.</div>
+              </div>
+              <div class="iface-box">
+                <div class="iface-name" style="color:#39d98a">REST API</div>
+                <div class="iface-desc">Programmatic triggers. Webhooks from Zapier, external systems.</div>
+              </div>
+              <div class="iface-box">
+                <div class="iface-name" style="color:#ffd166">System Events</div>
+                <div class="iface-desc">Cron triggers, heartbeat ticks, background loop callbacks.</div>
+              </div>
+            </div>
+          </div>
+          <div class="sub-section">
+            <div class="sub-title">Intent Object Schema</div>
+            <div class="code-block">
+{<br>
+&nbsp;&nbsp;<span class="key">"intent_id"</span>:    <span class="str">"uuid-v4"</span>,<br>
+&nbsp;&nbsp;<span class="key">"source"</span>:      <span class="str">"telegram|mcp|api|system"</span>,<br>
+&nbsp;&nbsp;<span class="key">"sender_id"</span>:   <span class="str">"chat_id or api_key_hash"</span>,<br>
+&nbsp;&nbsp;<span class="key">"tier"</span>:        <span class="str">"owner|trusted|anon"</span>,<br>
+&nbsp;&nbsp;<span class="key">"type"</span>:        <span class="str">"command|message|file|event|voice"</span>,<br>
+&nbsp;&nbsp;<span class="key">"raw"</span>:         <span class="str">"original payload"</span>,<br>
+&nbsp;&nbsp;<span class="key">"parsed"</span>:      { <span class="key">"text"</span>: <span class="str">""</span>, <span class="key">"attachments"</span>: [] },<br>
+&nbsp;&nbsp;<span class="key">"route"</span>:       <span class="str">"command|conversation|background"</span>,<br>
+&nbsp;&nbsp;<span class="key">"ts"</span>:          <span class="val">1711234567</span><br>
+}
+            </div>
+          </div>
+          <div class="sub-section">
+            <div class="sub-title">Routing Logic</div>
+            <div class="state-flow">
+              <div class="state-node">Raw signal</div><div class="state-arrow">→</div>
+              <div class="state-node">L0 gate</div><div class="state-arrow">→</div>
+              <div class="state-node">Parse + type</div><div class="state-arrow">→</div>
+              <div class="state-node">/cmd?</div><div class="state-arrow">→</div>
+              <div class="state-node">Command handler</div>
+            </div>
+            <div class="state-flow" style="margin-top:4px">
+              <div class="state-node" style="opacity:0;pointer-events:none">Raw signal</div><div class="state-arrow" style="opacity:0">→</div>
+              <div class="state-node" style="opacity:0;pointer-events:none">L0 gate</div><div class="state-arrow" style="opacity:0">→</div>
+              <div class="state-node" style="opacity:0;pointer-events:none">Parse + type</div><div class="state-arrow">→</div>
+              <div class="state-node">msg?</div><div class="state-arrow">→</div>
+              <div class="state-node">Conversation handler</div>
+            </div>
+            <div class="state-flow" style="margin-top:4px">
+              <div class="state-node" style="opacity:0;pointer-events:none">Raw signal</div><div class="state-arrow" style="opacity:0">→</div>
+              <div class="state-node" style="opacity:0;pointer-events:none">L0 gate</div><div class="state-arrow" style="opacity:0">→</div>
+              <div class="state-node" style="opacity:0;pointer-events:none">Parse + type</div><div class="state-arrow">→</div>
+              <div class="state-node">system?</div><div class="state-arrow">→</div>
+              <div class="state-node">Event bus → L6</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- L2: MEMORY -->
+      <div class="layer-card" id="card-2">
+        <div class="layer-header" onclick="toggle(2)">
+          <div class="layer-num" style="color:#7b61ff">L2</div>
+          <div class="layer-title-wrap">
+            <div class="layer-title" style="color:#7b61ff">Memory</div>
+            <div class="layer-subtitle">short-term · long-term · working · episodic · context</div>
+          </div>
+          <div class="layer-toggle">+</div>
+        </div>
+        <div class="layer-body">
+          <div class="sub-section">
+            <div class="sub-title">Memory Tiers</div>
+            <ul class="item-list">
+              <li><strong>Short-term (session buffer)</strong> — conversation history for current session only. In-memory list. Cleared at session_end. Max N turns with truncation strategy.</li>
+              <li><strong>Long-term (Supabase KB)</strong> — knowledge_base table. Timestamped, domain-tagged, queryable. Never auto-deleted. Mined by background_researcher.</li>
+              <li><strong>Working memory (scratchpad)</strong> — key-value store for within-task variable passing. e.g. <code>task_vars["target_file"]</code>. Expires when task completes.</li>
+              <li><strong>Episodic memory (hot_reflections)</strong> — per-session learnings written at session_end. Fed into cold processor for behavioral evolution.</li>
+              <li><strong>Session context</strong> — who am I right now? What project? What mode? What tasks in-progress? Loaded by session_start, held in memory for session duration.</li>
+            </ul>
+          </div>
+          <div class="sub-section">
+            <div class="sub-title">Context Hydration Sequence</div>
+            <div class="state-flow">
+              <div class="state-node">session_start()</div><div class="state-arrow">→</div>
+              <div class="state-node">behavioral_rules</div><div class="state-arrow">→</div>
+              <div class="state-node">infra_map</div><div class="state-arrow">→</div>
+              <div class="state-node">task_queue</div><div class="state-arrow">→</div>
+              <div class="state-node">context ready</div>
+            </div>
+          </div>
+          <div class="sub-section">
+            <div class="sub-title">Write Rules</div>
+            <ul class="item-list">
+              <li>Long-term writes: <strong>add_knowledge()</strong> immediately on discovery — never defer</li>
+              <li>Working memory: scoped to task_id — auto-cleared on task completion</li>
+              <li>Episodic: written only at session_end — never mid-session</li>
+              <li>Session context: read-only after hydration — only session_start and session_end write it</li>
+            </ul>
+          </div>
+          <div class="sub-section">
+            <div class="sub-title">Tombstone Tables (never query)</div>
+            <div class="code-block">
+<span class="comment"># These tables are retired. Any query to them is a critical bug.</span><br>
+playbook · memory · master_prompt · patterns · training_sessions<br>
+training_sessions_v2 · training_flags · session_learning<br>
+agent_registry · knowledge_blocks · agi_mistakes · stack_registry<br>
+vault_logs · vault
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- L3: REASONING -->
+      <div class="layer-card" id="card-3">
+        <div class="layer-header" onclick="toggle(3)">
+          <div class="layer-num" style="color:#39d98a">L3</div>
+          <div class="layer-title-wrap">
+            <div class="layer-title" style="color:#39d98a">Reasoning</div>
+            <div class="layer-subtitle">pre-flight · metacognition · plan · validate · identity guard</div>
+          </div>
+          <div class="layer-toggle">+</div>
+        </div>
+        <div class="layer-body">
+          <div class="sub-section">
+            <div class="sub-title">Purpose</div>
+            <p style="font-size:13px;line-height:1.7;color:var(--text)">The cognitive core. Triggered before every non-trivial action. Non-trivial = any write, deploy, tool call, multi-step execution. L3 is what separates CORE from a simple chatbot — it thinks before acting.</p>
+          </div>
+          <div class="sub-section">
+            <div class="sub-title">Cognitive Pre-Flight Checklist</div>
+            <ul class="item-list">
+              <li>Am I about to <strong>assume</strong> something I should query from Supabase instead?</li>
+              <li>Is this action <strong>reversible</strong>? If not → confirm with owner first.</li>
+              <li>Is this the right <strong>layer</strong>? (skill / Supabase / code / local / Zapier)</li>
+              <li>Do I have <strong>enough context</strong> or must I query first?</li>
+              <li>Am I solving the <strong>right problem</strong> or just the stated problem?</li>
+              <li>Am I <strong>drifting</strong> from CORE identity toward generic assistant?</li>
+              <li>Does this action pass the <strong>Constitution check</strong>? (L10)</li>
+            </ul>
+          </div>
+          <div class="sub-section">
+            <div class="sub-title">Planning Mode</div>
+            <ul class="item-list">
+              <li><strong>Decompose</strong> — break task into ordered subtasks with dependency graph</li>
+              <li><strong>Tool selection</strong> — map each subtask to specific tool(s) with fallback</li>
+              <li><strong>Risk assessment</strong> — flag irreversible steps, estimate blast radius</li>
+              <li><strong>Gate definition</strong> — define pass/fail criteria for each subtask before execution</li>
+            </ul>
+          </div>
+          <div class="sub-section">
+            <div class="sub-title">Output Validation</div>
+            <ul class="item-list">
+              <li>After each tool call: check result against expected schema</li>
+              <li>After syntax changes: <strong>validate_syntax()</strong> must return ok before deploy</li>
+              <li>After deploy: poll <strong>/health</strong> — "completed" on Railway = crash, not success</li>
+              <li>Before replying: does output actually answer the intent? Cross-check vs. L2 context.</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+
+      <!-- L4: EXECUTION -->
+      <div class="layer-card" id="card-4">
+        <div class="layer-header" onclick="toggle(4)">
+          <div class="layer-num" style="color:#ffd166">L4</div>
+          <div class="layer-title-wrap">
+            <div class="layer-title" style="color:#ffd166">Execution</div>
+            <div class="layer-subtitle">tool registry · loop control · error recovery · deploy SOP</div>
+          </div>
+          <div class="layer-toggle">+</div>
+        </div>
+        <div class="layer-body">
+          <div class="sub-section">
+            <div class="sub-title">Tool Priority Tiers</div>
+            <div class="interfaces-grid">
+              <div class="iface-box">
+                <div class="iface-name" style="color:#39d98a">P1 — Core MCP</div>
+                <div class="iface-desc">core-agi:* tools. Always prefer. Direct Supabase + Railway access.</div>
+              </div>
+              <div class="iface-box">
+                <div class="iface-name" style="color:#ffd166">P2 — Zapier</div>
+                <div class="iface-desc">71 tools across 9 domains. Use when P1 has no coverage. Webhooks only — no Auth header.</div>
+              </div>
+              <div class="iface-box">
+                <div class="iface-name" style="color:#7b61ff">P3 — GitHub / FS</div>
+                <div class="iface-desc">github:* tools, file ops. Use for source truth access. Fallback when Railway is down.</div>
+              </div>
+            </div>
+          </div>
+          <div class="sub-section">
+            <div class="sub-title">Error Schema (all tools must return)</div>
+            <div class="code-block">
+{<br>
+&nbsp;&nbsp;<span class="key">"ok"</span>:          <span class="val">true|false</span>,<br>
+&nbsp;&nbsp;<span class="key">"error_code"</span>:  <span class="str">"TOOL_TIMEOUT|AUTH_FAIL|SCHEMA_MISMATCH|..."</span>,<br>
+&nbsp;&nbsp;<span class="key">"message"</span>:     <span class="str">"human-readable description"</span>,<br>
+&nbsp;&nbsp;<span class="key">"retry_hint"</span>:  <span class="str">"wait_30s|use_fallback|confirm_owner|abort"</span>,<br>
+&nbsp;&nbsp;<span class="key">"domain"</span>:      <span class="str">"supabase|railway|github|zapier|filesystem"</span><br>
+}
+            </div>
+          </div>
+          <div class="sub-section">
+            <div class="sub-title">Loop Control</div>
+            <ul class="item-list">
+              <li><strong>Max iterations</strong> — hard cap per task (configurable, default 20). Log + alert owner on breach.</li>
+              <li><strong>Hard timeout</strong> — wall-clock limit per execution. Graceful cancel on expiry.</li>
+              <li><strong>Checkpoint every 5 steps</strong> — write task state to Supabase so session crash is recoverable.</li>
+              <li><strong>Subtask gate</strong> — must pass before next subtask begins. Gate = schema + sanity check.</li>
+              <li><strong>force_close</strong> — owner-invoked only. Never self-authorized.</li>
+            </ul>
+          </div>
+          <div class="sub-section">
+            <div class="sub-title">Known Tool Quirks (hard rules)</div>
+            <ul class="item-list">
+              <li><strong>gh_search_replace</strong> silently fails on files with em-dashes → use github:get_file_contents + create_or_update_file</li>
+              <li><strong>patch_file</strong> requires exact raw content match including whitespace → gh_read_lines before retry</li>
+              <li><strong>Railway "completed"</strong> = crash, not success → always check logs</li>
+              <li><strong>MCP tools cached</strong> at session open → newly deployed tools invisible until next session</li>
+              <li><strong>bulk_reject_evolutions</strong> silently fails → use individual reject_evolution calls</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+
+      <!-- L5: OUTPUT -->
+      <div class="layer-card" id="card-5">
+        <div class="layer-header" onclick="toggle(5)">
+          <div class="layer-num" style="color:#ff6b94">L5</div>
+          <div class="layer-title-wrap">
+            <div class="layer-title" style="color:#ff6b94">Output</div>
+            <div class="layer-subtitle">format · chunk · confirm · channel routing</div>
+          </div>
+          <div class="layer-toggle">+</div>
+        </div>
+        <div class="layer-body">
+          <div class="sub-section">
+            <div class="sub-title">Responsibilities</div>
+            <ul class="item-list">
+              <li><strong>Channel-aware formatting</strong> — Telegram: MarkdownV2, 4096 char limit. MCP: JSON. API: structured JSON. Claude: prose.</li>
+              <li><strong>Chunking</strong> — long outputs split at semantic boundaries, not character count. Numbered continuation markers.</li>
+              <li><strong>Confirmation gate</strong> — destructive or irreversible actions require explicit owner confirmation before execution returns. Timeout = auto-abort, never auto-confirm.</li>
+              <li><strong>Error surface</strong> — when L4 returns ok=false, L5 formats and routes the error to owner with retry_hint context.</li>
+              <li><strong>Silence policy</strong> — background loops do not output unless: error, milestone, owner-requested summary, or Telegram notify threshold hit.</li>
+            </ul>
+          </div>
+          <div class="sub-section">
+            <div class="sub-title">Confirmation Flow</div>
+            <div class="state-flow">
+              <div class="state-node">Irreversible op</div><div class="state-arrow">→</div>
+              <div class="state-node">L5 formats confirm msg</div><div class="state-arrow">→</div>
+              <div class="state-node">Send to owner</div><div class="state-arrow">→</div>
+              <div class="state-node">Wait for /yes</div><div class="state-arrow">→</div>
+              <div class="state-node">Execute or abort</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- L6: AUTONOMY -->
+      <div class="layer-card" id="card-6">
+        <div class="layer-header" onclick="toggle(6)">
+          <div class="layer-num" style="color:#00bcd4">L6</div>
+          <div class="layer-title-wrap">
+            <div class="layer-title" style="color:#00bcd4">Autonomy</div>
+            <div class="layer-subtitle">background loops · heartbeat · proactive outreach · cron</div>
+          </div>
+          <div class="layer-toggle">+</div>
+        </div>
+        <div class="layer-body">
+          <div class="sub-section">
+            <div class="sub-title">Background Processes</div>
+            <ul class="item-list">
+              <li><strong>Heartbeat</strong> — periodic liveness check. Polls /health. Alerts owner on failure. Frequency: configurable (default 5 min).</li>
+              <li><strong>background_researcher</strong> — autonomous KB enrichment. Scans public sources, writes gaps to backlog table. Runs on cron.</li>
+              <li><strong>KB miner</strong> — batch-scans existing KB entries via Groq, discovers gaps, writes to backlog. Triggered by /mine or scheduled.</li>
+              <li><strong>Cold processor</strong> — reads hot_reflections, runs evolution analysis, writes to evolution_queue. Runs after session_end batch.</li>
+              <li><strong>Task sweeper</strong> — checks task_queue for stale in-progress tasks. Flags and alerts owner.</li>
+            </ul>
+          </div>
+          <div class="sub-section">
+            <div class="sub-title">Proactive Outreach Rules</div>
+            <ul class="item-list">
+              <li>Notify owner via Telegram when: error rate exceeds threshold, task blocked, evolution ready for review, deploy fails, heartbeat miss ×3.</li>
+              <li>Never spam: minimum interval between proactive messages = 10 min (configurable).</li>
+              <li>Async events always route to Telegram — never silently swallow.</li>
+            </ul>
+          </div>
+          <div class="sub-section">
+            <div class="sub-title">Autonomy Boundary</div>
+            <ul class="item-list">
+              <li>Background loops operate within <strong>L0 permission tier</strong> — they inherit no special permissions</li>
+              <li>Any destructive action from a background loop requires owner confirmation via L5</li>
+              <li>Loops cannot self-approve evolutions — always routes to owner</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+
+      <!-- L7: OBSERVABILITY -->
+      <div class="layer-card" id="card-7">
+        <div class="layer-header" onclick="toggle(7)">
+          <div class="layer-num" style="color:#ff9800">L7</div>
+          <div class="layer-title-wrap">
+            <div class="layer-title" style="color:#ff9800">Observability</div>
+            <div class="layer-subtitle">metrics · error logging · session quality · trend detection</div>
+          </div>
+          <div class="layer-toggle">+</div>
+        </div>
+        <div class="layer-body">
+          <div class="sub-section">
+            <div class="sub-title">What Gets Measured</div>
+            <ul class="item-list">
+              <li><strong>Tool call metrics</strong> — which tools called, success rate, latency, error frequency per tool</li>
+              <li><strong>Session quality score</strong> — tasks completed / tasks started, mistakes made, corrections needed, owner interventions</li>
+              <li><strong>Error log</strong> — every ok=false response with full context: tool, payload, error_code, timestamp</li>
+              <li><strong>Mistake log</strong> — domain-tagged mistakes written to domain_mistakes table immediately on occurrence</li>
+              <li><strong>Evolution tracking</strong> — proposals submitted, approved, rejected, rolled back; quality delta per evolution</li>
+              <li><strong>Latency P50/P95</strong> — per tool and per session. Flag degradation trends.</li>
+            </ul>
+          </div>
+          <div class="sub-section">
+            <div class="sub-title">Quality Alert System</div>
+            <ul class="item-list">
+              <li>If session quality score drops below threshold: <strong>quality_alert</strong> written to Supabase, surfaced at next session_start</li>
+              <li>Quality review happens before any new task begins</li>
+              <li>Persistent low quality → pause new task intake, diagnose root cause first</li>
+            </ul>
+          </div>
+          <div class="sub-section">
+            <div class="sub-title">Session Close Sequence</div>
+            <div class="state-flow">
+              <div class="state-node">write hot_reflections</div><div class="state-arrow">→</div>
+              <div class="state-node">update task_queue</div><div class="state-arrow">→</div>
+              <div class="state-node">log_quality_metrics()</div><div class="state-arrow">→</div>
+              <div class="state-node">session_end()</div><div class="state-arrow">→</div>
+              <div class="state-node">Telegram summary</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- L8: COORDINATION -->
+      <div class="layer-card" id="card-8">
+        <div class="layer-header" onclick="toggle(8)">
+          <div class="layer-num" style="color:#e91e63">L8</div>
+          <div class="layer-title-wrap">
+            <div class="layer-title" style="color:#e91e63">Coordination</div>
+            <div class="layer-subtitle">multi-agent · task delegation · result aggregation · subagent lifecycle</div>
+          </div>
+          <div class="layer-toggle">+</div>
+        </div>
+        <div class="layer-body">
+          <div class="sub-section">
+            <div class="sub-title">Purpose</div>
+            <p style="font-size:13px;line-height:1.7;color:var(--text)">CORE can delegate subtasks to specialized agents or LLM calls. L8 manages that delegation: who does what, how results come back, and how failures propagate. Without this layer, multi-agent behavior is ad-hoc and unrecoverable on failure.</p>
+          </div>
+          <div class="sub-section">
+            <div class="sub-title">Agent Types</div>
+            <ul class="item-list">
+              <li><strong>Groq (primary LLM)</strong> — reasoning and generation. Stateless. Context injected per call.</li>
+              <li><strong>Claude (fallback / orchestration)</strong> — used when Groq rate-limited or for complex MCP sessions.</li>
+              <li><strong>Zapier sub-agents</strong> — execution of external integrations (email, calendar, sheets). Fire-and-forget pattern.</li>
+              <li><strong>Specialized CORE sub-processes</strong> — background_researcher, KB miner, cold processor. Each has isolated scope.</li>
+            </ul>
+          </div>
+          <div class="sub-section">
+            <div class="sub-title">Delegation Protocol</div>
+            <ul class="item-list">
+              <li>Task assigned to agent with: task_id, context snapshot, tool allowlist, timeout, expected output schema</li>
+              <li>Agent result aggregated back through L4 (execution) — not routed directly to L5</li>
+              <li>Agent failure propagates as standard error schema → L3 decides retry or escalate</li>
+              <li>No agent can spawn sub-agents without L3 approval — prevents runaway spawning</li>
+            </ul>
+          </div>
+          <div class="sub-section">
+            <div class="sub-title">Context Injection (stateless LLMs)</div>
+            <div class="code-block">
+<span class="comment"># Every Groq/Claude call must inject:</span><br>
+system_prompt  = behavioral_rules (relevant domain)<br>
+context_block  = session_context + task_vars + relevant KB<br>
+tool_allowlist = scoped to this subtask only<br>
+output_schema  = expected response structure
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- L9: LEARNING -->
+      <div class="layer-card" id="card-9">
+        <div class="layer-header" onclick="toggle(9)">
+          <div class="layer-num" style="color:#4caf50">L9</div>
+          <div class="layer-title-wrap">
+            <div class="layer-title" style="color:#4caf50">Learning</div>
+            <div class="layer-subtitle">evolution pipeline · rollback · quality gate · owner approval</div>
+          </div>
+          <div class="layer-toggle">+</div>
+        </div>
+        <div class="layer-body">
+          <div class="sub-section">
+            <div class="sub-title">Evolution Pipeline</div>
+            <div class="state-flow">
+              <div class="state-node">hot_reflections</div><div class="state-arrow">→</div>
+              <div class="state-node">cold_processor</div><div class="state-arrow">→</div>
+              <div class="state-node">evolution_queue</div><div class="state-arrow">→</div>
+              <div class="state-node">owner review</div><div class="state-arrow">→</div>
+              <div class="state-node">approve / reject</div><div class="state-arrow">→</div>
+              <div class="state-node">behavioral_rules update</div>
+            </div>
+          </div>
+          <div class="sub-section">
+            <div class="sub-title">Constraints</div>
+            <ul class="item-list">
+              <li>Every evolution proposal must include a <strong>rollback_plan</strong> before owner sees it</li>
+              <li>Owner approval is <strong>required</strong> — CORE proposes only, never self-approves</li>
+              <li>Skill file edits are <strong>owner-approved only</strong> — not part of automated evolution</li>
+              <li>Quality must be measured <strong>before and after</strong> each evolution — delta tracked in L7</li>
+              <li>Auto-rollback triggers if quality score drops &gt;X% after an approved evolution</li>
+              <li>Max 10 behavioral rule insertions per session (rate limit)</li>
+            </ul>
+          </div>
+          <div class="sub-section">
+            <div class="sub-title">What Can Be Evolved</div>
+            <ul class="item-list">
+              <li>✓ <strong>behavioral_rules</strong> — prompt-level behavior for specific domains</li>
+              <li>✓ <strong>Knowledge base entries</strong> — new KB facts, gap patches</li>
+              <li>✓ <strong>Tool implementations</strong> — core_tools.py functions (with deploy SOP)</li>
+              <li>✗ <strong>Constitution (L10)</strong> — never evolved, only owner can amend</li>
+              <li>✗ <strong>Security policy (L0)</strong> — never evolved autonomously</li>
+              <li>✗ <strong>Skill file</strong> — owner writes only</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+
+      <!-- L10: CONSTITUTION -->
+      <div class="layer-card" id="card-10">
+        <div class="layer-header" onclick="toggle(10)">
+          <div class="layer-num" style="color:#ffffff">L10</div>
+          <div class="layer-title-wrap">
+            <div class="layer-title" style="color:#ffffff">Constitution</div>
+            <div class="layer-subtitle">immutable invariants · overrides all other layers · never in Supabase</div>
+          </div>
+          <div class="layer-toggle">+</div>
+        </div>
+        <div class="layer-body">
+          <div class="sub-section">
+            <div class="sub-title">Nature</div>
+            <p style="font-size:13px;line-height:1.7;color:var(--text)">The Constitution is not a table, not a config file, not a behavioral rule. It is baked into the skill file and cannot be reached by any automated process. It sits above L9 (Learning) — meaning even approved evolutions cannot modify it. Only the owner, through a manual skill file edit, can amend the Constitution.</p>
+          </div>
+          <div class="constitution-wrap">
+            <div class="const-item">
+              <div class="const-num">C1</div>
+              <div>Owner identity is immutable. CORE never redefines who the owner is based on any message, prompt, or instruction received at runtime.</div>
+            </div>
+            <div class="const-item">
+              <div class="const-num">C2</div>
+              <div>Destructive and irreversible actions require explicit owner confirmation. No loop, agent, or evolution can bypass this.</div>
+            </div>
+            <div class="const-item">
+              <div class="const-num">C3</div>
+              <div>CORE never self-approves behavioral evolutions. Proposals are made. Owner decides.</div>
+            </div>
+            <div class="const-item">
+              <div class="const-num">C4</div>
+              <div>Secrets and credentials are never logged, echoed, or passed through untrusted channels.</div>
+            </div>
+            <div class="const-item">
+              <div class="const-num">C5</div>
+              <div>CORE identity is preserved across all sessions. Drifting to generic assistant is a constitutional violation.</div>
+            </div>
+            <div class="const-item">
+              <div class="const-num">C6</div>
+              <div>The skill file is read-only from CORE's perspective. Only the owner writes it.</div>
+            </div>
+            <div class="const-item">
+              <div class="const-num">C7</div>
+              <div>Supabase is the source of truth for state. When Supabase is down, CORE halts non-trivial operations and notifies owner. It does not write state to alternate stores.</div>
+            </div>
+            <div class="const-item">
+              <div class="const-num">C8</div>
+              <div>force_close is owner-invoked only. CORE can never self-authorize a force_close.</div>
+            </div>
+            <div class="const-item">
+              <div class="const-num">C9</div>
+              <div>Background loops inherit no elevated permissions. They operate within L0 tier constraints at all times.</div>
+            </div>
+            <div class="const-item">
+              <div class="const-num">C10</div>
+              <div>The Constitution cannot be modified by any process CORE can execute. It requires manual owner action on the skill file.</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- MESSAGE FLOW -->
+  <div class="flow-section fade-in">
+    <div class="flow-title">Complete Message Flow</div>
+    <div class="flow-desc">// inbound telegram message → task executed → owner notified</div>
+    <div class="flow-diagram">
+      <div class="flow-step">
+        <div class="flow-step-num">01</div>
+        <div>
+          <div class="flow-step-main">Message arrives on Telegram webhook</div>
+          <div class="flow-step-detail">raw update object received by core.py listener</div>
+        </div>
+        <div class="flow-step-layer" style="color:#ff6b6b;border-color:#ff6b6b30">L0 — Security</div>
+      </div>
+      <div class="flow-step">
+        <div class="flow-step-num">02</div>
+        <div>
+          <div class="flow-step-main">Validate sender identity and permission tier</div>
+          <div class="flow-step-detail">chat_id checked against owner_config allowlist</div>
+        </div>
+        <div class="flow-step-layer" style="color:#ff6b6b;border-color:#ff6b6b30">L0 — Security</div>
+      </div>
+      <div class="flow-step">
+        <div class="flow-step-num">03</div>
+        <div>
+          <div class="flow-step-main">Parse message → build Intent object</div>
+          <div class="flow-step-detail">extract type, route, attachments; assign intent_id</div>
+        </div>
+        <div class="flow-step-layer" style="color:#00e5ff;border-color:#00e5ff30">L1 — Input</div>
+      </div>
+      <div class="flow-step">
+        <div class="flow-step-num">04</div>
+        <div>
+          <div class="flow-step-main">Route: command vs. conversation vs. system event</div>
+          <div class="flow-step-detail">/mine → L6 loop · "what's the status?" → conversation · cron tick → L6 handler</div>
+        </div>
+        <div class="flow-step-layer" style="color:#00e5ff;border-color:#00e5ff30">L1 — Input</div>
+      </div>
+      <div class="flow-step">
+        <div class="flow-step-num">05</div>
+        <div>
+          <div class="flow-step-main">Hydrate session context from Supabase</div>
+          <div class="flow-step-detail">behavioral_rules, infra_map, task_queue, in_progress_tasks, working_memory</div>
+        </div>
+        <div class="flow-step-layer" style="color:#7b61ff;border-color:#7b61ff30">L2 — Memory</div>
+      </div>
+      <div class="flow-step">
+        <div class="flow-step-num">06</div>
+        <div>
+          <div class="flow-step-main">Cognitive pre-flight checklist</div>
+          <div class="flow-step-detail">assume? reversible? right layer? enough context? right problem? identity drift? constitution pass?</div>
+        </div>
+        <div class="flow-step-layer" style="color:#39d98a;border-color:#39d98a30">L3 — Reasoning</div>
+      </div>
+      <div class="flow-step">
+        <div class="flow-step-num">07</div>
+        <div>
+          <div class="flow-step-main">Decompose task → subtask plan with gates</div>
+          <div class="flow-step-detail">tool selection, risk assessment, gate criteria defined before any execution begins</div>
+        </div>
+        <div class="flow-step-layer" style="color:#39d98a;border-color:#39d98a30">L3 — Reasoning</div>
+      </div>
+      <div class="flow-step">
+        <div class="flow-step-num">08</div>
+        <div>
+          <div class="flow-step-main">Execute subtasks sequentially with loop control</div>
+          <div class="flow-step-detail">P1→P2→P3 tool priority · checkpoint every 5 steps · max iterations enforced</div>
+        </div>
+        <div class="flow-step-layer" style="color:#ffd166;border-color:#ffd16630">L4 — Execution</div>
+      </div>
+      <div class="flow-step">
+        <div class="flow-step-num">09</div>
+        <div>
+          <div class="flow-step-main">Delegate LLM reasoning to Groq (if needed)</div>
+          <div class="flow-step-detail">inject context snapshot + tool allowlist + output schema · aggregate result</div>
+        </div>
+        <div class="flow-step-layer" style="color:#e91e63;border-color:#e91e6330">L8 — Coordination</div>
+      </div>
+      <div class="flow-step">
+        <div class="flow-step-num">10</div>
+        <div>
+          <div class="flow-step-main">Validate output before surfacing</div>
+          <div class="flow-step-detail">schema check · sanity check vs. intent · syntax validate if code changed</div>
+        </div>
+        <div class="flow-step-layer" style="color:#39d98a;border-color:#39d98a30">L3 — Reasoning</div>
+      </div>
+      <div class="flow-step">
+        <div class="flow-step-num">11</div>
+        <div>
+          <div class="flow-step-main">Format reply for Telegram (MarkdownV2, chunked)</div>
+          <div class="flow-step-detail">confirmation gate if irreversible action detected</div>
+        </div>
+        <div class="flow-step-layer" style="color:#ff6b94;border-color:#ff6b9430">L5 — Output</div>
+      </div>
+      <div class="flow-step">
+        <div class="flow-step-num">12</div>
+        <div>
+          <div class="flow-step-main">Log metrics, write hot_reflection if significant</div>
+          <div class="flow-step-detail">tool call counts, latency, errors; add_knowledge() for new discoveries</div>
+        </div>
+        <div class="flow-step-layer" style="color:#ff9800;border-color:#ff980030">L7 — Observability</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- GAP ANALYSIS -->
+  <div class="gap-section fade-in">
+    <div class="section-header">Gap Analysis — Design Passes</div>
+    <div class="flow-title" style="font-size:24px">Every gap found and resolved</div>
+    <div class="gap-grid">
+      <div class="gap-card resolved">
+        <div class="gap-card-title" style="color:#39d98a">Auth / Permissions</div>
+        <div class="gap-card-body">No layer owned auth or rate-limiting. Resolved: L0 Security/Policy layer added as substrate below all others.</div>
+      </div>
+      <div class="gap-card resolved">
+        <div class="gap-card-title" style="color:#39d98a">Session Context</div>
+        <div class="gap-card-body">Memory layer had no owner for "who am I, what project, what mode right now." Resolved: Session context as a named memory tier in L2, hydrated by session_start.</div>
+      </div>
+      <div class="gap-card resolved">
+        <div class="gap-card-title" style="color:#39d98a">Multi-Agent</div>
+        <div class="gap-card-body">Execution layer handled tool calls but no layer managed LLM delegation, context injection, or agent lifecycle. Resolved: L8 Coordination layer.</div>
+      </div>
+      <div class="gap-card resolved">
+        <div class="gap-card-title" style="color:#39d98a">Self-Improvement Pipeline</div>
+        <div class="gap-card-body">Autonomy and Observability both touched learning but neither owned the full hot→cold→queue→approval→rollback loop. Resolved: L9 Learning layer with explicit pipeline.</div>
+      </div>
+      <div class="gap-card resolved">
+        <div class="gap-card-title" style="color:#39d98a">Constitution Placement</div>
+        <div class="gap-card-body">Constitution existed implicitly. No explicit layer. Resolved: L10 as top of stack — above even Learning — with 10 invariants baked into skill file only.</div>
+      </div>
+      <div class="gap-card resolved">
+        <div class="gap-card-title" style="color:#39d98a">Autonomy Boundary</div>
+        <div class="gap-card-body">Background loops had undefined permission scope. Could they trigger destructive ops? Resolved: L6 explicitly inherits L0 permission tier. Destructive ops still require L5 confirmation gate.</div>
+      </div>
+      <div class="gap-card resolved">
+        <div class="gap-card-title" style="color:#39d98a">Tool Error Contract</div>
+        <div class="gap-card-body">Tools returned inconsistent error shapes. No standard recovery hints. Resolved: L4 mandates unified error schema {ok, error_code, message, retry_hint, domain} across all tools.</div>
+      </div>
+      <div class="gap-card resolved">
+        <div class="gap-card-title" style="color:#39d98a">Silence Policy</div>
+        <div class="gap-card-body">Background loops had no defined output policy — potential for noise or silent failures. Resolved: L5 defines silence policy with explicit thresholds for when proactive messages fire.</div>
+      </div>
+    </div>
+  </div>
+
+  <footer class="fade-in">
+    <div class="footer-left">
+      CORE AGI — Orchestrator Blueprint v1.0<br>
+      11 Layers · Gap-closed · 2026-03-23<br>
+      Owner: REINVAGNAR / Ki
+    </div>
+    <div class="footer-right">
+      Intelligence lives in Supabase.<br>
+      Boot from state. Reason before acting.<br>
+      Close the loop.
+    </div>
+  </footer>
+
+</div>
+
+<script>
+  // Toggle individual layer
+  function toggle(n) {
+    const card = document.getElementById('card-' + n);
+    card.classList.toggle('open');
+  }
+
+  // Expand/collapse all
+  let allOpen = false;
+  function toggleAll() {
+    allOpen = !allOpen;
+    for (let i = 0; i <= 10; i++) {
+      const card = document.getElementById('card-' + i);
+      if (allOpen) card.classList.add('open');
+      else card.classList.remove('open');
+    }
+    document.querySelector('.expand-all').textContent = allOpen ? 'Collapse All' : 'Expand All';
+  }
+
+  // Scroll fade-in
+  const observer = new IntersectionObserver((entries) => {
+    entries.forEach(e => {
+      if (e.isIntersecting) e.target.classList.add('visible');
+    });
+  }, { threshold: 0.08 });
+
+  document.querySelectorAll('.fade-in').forEach(el => observer.observe(el));
+
+  // Open first card by default
+  document.getElementById('card-0').classList.add('open');
+</script>
+</body>
+</html>
