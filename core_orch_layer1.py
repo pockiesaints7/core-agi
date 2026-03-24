@@ -17,6 +17,82 @@ _COMMAND_ROUTES = {
     "/listen", "/checkpoint", "/help",
 }
 
+# ── L1 NLU Synonym Expansion ─────────────────────────────────────────────────
+# Maps natural-language phrases → canonical slash-commands.
+# Applied BEFORE route detection. Zero-latency, deterministic.
+# Keys are lowercase substrings. First match wins. Longer/more specific first.
+_NLU_SYNONYMS: list[tuple[str, str]] = [
+    # health / status
+    ("check health",       "/health"),
+    ("system health",      "/health"),
+    ("are you ok",         "/health"),
+    ("ping",               "/health"),
+    ("what's running",     "/status"),
+    ("what is running",    "/status"),
+    ("current status",     "/status"),
+    ("show status",        "/status"),
+    ("system status",      "/status"),
+    ("check status",       "/status"),
+    ("full state",         "/state"),
+    ("show state",         "/state"),
+    ("dump state",         "/state"),
+    # tasks
+    ("show tasks",         "/tasks"),
+    ("list tasks",         "/tasks"),
+    ("what tasks",         "/tasks"),
+    ("open tasks",         "/tasks"),
+    ("pending tasks",      "/tasks"),
+    ("task list",          "/tasks"),
+    # evolutions
+    ("show evolutions",    "/evolutions"),
+    ("list evolutions",    "/evolutions"),
+    ("pending evolutions", "/evolutions"),
+    ("what evolutions",    "/evolutions"),
+    # knowledge base
+    ("search kb",          "/kb"),
+    ("show kb",            "/kb"),
+    ("knowledge base",     "/kb"),
+    # mistakes
+    ("show mistakes",      "/mistakes"),
+    ("list mistakes",      "/mistakes"),
+    ("recent mistakes",    "/mistakes"),
+    # training
+    ("run training",       "/train"),
+    ("start training",     "/train"),
+    ("trigger training",   "/train"),
+    ("run cold",           "/cold"),
+    ("cold processor",     "/cold"),
+    ("trigger cold",       "/cold"),
+    # deploy
+    ("show deploy",        "/deploy"),
+    ("deploy status",      "/deploy"),
+    ("deployment status",  "/deploy"),
+    # listen / checkpoint
+    ("start listen",       "/listen"),
+    ("listen mode",        "/listen"),
+    ("save checkpoint",    "/checkpoint"),
+    ("show checkpoint",    "/checkpoint"),
+    # help
+    ("show help",          "/help"),
+    ("list commands",      "/help"),
+    ("what can you do",    "/help"),
+]
+
+
+def _nlu_expand(text: str) -> str:
+    """
+    Check if text (lowercased) matches a known synonym phrase.
+    Returns the canonical slash-command string if matched, else original text.
+    Preserves any trailing args after the matched phrase.
+    """
+    lower = text.lower().strip()
+    for phrase, cmd in _NLU_SYNONYMS:
+        if lower == phrase or lower.startswith(phrase + " ") or lower.startswith(phrase + ","):
+            # Preserve anything after the matched phrase as args
+            remainder = text[len(phrase):].strip()
+            return f"{cmd} {remainder}".strip() if remainder else cmd
+    return text
+
 
 # ── Parsers ───────────────────────────────────────────────────────────────────
 async def _parse_telegram(update: Dict[str, Any]) -> OrchestratorMessage:
@@ -26,6 +102,13 @@ async def _parse_telegram(update: Dict[str, Any]) -> OrchestratorMessage:
         or message.get("caption", "")
         or ""
     )
+
+    # NLU expansion: map natural phrases → slash-commands before routing
+    if text and not text.startswith("/"):
+        expanded = _nlu_expand(text)
+        if expanded != text:
+            print(f"[L1] NLU expand: {text!r} → {expanded!r}")
+            text = expanded
 
     msg = OrchestratorMessage(
         text=text,
