@@ -67,6 +67,28 @@ def _format_mcp(msg: OrchestratorMessage) -> dict:
 
 
 
+
+def _split_message(text: str, max_len: int = _TG_MAX) -> list:
+    """GAP-NEW-27: split long text on newlines into chunks <= max_len."""
+    if len(text) <= max_len:
+        return [text]
+    chunks = []
+    current = []
+    current_len = 0
+    for line in text.split("\n"):
+        line_len = len(line) + 1  # +1 for newline
+        if current_len + line_len > max_len and current:
+            chunks.append("\n".join(current))
+            current = [line]
+            current_len = line_len
+        else:
+            current.append(line)
+            current_len += line_len
+    if current:
+        chunks.append("\n".join(current))
+    return chunks if chunks else [text[:max_len]]
+
+
 def _notify_with_reply(text: str, chat_id: int, reply_to=None) -> bool:
     """GAP-NEW-26: send with reply threading."""
     try:
