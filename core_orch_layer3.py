@@ -187,6 +187,15 @@ async def layer_3_classify(msg: OrchestratorMessage):
     msg.track_layer("L3-START")
     print(f"[L3] Classifying intent …")
 
+    # Guard: empty text → skip pipeline, send gentle prompt
+    if not msg.text or not msg.text.strip():
+        print("[L3] Empty text — skipping pipeline")
+        msg.intent = "empty"
+        msg.styled_response = "I didn't catch anything — try sending a message!"
+        from core_orch_layer10 import layer_10_output
+        await layer_10_output(msg)
+        return
+
     # 1. Fast deterministic path (slash-cmd → greeting → fuzzy clusters)
     classification = await _fast_classify(msg)
 

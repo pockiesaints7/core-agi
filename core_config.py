@@ -199,7 +199,7 @@ def gemini_chat(system: str, user: str, max_tokens: int = 2048, json_mode: bool 
                         "X-Title": "CORE AGI",
                     },
                     json=payload,
-                    timeout=60,
+                    timeout=15,
                 )
                 if r.status_code == 429:
                     last_err = "429 rate limit"
