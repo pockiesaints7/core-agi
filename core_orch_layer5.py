@@ -51,16 +51,18 @@ def _call_tool(tool_fn, args: Dict[str, Any]) -> Any:
     Call a tool function synchronously.
     Handles both plain functions and coroutines.
     Strips unknown kwargs to avoid TypeError.
+    NOTE: Must be called from a thread (via run_in_executor), never from
+    inside a running event loop — coroutines are run via asyncio.run()
+    which creates a fresh loop in the thread.
     """
     try:
         sig = inspect.signature(tool_fn)
         valid_params = set(sig.parameters.keys())
-        # Pass only args the function accepts
         filtered = {k: v for k, v in args.items() if k in valid_params}
         result = tool_fn(**filtered)
-        # If it returns a coroutine, run it
         if inspect.isawaitable(result):
-            return asyncio.get_event_loop().run_until_complete(result)
+            # Safe: this runs in a thread pool thread (no running loop there)
+            return asyncio.run(result)
         return result
     except Exception as exc:
         raise exc

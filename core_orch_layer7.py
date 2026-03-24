@@ -110,11 +110,25 @@ async def layer_7_refine(msg: OrchestratorMessage):
         analysis = json.loads(raw.strip().lstrip("```json").rstrip("```").strip())
 
         if analysis.get("propose_evolution") and analysis.get("confidence", 0) >= 0.6:
+            # Dedup gate: skip if a pending entry with this pattern_key already exists
+            from core_config import sb_get
+            pattern_key = analysis.get("pattern_key", msg.text[:100])
+            existing = sb_get(
+                "evolution_queue",
+                f"select=id&pattern_key=eq.{pattern_key}&status=eq.pending&limit=1",
+            )
+            if existing:
+                print(f"[L7] Skipped duplicate evo (pending): {pattern_key[:60]}")
+                msg.track_layer("L7-DEDUP-SKIP")
+                from core_orch_layer8 import layer_8_safety
+                await layer_8_safety(msg)
+                return
+
             # Write to evolution_queue
             ok = sb_post_critical("evolution_queue", {
                 "change_type":    analysis.get("change_type", "knowledge"),
                 "change_summary": analysis.get("change_summary", "")[:300],
-                "pattern_key":    analysis.get("pattern_key", msg.text[:100]),
+                "pattern_key":    pattern_key,
                 "confidence":     float(analysis.get("confidence", 0.6)),
                 "status":         "pending",
                 "source":         "orchestrator_l7",

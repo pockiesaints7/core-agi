@@ -18,7 +18,7 @@ _REDACTION_PATTERNS = [
     ("TELEGRAM_TOKEN",   re.compile(r"\d{9,10}:[a-zA-Z0-9\-_]{35}")),
     ("SUPABASE_SVC_KEY", re.compile(r"sb-[a-zA-Z0-9]{32,}")),
     ("LOCAL_PATH",       re.compile(r"(?:/home|/root|/var|/opt)/[\w.\-/]+")),
-    ("IP_ADDRESS",       re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")),
+    ("IP_ADDRESS",       re.compile(r"\b(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]\d|\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]\d|\d)\b(?!\w|-)")),  # BUG5: tightened, skips version strings
     ("EMAIL",            re.compile(r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}")),
 ]
 

@@ -148,20 +148,26 @@ async def layer_2_memory(msg: OrchestratorMessage):
     msg.context["current_domain"] = domain
 
     # Run all loads concurrently
-    (
-        session_ctx,
-        behavioral_rules,
-        domain_mistakes,
-        kb_snippets,
-        health,
-    ) = await asyncio.gather(
+    results = await asyncio.gather(
         _load_session_context(),
         _load_behavioral_rules(domain),
         _load_domain_mistakes(domain),
         _load_relevant_kb(msg.text, domain),
         _load_system_health(),
-        return_exceptions=False,
+        return_exceptions=True,
     )
+
+    def _safe(val, default):
+        if isinstance(val, BaseException):
+            print(f"[L2] gather sub-task failed (non-fatal): {val}")
+            return default
+        return val
+
+    session_ctx      = _safe(results[0], {})
+    behavioral_rules = _safe(results[1], [])
+    domain_mistakes  = _safe(results[2], [])
+    kb_snippets      = _safe(results[3], [])
+    health           = _safe(results[4], {"supabase": "error"})
 
     msg.context["session"] = session_ctx
     msg.context["behavioral_rules"] = behavioral_rules
