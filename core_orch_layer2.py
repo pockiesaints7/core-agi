@@ -112,7 +112,11 @@ async def _load_relevant_kb(text: str, domain: str) -> List[Dict[str, Any]]:
     """Pull KB snippets relevant to the current message text."""
     try:
         # Clean query — strip special chars
-        q = text.strip().replace("'", "").replace('"', "")[:80]
+        q = (text.strip()
+               .replace("'", "")
+               .replace('"', "")
+               .replace("%", "\\%")
+               .replace("_", "\\_"))[:80]
         rows = sb_get(
             "knowledge_base",
             f"select=domain,topic,instruction,confidence"

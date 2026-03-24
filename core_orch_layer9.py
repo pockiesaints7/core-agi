@@ -199,6 +199,9 @@ async def layer_9_tone(msg: OrchestratorMessage):
                 domain=msg.context.get("current_domain", "general"),
                 tier=msg.tier,
             )
+            # GAP-NEW-21: prompt length guard — truncate before Groq
+            if len(prompt) > 12000:
+                prompt = prompt[:12000] + "\n[...truncated]"
             styled = groq_chat(
                 system=_PERSONA_SYSTEM,
                 user=prompt,
@@ -219,6 +222,9 @@ async def layer_9_tone(msg: OrchestratorMessage):
                     intent=msg.intent or "conversation",
                     session_state=session_state,
                 )
+                # GAP-NEW-21: prompt length guard on conversational path
+                if len(prompt) > 8000:
+                    prompt = prompt[:8000] + "\n[...truncated]"
                 styled = groq_chat(
                     system=_CONVO_SYSTEM,
                     user=prompt,

@@ -36,6 +36,9 @@ _PLAN_SYSTEM = (
 )
 
 # Dynamic tool registry injected at call time — see _build_plan()
+# GAP-NEW-10: module-level tool list cache so it is not rebuilt on every Groq call
+_TOOL_LIST_CACHE_L4: dict = {"list": None, "count": 0}
+
 _PLAN_TEMPLATE = """
 USER REQUEST: {text}
 INTENT: {intent}
@@ -61,6 +64,10 @@ Return JSON:
 
 
 def _build_tool_list() -> tuple[str, int]:
+    """Cached: only builds once per process lifetime."""
+    if _TOOL_LIST_CACHE_L4["list"] is not None:
+        return _TOOL_LIST_CACHE_L4["list"], _TOOL_LIST_CACHE_L4["count"]
+
     """
     Dynamically pull TOOLS keys from the live registry.
     Returns (formatted_string, count).
@@ -89,7 +96,10 @@ def _build_tool_list() -> tuple[str, int]:
                 lines.append(f"- {cat}: {', '.join(sorted(tools))}")
 
         total = len(TOOLS)
-        return "\n".join(lines), total
+        result = "\n".join(lines)
+        _TOOL_LIST_CACHE_L4["list"] = result
+        _TOOL_LIST_CACHE_L4["count"] = total
+        return result, total
 
     except Exception as e:
         # Graceful fallback — static summary
