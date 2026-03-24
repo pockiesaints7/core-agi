@@ -36,12 +36,12 @@ _FUZZY_INTENT_CLUSTERS: list[tuple[str, bool, set[str]]] = [
     ("system_state",     True,  {"state", "status", "running", "active", "what's up", "current state", "system info"}),
     ("task_list",        True,  {"tasks", "task list", "open tasks", "pending tasks", "my tasks", "todos", "task queue"}),
     ("evolution_list",   True,  {"evolution", "evolutions", "pending evo", "evolution queue", "suggested changes"}),
-    ("kb_search",        True,  {"knowledge", "kb", "search kb", "what do you know", "find in kb", "knowledge base"}),
+    ("kb_search",        True,  {"search kb", "find in kb", "knowledge base query"}),
+    ("kb_query",         True,  {"what is", "what are", "explain", "how does", "tell me about", "describe", "definition of", "meaning of", "knowledge", "kb", "what do you know"}),
     ("mistake_list",     True,  {"mistakes", "errors", "mistake log", "what went wrong", "past errors", "error log"}),
     ("trigger_training", True,  {"train", "training", "run training", "start training", "trigger train"}),
     ("trigger_cold",     True,  {"cold", "cold processor", "cold run", "cold cycle", "run cold"}),
     ("deploy_status",    True,  {"deploy", "deployment", "redeploy", "build", "railway", "vm status", "oracle vm"}),
-    ("kb_query",         True,  {"search for", "find me", "look up", "what is", "explain", "tell me about", "lookup"}),
     ("conversation",     False, {"hi", "hello", "hey", "thanks", "thank you", "ok", "cool", "got it", "nice", "good"}),
 ]
 
@@ -73,12 +73,11 @@ Classify this message. Return JSON only:
 
 
 def _fuzzy_match(text: str) -> Dict[str, Any]:
-    """
-    Scan text for keyword clusters. Returns classification dict if matched, else {}.
-    Case-insensitive. Checks full text for any cluster keyword.
-    """
+    """Scan hardcoded + KB-loaded clusters. First match wins."""
+    _try_load_kb_synonyms()  # GAP-NEW-4: merge KB synonyms
     lower = text.lower()
-    for intent, requires_tools, keywords in _FUZZY_INTENT_CLUSTERS:
+    all_clusters = list(_FUZZY_INTENT_CLUSTERS) + list(_KB_EXTRA_CLUSTERS)
+    for intent, requires_tools, keywords in all_clusters:
         for kw in keywords:
             if kw in lower:
                 return {
@@ -181,6 +180,10 @@ async def layer_3_classify(msg: OrchestratorMessage):
 
     msg.intent = classification.get("intent", "general_query")
     msg.context["intent_classification"] = classification
+    # GAP-NEW-9: propagate Gemini's domain classification back to context
+    if classification.get("domain") and classification["domain"] != "general":
+        msg.context["current_domain"] = classification["domain"]
+        print(f"[L3] Domain updated: {classification['domain']}")
 
     msg.track_layer("L3-COMPLETE")
     print(

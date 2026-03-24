@@ -226,7 +226,9 @@ async def layer_9_tone(msg: OrchestratorMessage):
                     max_tokens=600,
                 )
 
-        msg.styled_response = styled.strip()
+        # GAP-NEW-12: append preflight warning note if present
+        pf_note = msg.context.get("preflight_warning_note", "")
+        msg.styled_response = (styled.strip() + "\n\n" + pf_note).strip() if pf_note else styled.strip()
 
     except Exception as exc:
         print(f"[L9] Groq styling failed — using plain fallback: {exc}")

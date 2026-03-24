@@ -151,14 +151,33 @@ async def layer_5_tools(msg: OrchestratorMessage):
     print(f"[L5] Executing {len(subtasks)} subtask(s) …")
 
     all_ok = True
+    failed_steps = []
     for subtask in subtasks:
         ok = await _execute_subtask(subtask, msg, tools)
         if not ok:
             all_ok = False
-            # For multi-step plans, stop on first failure unless plan says otherwise
-            if plan.get("stop_on_failure", True):
-                print(f"[L5] Stopping pipeline after failed step")
+            failed_steps.append(subtask)
+            # GAP-NEW-15: only stop if this subtask is explicitly blocking
+            # Default: continue independent steps; stop only if blocking=True
+            is_blocking = subtask.get("blocking", False)
+            if is_blocking or plan.get("stop_on_failure", False):
+                print(f"[L5] Blocking step failed ? stopping pipeline")
                 break
+            else:
+                print(f"[L5] Non-blocking step failed ? continuing")
+
+    # GAP-NEW-30: if partial failure and multi-step, attempt re-plan
+    if failed_steps and not all_ok and plan.get("type") == "multi_step":
+        print(f"[L5] Partial failure ({len(failed_steps)} steps) ? triggering re-plan")
+        msg.context["failed_steps"] = failed_steps
+        msg.context["replan_triggered"] = True
+        # Re-plan: strip failed subtasks from plan, let L4 decide next move
+        remaining = [s for s in subtasks if s not in failed_steps and not
+                     any(r.get("tool") == s.get("tool") for r in msg.tool_results)]
+        if remaining:
+            msg.plan["subtasks"] = remaining
+            msg.plan["_replanned"] = True
+            print(f"[L5] Re-plan: {len(remaining)} remaining subtasks")
 
     msg.track_layer("L5-COMPLETE")
     print(f"[L5] Execution done: {len(msg.tool_results)} results  all_ok={all_ok}")

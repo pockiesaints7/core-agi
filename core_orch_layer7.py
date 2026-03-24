@@ -44,20 +44,29 @@ Return JSON:
 
 
 def _summarise_tool_results(msg: OrchestratorMessage) -> str:
-    """Build a compact summary of tool results for the prompt."""
+    """GAP-NEW-19: preserve error context ? error fields take priority, larger snippet."""
     if not msg.tool_results:
         return "none"
     parts = []
-    for r in msg.tool_results[:5]:
+    for r in msg.tool_results[:6]:
         tool = r.get("tool", "?")
         ok = r.get("success", False)
         result = r.get("result", {})
         if isinstance(result, dict):
-            snippet = str(result.get("error") or result.get("summary") or list(result.keys()))[:120]
+            # Error fields always surfaced fully
+            err = result.get("error") or result.get("message") or ""
+            summary = result.get("summary") or ""
+            if not ok and err:
+                snippet = f"ERROR: {err}"[:300]
+            elif summary:
+                snippet = str(summary)[:200]
+            else:
+                keys = [k for k in result.keys() if k not in ("ok","status")]
+                snippet = str({k: result[k] for k in keys[:4]})[:200]
         else:
-            snippet = str(result)[:120]
+            snippet = str(result)[:200]
         parts.append(f"{tool}(ok={ok}): {snippet}")
-    return " | ".join(parts)
+    return "\n".join(parts)
 
 
 async def layer_7_refine(msg: OrchestratorMessage):
@@ -82,7 +91,17 @@ async def layer_7_refine(msg: OrchestratorMessage):
         await layer_8_safety(msg)
         return
 
-    if msg.intent in ("greeting", "help", "general_query") and not msg.tool_results:
+    # GAP-NEW-18: skip read-only status queries ? no learning signal
+    READ_ONLY = {"system_health","system_state","task_list","evolution_list",
+                 "kb_search","mistake_list","deploy_status","greeting","help",
+                 "general_query","conversation"}
+    if msg.intent in READ_ONLY:
+        msg.track_layer("L7-SKIP-READONLY")
+        from core_orch_layer8 import layer_8_safety
+        await layer_8_safety(msg)
+        return
+
+    if not msg.tool_results and not msg.has_errors:
         msg.track_layer("L7-SKIP-TRIVIAL")
         from core_orch_layer8 import layer_8_safety
         await layer_8_safety(msg)

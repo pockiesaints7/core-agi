@@ -182,6 +182,11 @@ async def _parse_telegram(update: Dict[str, Any]) -> OrchestratorMessage:
             msg.attachments.append({"type": kind, "data": message[kind]})
             if kind == "voice":
                 msg.message_type = "voice"
+                # GAP-NEW-3: voice messages ? set text to a placeholder so pipeline
+                # can respond informatively rather than silently dropping
+                if not msg.text:
+                    msg.text = "[voice message received]"
+                    msg.context["voice_unsupported"] = True
 
     # Store raw Telegram message_id for potential reply threading
     msg.context["telegram_message_id"] = message.get("message_id")
