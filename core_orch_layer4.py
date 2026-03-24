@@ -35,6 +35,7 @@ _PLAN_SYSTEM = (
     "Return ONLY valid JSON. No preamble, no markdown."
 )
 
+# Dynamic tool registry injected at call time — see _build_plan()
 _PLAN_TEMPLATE = """
 USER REQUEST: {text}
 INTENT: {intent}
@@ -43,15 +44,8 @@ DOMAIN: {domain}
 COMMAND: {command}
 COMMAND_ARGS: {args}
 
-Available tool categories:
-- State/health: t_state, t_health, t_session_start, t_ping_health
-- Knowledge: t_search_kb, t_add_knowledge, t_get_mistakes, t_log_mistake
-- Tasks: t_session_start, t_session_end, t_checkpoint
-- Training: t_get_training_pipeline, t_trigger_cold_processor, t_list_evolutions, t_check_evolutions
-- Code/Files: t_read_file, t_write_file, t_gh_search_replace, t_multi_patch, t_gh_read_lines
-- Deployment: t_deploy_and_wait, t_railway_logs_live, t_core_py_validate, t_core_py_rollback
-- Notifications: t_notify
-- Monitoring: t_listen, t_listen_result
+Available tools (live registry — {tool_count} total):
+{tool_list}
 
 Return JSON:
 {{
@@ -64,6 +58,53 @@ Return JSON:
   "direct_answer": "only if type=direct_response, the actual answer text"
 }}
 """
+
+
+def _build_tool_list() -> tuple[str, int]:
+    """
+    Dynamically pull TOOLS keys from the live registry.
+    Returns (formatted_string, count).
+    Falls back to a static category summary on import error.
+    """
+    try:
+        from core_tools import TOOLS
+        from core_config import TOOL_CATEGORY_KEYWORDS
+
+        # Group tools by category for a readable but compact prompt injection
+        cats: Dict[str, List[str]] = {cat: [] for cat in TOOL_CATEGORY_KEYWORDS}
+        cats["misc"] = []
+        for tn in TOOLS.keys():
+            placed = False
+            for cat, kws in TOOL_CATEGORY_KEYWORDS.items():
+                if any(kw in tn for kw in kws):
+                    cats[cat].append(tn)
+                    placed = True
+                    break
+            if not placed:
+                cats["misc"].append(tn)
+
+        lines = []
+        for cat, tools in cats.items():
+            if tools:
+                lines.append(f"- {cat}: {', '.join(sorted(tools))}")
+
+        total = len(TOOLS)
+        return "\n".join(lines), total
+
+    except Exception as e:
+        # Graceful fallback — static summary
+        fallback = (
+            "- state/health: t_state, t_health, t_session_start, t_ping_health\n"
+            "- knowledge: t_search_kb, t_add_knowledge, t_get_mistakes, t_log_mistake\n"
+            "- tasks: t_session_start, t_session_end, t_checkpoint\n"
+            "- training: t_get_training_pipeline, t_trigger_cold_processor, t_list_evolutions\n"
+            "- code/files: t_read_file, t_write_file, t_multi_patch, t_patch_file\n"
+            "- deploy: t_deploy_and_wait, t_railway_logs_live, t_redeploy, t_verify_live\n"
+            "- notifications: t_notify\n"
+            "- monitoring: t_listen, t_listen_result"
+        )
+        print(f"[L4] tool registry import failed, using static fallback: {e}")
+        return fallback, 0
 
 
 async def _cognitive_preflight(msg: OrchestratorMessage) -> Dict[str, Any]:
@@ -132,6 +173,8 @@ async def _build_plan(msg: OrchestratorMessage) -> Dict[str, Any]:
         }
 
     # 3. Groq planning for complex/multi-step tasks
+    # Inject live TOOLS registry so Groq knows every tool available
+    tool_list, tool_count = _build_tool_list()
     try:
         prompt = _PLAN_TEMPLATE.format(
             text=msg.text[:600],
@@ -140,6 +183,8 @@ async def _build_plan(msg: OrchestratorMessage) -> Dict[str, Any]:
             domain=msg.context.get("current_domain", "general"),
             command=msg.context.get("command", ""),
             args=msg.context.get("command_args", ""),
+            tool_list=tool_list,
+            tool_count=tool_count or "?",
         )
         raw = groq_chat(
             system=_PLAN_SYSTEM,
@@ -148,7 +193,7 @@ async def _build_plan(msg: OrchestratorMessage) -> Dict[str, Any]:
             max_tokens=512,
         )
         plan = json.loads(raw.strip().lstrip("```json").rstrip("```").strip())
-        print(f"[L4] Groq plan: type={plan.get('type')}  steps={len(plan.get('subtasks', []))}")
+        print(f"[L4] Groq plan: type={plan.get('type')}  steps={len(plan.get('subtasks', []))}  tools_injected={tool_count}")
         return plan
     except Exception as exc:
         print(f"[L4] Groq planning failed (non-fatal): {exc}")
