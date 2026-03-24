@@ -4,6 +4,7 @@ Imported by core_train.py, core_tools.py, core_main.py.
 
 Depends on: core_config (L, GITHUB_PAT, GITHUB_REPO, TELEGRAM_TOKEN, TELEGRAM_CHAT)
 """
+import os
 import base64
 
 import httpx
