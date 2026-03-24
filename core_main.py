@@ -1320,10 +1320,11 @@ def on_start():
     except Exception as e:
         task_line = f"Tasks: unavailable ({e})"
     evo_line = f"Evolutions — pending: {evo_pending} | applied: {evo_applied} | rejected: {evo_rejected}"
+    _model = os.environ.get("CLAUDE_MODEL", "claude-sonnet-4-6")
     notify(
         f"<b>CORE Online</b>\n{resume}\n"
         f"KB: {counts.get('knowledge_base',0)} | Mistakes: {counts.get('mistakes',0)} | Sessions: {counts.get('sessions',0)}\n"
-        f"MCP: {len(TOOLS)} tools\n"
+        f"MCP: {len(TOOLS)} tools | Model: {_model}\n"
         f"{evo_line}"
     )
     print(f"[CORE] v8.0 online :{PORT} - {resume}")
