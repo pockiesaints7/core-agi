@@ -72,6 +72,49 @@ Classify this message. Return JSON only:
 """
 
 
+
+# ── KB-driven synonym clusters (GAP-NEW-4) ───────────────────────────────────
+# Loaded at runtime from knowledge_base where domain='nlu.synonyms'.
+# Falls back to empty list if Supabase unavailable.
+_KB_EXTRA_CLUSTERS: list[tuple[str, bool, set[str]]] = []
+_KB_SYNONYMS_LOADED = False
+
+
+def _try_load_kb_synonyms() -> None:
+    """Load NLU synonym clusters from Supabase knowledge_base (once per process)."""
+    global _KB_EXTRA_CLUSTERS, _KB_SYNONYMS_LOADED
+    if _KB_SYNONYMS_LOADED:
+        return
+    _KB_SYNONYMS_LOADED = True
+    try:
+        import os, urllib.request, json, ssl
+        sb_url = os.getenv("SUPABASE_URL", "")
+        sb_key = os.getenv("SUPABASE_KEY", "")
+        if not sb_url or not sb_key:
+            return
+        url = sb_url + "/rest/v1/knowledge_base?domain=eq.nlu.synonyms&select=topic,instruction&limit=200"
+        req = urllib.request.Request(
+            url,
+            headers={"apikey": sb_key, "Authorization": "Bearer " + sb_key}
+        )
+        ctx = ssl.create_default_context()
+        with urllib.request.urlopen(req, context=ctx, timeout=3) as resp:
+            rows = json.loads(resp.read())
+        for row in rows:
+            intent = row.get("topic", "")
+            keywords_raw = row.get("instruction", "")
+            if not intent or not keywords_raw:
+                continue
+            # instruction format: "kw1|kw2|kw3" or comma-separated
+            sep = "|" if "|" in keywords_raw else ","
+            keywords = {k.strip().lower() for k in keywords_raw.split(sep) if k.strip()}
+            if keywords:
+                _KB_EXTRA_CLUSTERS.append((intent, True, keywords))
+        print(f"[L3] KB synonyms loaded: {len(_KB_EXTRA_CLUSTERS)} extra clusters")
+    except Exception as exc:
+        print(f"[L3] KB synonyms load failed (non-fatal): {exc}")
+
+
 def _fuzzy_match(text: str) -> Dict[str, Any]:
     """Scan hardcoded + KB-loaded clusters. First match wins."""
     _try_load_kb_synonyms()  # GAP-NEW-4: merge KB synonyms

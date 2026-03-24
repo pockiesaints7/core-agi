@@ -130,7 +130,7 @@ async def _log_conversation(chat_id: int, user_text: str, response: str, usernam
     """GAP-NEW-29: write conversation log row."""
     try:
         from core_config import sb_post
-        sb_post("conversation_log", {"chat_id": chat_id, "user": username,
+        sb_post("conversation_log", {"chat_id": chat_id, "username": username,
             "user_message": user_text[:500], "core_response": response[:1000]})
     except Exception as exc:
         print(f"[L10] conversation_log write failed (non-fatal): {exc}")
