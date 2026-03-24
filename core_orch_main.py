@@ -78,7 +78,7 @@ async def handle_telegram_message_v2(msg: dict):
     """
     try:
         from core_orch_layer1 import layer_1_triage
-        await layer_1_triage(msg, input_type="telegram")
+        await layer_1_triage({"message": msg}, input_type="telegram")
     except Exception as e:
         print(f"[ORCH-V2] Unhandled top-level error: {e}")
         try:
