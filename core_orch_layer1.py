@@ -10,6 +10,42 @@ from dotenv import load_dotenv
 load_dotenv()
 from orchestrator_message import OrchestratorMessage
 
+# ?? Dedup gate ???????????????????????????????????????????????????????????????
+# Prevents Telegram webhook retries from processing the same message twice.
+# In-memory; resets on service restart (acceptable ? retries are ~30s window).
+_PROCESSED_IDS: set[int] = set()
+_MAX_DEDUP_SIZE = 2000  # cap memory usage
+
+
+def _is_duplicate(message_id: int) -> bool:
+    if message_id in _PROCESSED_IDS:
+        return True
+    _PROCESSED_IDS.add(message_id)
+    if len(_PROCESSED_IDS) > _MAX_DEDUP_SIZE:
+        # Evict oldest half ? sets are unordered so just clear oldest ~half
+        to_remove = list(_PROCESSED_IDS)[:_MAX_DEDUP_SIZE // 2]
+        for mid in to_remove:
+            _PROCESSED_IDS.discard(mid)
+    return False
+
+
+# ?? Typing indicator ??????????????????????????????????????????????????????????
+async def _send_typing(chat_id: int) -> None:
+    """Fire-and-forget sendChatAction typing ? masks processing latency."""
+    import httpx
+    token = os.getenv("TELEGRAM_TOKEN", "")
+    if not token or not chat_id:
+        return
+    try:
+        async with httpx.AsyncClient(timeout=3.0) as client:
+            await client.post(
+                f"https://api.telegram.org/bot{token}/sendChatAction",
+                json={"chat_id": chat_id, "action": "typing"},
+            )
+    except Exception:
+        pass  # typing is best-effort ? never block on it
+
+
 # Known slash-commands that require tool execution
 _COMMAND_ROUTES = {
     "/health", "/state", "/status", "/tasks", "/evolutions",
@@ -96,7 +132,19 @@ def _nlu_expand(text: str) -> str:
 
 # ── Parsers ───────────────────────────────────────────────────────────────────
 async def _parse_telegram(update: Dict[str, Any]) -> OrchestratorMessage:
-    message = update.get("message", {}) or update.get("edited_message", {})
+    # BUG-NEW-1: edited_message events are re-edits of past msgs ? skip them.
+    if "edited_message" in update and "message" not in update:
+        print("[L1] Skipping edited_message ? not a new command")
+        return OrchestratorMessage(
+            text="",
+            chat_id=update["edited_message"].get("chat", {}).get("id", 0),
+            user=update["edited_message"].get("from", {}).get("username", "unknown"),
+            source="telegram",
+            message_type="edited",
+            route="skip",
+        )
+
+    message = update.get("message", {}) or {}
     text = (
         message.get("text", "")
         or message.get("caption", "")
@@ -187,6 +235,14 @@ async def layer_1_triage(
     try:
         if input_type == "telegram":
             msg = await _parse_telegram(raw_input)
+            # GAP-NEW-1: Dedup ? reject Telegram webhook retries
+            tg_message_id = raw_input.get("message", {}).get("message_id")
+            if tg_message_id and _is_duplicate(tg_message_id):
+                print(f"[L1] DEDUP drop ? message_id={tg_message_id} already processed")
+                return msg
+            # GAP-NEW-2: Typing indicator ? fire immediately, before any await
+            if msg.route != "skip" and msg.chat_id:
+                asyncio.ensure_future(_send_typing(msg.chat_id))
         elif input_type == "mcp":
             msg = await _parse_mcp(raw_input)
         elif input_type == "system":
