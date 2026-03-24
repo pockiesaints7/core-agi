@@ -171,7 +171,7 @@ _GEMINI_KEYS = [k.strip() for k in os.getenv("GEMINI_KEYS", "").replace(" ", "")
 _GEMINI_KEY_INDEX = 0
 _GEMINI_MODEL = "gemini-2.5-flash-lite"
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API", "")
-OPENROUTER_MODEL   = os.getenv("OPENROUTER_MODEL", "google/gemini-2.5-flash-lite")
+OPENROUTER_MODEL   = os.getenv("OPENROUTER_MODEL", "google/gemini-2.5-flash")
 
 def gemini_chat(system: str, user: str, max_tokens: int = 2048, json_mode: bool = False) -> str:
     """LLM chat via OpenRouter (or Gemini direct as fallback).
@@ -364,5 +364,4 @@ TOOL_CATEGORY_KEYWORDS: dict = {
 TOOL_ALWAYS_INCLUDE: set = {
     "search_kb", "get_mistakes", "list_tools", "get_tool_info",
     "get_behavioral_rules", "get_table_schema",
-    "build_status",  # ← add this
 }
