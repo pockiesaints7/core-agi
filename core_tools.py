@@ -2200,7 +2200,7 @@ def t_core_py_validate() -> dict:
                 for ref in tool_fn_refs:
                     if ref not in defined_fns:
                         errors.append(f"TOOLS refs '{ref}' but function not defined")
-                if "TOOLS = {" not in content:
+                if "\nTOOLS = {" not in content:
                     errors.append("TOOLS dict not found â€” critical corruption")
             for i, line in enumerate(lines, 1):
                 # A.8: backboard.railway GQL endpoint is valid -- only flag old REST references
@@ -4985,7 +4985,35 @@ def t_tool_stats(days: str = "7") -> dict:
         return {"ok": False, "error_code": "exception", "message": str(e), "retry_hint": True, "domain": "supabase"}
   
 # -- Tool registry ------------------------------------------------------------
+
+def t_get_time(timezone: str = 'UTC') -> dict:
+    from datetime import datetime, timezone as tz
+    now = datetime.now(tz.utc)
+    return {
+        'utc': now.strftime('%Y-%m-%d %H:%M:%S UTC'),
+        'date': now.strftime('%Y-%m-%d'),
+        'time': now.strftime('%H:%M:%S'),
+        'day_of_week': now.strftime('%A'),
+        'timezone_note': 'Always UTC.',
+    }
+
+
+def t_get_time(timezone: str = 'UTC') -> dict:
+    from datetime import datetime, timezone as tz
+    now = datetime.now(tz.utc)
+    return {
+        'utc': now.strftime('%Y-%m-%d %H:%M:%S UTC'),
+        'date': now.strftime('%Y-%m-%d'),
+        'time': now.strftime('%H:%M:%S'),
+        'day_of_week': now.strftime('%A'),
+        'timezone_note': 'Always UTC.',
+    }
+
 TOOLS = {
+    "get_time":               {"fn": t_get_time, "perm": "READ", "args": ["timezone"],
+                               "desc": "Get current UTC date and time. Use for any question about current time, date, or day of week."},
+    "get_time":               {"fn": t_get_time, "perm": "READ", "args": ["timezone"],
+                               "desc": "Get current UTC date and time. Use for any question about current time, date, or day of week."},
     "get_state":              {"fn": t_state,                  "perm": "READ",    "args": [],
                                "desc": "Get current CORE state: last session, counts, in_progress+pending tasks. session_md=full SESSION.md content (static bootstrap doc). Pass include_operating_context=true to also load operating_context.json."},
     "get_system_health":      {"fn": t_health,                 "perm": "READ",    "args": [],
