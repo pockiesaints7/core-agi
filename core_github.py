@@ -8,12 +8,14 @@ import base64
 
 import httpx
 
+from dotenv import load_dotenv
+load_dotenv()  # loads ~/core-agi/.env automatically
+
 from core_config import (
     L,
     GITHUB_PAT, GITHUB_REPO,
     TELEGRAM_TOKEN, TELEGRAM_CHAT,
 )
-
 
 # -- Telegram ------------------------------------------------------------------
 def notify(msg, cid=None):
