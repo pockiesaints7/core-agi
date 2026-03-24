@@ -49,8 +49,8 @@ def startup_v2():
 
     # (L6 background loops not used — orchestrator is request-driven, not polling)
 
-    # Log active model
-    model = os.environ.get("CLAUDE_MODEL", "claude-sonnet-4-6")
+    # Log active model OPENROUTER_MODEL="google/gemini-2.5-flash"
+    model = os.environ.get("OPENROUTER_MODEL", "google/gemini-2.5-flash")
     print(f"[ORCH-V2] Started. Primary model: {model}")
     print("[ORCH-V2] Layer chain: L0→L1→L2→L3→L4→L5→L9 (L6/L7/L8 inlined)")
 
