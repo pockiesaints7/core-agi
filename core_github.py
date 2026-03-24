@@ -40,7 +40,7 @@ def notify_owner(msg):
 
 def set_webhook():
     import os
-    d = os.environ.get("RAILWAY_PUBLIC_DOMAIN", "")
+    d = os.environ.get("PUBLIC_DOMAIN", "")
     if not d: return
     httpx.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/setWebhook",
                data={"url": f"https://{d}/webhook"})
