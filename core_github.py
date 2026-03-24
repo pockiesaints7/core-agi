@@ -41,23 +41,20 @@ def notify_owner(msg):
 
 
 def set_webhook():
-    # Kita langsung tembak domainnya di sini
-    d = "core-agi.duckdns.org" 
+    import httpx
+    # HARDCODE DOMAIN KAMU
+    target_url = "https://core-agi.duckdns.org/webhook"
+    token = os.environ.get("TELEGRAM_TOKEN")
     
-    # Gunakan token yang sudah ada di config
-    target_url = f"https://{d}/webhook"
-    
-    print(f"[CORE] Hardcoded Webhook Attempt: {target_url}")
-    
+    print(f"[CORE] Hardcoding Webhook to: {target_url}")
     try:
         resp = httpx.post(
-            f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/setWebhook",
-            data={"url": target_url},
-            timeout=10.0
+            f"https://api.telegram.org/bot{token}/setWebhook",
+            data={"url": target_url}
         )
-        print(f"[CORE] Webhook response: {resp.text}")
+        print(f"[CORE] Webhook Response: {resp.text}")
     except Exception as e:
-        print(f"[CORE] Webhook setup failed: {e}")
+        print(f"[CORE] Webhook Error: {e}")
 
 
 # -- GitHub --------------------------------------------------------------------
