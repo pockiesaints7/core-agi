@@ -6,7 +6,8 @@ Entry point for all traffic.
 import os
 import asyncio
 from typing import Dict, Any
-
+from dotenv import load_dotenv
+load_dotenv()
 from orchestrator_message import OrchestratorMessage
 
 # Known slash-commands that require tool execution
