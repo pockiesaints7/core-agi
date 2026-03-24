@@ -7,7 +7,7 @@ import json
 from typing import Any, Dict
 
 from orchestrator_message import OrchestratorMessage
-from core_config import groq_chat, GROQ_FAST, gemini_chat
+from core_config import groq_chat, GROQ_FAST, GROQ_MODEL, gemini_chat
 
 # Slash-commands that always map to specific intents without Groq
 _COMMAND_INTENT_MAP = {
@@ -25,6 +25,25 @@ _COMMAND_INTENT_MAP = {
     "/checkpoint":  ("checkpoint",      True),
     "/help":        ("help",            False),
 }
+
+# ── L3 Fuzzy Intent Clusters ──────────────────────────────────────────────────
+# Keyword sets per intent. If text contains ANY keyword from a cluster,
+# that intent fires — no LLM call needed. Check BEFORE Gemini.
+# Order matters: first cluster match wins.
+_FUZZY_INTENT_CLUSTERS: list[tuple[str, bool, set[str]]] = [
+    # (intent_name, requires_tools, keyword_set)
+    ("system_health",    True,  {"health", "healthy", "alive", "ping", "heartbeat", "up?", "running ok", "online"}),
+    ("system_state",     True,  {"state", "status", "running", "active", "what's up", "current state", "system info"}),
+    ("task_list",        True,  {"tasks", "task list", "open tasks", "pending tasks", "my tasks", "todos", "task queue"}),
+    ("evolution_list",   True,  {"evolution", "evolutions", "pending evo", "evolution queue", "suggested changes"}),
+    ("kb_search",        True,  {"knowledge", "kb", "search kb", "what do you know", "find in kb", "knowledge base"}),
+    ("mistake_list",     True,  {"mistakes", "errors", "mistake log", "what went wrong", "past errors", "error log"}),
+    ("trigger_training", True,  {"train", "training", "run training", "start training", "trigger train"}),
+    ("trigger_cold",     True,  {"cold", "cold processor", "cold run", "cold cycle", "run cold"}),
+    ("deploy_status",    True,  {"deploy", "deployment", "redeploy", "build", "railway", "vm status", "oracle vm"}),
+    ("kb_query",         True,  {"search for", "find me", "look up", "what is", "explain", "tell me about", "lookup"}),
+    ("conversation",     False, {"hi", "hello", "hey", "thanks", "thank you", "ok", "cool", "got it", "nice", "good"}),
+]
 
 _CLASSIFY_SYSTEM = (
     "You are CORE AGI's intent classifier. Analyse the message and return ONLY valid JSON. "
@@ -53,8 +72,30 @@ Classify this message. Return JSON only:
 """
 
 
+def _fuzzy_match(text: str) -> Dict[str, Any]:
+    """
+    Scan text for keyword clusters. Returns classification dict if matched, else {}.
+    Case-insensitive. Checks full text for any cluster keyword.
+    """
+    lower = text.lower()
+    for intent, requires_tools, keywords in _FUZZY_INTENT_CLUSTERS:
+        for kw in keywords:
+            if kw in lower:
+                return {
+                    "intent": intent,
+                    "confidence": 0.85,
+                    "category": "command" if requires_tools else "conversation",
+                    "requires_tools": requires_tools,
+                    "tool_hints": [],
+                    "suggested_response_type": "structured" if requires_tools else "conversational",
+                    "domain": "general",
+                    "_source": f"fuzzy:{kw}",
+                }
+    return {}
+
+
 async def _fast_classify(msg: OrchestratorMessage) -> Dict[str, Any]:
-    """Try deterministic classification before hitting Groq."""
+    """Try deterministic classification before hitting Gemini."""
 
     # Slash-command fast path
     cmd = msg.context.get("command", "")
@@ -85,21 +126,29 @@ async def _fast_classify(msg: OrchestratorMessage) -> Dict[str, Any]:
             "domain": "general",
         }
 
-    return {}  # fall through to Groq
+    # Fuzzy keyword cluster matching (before Gemini)
+    fuzzy = _fuzzy_match(msg.text)
+    if fuzzy:
+        src = fuzzy.pop("_source", "fuzzy")
+        print(f"[L3] Fuzzy match ({src}) → intent={fuzzy['intent']}")
+        fuzzy["domain"] = msg.context.get("current_domain", "general")
+        return fuzzy
+
+    return {}  # fall through to Gemini
 
 
 async def layer_3_classify(msg: OrchestratorMessage):
     """
-    Classify user intent using deterministic rules first, Groq as fallback.
+    Classify user intent using deterministic rules first, Gemini as fallback.
     Mutates msg.intent and msg.context['intent_classification'].
     """
     msg.track_layer("L3-START")
     print(f"[L3] Classifying intent …")
 
-    # 1. Fast deterministic path
+    # 1. Fast deterministic path (slash-cmd → greeting → fuzzy clusters)
     classification = await _fast_classify(msg)
 
-    # 2. Groq classification
+    # 2. Gemini classification (only if no fast-path hit)
     if not classification:
         try:
             prompt = _CLASSIFY_TEMPLATE.format(
