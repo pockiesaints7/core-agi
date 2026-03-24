@@ -1,13 +1,13 @@
 """
 core_orch_layer3.py — L3: Intent Classification
-Uses real Groq (GROQ_FAST model) to classify user intent.
+Uses gemini chat to classify user intent.
 No mocks.
 """
 import json
 from typing import Any, Dict
 
 from orchestrator_message import OrchestratorMessage
-from core_config import groq_chat, GROQ_FAST
+from core_config import groq_chat, GROQ_FAST, gemini_chat
 
 # Slash-commands that always map to specific intents without Groq
 _COMMAND_INTENT_MAP = {
@@ -111,15 +111,15 @@ async def layer_3_classify(msg: OrchestratorMessage):
                 rules_count=len(msg.context.get("behavioral_rules", [])),
                 mistakes_count=len(msg.context.get("domain_mistakes", [])),
             )
-            raw = groq_chat(
+            raw = gemini_chat(
                 system=_CLASSIFY_SYSTEM,
                 user=prompt,
-                model=GROQ_FAST,
                 max_tokens=256,
+                json_mode=True,
             )
             classification = json.loads(raw.strip().lstrip("```json").rstrip("```").strip())
         except Exception as exc:
-            print(f"[L3] Groq classification failed (non-fatal): {exc}")
+            print(f"[L3] Gemini classification failed (non-fatal): {exc}")
             classification = {
                 "intent": "general_query",
                 "confidence": 0.5,
