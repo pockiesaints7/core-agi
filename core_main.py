@@ -1031,4 +1031,12 @@ def on_start():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("core_main:app", host="0.0.0.0", port=PORT, reload=False)
+    # Tambahkan path sertifikat yang tadi sudah terdaftar di certbot
+    uvicorn.run(
+        "core_main:app", 
+        host="0.0.0.0", 
+        port=443,             # Pindah ke port 443
+        reload=False,
+        ssl_keyfile="/etc/letsencrypt/live/core-agi.duckdns.org/privkey.pem",
+        ssl_certfile="/etc/letsencrypt/live/core-agi.duckdns.org/fullchain.pem"
+    )
