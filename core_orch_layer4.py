@@ -1,499 +1,190 @@
 """
-core_orch_layer4.py — L4: EXECUTION
-=====================================
-Agentic tool loop. Runs until done=True or max iterations hit.
-All tool calls return unified error schema.
-Checkpoints state to Supabase every 5 steps.
+core_orch_layer4.py — L4: Reasoning & Planning
+Cognitive pre-flight checks + real Groq execution planning.
+No mocks.
+"""
+import json
+from typing import Any, Dict, List
 
-Unified error schema (all tools must return):
-  {
-    "ok":          bool,
-    "error_code":  str,   # TOOL_TIMEOUT | AUTH_FAIL | SCHEMA_MISMATCH | NOT_FOUND | etc.
-    "message":     str,   # human-readable
-    "retry_hint":  str,   # wait_30s | use_fallback | confirm_owner | abort | retry
-    "domain":      str,   # supabase | railway | github | zapier | filesystem | groq
-    ...result_fields      # tool-specific
-  }
+from orchestrator_message import OrchestratorMessage
+from core_config import groq_chat, GROQ_MODEL, GROQ_FAST
 
-Loop control:
-  - Max iterations: MAX_TOOL_CALLS (default 50, hard cap)
-  - Checkpoint: every 5 steps → write task state to Supabase
-  - Hard timeout: LOOP_TIMEOUT_S wall-clock seconds
-  - On max_iter breach: log + alert owner, graceful stop
-  - force_close: owner-invoked only (C8)
+# Destructive action keywords requiring owner tier
+_DESTRUCTIVE_KW = frozenset([
+    "delete", "remove", "drop", "destroy", "force", "rollback",
+    "purge", "wipe", "reset", "truncate",
+])
+
+# Intent → tool mapping for simple one-tool dispatches
+_INTENT_TOOL_MAP: Dict[str, List[str]] = {
+    "system_health":    ["t_health"],
+    "system_state":     ["t_state"],
+    "task_list":        ["t_session_start"],
+    "evolution_list":   ["t_list_evolutions"],
+    "kb_search":        ["t_search_kb"],
+    "mistake_list":     ["t_get_mistakes"],
+    "trigger_training": ["t_trigger_cold_processor"],
+    "trigger_cold":     ["t_trigger_cold_processor"],
+    "deploy_status":    ["t_deploy_and_wait"],
+    "listen_mode":      ["t_listen"],
+    "checkpoint":       ["t_checkpoint"],
+}
+
+_PLAN_SYSTEM = (
+    "You are CORE AGI's task planner. You decompose user requests into tool execution steps. "
+    "Return ONLY valid JSON. No preamble, no markdown."
+)
+
+_PLAN_TEMPLATE = """
+USER REQUEST: {text}
+INTENT: {intent}
+TIER: {tier}
+DOMAIN: {domain}
+COMMAND: {command}
+COMMAND_ARGS: {args}
+
+Available tool categories:
+- State/health: t_state, t_health, t_session_start, t_ping_health
+- Knowledge: t_search_kb, t_add_knowledge, t_get_mistakes, t_log_mistake
+- Tasks: t_session_start, t_session_end, t_checkpoint
+- Training: t_get_training_pipeline, t_trigger_cold_processor, t_list_evolutions, t_check_evolutions
+- Code/Files: t_read_file, t_write_file, t_gh_search_replace, t_multi_patch, t_gh_read_lines
+- Deployment: t_deploy_and_wait, t_railway_logs_live, t_core_py_validate, t_core_py_rollback
+- Notifications: t_notify
+- Monitoring: t_listen, t_listen_result
+
+Return JSON:
+{{
+  "type": "direct_response|tool_execution|multi_step",
+  "subtasks": [
+    {{"step": 1, "action": "description", "tool": "t_tool_name", "args": {{}}, "expected_output": "description"}}
+  ],
+  "estimated_complexity": "low|medium|high",
+  "requires_confirmation": false,
+  "direct_answer": "only if type=direct_response, the actual answer text"
+}}
 """
 
-import json
-import time
-import asyncio
-import threading
-from datetime import datetime
 
-MAX_TOOL_CALLS   = 50
-LOOP_TIMEOUT_S   = 240    # 4 min wall-clock
-CHECKPOINT_EVERY = 5
+async def _cognitive_preflight(msg: OrchestratorMessage) -> Dict[str, Any]:
+    """Run pre-flight safety and context checks."""
+    checks = {"passed": True, "warnings": [], "blockers": []}
 
-# ── Unified error wrapper ─────────────────────────────────────────────────────
-
-def _wrap_error(error_code: str, message: str, retry_hint: str = "retry",
-                domain: str = "unknown", **extra) -> dict:
-    return {
-        "ok":          False,
-        "error_code":  error_code,
-        "message":     message,
-        "retry_hint":  retry_hint,
-        "domain":      domain,
-        **extra,
-    }
-
-
-def _normalize_result(raw, tool_name: str) -> dict:
-    """
-    Ensure every tool result conforms to unified error schema.
-    Tools that return plain dicts without 'ok' get it added.
-    """
-    if isinstance(raw, str):
-        try:
-            raw = json.loads(raw)
-        except Exception:
-            return {"ok": True, "result": raw, "error_code": None,
-                    "message": "", "retry_hint": None, "domain": "unknown"}
-
-    if not isinstance(raw, dict):
-        return {"ok": True, "result": raw, "error_code": None,
-                "message": "", "retry_hint": None, "domain": "unknown"}
-
-    # Already has 'ok' field — ensure other fields exist
-    if "ok" not in raw:
-        raw["ok"] = True
-    if "error_code" not in raw:
-        raw["error_code"] = None if raw.get("ok") else "UNKNOWN_ERROR"
-    if "message" not in raw:
-        raw["message"] = raw.get("error", "")
-    if "retry_hint" not in raw:
-        raw["retry_hint"] = None if raw.get("ok") else "retry"
-    if "domain" not in raw:
-        raw["domain"] = "unknown"
-
-    return raw
-
-
-# ── Tool execution ────────────────────────────────────────────────────────────
-
-def _execute_tool_safe(tool_name: str, tool_args: dict, cid: str = "") -> dict:
-    """
-    Execute a tool with timeout + unified error wrapping.
-    Returns normalized result dict.
-    """
-    try:
-        from core_tools import TOOLS
-        if tool_name not in TOOLS:
-            return _wrap_error(
-                "NOT_FOUND",
-                f"Tool '{tool_name}' not in registry ({len(TOOLS)} tools available).",
-                retry_hint="use_fallback",
-                domain="tool_registry",
-            )
-
-        fn = TOOLS[tool_name]["fn"]
-        # Unwrap nested args if needed
-        if (tool_args and len(tool_args) == 1 and "args" in tool_args
-                and isinstance(tool_args["args"], dict)):
-            tool_args = tool_args["args"]
-
-        # Inject cid for scratchpad tools
-        if tool_name in ("set_var", "get_var") and cid:
-            tool_args = dict(tool_args or {})
-            tool_args["cid"] = cid
-
-        print(f"[L4] CALL {tool_name}({json.dumps(tool_args, default=str)[:120]})")
-
-        # Per-tool timeout: 60s hard cap — prevents single slow tool blowing the loop budget
-        import concurrent.futures as _cf
-        import inspect as _inspect
-
-        _PER_TOOL_TIMEOUT = 60
-
-        def _run_tool():
-            return fn(**tool_args) if tool_args else fn()
-
-        with _cf.ThreadPoolExecutor(max_workers=1) as _tex:
-            _future = _tex.submit(_run_tool)
-            try:
-                result = _future.result(timeout=_PER_TOOL_TIMEOUT)
-            except _cf.TimeoutError:
-                return _wrap_error(
-                    "TOOL_TIMEOUT",
-                    f"Tool '{tool_name}' exceeded {_PER_TOOL_TIMEOUT}s timeout.",
-                    retry_hint="use_fallback",
-                    domain="tool_registry",
-                )
-
-        # Handle async tools: if fn() returned a coroutine, run it
-        if _inspect.iscoroutine(result):
-            import asyncio as _asyncio
-            import concurrent.futures as _cf2
-            # Always use a fresh thread to avoid "event loop already running" errors
-            with _cf2.ThreadPoolExecutor(max_workers=1) as ex:
-                future2 = ex.submit(_asyncio.run, (fn(**tool_args) if tool_args else fn()))
-                result = future2.result(timeout=_PER_TOOL_TIMEOUT)
-
-        # Normalize None return — model sees "(no output)" instead of "null"
-        if result is None:
-            result = {"ok": True, "result": "(no output)"}
-        raw    = json.dumps(result, default=str)
-
-        # Truncate massive results
-        if len(raw) > 16000:
-            try:
-                parsed = json.loads(raw)
-                if isinstance(parsed, dict):
-                    for k, v in list(parsed.items()):
-                        if isinstance(v, list) and len(v) > 20:
-                            parsed[f"{k}_count"] = len(v)
-                            parsed[k] = v[:20]
-                    raw = json.dumps(parsed, default=str)
-            except Exception:
-                raw = raw[:16000] + "…[truncated]"
-
-        normalized = _normalize_result(
-            json.loads(raw) if (raw.startswith("{") or raw.startswith("[")) else raw,
-            tool_name,
-        )
-        print(f"[L4] RESULT {tool_name}: ok={normalized.get('ok')} "
-              f"({len(raw)}b)")
-        return normalized
-
-    except TypeError as e:
-        return _wrap_error(
-            "SCHEMA_MISMATCH",
-            f"Wrong args for {tool_name}: {e}. "
-            f"Call get_tool_info(name='{tool_name}') to verify params.",
-            retry_hint="use_fallback",
-            domain="tool_registry",
-        )
-    except Exception as e:
-        import traceback
-        return _wrap_error(
-            "TOOL_EXCEPTION",
-            str(e)[:300],
-            retry_hint="retry",
-            domain="unknown",
-            trace=traceback.format_exc()[:400],
-        )
-
-
-# ── Checkpoint ────────────────────────────────────────────────────────────────
-
-def _checkpoint(task_id: str, step: int, tool_results: list, cid: str):
-    """Write execution state to Supabase so a crash is recoverable.
-    Uses upsert-style: updates existing task row instead of inserting new rows.
-    """
-    try:
-        from core_config import sb_patch, sb_post
-        payload = {
-            "task": json.dumps({
-                "checkpoint": True,
-                "task_id":    task_id,
-                "step":       step,
-                "cid":        cid,
-                "tools_used": [r["name"] for r in tool_results[-5:]],
-            }),
-            "status":     "in_progress",
-            "updated_at": datetime.utcnow().isoformat(),
-        }
-        # Try to update existing task first; fall back to insert if UPDATE not available
-        try:
-            sb_patch("task_queue", filters=f"source=eq.orch_checkpoint&task=like.*{task_id}*",
-                     data=payload)
-        except Exception:
-            sb_post("task_queue", {
-                **payload,
-                "source":     "orch_checkpoint",
-                "priority":   3,
-                "created_at": datetime.utcnow().isoformat(),
-            })
-    except Exception as e:
-        print(f"[L4] Checkpoint write failed (non-fatal): {e}")
-
-
-# ── Agentic loop ──────────────────────────────────────────────────────────────
-
-async def layer_4_execute(execution_plan: dict) -> None:
-    """
-    Main agentic loop. Calls L8 for reasoning, executes tool calls,
-    repeats until done=True or limits hit.
-    """
-    ctx           = execution_plan["ctx"]
-    intent        = ctx["intent"]
-    cid           = intent["sender_id"]
-    text          = intent["text"]
-
-    tool_results:   list = []
-    tools_called:   list = []
-    step                = 0
-    start_ts            = time.time()
-    task_id             = str(intent.get("intent_id") or "unknown")
-    _last_call_sig:str  = ""   # stall detection: consecutive identical call
-    _call_history: list = []   # stall detection: rolling window for A->B->A->B pattern
-
-    # Build tool descriptions for this message
-    from core_orch_layer8 import build_tools_desc, call_model_loop
-    selected_tools = _select_tools(text, execution_plan.get("tool_hints", []))
-    tools_desc     = build_tools_desc(selected_tools)
-
-    while step < MAX_TOOL_CALLS:
-        # Wall-clock timeout
-        if time.time() - start_ts > LOOP_TIMEOUT_S:
-            print(f"[L4] TIMEOUT after {step} steps")
-            from core_config import notify
-            notify(f"⚠️ Task timed out after {step} steps. Last action: "
-                   f"{tools_called[-1] if tools_called else 'none'}", cid)
-            break
-
-        # Checkpoint every N steps
-        if step > 0 and step % CHECKPOINT_EVERY == 0:
-            _checkpoint(task_id, step, tool_results, cid)
-
-        # ── Call model for next action ─────────────────────────────────────
-        try:
-            model_out = await call_model_loop(
-                ctx=ctx,
-                execution_plan=execution_plan,
-                tools_desc=tools_desc,
-                tool_results=tool_results,
-                step=step,
-            )
-        except Exception as e:
-            print(f"[L4] Model call failed at step {step}: {e}")
-            break
-
-        thought     = model_out.get("thought", "")
-        tool_calls  = model_out.get("tool_calls", [])
-        reply       = model_out.get("reply", "")
-        done        = model_out.get("done", False)
-
-        if thought:
-            print(f"[L4] step={step} thought={thought[:120]!r}")
-
-        # ── Execute tool calls ─────────────────────────────────────────────
-        if tool_calls:
-            for tc in tool_calls:
-                t_name = tc.get("name", "")
-                t_args = tc.get("args", {}) or {}
-
-                if not t_name:
-                    continue
-
-                # L6 validation: background-loop tools must not be called
-                # with elevated permissions from agentic loop
-                # Stall detection: same tool+args back-to-back (A→A)
-                # AND alternating loop (A→B→A→B) via rolling 6-sig window
-                _call_sig = f"{t_name}:{json.dumps(t_args, sort_keys=True, default=str)[:200]}"
-                _call_history.append(_call_sig)
-                _is_stall = False
-                if _call_sig == _last_call_sig:
-                    _is_stall = True   # A→A
-                elif len(_call_history) >= 4:
-                    # Check if last 4 sigs form A→B→A→B pattern
-                    w = _call_history[-4:]
-                    if w[0] == w[2] and w[1] == w[3] and w[0] != w[1]:
-                        _is_stall = True  # A→B→A→B
-                if len(_call_history) > 6:
-                    _call_history = _call_history[-6:]
-
-                if _is_stall:
-                    print(f"[L4] STALL detected — {t_name} in repeating pattern, breaking")
-                    done  = True
-                    reply = reply or f"⚠️ Stall detected on tool `{t_name}` — stopped."
-                    break
-                _last_call_sig = _call_sig
-
-                result = _execute_tool_safe(t_name, t_args, cid)
-                tool_results.append({
-                    "name":   t_name,
-                    "args":   t_args,
-                    "result": json.dumps(result, default=str)[:8000],
-                    "ok":     result.get("ok", False),
-                    "step":   step,
-                })
-                tools_called.append(t_name)
-                step += 1
-
-                # On tool failure: check retry_hint
-                if not result.get("ok"):
-                    hint = result.get("retry_hint", "retry")
-                    print(f"[L4] Tool {t_name} FAILED: {result.get('message','')} "
-                          f"hint={hint}")
-                    if hint == "abort":
-                        done = True
-                        reply = (f"❌ Task aborted: {result.get('message', 'tool error')}")
-                        break
-                    elif hint == "confirm_owner":
-                        from core_orch_layer5 import layer_5_request_confirm
-                        confirmed = await layer_5_request_confirm(
-                            intent,
-                            {"intent_parsed": f"Retry failed tool: {t_name}",
-                             "plan": [f"retry {t_name}"],
-                             "risk": "medium"},
-                        )
-                        if not confirmed:
-                            done = True
-                            break
-
-        # ── Done? ─────────────────────────────────────────────────────────
-        # Only break AFTER tool results are collected so model can synthesize reply
-        if done and reply:
-            break
-
-        if done and not reply and not tool_calls:
-            reply = "✅ Done."
-            break
-
-        # If model set done=True but also called tools this step,
-        # do one more loop pass so it can synthesize tool results into reply
-        if done and tool_calls and not reply:
-            done = False   # let loop continue for synthesis pass
-
-    else:
-        # Hit max iterations
-        print(f"[L4] Max iterations ({MAX_TOOL_CALLS}) reached")
-        from core_config import notify
-        notify(f"⚠️ Hit max {MAX_TOOL_CALLS} tool calls. Stopping.", cid)
-        reply = reply or f"Stopped after {MAX_TOOL_CALLS} tool calls."
-
-    elapsed = int((time.time() - start_ts) * 1000)
-
-    # Guarantee reply is never empty before L5 — covers timeout + any other break path
-    if not reply or not reply.strip():
-        if tool_results:
-            last_ok  = next((r for r in reversed(tool_results) if r.get("ok")), None)
-            last_err = next((r for r in reversed(tool_results) if not r.get("ok")), None)
-            if last_ok:
-                reply = f"✅ Completed {len(tools_called)} tool(s). Last: `{last_ok['name']}`."
-            elif last_err:
-                reply = f"⚠️ Task stopped. Last error from `{last_err['name']}`: {last_err.get('result','')[:200]}"
-            else:
-                reply = f"⚠️ Task stopped after {step} step(s) with no output."
+    # Destructive action check
+    text_lower = msg.text.lower()
+    if any(kw in text_lower for kw in _DESTRUCTIVE_KW):
+        if msg.tier != "owner":
+            checks["blockers"].append("Destructive action requires owner tier")
+            checks["passed"] = False
         else:
-            reply = f"⚠️ Task stopped after {step} step(s) — no tools executed."
-    
-    # Final safety net — reply must be a non-empty string
-    reply = str(reply).strip() or "⚠️ Task completed with no output."
+            checks["warnings"].append("Destructive keyword detected — confirm before execution")
 
-    print(f"[L4] Loop complete: steps={step} tools={len(tools_called)} "
-          f"elapsed={elapsed}ms reply_len={len(reply)}")
+    # Context quality check
+    if not msg.context.get("session"):
+        checks["warnings"].append("No session context loaded")
 
-    # ── Pass to L5 output ──────────────────────────────────────────────────
-    from core_orch_layer5 import layer_5_output
-    await layer_5_output(intent, reply, tool_results=tool_results)
+    # Intent confidence check
+    intent_data = msg.context.get("intent_classification", {})
+    conf = intent_data.get("confidence", 1.0)
+    if conf < 0.6:
+        checks["warnings"].append(f"Low intent confidence ({conf:.2f}) — may misplan")
 
-    # ── Pass to L9 learning (session logging) — only if reply is non-empty ──
-    if reply and reply.strip():
-        from core_orch_layer9 import layer_9_log_turn
-        await layer_9_log_turn(ctx, reply, tool_results=tool_results)
+    if checks["warnings"]:
+        print(f"[L4] Pre-flight warnings: {checks['warnings']}")
+    if checks["blockers"]:
+        print(f"[L4] Pre-flight BLOCKED: {checks['blockers']}")
 
-
-# ── Tool selection (scoped to message) ───────────────────────────────────────
-
-# Explicit intent → tool mappings (covers cases keyword routing misses)
-_INTENT_TOOL_MAP = [
-    # Knowledge base queries
-    ({"how many kb", "knowledge base", "kb count", "berapa kb"}, ["search_kb", "sb_query"]),
-    ({"how many tools", "berapa tools", "list tools"}, ["list_tools", "get_tool_info"]),
-    ({"how many task", "task count", "berapa task"}, ["sb_query", "task_health"]),
-    ({"mistake", "error log", "what went wrong"}, ["get_mistakes", "search_kb"]),
-    ({"pattern", "trading pattern"}, ["search_kb", "sb_query"]),
-    ({"status", "health", "are you", "how are you"}, ["get_state", "build_status"]),
-    ({"deploy", "redeploy", "restart"}, ["redeploy", "build_status", "railway_logs_live"]),
-    ({"patch", "fix file", "edit file"}, ["patch_file", "read_file", "gh_search_replace"]),
-    ({"search", "find", "look up", "cari"}, ["search_kb", "web_search"]),
-    ({"rule", "behavioral", "aturan"}, ["get_behavioral_rules"]),
-    ({"infrastructure", "infra"}, ["get_infrastructure"]),
-    ({"evolution", "evolusi"}, ["sb_query"]),
-    ({"crypto", "price", "trade", "harga"}, ["crypto_price", "crypto_balance"]),
-    ({"weather", "cuaca"}, ["weather"]),
-    ({"calculate", "math", "hitung"}, ["calc"]),
-    ({"translate", "terjemah"}, ["translate"]),
-    ({"write", "create", "buat", "document", "spreadsheet", "presentation"}, 
-     ["write_file", "create_document", "create_spreadsheet", "create_presentation"]),
-    ({"run", "execute", "python", "script"}, ["run_python"]),
-    ({"web", "browse", "fetch", "url"}, ["web_fetch", "web_search", "summarize_url"]),
-    ({"github", "repo", "commit", "branch"}, ["read_file", "write_file", "gh_search_replace"]),
-    ({"session", "session_start", "session_end"}, ["sb_query", "get_state"]),
-    ({"table", "schema", "column"}, ["get_table_schema", "sb_query"]),
-]
-
-# Max tools to pass to the model — more than this hurts reasoning quality
-_MAX_TOOLS_TO_MODEL = 20
+    return checks
 
 
-def _select_tools(text: str, hints: list) -> list:
-    """
-    Return a focused list of tool names relevant to this message.
-    Priority: (1) L3 hints, (2) intent map, (3) keyword category routing, (4) always_include.
-    Caps at _MAX_TOOLS_TO_MODEL to keep model focused.
-    Never returns more than all tools.
-    """
+async def _build_plan(msg: OrchestratorMessage) -> Dict[str, Any]:
+    """Build execution plan. Uses fast-path map first, Groq as fallback."""
+    intent = msg.intent or "general_query"
+    classification = msg.context.get("intent_classification", {})
+
+    # 1. No tools needed
+    if not classification.get("requires_tools", False):
+        return {
+            "type": "direct_response",
+            "subtasks": [],
+            "estimated_complexity": "low",
+            "direct_answer": None,
+        }
+
+    # 2. Fast-path single-tool intents
+    if intent in _INTENT_TOOL_MAP:
+        tools = _INTENT_TOOL_MAP[intent]
+        cmd_args = msg.context.get("command_args", "")
+        return {
+            "type": "tool_execution",
+            "subtasks": [
+                {
+                    "step": i + 1,
+                    "action": f"Execute {t}",
+                    "tool": t,
+                    "args": {"args": cmd_args} if cmd_args else {},
+                    "expected_output": "tool result",
+                }
+                for i, t in enumerate(tools)
+            ],
+            "estimated_complexity": "low",
+            "requires_confirmation": False,
+        }
+
+    # 3. Groq planning for complex/multi-step tasks
     try:
-        from core_tools import TOOLS
-        from core_config import TOOL_CATEGORY_KEYWORDS, TOOL_ALWAYS_INCLUDE
-
-        all_names   = set(TOOLS.keys())
-        always_incl = set(TOOL_ALWAYS_INCLUDE) & all_names
-        selected    = set(always_incl)
-        tl          = text.lower()
-
-        # (1) L3 hints — fuzzy match: accept partial name matches too
-        for h in (hints or []):
-            h_lower = h.lower()
-            if h in all_names:
-                selected.add(h)
-            else:
-                # partial match e.g. "supabase_query" → "sb_query"
-                for name in all_names:
-                    if h_lower in name or name in h_lower:
-                        selected.add(name)
-
-        # (2) Explicit intent → tool map
-        for intent_kws, tool_names in _INTENT_TOOL_MAP:
-            if any(kw in tl for kw in intent_kws):
-                for t in tool_names:
-                    if t in all_names:
-                        selected.add(t)
-
-        # (3) Keyword-based category routing (fixed: map category → tool names correctly)
-        for cat, kws in TOOL_CATEGORY_KEYWORDS.items():
-            if any(kw in tl for kw in kws):
-                for name in all_names:
-                    # tool name matches any keyword in the triggered category
-                    if any(kw in name for kw in kws):
-                        selected.add(name)
-
-        result = [t for t in selected if t in all_names]
-
-        # (4) If still empty after all routing — use always_include only (not ALL tools)
-        if not result:
-            result = list(always_incl) or list(all_names)[:_MAX_TOOLS_TO_MODEL]
-
-        # Cap to avoid flooding model context — prioritise hints + always_include
-        if len(result) > _MAX_TOOLS_TO_MODEL:
-            priority = list((set(hints or []) | always_incl) & all_names)
-            rest     = [t for t in result if t not in priority]
-            result   = (priority + rest)[:_MAX_TOOLS_TO_MODEL]
-
-        print(f"[L4] Selected {len(result)} tools for: {text[:60]!r}")
-        return result
-
-    except Exception as e:
-        print(f"[L4] Tool selection failed: {e}")
-        try:
-            from core_tools import TOOLS
-            from core_config import TOOL_ALWAYS_INCLUDE
-            return list(set(TOOL_ALWAYS_INCLUDE) & set(TOOLS.keys()))
-        except Exception:
-            return []
+        prompt = _PLAN_TEMPLATE.format(
+            text=msg.text[:600],
+            intent=intent,
+            tier=msg.tier,
+            domain=msg.context.get("current_domain", "general"),
+            command=msg.context.get("command", ""),
+            args=msg.context.get("command_args", ""),
+        )
+        raw = groq_chat(
+            system=_PLAN_SYSTEM,
+            user=prompt,
+            model=GROQ_MODEL,
+            max_tokens=512,
+        )
+        plan = json.loads(raw.strip().lstrip("```json").rstrip("```").strip())
+        print(f"[L4] Groq plan: type={plan.get('type')}  steps={len(plan.get('subtasks', []))}")
+        return plan
+    except Exception as exc:
+        print(f"[L4] Groq planning failed (non-fatal): {exc}")
+        return {
+            "type": "direct_response",
+            "subtasks": [],
+            "estimated_complexity": "unknown",
+            "error": str(exc),
+        }
 
 
-if __name__ == "__main__":
-    print("🛰️ Layer 4: Execution — Online.")
+# ── Main layer ────────────────────────────────────────────────────────────────
+async def layer_4_reason(msg: OrchestratorMessage):
+    """
+    Run pre-flight checks, build execution plan, hand to L5.
+    """
+    msg.track_layer("L4-START")
+    print(f"[L4] Planning execution …")
+
+    # Pre-flight
+    preflight = await _cognitive_preflight(msg)
+    msg.context["preflight_checks"] = preflight
+
+    if not preflight["passed"]:
+        msg.add_error("L4", Exception(f"Pre-flight blocked: {preflight['blockers']}"), "PREFLIGHT_BLOCKED")
+        from core_orch_layer10 import layer_10_output
+        await layer_10_output(msg)
+        return
+
+    # Build plan
+    plan = await _build_plan(msg)
+    msg.plan = plan
+    msg.context["execution_plan"] = plan
+
+    msg.track_layer("L4-COMPLETE")
+    print(f"[L4] Plan ready: type={plan.get('type')}  complexity={plan.get('estimated_complexity')}")
+
+    from core_orch_layer5 import layer_5_tools
+    await layer_5_tools(msg)

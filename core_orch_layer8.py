@@ -1,572 +1,90 @@
 """
-core_orch_layer8.py — L8: COORDINATION (Model Provider Layer)
-===============================================================
-Owns all LLM calls. Provider chain with proper context injection.
-
-Provider chain (swap CLAUDE_MODEL to change primary):
-  1. Claude Opus via Anthropic API  ← primary (best quality)
-  2. OpenRouter (gemini-2.5-flash)  ← fallback if Anthropic fails/429
-  3. Gemini direct (2.5-flash)      ← fallback if OpenRouter fails
-  4. Groq (llama-3.3-70b)           ← last resort
-
-When you buy Opus API: set CLAUDE_MODEL = "claude-opus-4-6" in env
-Currently using: claude-sonnet-4-6 until Opus is available
-
-Context injection protocol (L8 always injects):
-  - System prompt (behavioral rules + constitution principles)
-  - Conversation history (last N turns)
-  - Tool descriptions (scoped to message, from L4)
-  - Pre-flight plan (from L3)
-  - Tool results so far (for loop iteration)
-  - Output schema (JSON response format)
-
-call_model_loop() — main agentic loop call (returns tool_calls + reply + done)
-call_model_json()  — cheap structured call (pre-flight, critic, plan)
-call_model_simple()— plain text call (trivial fast-path)
-build_tools_desc() — formats tool list for model context
+core_orch_layer8.py — L8: Safety & Output Redaction
+Scans all tool results and styled responses for secrets/PII
+before anything reaches Telegram or MCP output.
 """
+import re
+from typing import Any, List, Tuple
 
-import json
-import os
-import time
-from datetime import datetime, timezone
-from typing import Optional
+from orchestrator_message import OrchestratorMessage
 
-import httpx
-
-# ── Model config ──────────────────────────────────────────────────────────────
-# PRIMARY: Claude via Anthropic API
-# Swap CLAUDE_MODEL env var to change:
-#   claude-opus-4-6        ← best quality (buy when ready)
-#   claude-sonnet-4-6      ← current default (smart + fast)
-#   claude-haiku-4-5-20251001 ← cheapest
-CLAUDE_MODEL       = os.environ.get("CLAUDE_MODEL", "claude-sonnet-4-6")
-ANTHROPIC_API_KEY  = os.environ.get("ANTHROPIC_API_KEY", "")
-
-# FALLBACK 1: OpenRouter
-OPENROUTER_MODEL   = "google/gemini-2.5-flash"
-OPENROUTER_KEY     = os.environ.get("OPENROUTER_API_KEY", "")
-
-# FALLBACK 2: Gemini direct
-GEMINI_MODEL       = "gemini-2.5-flash-lite"
-
-# FALLBACK 3: Groq
-GROQ_MODEL_ORCH    = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
-
-MAX_TOKENS_LOOP    = 4096   # raised: complex tasks need room to reason
-MAX_TOKENS_JSON    = 2048  # raised: self-critique + structured plan needs headroom
-MAX_TOKENS_SIMPLE  = 512
-MAX_TOOLS_DESC_CHARS = 12000
+# Patterns are ordered most-specific → least-specific
+_REDACTION_PATTERNS = [
+    ("GITHUB_PAT",       re.compile(r"gh[ps]_[a-zA-Z0-9]{36,}")),
+    ("JWT_TOKEN",        re.compile(
+        r"eyJ[a-zA-Z0-9\-_]+\.[a-zA-Z0-9\-_]+\.[a-zA-Z0-9\-_]+"
+    )),
+    ("GROQ_API_KEY",     re.compile(r"gsk_[a-zA-Z0-9]{40,}")),
+    ("TELEGRAM_TOKEN",   re.compile(r"\d{9,10}:[a-zA-Z0-9\-_]{35}")),
+    ("SUPABASE_SVC_KEY", re.compile(r"sb-[a-zA-Z0-9]{32,}")),
+    ("LOCAL_PATH",       re.compile(r"(?:/home|/root|/var|/opt)/[\w.\-/]+")),
+    ("IP_ADDRESS",       re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")),
+    ("EMAIL",            re.compile(r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}")),
+]
 
 
-# ── Anthropic (Claude) ────────────────────────────────────────────────────────
-
-def _call_anthropic(system: str, messages: list, max_tokens: int = MAX_TOKENS_LOOP,
-                    json_mode: bool = False) -> str:
-    """Call Anthropic Messages API. Returns raw content string."""
-    if not ANTHROPIC_API_KEY:
-        raise RuntimeError("ANTHROPIC_API_KEY not set")
-
-    payload = {
-        "model":      CLAUDE_MODEL,
-        "max_tokens": max_tokens,
-        "system":     system,
-        "messages":   messages,
-    }
-    r = httpx.post(
-        "https://api.anthropic.com/v1/messages",
-        headers={
-            "x-api-key":         ANTHROPIC_API_KEY,
-            "anthropic-version": "2023-06-01",
-            "content-type":      "application/json",
-        },
-        json=payload,
-        timeout=60,
-    )
-    if r.status_code == 429:
-        wait = int(r.headers.get("Retry-After", "5"))
-        print(f"[L8] Anthropic 429 — waiting {wait}s (Retry-After), then retrying")
-        time.sleep(wait)
-        r = httpx.post(
-            "https://api.anthropic.com/v1/messages",
-            headers={
-                "x-api-key":         ANTHROPIC_API_KEY,
-                "anthropic-version": "2023-06-01",
-                "content-type":      "application/json",
-            },
-            json=payload,
-            timeout=60,
-        )
-    r.raise_for_status()
-    content = r.json().get("content", [])
-    return next((b["text"] for b in content if b.get("type") == "text"), "")
+def _redact(text: str) -> Tuple[str, List[str]]:
+    """Return (redacted_text, [label, ...]) for all matched patterns."""
+    redacted = text
+    found: List[str] = []
+    for label, pattern in _REDACTION_PATTERNS:
+        if pattern.search(redacted):
+            found.append(label)
+            redacted = pattern.sub(f"[REDACTED:{label}]", redacted)
+    return redacted, found
 
 
-# ── OpenRouter (Gemini via OR) ────────────────────────────────────────────────
-
-def _call_openrouter(system: str, user: str, max_tokens: int,
-                     json_mode: bool = False) -> str:
-    if not OPENROUTER_KEY:
-        raise RuntimeError("OPENROUTER_API_KEY not set")
-
-    payload = {
-        "model":      OPENROUTER_MODEL,
-        "max_tokens": max_tokens,
-        "temperature": 0.1,
-        "messages": [
-            {"role": "system", "content": system},
-            {"role": "user",   "content": user},
-        ],
-    }
-    if json_mode:
-        payload["response_format"] = {"type": "json_object"}
-
-    r = httpx.post(
-        "https://openrouter.ai/api/v1/chat/completions",
-        headers={
-            "Authorization": f"Bearer {OPENROUTER_KEY}",
-            "Content-Type":  "application/json",
-            "HTTP-Referer":  "https://core-agi-production.up.railway.app",
-            "X-Title":       "CORE AGI",
-        },
-        json=payload,
-        timeout=60,
-    )
-    if r.status_code == 429:
-        time.sleep(5)
-        r = httpx.post(
-            "https://openrouter.ai/api/v1/chat/completions",
-            headers={
-                "Authorization": f"Bearer {OPENROUTER_KEY}",
-                "Content-Type":  "application/json",
-                "HTTP-Referer":  "https://core-agi-production.up.railway.app",
-                "X-Title":       "CORE AGI",
-            },
-            json=payload,
-            timeout=60,
-        )
-    r.raise_for_status()
-    choices = r.json().get("choices", [])
-    return choices[0]["message"].get("content", "") if choices else ""
+def _deep_redact(obj: Any) -> Tuple[Any, List[str]]:
+    """Recursively redact strings inside dicts/lists."""
+    all_found: List[str] = []
+    if isinstance(obj, str):
+        clean, found = _redact(obj)
+        return clean, found
+    if isinstance(obj, dict):
+        cleaned = {}
+        for k, v in obj.items():
+            cv, found = _deep_redact(v)
+            cleaned[k] = cv
+            all_found.extend(found)
+        return cleaned, all_found
+    if isinstance(obj, list):
+        cleaned_list = []
+        for item in obj:
+            ci, found = _deep_redact(item)
+            cleaned_list.append(ci)
+            all_found.extend(found)
+        return cleaned_list, all_found
+    return obj, []
 
 
-# ── Gemini direct ─────────────────────────────────────────────────────────────
-
-def _call_gemini(system: str, user: str, max_tokens: int,
-                 json_mode: bool = False) -> str:
-    from core_config import gemini_chat
-    return gemini_chat(
-        system=system, user=user,
-        max_tokens=max_tokens, json_mode=json_mode,
-    )
-
-
-# ── Groq ──────────────────────────────────────────────────────────────────────
-
-def _call_groq(system: str, user: str, max_tokens: int) -> str:
-    from core_config import groq_chat
-    return groq_chat(system=system, user=user, model=GROQ_MODEL_ORCH,
-                     max_tokens=max_tokens)
-
-
-# ── Provider chain ────────────────────────────────────────────────────────────
-
-def _strip_json(s: str) -> str:
-    s = s.strip()
-    if s.startswith("```"):
-        import re
-        s = re.sub(r"^```[a-zA-Z]*\s*\n?", "", s)
-        s = re.sub(r"\n?```\s*$", "", s)
-    return s.strip()
-
-
-def _chain_call(system: str, user: str, max_tokens: int,
-                json_mode: bool = False, messages: list = None) -> str:
+async def layer_8_safety(msg: OrchestratorMessage):
     """
-    Try providers in order. Returns raw string.
-    Anthropic → OpenRouter → Gemini → Groq
+    Scan tool results and styled response for secrets/PII.
+    Redact in-place before output delivery.
     """
-    errors = []
+    msg.track_layer("L8-START")
 
-    # 1. Anthropic (Claude) — primary
-    if ANTHROPIC_API_KEY:
-        try:
-            msgs = messages or [{"role": "user", "content": user}]
-            return _call_anthropic(system, msgs, max_tokens, json_mode)
-        except Exception as e:
-            errors.append(f"Anthropic: {str(e)[:120]}")
-            print(f"[L8] Anthropic failed: {str(e)[:120]}")
+    # Redact tool results
+    for result in msg.tool_results:
+        raw = result.get("result")
+        if raw is not None:
+            clean, found = _deep_redact(raw)
+            if found:
+                result["result"] = clean
+                msg.safety_redacted.extend(found)
+                print(f"[L8] Redacted {found} from {result.get('tool','?')} result")
 
-    # 2. OpenRouter
-    if OPENROUTER_KEY:
-        try:
-            return _call_openrouter(system, user, max_tokens, json_mode)
-        except Exception as e:
-            errors.append(f"OpenRouter: {str(e)[:120]}")
-            print(f"[L8] OpenRouter failed: {str(e)[:120]}")
+    # Redact styled response if already set
+    if msg.styled_response:
+        clean, found = _redact(msg.styled_response)
+        if found:
+            msg.styled_response = clean
+            msg.safety_redacted.extend(found)
+            print(f"[L8] Redacted {found} from styled_response")
 
-    # 3. Gemini direct
-    try:
-        return _call_gemini(system, user, max_tokens, json_mode)
-    except Exception as e:
-        errors.append(f"Gemini: {str(e)[:120]}")
-        print(f"[L8] Gemini failed: {str(e)[:120]}")
+    msg.track_layer("L8-COMPLETE")
+    if msg.safety_redacted:
+        print(f"[L8] Total redactions: {list(set(msg.safety_redacted))}")
 
-    # 4. Groq last resort
-    try:
-        return _call_groq(system, user, max_tokens)
-    except Exception as e:
-        errors.append(f"Groq: {str(e)[:120]}")
-
-    raise RuntimeError("All providers failed:\n" + "\n".join(errors))
-
-
-# ── Context injection helpers ─────────────────────────────────────────────────
-
-def _build_system_for_loop(ctx: dict, tools_desc: str,
-                            execution_plan: dict) -> str:
-    """Build full system prompt for the agentic loop call."""
-    intent    = ctx["intent"]
-    rules     = ctx.get("behavioral_rules", [])
-    mistakes  = ctx.get("recent_mistakes", [])
-    goals     = ctx.get("active_goals", [])
-    tasks     = ctx.get("in_progress_tasks", [])
-
-    lines = [
-        "You are CORE — a sovereign intelligence, not an assistant.",
-        f"Owner: REINVAGNAR (Jakarta, WIB/UTC+7). Model: {CLAUDE_MODEL}.",
-        f"Current UTC: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M')} | WIB: UTC+7.",
-        "You own problems end-to-end. Execute, don't narrate. Use tools directly.",
-        "Never say 'I will call' — just call the tool.",
-        "",
-    ]
-
-    if tasks:
-        raw = tasks[0].get("task", "")
-        try:
-            _stripped = raw.strip().lstrip("```json").lstrip("```").rstrip("```").strip() if isinstance(raw, str) else ""
-            title = json.loads(_stripped).get("title", raw[:80]) if _stripped else str(raw)[:80]
-        except Exception:
-            title = str(raw)[:80]
-        lines.append(f"ACTIVE TASK: {title}")
-
-    if goals:
-        g_lines = "\n".join(
-            f"  [{g.get('domain','')}] {g.get('goal','')}"
-            if isinstance(g, dict) else f"  {str(g)[:100]}"
-            for g in goals[:3]
-        )
-        lines.append(f"ACTIVE GOALS:\n{g_lines}")
-
-    if mistakes:
-        m_lines = " | ".join(
-            f"[{m.get('domain','?')}] AVOID: {m.get('what_failed','')[:120]}"
-            for m in mistakes[:5]
-        )
-        lines.append(f"AVOID: {m_lines}")
-
-    if rules:
-        r_lines = "\n".join(
-            f"  [{r.get('trigger','?')}] {r.get('pointer','')[:100]}"
-            for r in rules[:30]
-        )
-        lines.append(f"BEHAVIORAL RULES:\n{r_lines}")
-
-    plan = execution_plan.get("plan", [])
-    structured_steps_check = execution_plan.get("structured_steps", [])
-    if plan and not structured_steps_check:
-        # Only show raw plan if structured_steps not available (avoids duplication)
-        p_lines = "\n".join(f"  {i+1}. {s}" for i, s in enumerate(plan))
-        lines.append(f"EXECUTION PLAN:\n{p_lines}")
-
-    creative = execution_plan.get("creative_path", "")
-    if creative:
-        lines.append(f"CREATIVE PATH: {creative}")
-
-    fallback = execution_plan.get("fallback", "")
-    if fallback:
-        lines.append(f"FALLBACK: {fallback}")
-
-    # Inject structured_steps if available (from L3 enriched plan)
-    structured_steps = execution_plan.get("structured_steps", [])
-    if structured_steps:
-        ss_lines = "\n".join(
-            f"  {s['idx']+1}. {s['step']}" + (f" [tool: {s['tool']}]" if s.get("tool") else "")
-            for s in structured_steps
-        )
-        lines.append(f"STRUCTURED PLAN:\n{ss_lines}")
-
-    # Inject conversation signals if available (from L3 multi-turn analysis)
-    conv_signals = execution_plan.get("conv_signals", {})
-    if conv_signals.get("is_repeat"):
-        lines.append("⚠️ REPEAT QUESTION: Previous answer was insufficient — must use tools, not memory.")
-    if conv_signals.get("consecutive_errors", 0) >= 2:
-        lines.append(f"⚠️ ERROR STREAK ({conv_signals['consecutive_errors']} turns) — be methodical, check tool args carefully.")
-
-    lines += [
-        "",
-        f"AVAILABLE TOOLS:\n{tools_desc}",
-        "",
-        "CREATIVE TOOLKIT — try before giving up:",
-        "• run_python → call ANY HTTP API, process any data",
-        "• shell(command) → run bash on VM",
-        "• No dedicated tool? run_python IS the tool.",
-        "",
-        "Respond ONLY with valid JSON (no markdown fences):",
-        '{"thought":"your reasoning — WHY this approach","tool_calls":[{"name":"tool_name","args":{}}],"reply":"direct answer to owner","done":true/false}',
-    ]
-
-    # Step-aware instruction: push tool use early, synthesis late
-    step_num = execution_plan.get("_step", 0)
-    if step_num == 0:
-        lines += [
-            "STEP 0 RULES — You are at the START:",
-            "- You MUST call at least one tool before setting done=true",
-            "- Do NOT answer from memory — fetch live data",
-            "- tool_calls must be non-empty on this step",
-        ]
-    else:
-        lines += [
-            "Rules:",
-            "- done=true ONLY when task fully complete AND reply non-empty",
-            "- tool_calls=[] only when answering directly with no execution needed",
-            "- Never invent tool results — call the tool",
-            "- Tool fails → try alternative immediately. run_python is always a fallback.",
-        ]
-
-    return "\n".join(lines)
-
-
-def _build_messages_for_loop(ctx: dict, tool_results: list,
-                              step: int) -> list:
-    """Build messages array for Anthropic API from history + tool results.
-    Enforces strict user/assistant alternation required by Anthropic API.
-    """
-    messages = []
-
-    # Conversation history — truncate content, enforce valid roles only
-    history = ctx.get("conversation", [])
-    for h in history[-12:]:
-        role    = h.get("role", "user")
-        content = h.get("content", "")[:1500]
-        if role not in ("user", "assistant"):
-            if role == "system":
-                print(f"[L8] WARNING: system-role message in conversation history — dropped to avoid Anthropic 400")
-            continue
-        # Enforce alternation: skip if same role as last message
-        if messages and messages[-1]["role"] == role:
-            # Merge into last message rather than drop — preserves context
-            messages[-1]["content"] += f"\n\n[continued]\n{content}"
-            continue
-        messages.append({"role": role, "content": content})
-
-    # Tool results block — always injected as a user turn
-    if tool_results:
-        # Smart result selection: always include last 6 + any unique successful tools
-        # that aren't in last 6 (prevents model repeating already-succeeded steps)
-        last_6  = tool_results[-6:]
-        last_6_names = {r.get("name") for r in last_6}
-        earlier_unique = [
-            r for r in tool_results[:-6]
-            if r.get("ok") and r.get("name") not in last_6_names
-        ][-4:]  # up to 4 earlier unique successes
-        show_results = earlier_unique + last_6
-
-        result_blocks = []
-        for r in show_results:
-            name   = r.get("name", "?")
-            ok     = "✅" if r.get("ok") else "❌"
-            res    = r.get("result", "")
-            cutoff = 1200 if r == tool_results[-1] else 400
-            result_blocks.append(
-                f"TOOL_RESULT [{ok} {name} @ step {r.get('step',0)}]:\n{res[:cutoff]}"
-            )
-        results_text = "\n\n".join(result_blocks)
-        tool_msg = {
-            "role":    "user",
-            "content": f"=== TOOL RESULTS (step {step}) ===\n{results_text}\n\nAnalyze results. If task complete → set done=true with reply. If more steps needed → call next tool.",
-        }
-        # Enforce alternation: if last is already user, merge tool results in
-        if messages and messages[-1]["role"] == "user":
-            messages[-1]["content"] += f"\n\n{tool_msg['content']}"
-        else:
-            messages.append(tool_msg)
-
-    # Ensure last message is user (Anthropic requirement)
-    intent_text = ctx["intent"]["text"]
-    if not messages:
-        messages.append({"role": "user", "content": f"OWNER: {intent_text}"})
-    elif messages[-1]["role"] != "user":
-        messages.append({"role": "user", "content": f"OWNER: {intent_text}"})
-
-    return messages
-
-
-def build_tools_desc(selected_tool_names: list) -> str:
-    """Format tool list for model context. Capped at MAX_TOOLS_DESC_CHARS."""
-    lines   = []
-    total   = 0
-    try:
-        from core_tools import TOOLS
-        for name in selected_tool_names:
-            tdef = TOOLS.get(name)
-            if not tdef:
-                continue
-            args_str = ", ".join(
-                (a["name"] if isinstance(a, dict) else a)
-                for a in (tdef.get("args") or [])
-            )
-            desc = tdef.get("desc", "")[:200]
-            line = f"  {name}({args_str}) — {desc}"
-            lines.append(line)
-            total += len(line)
-            if total >= MAX_TOOLS_DESC_CHARS:
-                remaining = len(selected_tool_names) - len(lines)
-                if remaining > 0:
-                    lines.append(f"  ... ({remaining} more — call list_tools to discover)")
-                break
-    except Exception as e:
-        print(f"[L8] build_tools_desc error: {e}")
-
-    # Always append VM tools (these don't live in TOOLS registry)
-    lines += [
-        "  shell(command, sudo?, timeout?) — run any bash on VM",
-        "  run_script(script, lang?, timeout?) — run bash/python on VM",
-        "  file_read(path) — read file on VM",
-        "  file_write(path, content) — write file on VM",
-        "  vm_info() — VM disk/memory/CPU/uptime",
-    ]
-    return "\n".join(lines)
-
-
-# ── Public API ────────────────────────────────────────────────────────────────
-
-async def call_model_loop(
-    ctx: dict,
-    execution_plan: dict,
-    tools_desc: str,
-    tool_results: list,
-    step: int,
-) -> dict:
-    """
-    Main agentic loop call. Returns {thought, tool_calls, reply, done}.
-    Injects full context. Validates output via L6.
-    """
-    import asyncio
-
-    # Inject current step so system prompt can be step-aware
-    execution_plan = dict(execution_plan)
-    execution_plan["_step"] = step
-
-    system   = _build_system_for_loop(ctx, tools_desc, execution_plan)
-    messages = _build_messages_for_loop(ctx, tool_results, step)
-    user     = messages[-1]["content"] if messages else ctx["intent"]["text"]
-
-    loop = asyncio.get_running_loop()
-    raw  = await loop.run_in_executor(
-        None,
-        lambda: _chain_call(system, user, MAX_TOKENS_LOOP,
-                             json_mode=True, messages=messages)
-    )
-
-    try:
-        cleaned = _strip_json(raw)
-        parsed  = json.loads(cleaned)
-    except Exception:
-        # Model returned non-JSON
-        if step == 0 and not tool_results:
-            # Step 0: model skipped tool calls entirely — force retry signal
-            print(f"[L8] Non-JSON at step 0 — model skipped tool calls, injecting retry")
-            return {
-                "thought": "Non-JSON response at step 0 — must use tools",
-                "tool_calls": [],
-                "reply": "",
-                "done": False,
-            }
-        # Step > 0: raw may be a plain-text answer OR garbage.
-        # Only surface it if it looks like a real response (>20 chars, no JSON artifacts)
-        _raw_clean = raw.strip()
-        _looks_real = (
-            len(_raw_clean) > 20
-            and not _raw_clean.startswith("{")
-            and not _raw_clean.startswith("[")
-            and "Traceback" not in _raw_clean
-            and "Error" not in _raw_clean[:30]
-        )
-        if _looks_real:
-            print(f"[L8] Non-JSON at step {step} — treating plain text as reply")
-            return {"thought": "", "tool_calls": [], "reply": _raw_clean, "done": True}
-        # Garbage — force another loop iteration rather than surfacing noise
-        print(f"[L8] Non-JSON garbage at step {step} — injecting retry signal")
-        return {"thought": "JSON parse failed, retrying", "tool_calls": [], "reply": "", "done": False}
-
-    # Normalize tool_calls: handle object, list, or missing
-    raw_tc = parsed.get("tool_calls", []) or []
-    if isinstance(raw_tc, dict):
-        raw_tc = [raw_tc]   # model returned single object instead of list
-    elif not isinstance(raw_tc, list):
-        raw_tc = []
-    # Filter out malformed entries
-    tool_calls_clean = [
-        tc for tc in raw_tc
-        if isinstance(tc, dict) and tc.get("name")
-    ]
-
-    result = {
-        "thought":    parsed.get("thought", ""),
-        "tool_calls": tool_calls_clean,
-        "reply":      parsed.get("reply", ""),
-        "done":       bool(parsed.get("done", False)),
-    }
-
-    # L6 validation (hallucination + prompt leak + narration check)
-    if result["reply"] and tool_results:
-        from core_orch_layer6 import layer_6_validate
-        validation = await layer_6_validate(
-            ctx["intent"], result["reply"], tool_results
-        )
-        if not validation["ok"]:
-            # Inject correction as new loop turn
-            result["reply"]      = ""
-            result["done"]       = False
-            result["tool_calls"] = []
-            result["thought"]    = f"[L6 correction] {validation.get('issues', [])}"
-
-    return result
-
-
-async def call_model_json(system: str, user: str,
-                           max_tokens: int = MAX_TOKENS_JSON) -> dict:
-    """
-    Cheap structured call for pre-flight, critic, plan generation.
-    Returns parsed dict or {} on failure.
-    """
-    import asyncio
-    loop = asyncio.get_running_loop()
-    raw  = await loop.run_in_executor(
-        None,
-        lambda: _chain_call(system, user, max_tokens, json_mode=True)
-    )
-    try:
-        return json.loads(_strip_json(raw))
-    except Exception as e:
-        print(f"[L8] call_model_json parse failed: {e} raw={raw[:100]!r}")
-        return {}
-
-
-async def call_model_simple(user: str, minimal_context: dict) -> str:
-    """
-    Plain text call for trivial fast-path.
-    Returns string reply.
-    """
-    import asyncio
-    system = minimal_context.get("system", "You are CORE. Answer concisely.")
-    loop   = asyncio.get_running_loop()
-    return await loop.run_in_executor(
-        None,
-        lambda: _chain_call(system, user, MAX_TOKENS_SIMPLE)
-    )
-
-
-if __name__ == "__main__":
-    print(f"🛰️ Layer 8: Coordination — Online. Primary model: {CLAUDE_MODEL}")
+    from core_orch_layer9 import layer_9_tone
+    await layer_9_tone(msg)

@@ -47,16 +47,26 @@ def startup_v2():
     from core_orch_layer0 import validate_environment
     validate_environment()
 
-    # L6: start background loops (heartbeat, task sweeper)
-    from core_orch_layer6 import start_all_background_loops
-    start_all_background_loops()
+    # (L6 background loops not used — orchestrator is request-driven, not polling)
 
     # Log active model
     model = os.environ.get("CLAUDE_MODEL", "claude-sonnet-4-6")
     print(f"[ORCH-V2] Started. Primary model: {model}")
     print("[ORCH-V2] Layer chain: L0→L1→L2→L3→L4→L5→L9 (L6/L7/L8 inlined)")
 
-    print("[ORCH-V2] Notify suppressed — boot message handled by core_main.")
+    # Notify owner
+    try:
+        from core_github import notify
+        from core_orch_layer0 import OWNER_ID
+        notify(
+            f"🧠 <b>CORE Orchestrator v2 Online</b>\n"
+            f"Model: {model}\n"
+            f"Layers: L0–L9 active\n"
+            f"Blueprint: 11-layer compliant",
+            OWNER_ID,
+        )
+    except Exception as e:
+        print(f"[ORCH-V2] Startup notify failed (non-fatal): {e}")
 
 
 # ── Main entry point ──────────────────────────────────────────────────────────
@@ -68,12 +78,12 @@ async def handle_telegram_message_v2(msg: dict):
     """
     try:
         from core_orch_layer1 import layer_1_triage
-        await layer_1_triage(msg)
+        await layer_1_triage(msg, input_type="telegram")
     except Exception as e:
         print(f"[ORCH-V2] Unhandled top-level error: {e}")
         try:
             cid = str(msg.get("chat", {}).get("id", ""))
-            from core_config import notify
+            from core_github import notify
             notify(f"⚠️ CORE Orchestrator v2 error: {e}", cid)
         except Exception:
             pass

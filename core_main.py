@@ -20,7 +20,6 @@ from datetime import datetime, timedelta
 from typing import Optional
 
 import httpx
-from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -28,15 +27,16 @@ from pydantic import BaseModel
 
 from core_config import (
     MCP_SECRET, MCP_PROTOCOL_VERSION, PORT, SESSION_TTL_H,
-    SUPABASE_URL, COLD_KB_GROWTH_THRESHOLD, GROQ_API_KEY,
+    SUPABASE_URL, COLD_KB_GROWTH_THRESHOLD,
     L, sb_get, sb_post, sb_patch, sb_upsert, sb_post_critical,
     _sbh, _sbh_count_svc, groq_chat,
 )
-from core_github import gh_read, gh_write, notify
-from core_train import cold_processor_loop, background_researcher, evolution_tier_processor, proactive_surface_loop
+from core_github import gh_read, gh_write, notify, set_webhook
+from core_train import cold_processor_loop, background_researcher
 from core_tools import TOOLS, handle_jsonrpc
-# from core_orchestrator import handle_telegram_message, start_orchestrator
-from core_orch_main import handle_telegram_message, startup_v2
+
+# ── Orchestrator v2 ───────────────────────────────────────────────────────────
+from core_orch_main import handle_telegram_message_v2, startup_v2
 
 # ---------------------------------------------------------------------------
 # Shared helpers (used by routes + tools — defined here, imported by core_tools)
@@ -60,11 +60,11 @@ def get_resume_task() -> str:
                 title = str(raw)[:80]
             priority = tasks[0].get("priority", "?")
             return f"Resuming: {title} (P{priority})"
-        # No in_progress tasks -- check for pending (exclude desktop_agent tasks)
+        # No in_progress tasks -- check for pending
         pending = sb_get(
             "task_queue",
             "select=task,priority&source=in.(core_v6_registry,mcp_session)"
-            "&status=eq.pending&task=not.like.*desktop_agent*&order=priority.desc&limit=1"
+            "&status=eq.pending&order=priority.desc&limit=1"
         )
         if pending and isinstance(pending, list) and pending[0]:
             raw = pending[0].get("task", "")
@@ -81,7 +81,7 @@ def get_resume_task() -> str:
 
 
 def get_latest_session():
-    d = sb_get("sessions", "select=summary,created_at&order=created_at.desc&limit=1")
+    d = sb_get("sessions", "select=summary,actions,created_at&order=created_at.desc&limit=1")
     return d[0] if d else {}
 
 
@@ -219,14 +219,7 @@ class PatchRequest(BaseModel):
 # ---------------------------------------------------------------------------
 # FastAPI app
 # ---------------------------------------------------------------------------
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    """FastAPI lifespan — replaces deprecated @app.on_event("startup")."""
-    on_start()
-    yield
-
-
-app = FastAPI(title="CORE v6.0", version="6.0", lifespan=lifespan)
+app = FastAPI(title="CORE v6.0", version="6.0")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 _sse_sessions: dict = {}
@@ -292,7 +285,7 @@ async def ingest_status():
         last_ingest = None
         try:
             rows = sb_get("hot_reflections",
-                "select=created_at&domain=eq.knowledge_ingestion&order=created_at.desc&limit=1",
+                "select=created_at,task_summary&domain=eq.knowledge_ingestion&order=created_at.desc&limit=1",
                 svc=True)
             if rows:
                 last_ingest = {"ts": rows[0].get("created_at"), "summary": rows[0].get("task_summary", "")[:100]}
@@ -304,7 +297,7 @@ async def ingest_status():
         return JSONResponse(status_code=500, content={"ok": False, "error": str(e)})
 
 
-@app.api_route("/", methods=["GET", "HEAD"])
+@app.get("/")
 def root():
     counts = get_system_counts()
     step = get_resume_task()
@@ -317,13 +310,13 @@ def root():
     }
 
 
-@app.api_route("/health", methods=["GET", "HEAD"])
+@app.get("/health")
 def health_ep():
     from core_tools import t_health
     return t_health()
 
 
-@app.api_route("/ping", methods=["GET", "HEAD"])
+@app.get("/ping")
 def ping():
     """Fast health check - just confirms server is responding."""
     return {"ok": True, "service": "CORE v6.0", "ts": datetime.utcnow().isoformat()}
@@ -440,7 +433,7 @@ load();
 def api_evolutions():
     rows = sb_get(
         "evolution_queue",
-        "select=id,status,change_type,change_summary,confidence,pattern_key,created_at"
+        "select=id,status,change_type,change_summary,confidence,pattern_key,diff_content,created_at"
         "&status=eq.pending&id=gt.1&order=created_at.desc&limit=50",
         svc=True,
     )
@@ -824,7 +817,7 @@ async def webhook(req: Request):
 def handle_msg(msg):
     cid  = str(msg.get("chat", {}).get("id", ""))
     text = msg.get("text", "").strip()
-    if not text and not msg.get("photo") and not msg.get("caption") and not msg.get("document") and not msg.get("audio") and not msg.get("voice") and not msg.get("video") and not msg.get("video_note") and not msg.get("sticker"):
+    if not text:
         return
     # Strip bot username suffix from commands (e.g. /status@reinvagnarbot -> /status)
     if text.startswith("/") and "@" in text:
@@ -837,23 +830,9 @@ def handle_msg(msg):
             f"<b>CORE v6.0</b>\n{resume}\n"
             f"Knowledge: {counts.get('knowledge_base',0)} | Sessions: {counts.get('sessions',0)}\n\n"
             f"<b>Commands:</b>\n"
-            f"/status \u2014 health check of all components\n"
-            f"/tstatus \u2014 training pipeline detailed status\n"
-            f"/project \u2014 list or prepare project context\n"
-            f"/metrics \u2014 orchestrator performance stats\n"
-            f"/p3status \u2014 phase 3 features status\n"
-            f"/model \u2014 current AI model info\n"
-            f"/refresh \u2014 clear session cache\n"
-            f"/cancel \u2014 stop active loop\n\n"
-            f"<b>Trading:</b>\n"
-            f"/tradestatus \u2014 performance + graduation progress\n"
-            f"/winrate \u2014 30d win rate summary\n"
-            f"/decision \u2014 last LLM trading decision\n"
-            f"/why \u2014 explain last decision\n"
-            f"/market \u2014 latest market snapshot\n"
-            f"/balance \u2014 paper account balance\n"
-            f"/fullreport \u2014 detailed report with mistakes + patterns\n"
-            f"/criteria \u2014 graduation criteria",
+            f"/status \u2014 health + system\n"
+            f"/tstatus \u2014 training pipeline detail\n"
+            f"/project [list|id] \u2014 project context",
             cid
         )
 
@@ -946,285 +925,25 @@ def handle_msg(msg):
             else:
                 notify(f"Could not prepare: {ids}. Check project IDs with /project list.", cid)
 
-    # ── Trading Bot — read-only reporting commands ───────────────────────────
-    elif text in ("/tradestatus", "/performance", "/stats"):
-        rows = sb_get(
-            "trading_positions",
-            "status=eq.closed&order=closed_at.asc"
-            "&select=id,symbol,strategy,capital_usd,realized_pnl_usd,"
-            "total_funding_usd,opened_at,closed_at,close_reason"
-        )
-        if not rows:
-            notify("📊 No completed trades yet.", cid)
-        else:
-            total_trades = len(rows)
-            wins   = [p for p in rows if (p.get("realized_pnl_usd") or 0) > 0]
-            losses = [p for p in rows if (p.get("realized_pnl_usd") or 0) <= 0]
-            win_rate = len(wins) / total_trades if total_trades else 0
-            total_pnl    = sum((p.get("realized_pnl_usd") or 0) for p in rows)
-            gross_profit = sum((p.get("realized_pnl_usd") or 0) for p in wins)
-            gross_loss   = abs(sum((p.get("realized_pnl_usd") or 0) for p in losses))
-            profit_factor = round(gross_profit / gross_loss, 3) if gross_loss > 0 else 0
-            avg_win  = round(gross_profit / len(wins), 4)   if wins   else 0
-            avg_loss = round(gross_loss   / len(losses), 4) if losses else 0
-            rr_ratio = round(avg_win / avg_loss, 3) if avg_loss > 0 else 0
-            # Drawdown
-            cfg = sb_get("trading_config", "key=eq.max_capital_usdt&select=value")
-            start_cap = float(cfg[0]["value"]) if cfg else 50.0
-            equity = start_cap; peak = start_cap; max_dd = 0.0
-            for p in rows:
-                equity += (p.get("realized_pnl_usd") or 0)
-                if equity > peak: peak = equity
-                dd = (peak - equity) / peak if peak > 0 else 0
-                if dd > max_dd: max_dd = dd
-            # Days trading
-            try:
-                days = (
-                    datetime.fromisoformat(rows[-1].get("closed_at","")[:10]) -
-                    datetime.fromisoformat(rows[0].get("opened_at","")[:10])
-                ).days + 1
-            except Exception:
-                days = 0
-            # Confidence from decisions
-            dec_rows = sb_get(
-                "trading_decisions",
-                "action_taken=in.(executed,owner_confirmed)&select=confidence,market_regime"
-            )
-            confidences = [float(d.get("confidence") or 0) for d in dec_rows]
-            avg_conf = round(sum(confidences) / len(confidences), 3) if confidences else 0
-            regimes = set(d.get("market_regime") for d in dec_rows if d.get("market_regime") and d.get("market_regime") != "uncertain")
-            # Recent form
-            recent = rows[-10:]
-            recent_wins = sum(1 for p in recent if (p.get("realized_pnl_usd") or 0) > 0)
-            recent_wr   = round(recent_wins / len(recent), 3) if recent else 0
-            recent_pnl  = round(sum((p.get("realized_pnl_usd") or 0) for p in recent), 4)
-            # Graduation criteria
-            CRITERIA = {
-                "win_rate": 0.80, "avg_confidence": 0.80, "min_trades": 30,
-                "min_days": 20, "max_single_loss_pct": 0.10,
-                "max_drawdown_pct": 0.15, "min_sharpe": 1.5,
-                "min_regimes": 3, "min_profit_factor": 1.5,
-            }
-            max_single_loss_pct = max((abs(p.get("realized_pnl_usd") or 0) for p in losses), default=0) / start_cap if start_cap else 0
-            checks = {
-                "win_rate":       (win_rate,              CRITERIA["win_rate"],           ">="),
-                "avg_confidence": (avg_conf,              CRITERIA["avg_confidence"],     ">="),
-                "total_trades":   (total_trades,          CRITERIA["min_trades"],         ">="),
-                "days_trading":   (days,                  CRITERIA["min_days"],           ">="),
-                "max_single_loss":(max_single_loss_pct,   CRITERIA["max_single_loss_pct"],"<="),
-                "max_drawdown":   (max_dd,                CRITERIA["max_drawdown_pct"],   "<="),
-                "regimes_seen":   (len(regimes),          CRITERIA["min_regimes"],        ">="),
-                "profit_factor":  (profit_factor,         CRITERIA["min_profit_factor"],  ">="),
-            }
-            def tick(k): v, t2, op = checks[k]; return "✅" if (v >= t2 if op == ">=" else v <= t2) else "❌"
-            passed_count = sum(1 for k in checks if (lambda v,t2,op: v>=t2 if op==">=" else v<=t2)(*checks[k])) 
-            ret_pct = round((equity - start_cap) / start_cap * 100, 2) if start_cap else 0
-            notify(
-                f"🤖 <b>CORE Trading — Performance Report</b>\n"
-                f"<i>Paper Trading Mode</i>\n\n"
-                f"📊 Graduation: {passed_count}/{len(checks)} criteria passed\n\n"
-                f"<b>📈 Performance</b>\n"
-                f"Capital: ${start_cap:.2f} → ${equity:.2f} ({ret_pct:+.2f}%)\n"
-                f"Total P&L: ${total_pnl:+.4f}\n"
-                f"Win rate: {win_rate:.1%} ({len(wins)}/{total_trades})\n"
-                f"Avg confidence: {avg_conf:.2f}\n"
-                f"Reward/Risk: {rr_ratio:.2f}x | PF: {profit_factor:.2f}x\n"
-                f"Days active: {days}\n\n"
-                f"<b>📉 Risk</b>\n"
-                f"Max drawdown: {max_dd:.1%}\n"
-                f"Max single loss: {max_single_loss_pct:.1%}\n\n"
-                f"<b>🎯 Recent (last 10)</b>\n"
-                f"Win rate: {recent_wr:.1%} | P&L: ${recent_pnl:+.4f}\n"
-                f"Regimes seen: {', '.join(regimes) or 'none'}\n\n"
-                f"<b>✅ Graduation Checklist</b>\n"
-                f"{tick('win_rate')} Win rate: {win_rate:.1%} (need ≥80%)\n"
-                f"{tick('avg_confidence')} Avg confidence: {avg_conf:.2f} (need ≥0.80)\n"
-                f"{tick('total_trades')} Trades: {total_trades}/30 min\n"
-                f"{tick('days_trading')} Days: {days}/20 min\n"
-                f"{tick('profit_factor')} Profit factor: {profit_factor:.2f}x (need ≥1.5x)\n"
-                f"{tick('max_drawdown')} Max drawdown: {max_dd:.1%} (need ≤15%)\n"
-                f"{tick('max_single_loss')} Max single loss: {max_single_loss_pct:.1%} (need ≤10%)\n"
-                f"{tick('regimes_seen')} Regimes seen: {len(regimes)}/3 min",
-                cid
-            )
-
-    elif text == "/winrate":
-        cutoff = (datetime.utcnow() - timedelta(days=30)).date().isoformat()
-        rows = sb_get(
-            "trading_pnl_daily",
-            f"date=gte.{cutoff}&order=date.desc"
-            "&select=date,total_pnl_usd,win_count,loss_count"
-        )
-        if not rows:
-            notify("📈 No completed trades yet.", cid)
-        else:
-            total_pnl = sum((r.get("total_pnl_usd") or 0) for r in rows)
-            wins      = sum((r.get("win_count") or 0) for r in rows)
-            losses    = sum((r.get("loss_count") or 0) for r in rows)
-            trades    = wins + losses
-            wr_str    = f"{wins/trades:.0%}" if trades else "N/A"
-            notify(
-                f"📈 <b>Win Rate (last 30d)</b>\n\n"
-                f"Total P&L: ${total_pnl:+.4f}\n"
-                f"Trades: {trades} (W:{wins} L:{losses})\n"
-                f"Win rate: {wr_str}",
-                cid
-            )
-
-    elif text == "/decision":
-        rows = sb_get(
-            "trading_decisions",
-            "order=created_at.desc&limit=1"
-            "&select=strategy,symbol,confidence,action_taken,"
-            "market_regime,reasoning,created_at"
-        )
-        if not rows:
-            notify("🧠 No decisions recorded yet.", cid)
-        else:
-            d = rows[0]
-            notify(
-                f"🧠 <b>Last Decision</b>\n\n"
-                f"Time: {(d.get('created_at') or '')[:16]}\n"
-                f"Regime: {d.get('market_regime','?')}\n"
-                f"Strategy: {d.get('strategy','?')}\n"
-                f"Symbol: {d.get('symbol') or 'none'}\n"
-                f"Confidence: {float(d.get('confidence') or 0):.0%}\n"
-                f"Action: {d.get('action_taken','?')}\n\n"
-                f"<b>Reasoning:</b>\n{d.get('reasoning','?')}",
-                cid
-            )
-
-    elif text == "/why":
-        rows = sb_get(
-            "trading_decisions",
-            "order=created_at.desc&limit=1"
-            "&select=strategy,reasoning,created_at"
-        )
-        if not rows:
-            notify("💭 No decisions recorded yet.", cid)
-        else:
-            d = rows[0]
-            notify(
-                f"💭 <b>Why {d.get('strategy','?')}?</b>\n\n"
-                f"{d.get('reasoning','No reasoning available.')}",
-                cid
-            )
-
-    elif text == "/market":
-        rows = sb_get(
-            "market_snapshots",
-            "order=recorded_at.desc&limit=4"
-            "&select=symbol,price,price_change_24h,funding_rate,"
-            "fear_greed,btc_dominance,recorded_at"
-        )
-        if not rows:
-            notify("📊 No market data yet.", cid)
-        else:
-            ts  = (rows[0].get("recorded_at") or "")[:16]
-            fg  = rows[0].get("fear_greed")
-            btd = rows[0].get("btc_dominance")
-            lines = [f"📊 <b>Market Snapshot</b> ({ts})\n"]
-            if fg:  lines.append(f"Fear &amp; Greed: {fg}/100")
-            if btd: lines.append(f"BTC Dominance: {btd}%")
-            lines.append("")
-            for r in rows:
-                fr  = r.get("funding_rate") or 0
-                prc = r.get("price") or 0
-                chg = r.get("price_change_24h") or 0
-                lines.append(
-                    f"<b>{r['symbol']}</b>: ${prc:,.2f} ({chg:+.2f}%)\n"
-                    f"  Funding: {fr*100:.4f}%/8h"
-                )
-            notify("\n".join(lines), cid)
-
-    elif text == "/balance":
-        cfg = sb_get("trading_config", "key=eq.max_capital_usdt&select=value")
-        starting = float(cfg[0]["value"]) if cfg else 50.0
-        open_rows   = sb_get("trading_positions", "status=eq.open&select=capital_usd")
-        closed_rows = sb_get("trading_positions", "status=eq.closed&select=realized_pnl_usd")
-        locked   = sum((r.get("capital_usd") or 0) for r in open_rows)
-        realized = sum((r.get("realized_pnl_usd") or 0) for r in closed_rows)
-        available = starting - locked + realized
-        notify(
-            f"💰 <b>Account Balance (Paper)</b>\n\n"
-            f"Starting capital: ${starting:.2f}\n"
-            f"Locked in positions: ${locked:.2f}\n"
-            f"Realized P&amp;L: ${realized:+.4f}\n"
-            f"Available: ${available:.2f}",
-            cid
-        )
-
-    elif text == "/fullreport":
-        # Performance summary (reuse tradestatus logic abbreviated)
-        rows = sb_get(
-            "trading_positions",
-            "status=eq.closed&select=realized_pnl_usd,total_funding_usd,symbol,strategy"
-        )
-        total_pnl = sum((p.get("realized_pnl_usd") or 0) for p in rows)
-        wins  = sum(1 for p in rows if (p.get("realized_pnl_usd") or 0) > 0)
-        wr    = round(wins / len(rows), 3) if rows else 0
-        # Mistakes
-        mistakes = sb_get(
-            "trading_mistakes",
-            "order=created_at.desc&limit=5"
-            "&select=what_failed,how_to_avoid,severity,created_at"
-        )
-        mistake_lines = "\n".join(
-            f"  [{m.get('severity','?')}] {(m.get('what_failed') or '')[:80]}"
-            for m in mistakes
-        ) or "  None logged yet"
-        # Patterns
-        patterns = sb_get(
-            "trading_patterns",
-            "order=win_rate.desc&limit=5"
-            "&select=pattern_key,win_rate,win_count,total_count"
-        )
-        pattern_lines = "\n".join(
-            f"  {p.get('pattern_key','?')}: {float(p.get('win_rate') or 0):.0%} ({p.get('win_count',0)}/{p.get('total_count',0)})"
-            for p in patterns
-        ) or "  None learned yet"
-        notify(
-            f"📋 <b>Full Trading Report</b>\n\n"
-            f"<b>Summary</b>\n"
-            f"Closed trades: {len(rows)} | Win rate: {wr:.1%}\n"
-            f"Total P&amp;L: ${total_pnl:+.4f}\n\n"
-            f"<b>Recent Mistakes Logged</b>\n{mistake_lines}\n\n"
-            f"<b>Patterns Learned</b>\n{pattern_lines}",
-            cid
-        )
-
-    elif text == "/criteria":
-        notify(
-            "🎓 <b>Graduation Criteria</b>\n\n"
-            "Win rate ≥ 80%\n"
-            "Avg confidence ≥ 0.80\n"
-            "Min trades: 30\n"
-            "Min days: 20\n"
-            "Max single loss: 10% of capital\n"
-            "Max drawdown: 15%\n"
-            "Sharpe ratio ≥ 1.5\n"
-            "Market regimes seen: 3\n"
-            "Profit factor ≥ 1.5x\n\n"
-            "Use /tradestatus to see your current progress.",
-            cid
-        )
-
     else:
-        threading.Thread(target=handle_telegram_message, args=(msg,), daemon=True).start()
-        
+        # ── Orchestrator v2: all freeform messages routed through L0→L10 pipeline
+        threading.Thread(
+            target=lambda: asyncio.run(handle_telegram_message_v2(msg)),
+            daemon=True
+        ).start()
+
+
 # ---------------------------------------------------------------------------
 # Background pollers
 # ---------------------------------------------------------------------------
 def queue_poller():
     """Notify-only mode — no auto-execution without owner approval.
-    Only notifies NEW tasks (created in last 5 minutes) to avoid spam on redeploy."""
+    Polls task_queue for pending tasks and notifies owner via Telegram."""
     print("[QUEUE] Started - notify-only mode (no auto-execution)")
     _notified: set = set()
     while True:
         try:
-            # Only fetch tasks created in last 5 minutes — avoids spam on redeploy
-            cutoff = (datetime.utcnow() - timedelta(minutes=5)).isoformat()
-            tasks = sb_get("task_queue", f"status=eq.pending&created_at=gte.{cutoff}&order=priority.asc&limit=5")
+            tasks = sb_get("task_queue", "status=eq.pending&order=priority.asc&limit=5")
             if tasks:
                 for t in tasks:
                     tid = t["id"]
@@ -1250,48 +969,14 @@ def queue_poller():
 # ---------------------------------------------------------------------------
 # Startup
 # ---------------------------------------------------------------------------
-def polling_loop():
-    """Poll Telegram getUpdates every 2s. No webhook/HTTPS needed for VM."""
-    from core_config import TELEGRAM_TOKEN
-    print("[POLLING] Telegram polling loop started")
-    try:
-        httpx.get(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/deleteWebhook", timeout=10)
-        print("[POLLING] Webhook deleted — polling mode active")
-    except Exception as e:
-        print(f"[POLLING] deleteWebhook warning: {e}")
-    offset = 0
-    while True:
-        try:
-            r = httpx.get(
-                f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates",
-                params={"timeout": 10, "offset": offset},
-                timeout=15,
-            )
-            if r.is_success:
-                updates = r.json().get("result", [])
-                for update in updates:
-                    offset = update["update_id"] + 1
-                    msg = update.get("message") or update.get("edited_message")
-                    if msg:
-                        try:
-                            threading.Thread(target=handle_msg, args=(msg,), daemon=True).start()
-                        except Exception as e:
-                            print(f"[POLLING] handle_msg error: {e}")
-        except Exception as e:
-            print(f"[POLLING] getUpdates error: {e}")
-        time.sleep(2)
-
-
+@app.on_event("startup")
 def on_start():
-    threading.Thread(target=polling_loop, daemon=True).start()
+    set_webhook()
+    startup_v2()  # ── Orchestrator v2 init
     threading.Thread(target=queue_poller, daemon=True).start()
     threading.Thread(target=cold_processor_loop, daemon=True).start()
     # self_sync_check disabled -- CORE_SELF.md is tombstoned, superseded by system_map
     threading.Thread(target=background_researcher, daemon=True).start()
-    threading.Thread(target=evolution_tier_processor, daemon=True).start()
-    threading.Thread(target=proactive_surface_loop,   daemon=True).start()  # P2-04
-    startup_v2()
-    # start_orchestrator()
     counts = get_system_counts()
     resume = get_resume_task()
     evo_pending  = counts.get('evolution_pending', 0)
@@ -1316,18 +1001,32 @@ def on_start():
                 lines.append(f"  ▶ {title} (P{t.get('priority','?')})")
             task_line = "In progress:\n" + "\n".join(lines)
         else:
-            task_line = ""  # already shown in resume line above
+            pending = sb_get(
+                "task_queue",
+                "select=task,priority&source=in.(core_v6_registry,mcp_session)"
+                "&status=eq.pending&order=priority.desc&limit=1"
+            ) or []
+            if pending:
+                raw = pending[0].get("task", "")
+                try:
+                    parsed = json.loads(raw) if isinstance(raw, str) else raw
+                    title = parsed.get("title") or str(parsed)[:60]
+                except Exception:
+                    title = str(raw)[:60]
+                task_line = f"Next up: {title}"
+            else:
+                task_line = "No active tasks"
     except Exception as e:
         task_line = f"Tasks: unavailable ({e})"
     evo_line = f"Evolutions — pending: {evo_pending} | applied: {evo_applied} | rejected: {evo_rejected}"
-    _model = os.environ.get("CLAUDE_MODEL", "claude-sonnet-4-6")
     notify(
         f"<b>CORE Online</b>\n{resume}\n"
         f"KB: {counts.get('knowledge_base',0)} | Mistakes: {counts.get('mistakes',0)} | Sessions: {counts.get('sessions',0)}\n"
-        f"MCP: {len(TOOLS)} tools | Model: {_model}\n"
-        f"{evo_line}"
+        f"MCP: {len(TOOLS)} tools\n"
+        f"{evo_line}\n"
+        f"{task_line}"
     )
-    print(f"[CORE] v8.0 online :{PORT} - {resume}")
+    print(f"[CORE] v6.0 online :{PORT} - {resume}")
 
 
 if __name__ == "__main__":
