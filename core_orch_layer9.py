@@ -1,3 +1,34 @@
+# GAP-NEW-10: cached tool list
+_TOOL_LIST_CACHE: dict = {"list": None, "count": 0}
+
+
+def _get_cached_tool_list() -> tuple:
+    if _TOOL_LIST_CACHE["list"] is not None:
+        return _TOOL_LIST_CACHE["list"], _TOOL_LIST_CACHE["count"]
+    try:
+        from core_tools import TOOLS
+        from core_config import TOOL_CATEGORY_KEYWORDS
+        cats: dict = {cat: [] for cat in TOOL_CATEGORY_KEYWORDS}
+        cats["misc"] = []
+        for tn, fn in TOOLS.items():
+            doc = (fn.__doc__ or "").split("\n")[0][:60]
+            placed = False
+            for cat, kws in TOOL_CATEGORY_KEYWORDS.items():
+                if any(kw in tn for kw in kws):
+                    cats[cat].append(f"{tn}: {doc}" if doc else tn)
+                    placed = True
+                    break
+            if not placed:
+                cats["misc"].append(tn)
+        lines = [f"- {c}: {', '.join(sorted(ts))}" for c, ts in cats.items() if ts]
+        result = "\n".join(lines)
+        _TOOL_LIST_CACHE["list"] = result
+        _TOOL_LIST_CACHE["count"] = len(TOOLS)
+        return result, len(TOOLS)
+    except Exception:
+        return "", 0
+
+
 """
 core_orch_layer9.py — L9: Tone & Personality
 Transforms raw tool results into CORE's natural voice using real Groq.
@@ -97,7 +128,8 @@ def _build_session_state(msg: OrchestratorMessage) -> str:
         task_strs = []
         for t in in_progress[:5]:
             if isinstance(t, dict):
-                task_strs.append(f"  - [{t.get('id','?')}] {t.get('title', t.get('description','?'))[:80]} (priority={t.get('priority','?')})")
+                name = t.get("task") or t.get("title") or t.get("description") or "?"
+                task_strs.append(f"  - [{t.get('id','?')}] {str(name)[:80]} (priority={t.get('priority','?')})")
             else:
                 task_strs.append(f"  - {str(t)[:80]}")
         lines.append("In-progress tasks:\n" + "\n".join(task_strs))

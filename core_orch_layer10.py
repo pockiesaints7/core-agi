@@ -4,6 +4,9 @@ Final layer. Formats and dispatches to Telegram / MCP / system log.
 Uses real core_github.notify — no mocks.
 """
 import json
+import html
+import asyncio
+import os
 from typing import Any
 
 from orchestrator_message import OrchestratorMessage
@@ -63,6 +66,54 @@ def _format_mcp(msg: OrchestratorMessage) -> dict:
     }
 
 
+
+def _notify_with_reply(text: str, chat_id: int, reply_to=None) -> bool:
+    """GAP-NEW-26: send with reply threading."""
+    try:
+        import requests
+        token = os.getenv("TELEGRAM_TOKEN", "")
+        if not token:
+            return notify(text, cid=chat_id)
+        payload = {"chat_id": chat_id, "text": text, "parse_mode": "HTML"}
+        if reply_to:
+            payload["reply_to_message_id"] = reply_to
+        r = requests.post(f"https://api.telegram.org/bot{token}/sendMessage", json=payload, timeout=10)
+        return r.status_code == 200
+    except Exception:
+        return notify(text, cid=chat_id)
+
+
+async def _send_followup(text: str, chat_id: int) -> None:
+    """GAP-NEW-23: async follow-up chunk."""
+    import asyncio, requests
+    await asyncio.sleep(0.3)
+    try:
+        token = os.getenv("TELEGRAM_TOKEN", "")
+        requests.post(f"https://api.telegram.org/bot{token}/sendMessage",
+            json={"chat_id": chat_id, "text": text, "parse_mode": "HTML"}, timeout=10)
+    except Exception as exc:
+        print(f"[L10] follow-up send failed: {exc}")
+
+
+async def _write_history_turn(chat_id: int, role: str, content: str) -> None:
+    """GAP-NEW-5: persist turn to conversation_history."""
+    try:
+        from core_config import sb_post
+        sb_post("conversation_history", {"chat_id": chat_id, "role": role, "content": content[:800]})
+    except Exception as exc:
+        print(f"[L10] history write failed (non-fatal): {exc}")
+
+
+async def _log_conversation(chat_id: int, user_text: str, response: str, username: str) -> None:
+    """GAP-NEW-29: write conversation log row."""
+    try:
+        from core_config import sb_post
+        sb_post("conversation_log", {"chat_id": chat_id, "user": username,
+            "user_message": user_text[:500], "core_response": response[:1000]})
+    except Exception as exc:
+        print(f"[L10] conversation_log write failed (non-fatal): {exc}")
+
+
 async def layer_10_output(msg: OrchestratorMessage):
     """
     Dispatch final output to the appropriate channel.
@@ -76,9 +127,26 @@ async def layer_10_output(msg: OrchestratorMessage):
     try:
         if msg.source == "telegram":
             text = _format_telegram(msg)
-            ok = notify(text, cid=msg.chat_id)
+            chunks = _split_message(text)
+            reply_id = msg.context.get("telegram_message_id")
+            if len(chunks) == 1 and len(chunks[0]) > 1500:
+                mid = len(chunks[0]) // 2
+                cut = chunks[0].rfind("\n", 0, mid) or mid
+                p1, p2 = chunks[0][:cut].strip(), chunks[0][cut:].strip()
+                ok = _notify_with_reply(p1, msg.chat_id, reply_id)
+                if ok and p2:
+                    asyncio.ensure_future(_send_followup(p2, msg.chat_id))
+            elif len(chunks) > 1:
+                ok = _notify_with_reply(chunks[0], msg.chat_id, reply_id)
+                for extra in chunks[1:]:
+                    asyncio.ensure_future(_send_followup(extra, msg.chat_id))
+            else:
+                ok = _notify_with_reply(chunks[0], msg.chat_id, reply_id)
             msg.final_output = text
-            print(f"[L10] Telegram notify ok={ok}  len={len(text)}")
+            print(f"[L10] Telegram notify ok={ok}  chunks={len(chunks)}  len={len(text)}")
+            asyncio.ensure_future(_log_conversation(msg.chat_id, msg.text, text, msg.user))
+            asyncio.ensure_future(_write_history_turn(msg.chat_id, "user", msg.text))
+            asyncio.ensure_future(_write_history_turn(msg.chat_id, "assistant", text))
 
         elif msg.source == "mcp":
             payload = _format_mcp(msg)

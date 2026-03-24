@@ -67,8 +67,9 @@ async def _load_behavioral_rules(domain: str) -> List[Dict[str, Any]]:
     try:
         rows = sb_get(
             "knowledge_base",
-            f"select=instruction,content,confidence,topic"
-            f"&domain=like.core_agi%25&order=confidence.desc&limit=10",
+            f"select=instruction,content,confidence,topic,domain"
+            f"&or=(domain.like.core_agi%25,domain.like.{domain}%25)"
+            f"&order=confidence.desc&limit=15",
             svc=True,
         ) or []
         return rows
@@ -125,7 +126,23 @@ async def _load_relevant_kb(text: str, domain: str) -> List[Dict[str, Any]]:
         return []
 
 
-async def _load_system_health() -> Dict[str, Any]:
+async def _load_conversation_history(chat_id: int, limit: int = 20) -> list:
+    if not chat_id:
+        return []
+    try:
+        rows = sb_get(
+            "conversation_history",
+            f"select=role,content,created_at&chat_id=eq.{chat_id}"
+            f"&order=created_at.desc&limit={limit}",
+            svc=True,
+        ) or []
+        return list(reversed(rows))
+    except Exception as exc:
+        print(f"[L2] conversation_history error (non-fatal): {exc}")
+        return []
+
+
+async def _load_system_health() -> dict:
     """Quick health probe: checks Supabase connectivity only (fast)."""
     try:
         rows = sb_get("sessions", "select=id&limit=1")
@@ -147,15 +164,23 @@ async def layer_2_memory(msg: OrchestratorMessage):
     domain = _detect_domain(msg.text)
     msg.context["current_domain"] = domain
 
-    # Run all loads concurrently
-    results = await asyncio.gather(
-        _load_session_context(),
-        _load_behavioral_rules(domain),
-        _load_domain_mistakes(domain),
-        _load_relevant_kb(msg.text, domain),
-        _load_system_health(),
-        return_exceptions=True,
-    )
+    if not hasattr(layer_2_memory, "_sem"):
+        layer_2_memory._sem = asyncio.Semaphore(8)
+    async with layer_2_memory._sem:
+        pass
+    try:
+        results = await asyncio.wait_for(asyncio.gather(
+            _load_session_context(),
+            _load_behavioral_rules(domain),
+            _load_domain_mistakes(domain),
+            _load_relevant_kb(msg.text, domain),
+            _load_system_health(),
+            _load_conversation_history(msg.chat_id),
+            return_exceptions=True,
+        ), timeout=8.0)
+    except asyncio.TimeoutError:
+        print("[L2] Context load TIMEOUT")
+        results = [{}, [], [], [], {"supabase": "timeout"}, []]
 
     def _safe(val, default):
         if isinstance(val, BaseException):
@@ -168,13 +193,14 @@ async def layer_2_memory(msg: OrchestratorMessage):
     domain_mistakes  = _safe(results[2], [])
     kb_snippets      = _safe(results[3], [])
     health           = _safe(results[4], {"supabase": "error"})
+    conv_history     = _safe(results[5], [])
 
     msg.context["session"] = session_ctx
     msg.context["behavioral_rules"] = behavioral_rules
     msg.context["domain_mistakes"] = domain_mistakes
     msg.context["kb_snippets"] = kb_snippets
     msg.context["health"] = health
-    msg.context["conversation_history"] = []  # populated externally if needed
+    msg.context["conversation_history"] = conv_history
 
     msg.track_layer("L2-COMPLETE")
     print(
