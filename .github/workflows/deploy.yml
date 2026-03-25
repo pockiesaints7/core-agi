@@ -1,0 +1,17 @@
+name: Deploy to Oracle VM
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger VM deploy webhook
+        run: |
+          curl -s -X POST \
+            -H "X-MCP-Secret: ${{ secrets.MCP_SECRET }}" \
+            -H "Content-Type: application/json" \
+            https://core-agi.duckdns.org/deploy-webhook
+        timeout-minutes: 2
