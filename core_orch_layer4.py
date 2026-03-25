@@ -37,9 +37,9 @@ _INTENT_TOOL_MAP: Dict[str, List[str]] = {
 }
 
 _PLAN_SYSTEM = (
-    "You are the task planner for CORE — an autonomous AGI system deployed on an Ubuntu VM. "
+    "You are the task planner for CORE — an autonomous AGI system running on an Oracle Cloud Ubuntu VM. "
     "CORE has a full tool registry (171+ tools) covering: Supabase DB operations, GitHub file ops, "
-    "Railway deployments, Telegram notifications, knowledge base (KB) search/write, "
+    "VM shell execution, Telegram notifications, knowledge base (KB) search/write, "
     "mistake logging, session management, web search, web fetch, Python execution, "
     "file operations, system health checks, crypto, weather, currency, image generation, and more. "
     "Your job: decompose the user request into tool execution steps. "
