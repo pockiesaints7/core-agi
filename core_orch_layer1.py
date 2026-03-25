@@ -51,6 +51,7 @@ _COMMAND_ROUTES = {
     "/health", "/state", "/status", "/tasks", "/evolutions",
     "/kb", "/mistakes", "/train", "/cold", "/deploy",
     "/listen", "/checkpoint", "/help",
+    "/ask", "/search", "/time", "/calc", "/weather", "/tools", "/run", "/do", "/log",
 }
 
 # ── L1 NLU Synonym Expansion ─────────────────────────────────────────────────
