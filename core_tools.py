@@ -32,8 +32,10 @@ from core_train import apply_evolution, reject_evolution, bulk_reject_evolutions
 # Alias â€” used in t_core_py_rollback and t_deploy_and_wait
 notify_owner = notify
 
-# BASE_URL and MCP_SECRET for tools that call Railway endpoints
-BASE_URL = os.environ.get("RAILWAY_PUBLIC_URL", "https://core-agi-production.up.railway.app")
+# BASE_URL and MCP_SECRET for tools that call the VM's own endpoints
+# VM runs on Oracle Cloud — public domain via duckdns, port 8081
+BASE_URL = os.environ.get("PUBLIC_URL",
+           f"https://{os.environ.get('PUBLIC_DOMAIN', 'core-agi.duckdns.org')}")
 MCP_SECRET = os.environ.get("MCP_SECRET", "")
 
 
