@@ -121,10 +121,8 @@ _NLU_SYNONYMS: list[tuple[str, str]] = [
     ("what day is it",     "/time"),
     ("what date is it",    "/time"),
     ("time now",           "/time"),
-    # calc
-    ("calculate",          "/calc"),
-    ("compute",            "/calc"),
-    ("what is",            "/calc"),
+    # calc — only match when clearly followed by a math expression (trailing space required)
+    # DO NOT use bare "what is" — too greedy, matches "what is your health" etc.
     # weather
     ("what's the weather", "/weather"),
     ("weather today",      "/weather"),
@@ -134,6 +132,8 @@ _NLU_SYNONYMS: list[tuple[str, str]] = [
     ("show tools",         "/tools"),
     ("available tools",    "/tools"),
     ("what tools do you have", "/tools"),
+    ("how many tools",     "/tools"),
+    ("name your tools",    "/tools"),
 ]
 
 
