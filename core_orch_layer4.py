@@ -247,11 +247,39 @@ async def _build_plan(msg: OrchestratorMessage) -> Dict[str, Any]:
         return plan
     except Exception as exc:
         print(f"[L4] Groq planning failed (non-fatal): {exc}")
+        # SAFE FALLBACK: use tool_hints from L3 if available, else search_kb as default
+        hints = classification.get("tool_hints", [])
+        if hints:
+            # L3 gave us tool hints — use them directly
+            valid_hints = []
+            try:
+                from core_tools import TOOLS
+                valid_hints = [h for h in hints if h in TOOLS]
+            except Exception:
+                valid_hints = hints[:2]
+            if valid_hints:
+                return {
+                    "type": "tool_execution",
+                    "subtasks": [
+                        {"step": i+1, "action": f"Execute {t}", "tool": t,
+                         "args": {"query": msg.text} if "search" in t or "kb" in t else {},
+                         "expected_output": "tool result"}
+                        for i, t in enumerate(valid_hints[:3])
+                    ],
+                    "estimated_complexity": "low",
+                    "requires_confirmation": False,
+                    "_fallback": "tool_hints",
+                }
+        # Last resort: get_state gives CORE a chance to answer from session context
         return {
-            "type": "direct_response",
-            "subtasks": [],
-            "estimated_complexity": "unknown",
-            "error": str(exc),
+            "type": "tool_execution",
+            "subtasks": [
+                {"step": 1, "action": "Get current CORE state", "tool": "get_state",
+                 "args": {}, "expected_output": "system state"}
+            ],
+            "estimated_complexity": "low",
+            "_fallback": "groq_failed",
+            "_error": str(exc),
         }
 
 
