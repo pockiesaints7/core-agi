@@ -152,16 +152,21 @@ def notify(text: str, chat_id: str = "") -> bool:
 
 # -- Groq chat helper ----------------------------------------------------------
 def groq_chat(system: str, user: str, model: str = None, max_tokens: int = 1024) -> str:
-    """Shared Groq chat helper. Matches core.py signature exactly."""
+    """Shared Groq chat helper. Hard 20s timeout — never hangs the pipeline."""
+    import time as _time
     m = model or GROQ_MODEL
+    t0 = _time.monotonic()
     r = httpx.post(
         "https://api.groq.com/openai/v1/chat/completions",
         headers={"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"},
         json={"model": m, "max_tokens": max_tokens,
               "messages": [{"role": "system", "content": system},
                            {"role": "user", "content": user}]},
-        timeout=30,
+        timeout=20,  # Hard 20s — Groq is fast, >20s means something is wrong
     )
+    elapsed = round(_time.monotonic() - t0, 2)
+    if elapsed > 5:
+        print(f"[GROQ] SLOW response: {elapsed}s model={m}")
     r.raise_for_status()
     return r.json()["choices"][0]["message"]["content"].strip()
 
