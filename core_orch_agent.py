@@ -168,42 +168,45 @@ def _llm_think(system: str, prompt: str, max_tokens: int = 1500):
                 continue
         print(f"[AGENT] OpenRouter failed ({last_err}) — trying Gemini direct")
 
-    # ── Tier 2: Gemini direct ─────────────────────────────────────────────────
-    from core_config import _GEMINI_KEYS, _GEMINI_KEY_INDEX, _GEMINI_MODEL
-    try:
-        # Round-robin API key selection
-        api_key = _GEMINI_KEYS[_GEMINI_KEY_INDEX]
-        _GEMINI_KEY_INDEX = (_GEMINI_KEY_INDEX + 1) % len(_GEMINI_KEYS)
-
-        # Construct messages for Gemini API
-        messages = []
-        if system:
-            messages.append({"role": "user", "parts": [{"text": system}]})
-            messages.append({"role": "model", "parts": [{"text": "Ok."}]})
-        messages.append({"role": "user", "parts": [{"text": prompt}]})
-
-        # Direct Gemini API call
-        r = requests.post(
-            f"https://generativelanguage.googleapis.com/v1beta/models/{_GEMINI_MODEL}:generateContent?key={api_key}",
-            headers={
-                "Content-Type": "application/json"
-            },
-            json={
-                "contents": messages,
-                "generationConfig": {
-                    "maxOutputTokens": max_tokens,
-                    "temperature": 0.1,
+    # ── Tier 2: Gemini direct — real promptTokenCount from usageMetadata ────────
+    from core_config import _GEMINI_KEYS, _GEMINI_MODEL
+    import core_config as _cc
+    if _GEMINI_KEYS:
+        try:
+            import httpx as _hx
+            # Round-robin key selection via module-level index
+            key = _GEMINI_KEYS[_cc._GEMINI_KEY_INDEX % len(_GEMINI_KEYS)]
+            _cc._GEMINI_KEY_INDEX = (_cc._GEMINI_KEY_INDEX + 1) % len(_GEMINI_KEYS)
+            contents = []
+            if system:
+                # Gemini system turn pattern
+                contents.append({"role": "user",  "parts": [{"text": system}]})
+                contents.append({"role": "model", "parts": [{"text": "Understood."}]})
+            contents.append({"role": "user", "parts": [{"text": prompt}]})
+            r = _hx.post(
+                f"https://generativelanguage.googleapis.com/v1beta/models/{_GEMINI_MODEL}:generateContent",
+                params={"key": key},
+                headers={"Content-Type": "application/json"},
+                json={
+                    "contents": contents,
+                    "generationConfig": {"maxOutputTokens": max_tokens, "temperature": 0.1},
+                    "safetySettings": [
+                        {"category": "HARM_CATEGORY_HARASSMENT",       "threshold": "BLOCK_NONE"},
+                        {"category": "HARM_CATEGORY_HATE_SPEECH",      "threshold": "BLOCK_NONE"},
+                        {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT","threshold": "BLOCK_NONE"},
+                        {"category": "HARM_CATEGORY_DANGEROUS_CONTENT","threshold": "BLOCK_NONE"},
+                    ],
                 },
-            },
-            timeout=90,
-        )
-        r.raise_for_status()
-        data = r.json()
-        text = data["candidates"][0]["content"]["parts"][0]["text"].strip()
-        prompt_tokens = data.get("usageMetadata", {}).get("promptTokenCount", len(prompt) // 4)
-        return text, prompt_tokens
-    except Exception as e:
-        print(f"[AGENT] Gemini direct failed ({e}) — trying Groq")
+                timeout=60,
+            )
+            r.raise_for_status()
+            data = r.json()
+            text = data["candidates"][0]["content"]["parts"][0]["text"].strip()
+            # Real token count — Gemini returns it in usageMetadata.promptTokenCount
+            prompt_tokens = data.get("usageMetadata", {}).get("promptTokenCount", len(prompt) // 4)
+            return text, prompt_tokens
+        except Exception as e:
+            print(f"[AGENT] Gemini direct failed ({e}) — trying Groq")
 
     # ── Tier 3: Groq ──────────────────────────────────────────────────────────
     from core_config import groq_chat, GROQ_MODEL
