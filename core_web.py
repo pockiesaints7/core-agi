@@ -944,11 +944,20 @@ def t_calc(expression: str = "") -> dict:
     """
     Safe math calculator. Evaluates mathematical expressions.
     Supports: +, -, *, /, **, %, //, sqrt, sin, cos, tan, log, pi, e, abs, round, etc.
-    expression: math expression string e.g. "2 ** 10", "sqrt(144)", "sin(pi/2)"
+    expression: math expression string e.g. "2 ** 10", "sqrt(144)", "0.5 * 71168.77"
+    Auto-sanitises: strips $, currency symbols, thousands commas (e.g. "$71,168.77" → "71168.77")
     """
     if not expression:
         return {"ok": False, "error": "expression required"}
     try:
+        # Auto-sanitise common patterns from financial/web data before validation
+        import re as _re
+        clean = expression.strip()
+        clean = clean.replace("$", "").replace("€", "").replace("£", "").replace("¥", "")
+        clean = clean.replace(",", "")  # remove thousands separators: 71,168.77 → 71168.77
+        clean = clean.replace("USD", "").replace("BTC", "").replace("ETH", "")
+        clean = clean.strip()
+
         # Safe eval — only math functions allowed
         safe_globals = {
             "__builtins__": {},
@@ -959,16 +968,16 @@ def t_calc(expression: str = "") -> dict:
             k: getattr(math, k) for k in dir(math) if not k.startswith("_")
         })
         # Validate — only allow safe characters
-        allowed = re.sub(r'[\d\s\+\-\*\/\(\)\.\,\%\_a-zA-Z]', '', expression)
+        allowed = re.sub(r'[\d\s\+\-\*\/\(\)\.\%\_a-zA-Z]', '', clean)
         if allowed:
             return {"ok": False, "error": f"unsafe characters in expression: {repr(allowed)}"}
-        result = eval(expression, safe_globals)  # noqa: S307
+        result = eval(clean, safe_globals)  # noqa: S307
         # Format result
         if isinstance(result, float):
             formatted = f"{result:.10g}"
         else:
             formatted = str(result)
-        return {"ok": True, "expression": expression, "result": result, "formatted": formatted}
+        return {"ok": True, "expression": clean, "original": expression, "result": result, "formatted": formatted}
     except ZeroDivisionError:
         return {"ok": False, "error": "division by zero"}
     except Exception as e:
