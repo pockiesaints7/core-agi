@@ -1008,6 +1008,41 @@ def queue_poller():
 
 
 # ---------------------------------------------------------------------------
+# Deploy webhook — triggered by GitHub push to auto-pull + restart
+# ---------------------------------------------------------------------------
+@app.post("/deploy-webhook")
+async def deploy_webhook(req: Request):
+    """Auto-deploy: git pull latest from GitHub then restart core-agi service.
+    Auth: X-MCP-Secret header (same secret as MCP).
+    Call from GitHub Actions or manually after pushing code.
+    Returns immediately — restart happens in background thread.
+    """
+    secret = req.headers.get("X-MCP-Secret", "")
+    if not secrets.compare_digest(str(secret), str(MCP_SECRET)):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+    def _do_deploy():
+        import subprocess
+        try:
+            pull = subprocess.run(
+                ["git", "pull", "origin", "main"],
+                cwd="/home/ubuntu/core-agi",
+                capture_output=True, text=True, timeout=60
+            )
+            print(f"[DEPLOY] git pull: {pull.stdout.strip()} {pull.stderr.strip()}")
+            notify(f"🚀 <b>CORE Auto-Deploy</b>\n{pull.stdout.strip() or 'already up to date'}")
+            if "Already up to date" not in pull.stdout:
+                # New commits — restart service to pick them up
+                subprocess.run(["systemctl", "restart", "core-agi"], timeout=10)
+        except Exception as e:
+            print(f"[DEPLOY] error: {e}")
+            notify(f"⚠️ CORE Deploy error: {e}")
+
+    threading.Thread(target=_do_deploy, daemon=True).start()
+    return {"ok": True, "status": "deploy_started"}
+
+
+# ---------------------------------------------------------------------------
 # Startup
 # ---------------------------------------------------------------------------
 @app.on_event("startup")
