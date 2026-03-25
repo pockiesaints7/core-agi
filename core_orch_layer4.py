@@ -129,16 +129,18 @@ def _build_tool_list() -> tuple[str, int]:
         return result, total
 
     except Exception as e:
-        # Graceful fallback — static summary
+        # Graceful fallback — use real TOOLS registry key names
         fallback = (
-            "- state/health: t_state, t_health, t_session_start, t_ping_health\n"
-            "- knowledge: t_search_kb, t_add_knowledge, t_get_mistakes, t_log_mistake\n"
-            "- tasks: t_session_start, t_session_end, t_checkpoint\n"
-            "- training: t_get_training_pipeline, t_trigger_cold_processor, t_list_evolutions\n"
-            "- code/files: t_read_file, t_write_file, t_multi_patch, t_patch_file\n"
-            "- deploy: t_deploy_and_wait, t_railway_logs_live, t_redeploy, t_verify_live\n"
-            "- notifications: t_notify\n"
-            "- monitoring: t_listen, t_listen_result"
+            "- state/health: get_state, get_system_health, deploy_status\n"
+            "- knowledge: search_kb, add_knowledge, get_mistakes, log_mistake, kb_update\n"
+            "- tasks: get_state, checkpoint, task_add, task_update\n"
+            "- training: get_training_pipeline, trigger_cold_processor, list_evolutions\n"
+            "- code/files: read_file, write_file, multi_patch, patch_file, gh_search_replace\n"
+            "- deploy: deploy_and_wait, railway_logs_live, redeploy, verify_live, build_status\n"
+            "- notifications: notify_owner\n"
+            "- web/tools: web_search, web_fetch, calc, datetime_now, weather, currency, translate\n"
+            "- monitoring: listen, listen_result, get_time\n"
+            "- system: run_python, shell, vm_info, file_list, file_read, file_write"
         )
         print(f"[L4] tool registry import failed, using static fallback: {e}")
         return fallback, 0
