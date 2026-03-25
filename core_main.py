@@ -405,12 +405,11 @@ async function go(){
   const btn=document.getElementById('btn');
   btn.disabled=true;btn.innerHTML='<span class="spin"></span> Translating...';
   const res=document.getElementById('res');res.style.display='none';
-  const sys=`You are CORE's evolution analyst. Translate a raw evolution entry into a structured prompt.\nOutput MUST be valid JSON:\n{"what":"1-2 sentences","why":"1-2 sentences","where":"which component","how":"2-4 concrete steps","expected_outcome":"1 sentence"}\nOutput ONLY valid JSON, no preamble.`;
-  const usr="Evolution ID: "+evo.id+"\\nType: "+evo.change_type+"\\nSummary: "+evo.change_summary+"\\nConfidence: "+evo.confidence+"\\nTranslate this evolution.";
   try{
-    const r=await fetch('https://api.anthropic.com/v1/messages',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model:'claude-sonnet-4-20250514',max_tokens:1000,system:sys,messages:[{role:'user',content:usr}]})});
+    const r=await fetch('/api/translate-evolution',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:evo.id,change_type:evo.change_type,change_summary:evo.change_summary,confidence:evo.confidence})});
     const d=await r.json();
-    const raw=d.content?.find(b=>b.type==='text')?.text||'{}';
+    if(!d.ok){throw new Error(d.error||'Backend error');}
+    const raw=d.result||'{}';
     const p=JSON.parse(raw.replace(/```json|```/g,'').trim());
     const fields=[{k:'WHAT',v:p.what},{k:'WHY',v:p.why},{k:'WHERE',v:p.where},{k:'HOW',v:p.how},{k:'EXPECTED OUTCOME',v:p.expected_outcome}];
     const full=fields.map(f=>f.k+':\\n'+f.v).join('\\n\\n');
