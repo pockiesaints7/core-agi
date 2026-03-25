@@ -856,6 +856,11 @@ def t_sb_insert(table="", data=""):
     if table in _SB_SCHEMA.get("_tombstone", set()):
         return {"ok": False, "error": f"TOMBSTONE: '{table}' is retired -- do not write to it",
                 "hint": "Check active tables in _SB_SCHEMA"}
+    if table not in _SB_SCHEMA.get("tables", {}):
+        known = sorted(_SB_SCHEMA.get("tables", {}).keys())
+        return {"ok": False, "error": f"UNKNOWN_TABLE: '{table}' not in schema registry.",
+                "hint": f"Known tables: {known}",
+                "tip": "Common mistake: 'tasks' should be 'task_queue'"}
     if isinstance(data, str):
         try: data = json.loads(data)
         except Exception as e:
