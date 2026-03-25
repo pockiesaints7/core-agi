@@ -2919,7 +2919,8 @@ def t_verify_live(expected_text: str, timeout: str = "90") -> dict:
     """Poll /state until expected_text appears."""
     try:
         t_secs = int(timeout) if timeout else 90
-        railway_url = os.environ.get("RAILWAY_PUBLIC_URL", "https://core-agi-production.up.railway.app")
+        railway_url = os.environ.get("PUBLIC_URL",
+                     f"https://{os.environ.get('PUBLIC_DOMAIN', 'core-agi.duckdns.org')}")
         deadline = time.time() + t_secs
         poll_count = 0
         while time.time() < deadline:
