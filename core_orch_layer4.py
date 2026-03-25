@@ -410,7 +410,9 @@ async def _build_plan(msg: OrchestratorMessage) -> Dict[str, Any]:
 # ── Main layer ────────────────────────────────────────────────────────────────
 async def layer_4_reason(msg: OrchestratorMessage):
     """
-    Run pre-flight checks, build execution plan, hand to L5.
+    Run pre-flight checks, then either:
+    - AGENTIC MODE: hand to core_orch_agent.run_agent_loop for complex multi-step tasks
+    - FAST MODE: build static plan and hand to L5 (existing behaviour, unchanged)
     """
     msg.track_layer("L4-START")
     print(f"[L4] Planning execution …")
@@ -425,7 +427,21 @@ async def layer_4_reason(msg: OrchestratorMessage):
         await layer_10_output(msg)
         return
 
-    # Build plan
+    # ── Agentic mode check ────────────────────────────────────────────────────
+    # Only activate for complex requests — simple queries stay on fast path
+    try:
+        from core_orch_agent import is_agentic_request, run_agent_loop, AGENT_MODEL
+        if is_agentic_request(msg.text, msg.intent or ""):
+            model_label = AGENT_MODEL or "groq"
+            print(f"[L4] AGENTIC MODE activated model={model_label} intent={msg.intent}")
+            msg.track_layer("L4-AGENTIC")
+            await run_agent_loop(msg, goal=msg.text)
+            return
+    except ImportError as e:
+        print(f"[L4] core_orch_agent not available (non-fatal): {e}")
+    # ─────────────────────────────────────────────────────────────────────────
+
+    # Build static plan (existing fast-path)
     plan = await _build_plan(msg)
     msg.plan = plan
     msg.context["execution_plan"] = plan
