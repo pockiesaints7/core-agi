@@ -222,6 +222,48 @@ async def _build_plan(msg: OrchestratorMessage) -> Dict[str, Any]:
                 "requires_confirmation": False,
             }
 
+    # 2b. Smart fast-path for general_tool intent — resolve tool from command or text
+    if intent == "general_tool":
+        cmd = msg.context.get("command", "")
+        cmd_args = msg.context.get("command_args", "").strip()
+        text_lower = msg.text.lower()
+        # Map command → tool directly
+        _cmd_to_tool = {
+            "/time": ("get_time", {}),
+            "/calc": ("calc", {"expr": cmd_args} if cmd_args else {"expr": msg.text}),
+            "/weather": ("weather", {"location": cmd_args} if cmd_args else {"location": "Jakarta"}),
+            "/run": ("run_python", {"code": cmd_args} if cmd_args else {}),
+        }
+        if cmd in _cmd_to_tool:
+            tool_name, tool_args = _cmd_to_tool[cmd]
+            return {
+                "type": "tool_execution",
+                "subtasks": [{"step": 1, "action": f"Execute {tool_name}", "tool": tool_name,
+                              "args": tool_args, "expected_output": "tool result"}],
+                "estimated_complexity": "low",
+                "requires_confirmation": False,
+            }
+        # Text-based detection for general_tool
+        if any(w in text_lower for w in ("time", "date", "day", "clock")):
+            tz = "Asia/Jakarta"  # owner default
+            return {"type": "tool_execution", "subtasks": [
+                {"step": 1, "action": "Get current time", "tool": "get_time",
+                 "args": {"timezone": tz}, "expected_output": "current time"}
+            ], "estimated_complexity": "low", "requires_confirmation": False}
+        if any(w in text_lower for w in ("calculat", "compute", "math", " + ", " - ", " * ", " / ", "=")):
+            expr = cmd_args or msg.text
+            return {"type": "tool_execution", "subtasks": [
+                {"step": 1, "action": "Calculate", "tool": "calc",
+                 "args": {"expr": expr}, "expected_output": "calculation result"}
+            ], "estimated_complexity": "low", "requires_confirmation": False}
+        if any(w in text_lower for w in ("weather", "temperature", "forecast", "rain", "humid")):
+            loc = cmd_args or "Jakarta"
+            return {"type": "tool_execution", "subtasks": [
+                {"step": 1, "action": "Get weather", "tool": "weather",
+                 "args": {"location": loc}, "expected_output": "weather data"}
+            ], "estimated_complexity": "low", "requires_confirmation": False}
+        # Fallback for general_tool: let Groq plan it (falls through)
+
     # 3. Groq planning for complex/multi-step tasks
     # Inject live TOOLS registry so Groq knows every tool available
     tool_list, tool_count = _build_tool_list()
