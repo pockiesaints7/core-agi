@@ -255,6 +255,15 @@ async def _build_plan(msg: OrchestratorMessage) -> Dict[str, Any]:
                 if query_text.startswith("/"):
                     query_text = " ".join(query_text.split()[1:])
                 smart_args = {"query": query_text or msg.text}
+            elif cmd_args:
+                # For most tools, map cmd_args to the right param name
+                _arg_map = {
+                    "search_kb": "query", "web_search": "query",
+                    "calc": "expression", "weather": "location",
+                    "get_time": "timezone", "datetime_now": "timezone",
+                }
+                param = _arg_map.get(tools[0], "args")
+                smart_args = {param: cmd_args}
             return {
                 "type": "tool_execution",
                 "subtasks": [
