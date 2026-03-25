@@ -127,8 +127,9 @@ async def _execute_subtask(
             for prev in reversed(msg.tool_results):
                 if prev.get("tool") == "web_search" and prev.get("success"):
                     results_text = str(prev.get("result", {}))
-                    # Extract first number that looks like a price (4+ digits, optional decimals)
-                    prices = _re.findall(r'[\$]?([\d]{4,}(?:,[\d]{3})*(?:\.\d{1,2})?)', results_text)
+                    # Extract first number that looks like a price (4+ digits, handles $71,168.77 format)
+                    prices = [x.replace(",", "") for x in _re.findall(r'\$?([\d,]+\.?\d*)', results_text)
+                              if len(x.replace(",", "").replace(".", "")) >= 4]
                     if prices:
                         price_str = prices[0].replace(",", "")
                         try:
