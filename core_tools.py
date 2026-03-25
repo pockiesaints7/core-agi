@@ -809,6 +809,12 @@ def t_sb_query(table, filters="", limit=20, order="", select="*"):
     select: columns e.g. 'id,status,priority' (avoid * on large tables)"""
     try: lim = int(limit) if limit else 20
     except: lim = 20
+    # Block unknown tables upfront — no point hitting Supabase if table doesn't exist
+    if table not in _SB_SCHEMA.get("_tombstone", set()) and table not in _SB_SCHEMA.get("tables", {}):
+        known = sorted(_SB_SCHEMA.get("tables", {}).keys())
+        return {"ok": False, "error": f"UNKNOWN_TABLE: '{table}' not in schema registry.",
+                "hint": f"Known tables: {known}",
+                "tip": "Check spelling — common mistake: 'tasks' should be 'task_queue'"}
     sel, warnings = _validate_read(table, select or "*", filters or "")
     # Hard block on tombstone
     if sel is None:
@@ -818,13 +824,28 @@ def t_sb_query(table, filters="", limit=20, order="", select="*"):
     if filters and filters.strip(): qs += f"&{filters.strip()}"
     if order and order.strip():     qs += f"&order={order.strip()}"
     qs += f"&limit={lim}"
-    result = sb_get(table, qs, svc=True)
+    try:
+        result = sb_get(table, qs, svc=True)
+    except Exception as e:
+        err_str = str(e)
+        # Parse Supabase error for actionable hint
+        hint = ""
+        if "400" in err_str:
+            hint = "Bad request — check filter syntax and column names"
+        elif "404" in err_str:
+            hint = f"Table '{table}' not found in Supabase — check table name"
+        elif "column" in err_str.lower():
+            hint = "Unknown column in select or filters — check column names against schema"
+        return {"ok": False, "error": f"Supabase query failed: {err_str[:200]}",
+                "table": table, "query": qs, "hint": hint}
     if warnings:
         if isinstance(result, list):
-            return {"data": result, "count": len(result), "schema_warnings": warnings,
+            return {"ok": True, "data": result, "count": len(result), "schema_warnings": warnings,
                     "table": table, "effective_select": sel}
         if isinstance(result, dict):
             result["schema_warnings"] = warnings
+    if isinstance(result, list):
+        return {"ok": True, "data": result, "count": len(result), "table": table}
     return result
 
 def t_sb_insert(table="", data=""):
