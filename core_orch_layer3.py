@@ -88,9 +88,26 @@ DOMAIN_CONTEXT: {domain}
 BEHAVIORAL_RULES_COUNT: {rules_count}
 KNOWN_MISTAKES_COUNT: {mistakes_count}
 
-Classify this message. Return JSON only:
+Classify this message. AVAILABLE INTENTS:
+- system_health: checking if CORE/system is alive/healthy
+- system_state: getting current system state, tasks, status
+- task_list: listing pending/active tasks
+- evolution_list: listing pending evolutions
+- kb_search: searching knowledge base by keyword
+- kb_query: asking what CORE knows about a topic
+- mistake_list: listing past mistakes/errors
+- trigger_training: running cold processor / training
+- trigger_cold: same as trigger_training
+- deploy_status: checking Railway/VM deployment status
+- general_tool: any tool use (time, calc, weather, web search, currency, translation, etc)
+- task_execution: performing an action (fix, create, update, delete, run, execute)
+- list_tools: asking what tools CORE has
+- conversation: pure greeting/acknowledgement with NO action needed
+- general_query: anything else that needs tools to answer
+
+Return JSON only:
 {{
-  "intent": "task_execution|system_command|kb_query|general_query|conversation|greeting|error_recovery",
+  "intent": "<intent from list above>",
   "confidence": 0.0-1.0,
   "category": "task|question|command|conversation",
   "requires_tools": true|false,
