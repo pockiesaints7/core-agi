@@ -266,13 +266,15 @@ async def layer_3_classify(msg: OrchestratorMessage):
             classification = json.loads(raw.strip().lstrip("```json").rstrip("```").strip())
         except Exception as exc:
             print(f"[L3] Gemini classification failed (non-fatal): {exc}")
+            # Smart fallback: default to general_query WITH tools rather than blind conversation
+            # This ensures free-form requests don't silently skip tool execution
             classification = {
                 "intent": "general_query",
                 "confidence": 0.5,
-                "category": "conversation",
-                "requires_tools": False,
+                "category": "question",
+                "requires_tools": True,
                 "tool_hints": [],
-                "suggested_response_type": "conversational",
+                "suggested_response_type": "structured",
                 "domain": msg.context.get("current_domain", "general"),
             }
 
