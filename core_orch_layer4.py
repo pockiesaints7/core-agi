@@ -245,10 +245,15 @@ async def _build_plan(msg: OrchestratorMessage) -> Dict[str, Any]:
         tools = _INTENT_TOOL_MAP[intent]
         if tools:  # only use fast-path if tools list is non-empty
             cmd_args = msg.context.get("command_args", "")
+            text_lower = msg.text.lower()
             # Build smart args from message text for search-type tools
             smart_args: dict = {}
-            if cmd_args:
-                smart_args = {"args": cmd_args}
+            if tools[0] == "list_tools":
+                # Extract limit from text if user asks for a specific count
+                import re as _re
+                m = _re.search(r'\b(\d+)\b', msg.text)
+                limit = m.group(1) if m else "20"
+                smart_args = {"limit": limit}
             elif tools[0] in ("search_kb",) and msg.text:
                 # Strip slash-command prefix for KB searches
                 query_text = msg.text.strip()
