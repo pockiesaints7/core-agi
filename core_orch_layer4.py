@@ -268,6 +268,19 @@ async def _build_plan(msg: OrchestratorMessage) -> Dict[str, Any]:
     # Inject live TOOLS registry so Groq knows every tool available
     tool_list, tool_count = _build_tool_list()
     try:
+        # Inject L3 tool_hints as a priority signal so Groq doesn't have to
+        # scan all 171 tools when L3 already identified strong candidates
+        hints = classification.get("tool_hints", [])
+        hints_str = ""
+        if hints:
+            try:
+                from core_tools import TOOLS
+                valid = [h for h in hints if h in TOOLS]
+                if valid:
+                    hints_str = f"\nPRIORITY TOOL HINTS FROM CLASSIFIER: {valid}\nUse these first if they fit the request.\n"
+            except Exception:
+                pass
+
         prompt = _PLAN_TEMPLATE.format(
             text=msg.text[:600],
             intent=intent,
@@ -277,7 +290,7 @@ async def _build_plan(msg: OrchestratorMessage) -> Dict[str, Any]:
             args=msg.context.get("command_args", ""),
             tool_list=tool_list,
             tool_count=tool_count or "?",
-        )
+        ) + hints_str
         raw = groq_chat(
             system=_PLAN_SYSTEM,
             user=prompt,
@@ -285,6 +298,10 @@ async def _build_plan(msg: OrchestratorMessage) -> Dict[str, Any]:
             max_tokens=512,
         )
         plan = json.loads(raw.strip().lstrip("```json").rstrip("```").strip())
+        # Safety net: if Groq returns direct_response but requires_tools=True, override
+        if plan.get("type") == "direct_response" and classification.get("requires_tools", False):
+            print(f"[L4] Groq returned direct_response but requires_tools=True — overriding with tool fallback")
+            raise ValueError("Groq plan mismatch: direct_response with requires_tools=True")
         print(f"[L4] Groq plan: type={plan.get('type')}  steps={len(plan.get('subtasks', []))}  tools_injected={tool_count}")
         return plan
     except Exception as exc:
