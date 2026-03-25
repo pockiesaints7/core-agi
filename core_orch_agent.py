@@ -169,11 +169,39 @@ def _llm_think(system: str, prompt: str, max_tokens: int = 1500):
         print(f"[AGENT] OpenRouter failed ({last_err}) — trying Gemini direct")
 
     # ── Tier 2: Gemini direct ─────────────────────────────────────────────────
-    from core_config import gemini_chat
+    from core_config import _GEMINI_KEYS, _GEMINI_KEY_INDEX, _GEMINI_MODEL
     try:
-        text = gemini_chat(system=system, user=prompt, max_tokens=max_tokens, model="")
-        # Gemini direct doesn't return token counts easily — estimate from chars
-        return text, len(prompt) // 4
+        # Round-robin API key selection
+        api_key = _GEMINI_KEYS[_GEMINI_KEY_INDEX]
+        _GEMINI_KEY_INDEX = (_GEMINI_KEY_INDEX + 1) % len(_GEMINI_KEYS)
+
+        # Construct messages for Gemini API
+        messages = []
+        if system:
+            messages.append({"role": "user", "parts": [{"text": system}]})
+            messages.append({"role": "model", "parts": [{"text": "Ok."}]})
+        messages.append({"role": "user", "parts": [{"text": prompt}]})
+
+        # Direct Gemini API call
+        r = requests.post(
+            f"https://generativelanguage.googleapis.com/v1beta/models/{_GEMINI_MODEL}:generateContent?key={api_key}",
+            headers={
+                "Content-Type": "application/json"
+            },
+            json={
+                "contents": messages,
+                "generationConfig": {
+                    "maxOutputTokens": max_tokens,
+                    "temperature": 0.1,
+                },
+            },
+            timeout=90,
+        )
+        r.raise_for_status()
+        data = r.json()
+        text = data["candidates"][0]["content"]["parts"][0]["text"].strip()
+        prompt_tokens = data.get("usageMetadata", {}).get("promptTokenCount", len(prompt) // 4)
+        return text, prompt_tokens
     except Exception as e:
         print(f"[AGENT] Gemini direct failed ({e}) — trying Groq")
 
