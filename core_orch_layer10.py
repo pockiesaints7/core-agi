@@ -90,18 +90,25 @@ def _split_message(text: str, max_len: int = _TG_MAX) -> list:
 
 
 def _notify_with_reply(text: str, chat_id: int, reply_to=None) -> bool:
-    """GAP-NEW-26: send with reply threading."""
+    """Send with reply threading. Falls back to core_github.notify on failure."""
     try:
         import requests
-        token = os.getenv("TELEGRAM_TOKEN", "")
+        token = (os.getenv("TELEGRAM_BOT_TOKEN") or os.getenv("TELEGRAM_TOKEN", "")).strip()
         if not token:
             return notify(text, cid=chat_id)
         payload = {"chat_id": chat_id, "text": text, "parse_mode": "HTML"}
         if reply_to:
             payload["reply_to_message_id"] = reply_to
         r = requests.post(f"https://api.telegram.org/bot{token}/sendMessage", json=payload, timeout=10)
-        return r.status_code == 200
-    except Exception:
+        if r.status_code != 200:
+            print(f"[L10] Telegram API error {r.status_code}: {r.text[:200]}")
+            # Retry without HTML parse_mode in case of malformed HTML
+            payload.pop("parse_mode")
+            r2 = requests.post(f"https://api.telegram.org/bot{token}/sendMessage", json=payload, timeout=10)
+            return r2.status_code == 200
+        return True
+    except Exception as e:
+        print(f"[L10] _notify_with_reply exception: {e}")
         return notify(text, cid=chat_id)
 
 
