@@ -121,9 +121,12 @@ def _format_tool_summary(tool_results: List[Dict[str, Any]]) -> str:
                 if k not in ("wiring", "chunks", "source", "session_md")
                 and not (isinstance(v, list) and len(v) > 20)
             }
-            snippet = json.dumps(trimmed, default=str)[:800]
+            # Give list-type results more space so Groq sees all items
+            has_list = any(isinstance(v, list) for v in trimmed.values())
+            limit = 2400 if has_list else 1200
+            snippet = json.dumps(trimmed, default=str)[:limit]
         else:
-            snippet = str(result)[:400]
+            snippet = str(result)[:800]
         lines.append(f"[{tool}  ok={ok}]\n{snippet}")
     return "\n\n".join(lines)
 
