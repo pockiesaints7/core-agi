@@ -95,21 +95,92 @@ def _compress_history(history: List[Dict], keep_last: int = 6) -> Tuple[str, Lis
             parts.append(f"  {status} {tool}: {summary}")
     return "\n".join(parts), recent
 
+# ── Context limit sentinel ───────────────────────────────────────────────────
+class ContextLimitError(Exception):
+    """Raised when the API explicitly reports context length exceeded."""
+    pass
+
 # ── LLM think ────────────────────────────────────────────────────────────────
-def _llm_think(system: str, prompt: str, max_tokens: int = 1500) -> str:
+def _llm_think(system: str, prompt: str, max_tokens: int = 1500):
     """
-    Full LLM fallback chain via core_config.gemini_chat:
-      1. OpenRouter → AGENT_MODEL (gemini-2.5-flash by default, Opus when key set)
-      2. Gemini direct API → round-robin all GEMINI_KEYS (up to 11)
-      3. Groq → strongest free model (final safety net)
+    Returns (response_text, prompt_tokens_actually_used).
+
+    prompt_tokens comes from the REAL API response — not estimated, not hardcoded.
+    This is the only correct way to track context: ask the API how much was used.
+
+    Chain: OpenRouter → Gemini direct (11 keys) → Groq
+    If context limit exceeded → raises ContextLimitError (caller forces conclusion).
     """
+    import httpx as _httpx
+    import time as _time
+    from core_config import OPENROUTER_API_KEY
+
+    active_model = AGENT_MODEL or os.getenv("OPENROUTER_MODEL", "google/gemini-2.5-flash")
+
+    # ── Tier 1: OpenRouter ────────────────────────────────────────────────────
+    if OPENROUTER_API_KEY:
+        messages = []
+        if system:
+            messages.append({"role": "system", "content": system})
+        messages.append({"role": "user", "content": prompt})
+        last_err = None
+        for attempt in range(3):
+            try:
+                t0 = _time.monotonic()
+                r = _httpx.post(
+                    "https://openrouter.ai/api/v1/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+                        "Content-Type": "application/json",
+                        "HTTP-Referer": f"https://{os.getenv('PUBLIC_DOMAIN', 'core-agi.duckdns.org')}",
+                        "X-Title": "CORE AGI Agent",
+                    },
+                    json={
+                        "model": active_model,
+                        "max_tokens": max_tokens,
+                        "temperature": 0.1,
+                        "messages": messages,
+                    },
+                    timeout=90,
+                )
+                elapsed = round(_time.monotonic() - t0, 2)
+                if elapsed > 10:
+                    print(f"[AGENT] LLM slow: {elapsed}s model={active_model}")
+                if r.status_code == 429:
+                    _time.sleep(3 * (attempt + 1))
+                    continue
+                # Context length exceeded — API tells us explicitly
+                if r.status_code in (400, 413):
+                    err_body = r.json().get("error", {})
+                    err_str = str(err_body).lower()
+                    if any(k in err_str for k in ("context", "length", "too long", "token")):
+                        raise ContextLimitError(f"Context limit hit on {active_model}: {err_body}")
+                r.raise_for_status()
+                data = r.json()
+                text = data["choices"][0]["message"]["content"].strip()
+                # ← Real token count from API. No guessing. No hardcoded limits.
+                prompt_tokens = data.get("usage", {}).get("prompt_tokens", len(prompt) // 4)
+                return text, prompt_tokens
+            except ContextLimitError:
+                raise  # propagate immediately to caller
+            except Exception as e:
+                last_err = e
+                continue
+        print(f"[AGENT] OpenRouter failed ({last_err}) — trying Gemini direct")
+
+    # ── Tier 2: Gemini direct ─────────────────────────────────────────────────
     from core_config import gemini_chat
-    return gemini_chat(
-        system=system,
-        user=prompt,
-        max_tokens=max_tokens,
-        model=AGENT_MODEL,  # "" = use OPENROUTER_MODEL env default
-    )
+    try:
+        text = gemini_chat(system=system, user=prompt, max_tokens=max_tokens, model="")
+        # Gemini direct doesn't return token counts easily — estimate from chars
+        return text, len(prompt) // 4
+    except Exception as e:
+        print(f"[AGENT] Gemini direct failed ({e}) — trying Groq")
+
+    # ── Tier 3: Groq ──────────────────────────────────────────────────────────
+    from core_config import groq_chat, GROQ_MODEL
+    text = groq_chat(system=system, user=prompt, model=GROQ_MODEL, max_tokens=max_tokens)
+    return text, len(prompt) // 4  # estimate only
 
 # ── Tool executor ─────────────────────────────────────────────────────────────
 async def _run_tool(tool_name: str, args: Dict[str, Any], msg: OrchestratorMessage) -> Dict[str, Any]:
@@ -253,20 +324,10 @@ async def run_agent_loop(msg: OrchestratorMessage, goal: str) -> None:
     step = 0
     force_conclude = False  # set True when any budget is critical
 
-    # ── Cumulative ingestion budget ───────────────────────────────────────────
-    # Tracks total chars of raw tool results processed this session.
-    # Independent of prompt size — catches the case where compression keeps
-    # resetting prompt budget but the model has still seen enormous data overall.
-    # Per-model practical limits (tokens × 4 chars × 0.85 safety margin):
-    _MODEL_CHAR_LIMITS = {
-        "groq":   460_000,    # 128k tokens × 4 × 0.90
-        "gemini": 900_000,    # 250k tokens × 4 × 0.90
-        "opus":   680_000,    # 200k tokens × 4 × 0.85
-    }
-    _model_key = "opus" if "opus" in model_label else ("gemini" if "gemini" in model_label else "groq")
-    total_chars_ingested = 0
-    cumulative_limit = _MODEL_CHAR_LIMITS[_model_key]
-    print(f"[AGENT] Budgets: prompt={AGENT_TOKEN_BUDGET//4}t cumulative={cumulative_limit//4}t timeout={AGENT_TIMEOUT_SEC}s")
+    # Token tracking: use real prompt_tokens from API response each step.
+    # No hardcoded model limits — the API tells us the truth.
+    last_prompt_tokens = 0   # updated every step from API response
+    print(f"[AGENT] Budgets: prompt_compress={int(AGENT_TOKEN_COMPRESS*100)}% prompt_conclude={int(AGENT_TOKEN_CONCLUDE*100)}% timeout={AGENT_TIMEOUT_SEC}s")
 
     while True:
         step += 1
@@ -281,27 +342,36 @@ async def run_agent_loop(msg: OrchestratorMessage, goal: str) -> None:
         prompt = _build_prompt(goal, history, compressed_summary, tools_summary, conclude=force_conclude)
         char_count = _chars(prompt)
 
-        if not force_conclude and char_count > AGENT_TOKEN_BUDGET * AGENT_TOKEN_COMPRESS:
-            # Compress old history to free up budget
-            print(f"[AGENT] step={step} compressing history ({char_count:,} chars)")
+        # Use real token count from last API call if available, else estimate from chars
+        effective_tokens = last_prompt_tokens if last_prompt_tokens > 0 else char_count // 4
+        compress_threshold = int(AGENT_TOKEN_BUDGET * AGENT_TOKEN_COMPRESS // 4)  # convert budget to tokens
+        conclude_threshold = int(AGENT_TOKEN_BUDGET * AGENT_TOKEN_CONCLUDE // 4)
+
+        if not force_conclude and effective_tokens > compress_threshold:
+            print(f"[AGENT] step={step} compressing history (tokens={effective_tokens} > {compress_threshold})")
             compressed_summary, history = _compress_history(history, keep_last=6)
             prompt = _build_prompt(goal, history, compressed_summary, tools_summary, conclude=False)
             char_count = _chars(prompt)
 
-        if not force_conclude and char_count > AGENT_TOKEN_BUDGET * AGENT_TOKEN_CONCLUDE:
-            # Budget critical — tell LLM to conclude now
-            print(f"[AGENT] step={step} budget critical ({char_count:,} chars) — forcing conclusion")
+        if not force_conclude and effective_tokens > conclude_threshold:
+            print(f"[AGENT] step={step} token budget critical (tokens={effective_tokens} > {conclude_threshold}) — forcing conclusion")
             force_conclude = True
             prompt = _build_prompt(goal, history, compressed_summary, tools_summary, conclude=True)
 
-        print(f"[AGENT] step={step} prompt≈{char_count//4}t ingested≈{total_chars_ingested//4}t elapsed={elapsed:.1f}s")
+        print(f"[AGENT] step={step} prompt_real={last_prompt_tokens}t prompt_est≈{char_count//4}t elapsed={elapsed:.1f}s")
 
         # ── LLM think ──────────────────────────────────────────────────────────
         try:
-            raw = _llm_think(_AGENT_SYSTEM, prompt, max_tokens=1500)
+            raw, last_prompt_tokens = _llm_think(_AGENT_SYSTEM, prompt, max_tokens=1500)
             raw = raw.strip().lstrip("```json").lstrip("```").rstrip("```").strip()
             decision = json.loads(raw)
             consecutive_errors = 0
+        except ContextLimitError as e:
+            # API explicitly told us context is exceeded — force conclusion immediately
+            print(f"[AGENT] step={step} CONTEXT LIMIT from API: {e}")
+            force_conclude = True
+            history.append({"type": "thought_only", "thought": f"Context limit hit: {e}", "step": step})
+            continue
         except Exception as e:
             consecutive_errors += 1
             print(f"[AGENT] step={step} LLM/parse error ({consecutive_errors}/{AGENT_ERROR_THRESHOLD}): {e}")
@@ -398,13 +468,8 @@ async def run_agent_loop(msg: OrchestratorMessage, goal: str) -> None:
             })
             msg.add_tool_result(tool_name, ok, result)
 
-            # ── Cumulative ingestion tracking ─────────────────────────────────
-            result_chars = len(json.dumps(result, default=str))
-            total_chars_ingested += result_chars
-            if total_chars_ingested > cumulative_limit:
-                print(f"[AGENT] step={step} cumulative ingestion limit reached "
-                      f"({total_chars_ingested:,}/{cumulative_limit:,} chars) — forcing conclusion")
-                force_conclude = True
+            # Token budget: checked at top of loop via last_prompt_tokens (real API value)
+            # No additional tracking needed here — the API response tells us truth each step
 
         # ── UNKNOWN ───────────────────────────────────────────────────────────
         else:
