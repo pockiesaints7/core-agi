@@ -694,11 +694,14 @@ _listen_lock = threading.Lock()
 def _run_listen_job(job_id: str):
     """Background thread: drain listen_stream(), accumulate chunks, update _listen_job."""
     from core_train import listen_stream
-    chunks = []
+    _MAX_CHUNKS = 500  # cap to prevent OOM on long listen sessions
     try:
         for chunk in listen_stream():
             with _listen_lock:
-                _listen_job["chunks"] = _listen_job.get("chunks", []) + [chunk]
+                current = _listen_job.get("chunks", [])
+                if len(current) < _MAX_CHUNKS:
+                    current.append(chunk)
+                _listen_job["chunks"] = current
                 parsed = {}
                 try: parsed = json.loads(chunk) if isinstance(chunk, str) else chunk
                 except Exception: pass
