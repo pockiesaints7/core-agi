@@ -111,12 +111,16 @@ async def _load_domain_mistakes(domain: str) -> List[Dict[str, Any]]:
 async def _load_relevant_kb(text: str, domain: str) -> List[Dict[str, Any]]:
     """Pull KB snippets relevant to the current message text."""
     try:
-        # Clean query — strip special chars
-        q = (text.strip()
-               .replace("'", "")
-               .replace('"', "")
-               .replace("%", "\\%")
-               .replace("_", "\\_"))[:80]
+        import re as _re
+        # Aggressively clean query — strip all special chars that break Supabase ilike
+        q = text.strip()[:120]
+        # Keep only alphanumeric, spaces, hyphens
+        q = _re.sub(r"[^a-zA-Z0-9 \-]", " ", q)
+        # Collapse whitespace, take first 6 meaningful words only
+        words = q.split()[:6]
+        q = " ".join(words).strip()
+        if not q or len(q) < 3:
+            return []
         rows = sb_get(
             "knowledge_base",
             f"select=domain,topic,instruction,confidence"
