@@ -13,6 +13,7 @@ import difflib
 import json
 import os
 import re as _re
+import subprocess
 import time
 from collections import Counter
 from datetime import datetime, timedelta
@@ -2745,196 +2746,105 @@ def t_diff(path: str = "", sha_a: str = "", sha_b: str = "main") -> dict:
 
 
 def t_deploy_and_wait(reason: str = "", timeout: str = "120") -> dict:
-    """Instant Railway deployment status snapshot. Returns in <5s always.
-    NOTE: CORE now runs on Oracle VM — Railway is legacy CI/CD only.
-    This tool checks the last Railway deploy state (git push → Railway builds → VM pulls).
-    To check if the VM is live: call ping_health or get_system_health instead.
-    timeout param retained for API compat but ignored -- no blocking ever.
-    To poll VM live: curl https://core-agi.duckdns.org/health
-    """
+    """Trigger VM redeploy and wait for health check to pass.
+    Replaces old Railway deploy-and-wait — CORE now runs on Oracle VM."""
     try:
-        tok = _RAILWAY_TOKEN or os.environ.get("RAILWAY_TOKEN", "")
-        q = """
-        query($projectId: String!, $serviceId: String!) {
-            deployments(first: 1, input: { projectId: $projectId, serviceId: $serviceId }) {
-                edges { node { id status createdAt meta } }
-            }
-        }"""
-        headers = {"Authorization": f"Bearer {tok}", "Content-Type": "application/json"}
-        body = {"query": q, "variables": {"projectId": _RAILWAY_PROJECT, "serviceId": _RAILWAY_SERVICE}}
-        # Hard 4s timeout -- MCP socket dies after ~10s, must return well before that
-        r = httpx.post(_RAILWAY_GQL, headers=headers, json=body, timeout=4)
-        data = r.json().get("data", {})
-        edges = data.get("deployments", {}).get("edges", [])
-        if not edges:
-            return {"ok": False, "status": "NO_DEPLOYMENTS", "source": "railway_gql"}
-        node = edges[0]["node"]
-        status = node.get("status", "UNKNOWN")
-        deploy_id = node.get("id", "")[:12]
-        meta = node.get("meta") or {}
-        if isinstance(meta, str):
-            import json as _j
-            try: meta = _j.loads(meta)
-            except: meta = {}
-        commit_sha = (meta.get("commitHash") or "")[:12]
-        commit_msg = (meta.get("commitMessage") or "")[:80]
-        in_progress = status in {"BUILDING", "DEPLOYING", "INITIALIZING", "QUEUED"}
-        result = {
-            "ok": status == "SUCCESS",
-            "status": status,
-            "deploy_id": deploy_id,
-            "commit_sha": commit_sha,
-            "commit_msg": commit_msg,
-            "source": "railway_gql_snapshot",
-        }
-        if in_progress:
-            result["note"] = f"Still {status} — Railway is building. VM will auto-pull on success."
-        elif status == "SUCCESS":
-            result["note"] = "Railway build complete. Call ping_health to verify VM is responding."
-        elif status in {"FAILED", "CRASHED"}:
-            result["note"] = "Railway build failed — call railway_logs_live to diagnose."
-        return result
-    except httpx.TimeoutException:
-        return {"ok": False, "status": "GQL_TIMEOUT", "note": "Railway GQL did not respond in 4s. VM may still be healthy — call ping_health.", "source": "railway_gql_snapshot"}
+        deploy_result = t_redeploy(reason=reason)
+        if not deploy_result.get("ok"):
+            return deploy_result
+        import time as _time
+        max_wait = min(int(timeout), 120)
+        for _ in range(max_wait // 5):
+            _time.sleep(5)
+            try:
+                h = t_health()
+                if h.get("overall") == "ok":
+                    return {"ok": True, "reason": reason, "health": "ok", "host": "oracle_vm"}
+            except Exception:
+                pass
+        return {"ok": False, "reason": reason, "error": f"Health check did not pass within {max_wait}s"}
     except Exception as e:
-        return {"ok": False, "error": str(e), "source": "railway_gql_snapshot"}
+        return {"ok": False, "error": str(e)}
 
 
 def t_railway_logs_live(lines: str = "50", keyword: str = "") -> dict:
-    """Fetch live Railway deployment stdout logs via GraphQL.
-    Returns actual print() output from the running container -- not just commit history.
-    lines: number of log lines to return (default 50, max 500).
-    keyword: optional filter string (case-insensitive).
-    """
+    """Fetch live CORE service logs from Oracle VM via journalctl.
+    Replaces old Railway GraphQL log fetcher — CORE now runs on Oracle VM.
+    lines: number of log lines to return (default 50).
+    keyword: optional filter string (grep on output)."""
     try:
-        node = _railway_latest_deployment()
-        if not node:
-            return {"ok": False, "error": "No deployments found"}
-        deploy_id = node["id"]
-        limit = min(int(lines) if lines else 50, 500)
-        q = """
-        query($deploymentId: String!, $limit: Int) {
-            deploymentLogs(deploymentId: $deploymentId, limit: $limit) {
-                message
-                timestamp
-            }
-        }"""
-        data = _railway_gql(q, {"deploymentId": deploy_id, "limit": limit})
-        logs = data.get("deploymentLogs", []) or []
-        kw = keyword.strip().lower() if keyword else ""
-        if kw:
-            logs = [l for l in logs if kw in l.get("message", "").lower()]
-        formatted = []
-        for l in logs:
-            ts = l.get("timestamp", "")[:19].replace("T", " ")
-            msg = l.get("message", "")
-            formatted.append(f"{ts} {msg}")
-        return {
-            "ok": True,
-            "deploy_id": deploy_id[:12],
-            "deploy_status": node.get("status"),
-            "total": len(formatted),
-            "keyword": kw or None,
-            "logs": formatted,
-        }
+        n = max(1, min(int(lines), 500))
+        cmd = ["journalctl", "-u", "core-agi", "-n", str(n), "--no-pager", "--output=short"]
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+        output = result.stdout or result.stderr or "(no output)"
+        if keyword:
+            filtered = [l for l in output.splitlines() if keyword.lower() in l.lower()]
+            output = "\n".join(filtered) or f"(no lines matching '{keyword}')"
+        return {"ok": True, "source": "oracle_vm_journalctl", "lines": output.splitlines(), "raw": output[:8000]}
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
 
 def t_railway_env_get(key: str = "") -> dict:
-    """Read Railway environment variables via GraphQL.
-    key: specific var name to read (returns just that value). Empty = return all vars.
-    """
+    """Read CORE env vars from Oracle VM .env file.
+    Replaces old Railway GraphQL env getter — CORE now runs on Oracle VM.
+    key: specific var name. Empty = return all var names (values redacted)."""
     try:
-        q = """
-        query($projectId: String!, $serviceId: String!, $environmentId: String!) {
-            variables(projectId: $projectId, serviceId: $serviceId, environmentId: $environmentId)
-        }"""
-        data = _railway_gql(q, {"projectId": _RAILWAY_PROJECT, "serviceId": _RAILWAY_SERVICE, "environmentId": _RAILWAY_ENV})
-        vars_obj = data.get("variables") or {}
-        if isinstance(vars_obj, dict):
-            all_vars = vars_obj
-        else:
-            all_vars = {}
+        env_path = "/home/ubuntu/core-agi/.env"
+        with open(env_path) as f:
+            lines = [l.strip() for l in f if l.strip() and not l.startswith("#")]
         if key:
-            val = all_vars.get(key)
-            return {"ok": True, "key": key, "value": val, "found": val is not None}
-        # Return all var names (not values -- security)
-        return {"ok": True, "count": len(all_vars), "keys": sorted(all_vars.keys())}
+            for line in lines:
+                if line.startswith(f"{key}="):
+                    return {"ok": True, "key": key, "value": line.split("=", 1)[1].strip('"').strip("'")}
+            return {"ok": False, "error": f"Key '{key}' not found in .env"}
+        return {"ok": True, "keys": [l.split("=")[0] for l in lines if "=" in l],
+                "note": "values redacted — use key= to read a specific value"}
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
 
 def t_railway_env_set(key: str, value: str) -> dict:
-    """Write a Railway environment variable via GraphQL variableUpsert.
-    Triggers a redeploy automatically after setting.
-    key: env var name (e.g. GROQ_API_KEY). value: new value.
-    """
-    # G.6: known Railway env var set for key validation
-    _KNOWN_KEYS = {
-        "GROQ_API_KEY", "SUPABASE_URL", "SUPABASE_SERVICE_KEY", "SUPABASE_ANON_KEY",
-        "SUPABASE_KEY", "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID", "GITHUB_PAT",
-        "GITHUB_TOKEN", "MCP_SECRET", "RAILWAY_TOKEN", "BACKUP_REPO",
-        "RAILWAY_PUBLIC_DOMAIN", "BINANCE_API_KEY", "BINANCE_SECRET_KEY",
-        "GEMINI_API_KEY", "GEMINI_API_KEY_2", "GEMINI_API_KEY_3",
-    }
+    """Write a CORE env var to Oracle VM .env file + restart service.
+    Replaces old Railway GraphQL env setter — CORE now runs on Oracle VM.
+    key: var name. value: new value. Restarts core-agi after write."""
     try:
-        if not key or not value:
-            return {"ok": False, "error": "key and value are required"}
-        q = """
-        mutation($input: VariableUpsertInput!) {
-            variableUpsert(input: $input)
-        }"""
-        inp = {
-            "projectId": _RAILWAY_PROJECT,
-            "serviceId": _RAILWAY_SERVICE,
-            "environmentId": _RAILWAY_ENV,
-            "name": key,
-            "value": value,
-        }
-        data = _railway_gql(q, {"input": inp})
-        success = data.get("variableUpsert", False)
-        if success:
-            notify(f"Railway env var set: <b>{key}</b> updated. Redeploy required to take effect.")
-        result = {"ok": success, "key": key, "note": "Redeploy required for changes to take effect"}
-        if key not in _KNOWN_KEYS:
-            result["warning"] = f"'{key}' is not in the known Railway env var set -- verify the key name is correct"
-        return result
+        env_path = "/home/ubuntu/core-agi/.env"
+        with open(env_path) as f:
+            lines = f.readlines()
+        found = False
+        new_lines = []
+        for line in lines:
+            if line.strip().startswith(f"{key}="):
+                new_lines.append(f'{key}="{value}"\n')
+                found = True
+            else:
+                new_lines.append(line)
+        if not found:
+            new_lines.append(f'{key}="{value}"\n')
+        with open(env_path, "w") as f:
+            f.writelines(new_lines)
+        subprocess.run(["systemctl", "restart", "core-agi"], timeout=10)
+        notify(f"\u2699\ufe0f CORE env updated: {key} set. Service restarting.")
+        return {"ok": True, "key": key, "action": "written_and_restarted"}
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
 
 def t_railway_service_info() -> dict:
-    """Full Railway service snapshot: status, latest deployment, env var keys, project info."""
+    """VM service snapshot: systemd status, uptime, memory, latest git commit.
+    Replaces old Railway GraphQL service info — CORE now runs on Oracle VM."""
     try:
-        # Service + project
-        q = """
-        query($serviceId: String!, $envId: String!) {
-            service(id: $serviceId) {
-                id name projectId
-            }
-            serviceInstance(serviceId: $serviceId, environmentId: $envId) {
-                id startCommand region
-            }
-        }"""
-        data = _railway_gql(q, {"serviceId": _RAILWAY_SERVICE, "envId": _RAILWAY_ENV})
-        svc = data.get("service", {})
-        inst = data.get("serviceInstance", {})
-        # Latest deployment
-        node = _railway_latest_deployment()
-        meta = (node.get("meta") or {}) if node else {}
-        return {
-            "ok": True,
-            "service": {"id": svc.get("id","")[:12], "name": svc.get("name"), "project_id": svc.get("projectId","")[:12]},
-            "instance": {"region": inst.get("region"), "start_cmd": inst.get("startCommand")},
-            "latest_deploy": {
-                "id": (node.get("id") or "")[:12],
-                "status": node.get("status"),
-                "commit": (meta.get("commitMessage") or "")[:60],
-                "sha": (meta.get("commitSha") or "")[:12],
-            } if node else None,
-            "ids": {"project": _RAILWAY_PROJECT, "service": _RAILWAY_SERVICE, "env": _RAILWAY_ENV},
-        }
+        status = subprocess.run(["systemctl", "show", "core-agi",
+            "--property=ActiveState,SubState,MainPID,MemoryCurrent,ActiveEnterTimestamp"],
+            capture_output=True, text=True, timeout=10).stdout.strip()
+        git = subprocess.run(["git", "-C", "/home/ubuntu/core-agi", "log", "--oneline", "-3"],
+            capture_output=True, text=True, timeout=10).stdout.strip()
+        parsed = dict(line.split("=", 1) for line in status.splitlines() if "=" in line)
+        return {"ok": True, "host": "oracle_vm", "service": "core-agi",
+                "state": parsed.get("ActiveState"), "sub": parsed.get("SubState"),
+                "pid": parsed.get("MainPID"), "since": parsed.get("ActiveEnterTimestamp"),
+                "recent_commits": git.splitlines()}
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
@@ -3315,44 +3225,27 @@ def t_run_template(name: str, params: str = "") -> dict:
 
 
 def t_redeploy(reason: str = "") -> dict:
-    """Trigger Railway redeploy via empty GitHub commit."""
+    """Trigger CORE redeploy on Oracle VM: git pull latest + restart service.
+    Calls /deploy-webhook on the VM. Replaces old Railway empty-commit approach.
+    reason: optional description logged to Telegram and Supabase."""
     try:
-        h = _ghh()
-        ref = httpx.get(f"https://api.github.com/repos/{GITHUB_REPO}/git/ref/heads/main", headers=h, timeout=10)
-        ref.raise_for_status()
-        current_sha = ref.json()["object"]["sha"]
-        commit = httpx.get(f"https://api.github.com/repos/{GITHUB_REPO}/git/commits/{current_sha}", headers=h, timeout=10)
-        commit.raise_for_status()
-        tree_sha = commit.json()["tree"]["sha"]
-        msg = f"chore: trigger redeploy â€” {reason or 'manual trigger'}"
-        new_commit = httpx.post(
-            f"https://api.github.com/repos/{GITHUB_REPO}/git/commits",
-            headers=h,
-            json={"message": msg, "tree": tree_sha, "parents": [current_sha]},
+        r = httpx.post(
+            f"{BASE_URL}/deploy-webhook",
+            headers={"X-MCP-Secret": MCP_SECRET, "Content-Type": "application/json"},
             timeout=15,
         )
-        new_commit.raise_for_status()
-        new_sha = new_commit.json()["sha"]
-        update = httpx.patch(
-            f"https://api.github.com/repos/{GITHUB_REPO}/git/refs/heads/main",
-            headers=h,
-            json={"sha": new_sha},
-            timeout=15,
-        )
-        update.raise_for_status()
-        notify(f"CORE redeploying\nReason: {reason or 'manual trigger'}\nCommit: {new_sha[:12]}")
-        # Schedule post-deploy sync in background -- runs after Railway finishes building
-        # Uses threading so redeploy returns immediately without blocking
+        r.raise_for_status()
+        notify(f"\U0001f680 CORE redeploy triggered\nReason: {reason or 'manual trigger'}\nHost: oracle_vm")
         import threading as _t
         def _post_deploy_sync():
             import time as _time
-            _time.sleep(90)  # wait ~90s for Railway to finish building
+            _time.sleep(15)
             try:
                 t_sync_system_map(trigger="post_deploy", notify_on_changes="true")
             except Exception as _se:
                 print(f"[SMAP] post-deploy sync error: {_se}")
         _t.Thread(target=_post_deploy_sync, daemon=True).start()
-        return {"ok": True, "reason": reason, "commit": new_sha[:12]}
+        return {"ok": True, "reason": reason, "status": "deploy_started", "host": "oracle_vm"}
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
@@ -3576,156 +3469,47 @@ def _gh_commit_status(sha: str = "") -> dict:
 
 
 def t_deploy_status() -> dict:
+    """VM deploy status: latest git commit on VM vs GitHub.
+    Replaces old Railway deploy status — CORE now runs on Oracle VM."""
     try:
-        result = _gh_commit_status()
-        return {"ok": True, "commit_sha": result.get("sha", "unknown"),
-                "commit_msg": result.get("commit_msg", "unknown"),
-                "status": result.get("state", "unknown"),
-                "description": result.get("description", ""),
-                "updated_at": result.get("updated_at", "")}
+        vm_sha = subprocess.run(["git", "-C", "/home/ubuntu/core-agi", "rev-parse", "HEAD"],
+            capture_output=True, text=True, timeout=10).stdout.strip()
+        vm_msg = subprocess.run(["git", "-C", "/home/ubuntu/core-agi", "log", "-1", "--pretty=%s"],
+            capture_output=True, text=True, timeout=10).stdout.strip()
+        h = _ghh()
+        r = httpx.get(f"https://api.github.com/repos/{GITHUB_REPO}/commits/main", headers=h, timeout=10)
+        r.raise_for_status()
+        gh = r.json()
+        gh_sha = gh["sha"]
+        synced = vm_sha == gh_sha
+        return {"ok": True, "vm_sha": vm_sha[:12], "vm_msg": vm_msg,
+                "github_sha": gh_sha[:12], "synced": synced,
+                "status": "up_to_date" if synced else "behind"}
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
 
 def t_build_status() -> dict:
-    """Real-time deploy status via Railway GraphQL (direct) + GitHub commit history.
-    Railway GraphQL gives live status: BUILDING | DEPLOYING | SUCCESS | FAILED | CRASHED.
-    Falls back to GitHub commit statuses if Railway token unavailable."""
-    try:
-        now = datetime.utcnow()
-        # Primary: Railway GraphQL (real-time, no lag)
-        railway_deploy = None
-        railway_error = None
-        try:
-            node = _railway_latest_deployment()
-            if node:
-                created = node.get("createdAt", "")
-                time_since = ""
-                if created:
-                    try:
-                        dt = datetime.fromisoformat(created.replace("Z", "+00:00")).replace(tzinfo=None)
-                        mins = int((now - dt).total_seconds() // 60)
-                        time_since = f"{mins}m ago" if mins < 60 else f"{mins//60}h{mins%60}m ago"
-                    except: pass
-                meta = node.get("meta", {}) or {}
-                railway_deploy = {
-                    "deploy_id": node.get("id", "")[:12],
-                    "status": node.get("status", "UNKNOWN"),  # BUILDING|DEPLOYING|SUCCESS|FAILED|CRASHED
-                    "commit_sha": (meta.get("commitSha") or "")[:12],
-                    "commit_msg": (meta.get("commitMessage") or "")[:80],
-                    "created_at": created[:19] if created else "",
-                    "time_since": time_since,
-                    "source": "railway_graphql",
-                }
-        except Exception as re:
-            railway_error = str(re)
-
-        # G.4: short-circuit -- if Railway GQL returned terminal status, skip 3 GitHub API calls
-        _TERMINAL = {"SUCCESS", "FAILED", "CRASHED", "REMOVED"}
-        _rw_status = (railway_deploy or {}).get("status", "")
-        if railway_deploy and _rw_status in _TERMINAL:
-            return {
-                "ok": True,
-                "latest": railway_deploy,
-                "railway_live": railway_deploy,
-                "railway_error": railway_error,
-                "recent": [],
-                "summary": f"Latest: {_rw_status} -- {railway_deploy.get('commit_msg', '?')}",
-                "source": "railway_graphql_only",
-            }
-
-        # Secondary: last 3 GitHub commits with Railway status callbacks (only if Railway GQL is unclear)
-        h = _ghh()
-        gh_r = httpx.get(f"https://api.github.com/repos/{GITHUB_REPO}/commits?per_page=3", headers=h, timeout=8)
-        gh_r.raise_for_status()
-        recent = []
-        for commit in gh_r.json():
-            sha = commit["sha"]
-            msg = commit.get("commit", {}).get("message", "")[:60]
-            ts = commit.get("commit", {}).get("committer", {}).get("date", "")
-            sr = httpx.get(f"https://api.github.com/repos/{GITHUB_REPO}/commits/{sha}/statuses",
-                           headers=h, timeout=8)
-            statuses = sr.json() if sr.status_code == 200 else []
-            rw = [s for s in statuses if "railway" in s.get("context","").lower()
-                  or "railway" in s.get("description","").lower()]
-            st = rw[0] if rw else {}
-            time_since = ""
-            if ts:
-                try:
-                    dt = datetime.strptime(ts, "%Y-%m-%dT%H:%M:%SZ")
-                    mins = int((now - dt).total_seconds() // 60)
-                    time_since = f"{mins}m ago" if mins < 60 else f"{mins//60}h{mins%60}m ago"
-                except: pass
-            recent.append({"commit_sha": sha[:12], "commit_msg": msg,
-                           "state": st.get("state", "no_status"),
-                           "description": st.get("description", ""),
-                           "updated_at": st.get("updated_at", ""), "time_since": time_since})
-
-        latest_gh = recent[0] if recent else {}
-        latest = railway_deploy or latest_gh
-        state = (railway_deploy or {}).get("status") or latest_gh.get("state", "?")
-        msg = (railway_deploy or latest_gh).get("commit_msg", "?")
-        return {
-            "ok": True,
-            "latest": latest,
-            "railway_live": railway_deploy,
-            "railway_error": railway_error,
-            "recent": recent,
-            "summary": f"Latest: {state} -- {msg}",
-        }
-    except Exception as e:
-        return {"ok": False, "error": str(e)}
-
-
-_crash_window_secs = 3600
-_crash_threshold   = 2
-_startup_times: list = []
+    """VM build/deploy status: checks if VM is running latest GitHub commit.
+    Replaces old Railway build status — CORE now runs on Oracle VM."""
+    return t_deploy_status()
 
 
 def t_crash_report() -> dict:
+    """Check if core-agi service has crashed or restarted recently on Oracle VM.
+    Replaces old Railway crash loop detector."""
     try:
-        h = _ghh()
-        r = httpx.get(f"https://api.github.com/repos/{GITHUB_REPO}/commits?per_page=5", headers=h, timeout=10)
-        r.raise_for_status()
-        commits = r.json()
-        now = datetime.utcnow()
-        cutoff = now - timedelta(seconds=_crash_window_secs)
-        failed_recent = []
-        for commit in commits:
-            sha = commit["sha"]
-            ts_str = commit.get("commit", {}).get("committer", {}).get("date", "")
-            msg = commit.get("commit", {}).get("message", "")[:60]
-            try:
-                ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00")).replace(tzinfo=None)
-                if ts < cutoff:
-                    continue
-            except Exception:
-                continue
-            sr = httpx.get(f"https://api.github.com/repos/{GITHUB_REPO}/commits/{sha}/statuses", headers=h, timeout=8)
-            statuses = sr.json() if sr.status_code == 200 else []
-            railway = [s for s in statuses if "railway" in s.get("context","").lower() or "railway" in s.get("description","").lower()]
-            st = railway[0] if railway else {}
-            if st.get("state") == "failure":
-                failed_recent.append({"sha": sha[:10], "ts": ts_str[:19], "message": msg,
-                                      "detail": st.get("description", "")})
-        crash_count  = len(failed_recent)
-        loop_detected = crash_count > _crash_threshold
-        if loop_detected:
-            sb_post("mistakes", {
-                "domain": "infrastructure",
-                "context": f"Railway restart loop detected - {crash_count} failures in 1hr",
-                "what_failed": f"Service crashed {crash_count}x in 1 hour",
-                "correct_approach": "Check recent commits for syntax errors. Use t_build_status.",
-                "root_cause": "Likely bad code patch deployed",
-                "how_to_avoid": "Run t_build_status after every patch.",
-                "severity": "critical",
-                "tags": ["crash", "restart_loop", "railway"],
-            })
-            notify(f"CORE Restart Loop Detected\nFailures in last hour: {crash_count}\n"
-                   f"Recent failed commits: {', '.join(d['sha'] for d in failed_recent[:3])}")
-        summary = f"{'Restart loop: ' + str(crash_count) + ' failures' if loop_detected else 'OK - ' + str(crash_count) + ' failures'} in last hour."
-        return {"ok": True, "crash_count": crash_count, "loop_detected": loop_detected,
-                "threshold": _crash_threshold, "failed_recent": failed_recent, "summary": summary}
+        result = subprocess.run(
+            ["journalctl", "-u", "core-agi", "--no-pager", "-n", "50",
+             "--output=short", "--since", "1 hour ago"],
+            capture_output=True, text=True, timeout=15
+        )
+        lines = result.stdout.splitlines()
+        crashes = [l for l in lines if any(w in l.lower() for w in ["failed", "error", "crashed", "killed", "start request"])]
+        status = subprocess.run(["systemctl", "is-active", "core-agi"],
+            capture_output=True, text=True, timeout=5).stdout.strip()
+        return {"ok": True, "service_state": status, "crash_indicators": crashes[-10:],
+                "crash_count": len(crashes), "source": "oracle_vm_journalctl"}
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
