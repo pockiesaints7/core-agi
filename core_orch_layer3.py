@@ -67,8 +67,16 @@ _FUZZY_INTENT_CLUSTERS: list[tuple[str, bool, set[str]]] = [
 ]
 
 _CLASSIFY_SYSTEM = (
-    "You are CORE AGI's intent classifier. Analyse the message and return ONLY valid JSON. "
-    "No preamble, no markdown, no extra keys."
+    "You are the intent classifier for CORE — an autonomous AGI system with 171+ tools covering "
+    "system health, knowledge base, task management, web search, code execution, file ops, "
+    "deployments, crypto, weather, calculations, and more. "
+    "Your job: classify user intent and determine if tools are needed. "
+    "CRITICAL RULE: requires_tools must be TRUE for ANY request that involves: "
+    "looking something up, performing an action, checking status, fetching data, running code, "
+    "time/date queries, calculations, web searches, system operations, or ANY non-trivial request. "
+    "requires_tools is FALSE ONLY for pure greetings (hi/hello/thanks) and simple acknowledgements. "
+    "When in doubt → set requires_tools=true. "
+    "Return ONLY valid JSON. No preamble, no markdown, no extra keys."
 )
 
 _CLASSIFY_TEMPLATE = """
