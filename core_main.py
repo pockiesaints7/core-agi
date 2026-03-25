@@ -798,13 +798,21 @@ async def backfill_status(req: Request):
 async def webhook(req: Request):
     try:
         u = await req.json()
+        keys = list(u.keys())
+        print(f"[WEBHOOK] update keys={keys} update_id={u.get('update_id','?')}")
         if "message" in u:
-            # Fire-and-forget in a thread — webhook must return 200 immediately
-            # to prevent Telegram retry storms. ALL processing is async/threaded.
             msg = u["message"]
+            text = msg.get("text", "")
+            cid = msg.get("chat", {}).get("id", "?")
+            uname = msg.get("from", {}).get("username", "?")
+            print(f"[WEBHOOK] message: chat_id={cid} user=@{uname} text={text!r:.80}")
+            # Fire-and-forget in a thread — webhook must return 200 immediately
             threading.Thread(target=handle_msg, args=(msg,), daemon=True).start()
+        else:
+            # Non-message update (edited_message, callback_query, etc) — log and ignore
+            print(f"[WEBHOOK] non-message update ignored: keys={keys}")
     except Exception as e:
-        print(f"[WEBHOOK] {e}")
+        print(f"[WEBHOOK] error: {e}")
     return {"ok": True}  # Always return 200 immediately — never block here
 
 
