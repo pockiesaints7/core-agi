@@ -219,7 +219,7 @@ async def layer_9_tone(msg: OrchestratorMessage):
 
     behavioral_rules = msg.context.get("behavioral_rules", [])
     rules_str = "\n".join(
-        f"- {r.get('instruction','')[:120]}"
+        f"- {(r.get('instruction') or '')[:120]}"
         for r in behavioral_rules[:5]
     ) if behavioral_rules else "none"
 
