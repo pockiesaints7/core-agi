@@ -91,36 +91,85 @@ Return JSON:
 
 
 def _build_tool_list() -> tuple[str, int]:
-    """Cached: only builds once per process lifetime."""
+    """Cached: only builds once per process lifetime.
+    Returns (formatted_string, count) — tool name + short description per line,
+    grouped by functional category so Groq can scan it reliably.
+    """
     if _TOOL_LIST_CACHE_L4["list"] is not None:
         return _TOOL_LIST_CACHE_L4["list"], _TOOL_LIST_CACHE_L4["count"]
 
-    """
-    Dynamically pull TOOLS keys from the live registry.
-    Returns (formatted_string, count).
-    Falls back to a static category summary on import error.
-    """
     try:
         from core_tools import TOOLS
-        from core_config import TOOL_CATEGORY_KEYWORDS
 
-        # Group tools by category for a readable but compact prompt injection
-        cats: Dict[str, List[str]] = {cat: [] for cat in TOOL_CATEGORY_KEYWORDS}
-        cats["misc"] = []
-        for tn in TOOLS.keys():
-            placed = False
-            for cat, kws in TOOL_CATEGORY_KEYWORDS.items():
-                if any(kw in tn for kw in kws):
-                    cats[cat].append(tn)
-                    placed = True
-                    break
-            if not placed:
-                cats["misc"].append(tn)
+        # Functional groups — human-readable categories Groq understands
+        # Each group has a label and keyword matchers against tool name
+        _GROUPS = [
+            ("TIME/DATE",       ["get_time", "datetime_now"]),
+            ("SYSTEM HEALTH",   ["get_system_health", "ping_health", "get_state", "get_state_key"]),
+            ("KNOWLEDGE BASE",  ["search_kb", "add_knowledge", "kb_update", "ingest_knowledge",
+                                  "get_behavioral_rules", "get_constitution", "search_mistakes",
+                                  "semantic_kb_search"]),
+            ("MISTAKES",        ["get_mistakes", "log_mistake", "mistakes_since"]),
+            ("TASKS/GOALS",     ["task_add", "task_update", "get_active_goals", "set_goal",
+                                  "update_goal_progress", "checkpoint"]),
+            ("EVOLUTIONS",      ["list_evolutions", "approve_evolution", "reject_evolution",
+                                  "bulk_reject_evolutions", "check_evolutions", "add_evolution_rule"]),
+            ("TRAINING",        ["trigger_cold_processor", "get_training_pipeline",
+                                  "get_quality_trend", "get_quality_alert", "log_quality_metrics"]),
+            ("DEPLOY/RAILWAY",  ["deploy_status", "deploy_and_wait", "railway_logs_live",
+                                  "railway_env_get", "railway_env_set", "railway_service_info",
+                                  "redeploy", "build_status", "verify_live", "crash_report"]),
+            ("CODE/FILES",      ["run_python", "shell", "read_file", "write_file", "file_read",
+                                  "file_write", "file_list", "gh_read_lines", "gh_search_replace",
+                                  "multi_patch", "patch_file", "smart_patch", "replace_fn",
+                                  "core_py_fn", "core_py_validate", "core_py_rollback",
+                                  "diff", "search_in_file", "append_to_file", "git"]),
+            ("DATABASE",        ["sb_query", "sb_insert", "sb_bulk_insert", "sb_patch",
+                                  "sb_upsert", "sb_delete", "get_table_schema"]),
+            ("WEB",             ["web_search", "web_fetch", "summarize_url"]),
+            ("UTILS",           ["calc", "weather", "currency", "translate", "datetime_now",
+                                  "generate_image", "image_process", "convert_document",
+                                  "create_document", "create_spreadsheet", "create_presentation",
+                                  "read_document"]),
+            ("NOTIFICATIONS",   ["notify_owner"]),
+            ("SESSION",         ["session_start", "session_end", "update_state", "checkpoint",
+                                  "log_reasoning", "cognitive_load"]),
+            ("CRYPTO",          ["crypto_price", "crypto_balance", "crypto_trade"]),
+            ("MONITORING",      ["listen", "listen_result", "vm_info", "get_system_health",
+                                  "system_map_scan", "tool_health_scan"]),
+            ("PROJECTS",        ["project_list", "project_get", "project_search", "project_register",
+                                  "project_index", "project_update_kb"]),
+            ("OWNER PROFILE",   ["get_owner_profile", "add_owner_observation"]),
+            ("SELF-IMPROVE",    ["add_evolution_rule", "synthesize_evolutions", "scope_tracker",
+                                  "contradiction_check", "reason_chain", "decompose_task",
+                                  "lookahead", "goal_check", "impact_model", "circuit_breaker",
+                                  "assert_source", "loop_detect", "predict_failure"]),
+        ]
 
+        placed = set()
         lines = []
-        for cat, tools in cats.items():
-            if tools:
-                lines.append(f"- {cat}: {', '.join(sorted(tools))}")
+        for group_label, tool_names in _GROUPS:
+            # Filter to tools that actually exist in registry
+            group_tools = []
+            for tn in tool_names:
+                if tn in TOOLS and tn not in placed:
+                    entry = TOOLS[tn]
+                    desc = ""
+                    if isinstance(entry, dict):
+                        desc = (entry.get("desc") or "")[:70]
+                    elif hasattr(entry, "__doc__") and entry.__doc__:
+                        desc = entry.__doc__.strip().split("\n")[0][:70]
+                    group_tools.append(f"  {tn}: {desc}" if desc else f"  {tn}")
+                    placed.add(tn)
+            if group_tools:
+                lines.append(f"[{group_label}]")
+                lines.extend(group_tools)
+
+        # Dump any remaining unplaced tools under MISC
+        misc = [tn for tn in TOOLS if tn not in placed]
+        if misc:
+            lines.append("[MISC]")
+            lines.extend(f"  {tn}" for tn in sorted(misc))
 
         total = len(TOOLS)
         result = "\n".join(lines)
