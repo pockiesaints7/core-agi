@@ -139,7 +139,8 @@ async def _execute_subtask(
                             price_val = float(price_str)
                             # Rebuild expression: replace word tokens with extracted price
                             new_expr = _re.sub(r'[a-zA-Z_][a-zA-Z0-9_]*', price_str, expr)
-                            new_expr = new_expr.replace(",", "").replace("[", "").replace("]", "")
+                            # Strip ALL bracket types left over from template placeholders
+                            new_expr = new_expr.replace(",", "").replace("[", "").replace("]", "").replace("{", "").replace("}", "")
                             args = dict(args)
                             args["expression"] = new_expr
                             print(f"[L5] calc smart-inject: {expr!r} → {new_expr!r} (price={price_val})")
