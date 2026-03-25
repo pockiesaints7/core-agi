@@ -2713,11 +2713,11 @@ def t_diff(path: str = "", sha_a: str = "", sha_b: str = "main") -> dict:
 
 def t_deploy_and_wait(reason: str = "", timeout: str = "120") -> dict:
     """Instant Railway deployment status snapshot. Returns in <5s always.
-    Root cause of previous hangs: any blocking I/O (sleep loops, urllib, long httpx timeout)
-    kills the claude.ai MCP socket. Fix: single Railway GQL call with 4s httpx timeout,
-    catch timeout immediately, return whatever state Railway has right now.
+    NOTE: CORE now runs on Oracle VM — Railway is legacy CI/CD only.
+    This tool checks the last Railway deploy state (git push → Railway builds → VM pulls).
+    To check if the VM is live: call ping_health or get_system_health instead.
     timeout param retained for API compat but ignored -- no blocking ever.
-    To poll live: PowerShell loop on https://core-agi-production.up.railway.app/health
+    To poll VM live: curl https://core-agi.duckdns.org/health
     """
     try:
         tok = _RAILWAY_TOKEN or os.environ.get("RAILWAY_TOKEN", "")
@@ -2745,7 +2745,6 @@ def t_deploy_and_wait(reason: str = "", timeout: str = "120") -> dict:
             except: meta = {}
         commit_sha = (meta.get("commitHash") or "")[:12]
         commit_msg = (meta.get("commitMessage") or "")[:80]
-        terminal = {"SUCCESS", "FAILED", "CRASHED", "REMOVED"}
         in_progress = status in {"BUILDING", "DEPLOYING", "INITIALIZING", "QUEUED"}
         result = {
             "ok": status == "SUCCESS",
@@ -2756,14 +2755,14 @@ def t_deploy_and_wait(reason: str = "", timeout: str = "120") -> dict:
             "source": "railway_gql_snapshot",
         }
         if in_progress:
-            result["note"] = f"Still {status} -- poll: Invoke-WebRequest https://core-agi-production.up.railway.app/health"
+            result["note"] = f"Still {status} — Railway is building. VM will auto-pull on success."
         elif status == "SUCCESS":
-            result["note"] = "Deploy complete. Call ping_health to verify app is responding."
+            result["note"] = "Railway build complete. Call ping_health to verify VM is responding."
         elif status in {"FAILED", "CRASHED"}:
-            result["note"] = "Deploy failed -- call railway_logs_live to diagnose."
+            result["note"] = "Railway build failed — call railway_logs_live to diagnose."
         return result
     except httpx.TimeoutException:
-        return {"ok": False, "status": "GQL_TIMEOUT", "note": "Railway GQL did not respond in 4s. Poll manually: Invoke-WebRequest https://core-agi-production.up.railway.app/health", "source": "railway_gql_snapshot"}
+        return {"ok": False, "status": "GQL_TIMEOUT", "note": "Railway GQL did not respond in 4s. VM may still be healthy — call ping_health.", "source": "railway_gql_snapshot"}
     except Exception as e:
         return {"ok": False, "error": str(e), "source": "railway_gql_snapshot"}
 
