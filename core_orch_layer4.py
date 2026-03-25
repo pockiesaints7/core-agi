@@ -32,6 +32,8 @@ _INTENT_TOOL_MAP: Dict[str, List[str]] = {
     "checkpoint":       ["checkpoint"],
     "list_tools":       ["list_tools"],
     "general_tool":     [],  # handled by Groq planning — too varied for fast-path
+    "general_query":    ["search_kb"],  # default: search KB first, then let Groq plan more if needed
+    "task_execution":   [],  # always goes to Groq planner — too dynamic for fast-path
 }
 
 _PLAN_SYSTEM = (
