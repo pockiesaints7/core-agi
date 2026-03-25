@@ -398,11 +398,13 @@ async def run_agent_loop(msg: OrchestratorMessage, goal: str) -> None:
             })
             msg.add_tool_result(tool_name, ok, result)
 
-            # If force_conclude was set and we just ran an action, next iteration will conclude
-            if force_conclude:
-                # LLM ignored the conclude instruction — force it harder on next step
-                # (it will see force_conclude=True again in the next iteration)
-                pass
+            # ── Cumulative ingestion tracking ─────────────────────────────────
+            result_chars = len(json.dumps(result, default=str))
+            total_chars_ingested += result_chars
+            if total_chars_ingested > cumulative_limit:
+                print(f"[AGENT] step={step} cumulative ingestion limit reached "
+                      f"({total_chars_ingested:,}/{cumulative_limit:,} chars) — forcing conclusion")
+                force_conclude = True
 
         # ── UNKNOWN ───────────────────────────────────────────────────────────
         else:
