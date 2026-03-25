@@ -2,29 +2,39 @@
 
 Personal AGI Orchestration System — built by REINVAGNAR, Indonesia.
 
-CORE is a persistent, self-improving AI brain running on Railway, Supabase, and GitHub. It connects to Claude via MCP, learns from every session, and evolves itself over time. Not a chatbot wrapper. An operating system for AI-assisted work.
+CORE is a persistent, self-improving AI brain. It connects to Claude Desktop via MCP, learns from every session, and evolves its own behavior over time. Not a chatbot wrapper. An operating system for AI-assisted work.
 
 ---
 
 ## What it does
 
-Every session, CORE captures patterns from the work done. A cold processor distills those patterns, queues proposed changes, and waits for owner approval. Once approved, the changes are applied — and CORE is measurably smarter than before. The loop runs indefinitely.
+Every session, CORE captures patterns from the work done. A cold processor distills those patterns into proposed behavioral changes, queued for owner approval. Once approved, they are applied — and CORE is measurably smarter than before. The loop runs indefinitely.
 
 ---
 
 ## Architecture
 
-Claude connects to a FastAPI server on Railway via MCP. That server is the brain — it dispatches tool calls, handles Telegram webhooks, and runs a background queue poller every 60 seconds. State and source of truth live in two places: Supabase holds the memory (knowledge base, mistakes, evolutions, sessions), and GitHub holds the code and state files.
+Five layers, all simultaneous:
+
+| Layer | System | Role |
+|---|---|---|
+| Brain | Supabase | All persistent memory — KB, mistakes, evolutions, sessions |
+| Executor | Oracle VM (`core-agi.service`) | Always-on FastAPI + MCP server, Telegram bot, cold processor |
+| Skeleton | GitHub (`pockiesaints7/core-agi`) | Source of truth for all code and docs |
+| Interface | Claude Desktop + Groq + Telegram | Reasoning, learning, owner interaction |
+| Local PC | REINVAGNAR's Windows PC | Credentials, local execution, Desktop Commander |
+
+MCP endpoint: `https://core-agi.duckdns.org/mcp/sse`
 
 ---
 
 ## MCP Surface
 
-50 tools across three classes:
+171 tools across three classes:
 
-- Read (27) — query state, search the knowledge base, inspect code, check builds
-- Write (15) — log knowledge, reflect, queue evolutions, send notifications  
-- Execute (8) — patch code, redeploy, rollback to last good commit
+- **Read** — query state, search the knowledge base, inspect code, get crypto prices
+- **Write** — log knowledge, reflect, queue evolutions, send notifications
+- **Execute** — patch code, redeploy, rollback, run scripts on VM
 
 One call to `session_start` bootstraps full context. One call to `session_end` closes the loop and logs the session.
 
@@ -32,7 +42,8 @@ One call to `session_start` bootstraps full context. One call to `session_end` c
 
 ## Current state
 
-Live session state is always at SESSION.md in this repo. The knowledge base currently holds 3,368 entries across 205 sessions. Training pipeline is active.
+Knowledge base: **6,081 entries** · Sessions: **962** · Mistakes: **1,248** · Evolutions applied: **1,314**
+Training pipeline: active · Quality 7d avg: **0.786** (improving)
 
 ---
 
