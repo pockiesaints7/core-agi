@@ -180,8 +180,8 @@ async def _build_plan(msg: OrchestratorMessage) -> Dict[str, Any]:
     intent = msg.intent or "general_query"
     classification = msg.context.get("intent_classification", {})
 
-    # 1. No tools needed
-    if not classification.get("requires_tools", False):
+    # 1. No tools needed — ONLY for pure greetings/conversation
+    if not classification.get("requires_tools", False) and msg.intent in ("conversation", "greeting"):
         return {
             "type": "direct_response",
             "subtasks": [],
@@ -189,25 +189,36 @@ async def _build_plan(msg: OrchestratorMessage) -> Dict[str, Any]:
             "direct_answer": None,
         }
 
-    # 2. Fast-path single-tool intents
+    # 2. Fast-path single-tool intents (non-empty tool list only)
     if intent in _INTENT_TOOL_MAP:
         tools = _INTENT_TOOL_MAP[intent]
-        cmd_args = msg.context.get("command_args", "")
-        return {
-            "type": "tool_execution",
-            "subtasks": [
-                {
-                    "step": i + 1,
-                    "action": f"Execute {t}",
-                    "tool": t,
-                    "args": {"args": cmd_args} if cmd_args else {},
-                    "expected_output": "tool result",
-                }
-                for i, t in enumerate(tools)
-            ],
-            "estimated_complexity": "low",
-            "requires_confirmation": False,
-        }
+        if tools:  # only use fast-path if tools list is non-empty
+            cmd_args = msg.context.get("command_args", "")
+            # Build smart args from message text for search-type tools
+            smart_args: dict = {}
+            if cmd_args:
+                smart_args = {"args": cmd_args}
+            elif tools[0] in ("search_kb",) and msg.text:
+                # Strip slash-command prefix for KB searches
+                query_text = msg.text.strip()
+                if query_text.startswith("/"):
+                    query_text = " ".join(query_text.split()[1:])
+                smart_args = {"query": query_text or msg.text}
+            return {
+                "type": "tool_execution",
+                "subtasks": [
+                    {
+                        "step": i + 1,
+                        "action": f"Execute {t}",
+                        "tool": t,
+                        "args": smart_args,
+                        "expected_output": "tool result",
+                    }
+                    for i, t in enumerate(tools)
+                ],
+                "estimated_complexity": "low",
+                "requires_confirmation": False,
+            }
 
     # 3. Groq planning for complex/multi-step tasks
     # Inject live TOOLS registry so Groq knows every tool available
