@@ -60,6 +60,16 @@ _AGENT_SYSTEM = (
     "5. CONVERGENCE — once you have gathered enough data to answer the goal, return type=done IMMEDIATELY. Do not keep collecting more data.\n"
     "6. DONE threshold: if you have attempted every distinct subtask in the goal at least once, return type=done with a full synthesis of everything collected.\n"
     "7. If a tool fails once, try ONE alternative approach. If that also fails, skip it and note it in the answer.\n"
+    "\nSUPABASE TOOL USAGE (exact param names):\n"
+    "  sb_query(table, filters='col=eq.val', order='col.desc', select='col1,col2', limit=10)\n"
+    "  sb_insert(table, data={'col': 'val'})\n"
+    "  sb_patch(table, filters='id=eq.X', data={'col': 'newval'})\n"
+    "  sb_upsert(table, data={'col': 'val'}, on_conflict='col')\n"
+    "  add_knowledge(domain, topic, content, confidence='high')\n"
+    "  log_mistake(domain, what_failed, correct_approach, severity='low')\n"
+    "  Known tables: knowledge_base, task_queue, mistakes, sessions, behavioral_rules, evolution_queue\n"
+    "  filters use PostgREST syntax: 'status=eq.pending', 'id=gt.1', 'domain=eq.code'\n"
+    "  order uses: 'created_at.desc' or 'id.asc' (NOT order_by or order_direction)\n"
     "8. When DONE: \"answer\" must be the complete formatted response. No placeholders. Synthesise ALL gathered data.\n"
     "Return ONLY valid JSON. No markdown, no preamble."
 )
@@ -244,15 +254,23 @@ async def _run_tool(tool_name: str, args: Dict[str, Any], msg: OrchestratorMessa
             return {"ok": False, "error": f"Unknown tool: {tool_name!r}. Check spelling."}
         entry = TOOLS[tool_name]
         fn = entry.get("fn") if isinstance(entry, dict) else entry
-        # Strip unknown kwargs gracefully
+        # Strip unknown kwargs gracefully — but warn LLM if args were silently dropped
         sig = inspect.signature(fn)
         valid = set(sig.parameters.keys())
         filtered = {k: v for k, v in args.items() if k in valid}
+        stripped = [k for k in args if k not in valid]
         loop = asyncio.get_event_loop()
         result = await loop.run_in_executor(None, lambda: fn(**filtered))
         if asyncio.iscoroutine(result):
             result = await result
-        return result if isinstance(result, dict) else {"ok": True, "result": result}
+        if not isinstance(result, dict):
+            result = {"ok": True, "result": result}
+        # Inject warning about stripped args so LLM knows to use correct param names
+        if stripped:
+            result = dict(result)
+            result["ignored_args"] = stripped
+            result["param_hint"] = f"Valid params for {tool_name}: {sorted(valid - {'self'})}"
+        return result
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
