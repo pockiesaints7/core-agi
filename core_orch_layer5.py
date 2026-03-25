@@ -117,6 +117,36 @@ async def _execute_subtask(
     tool_entry = tools[tool_name]
     tool_fn = tool_entry.get("fn") or tool_entry  # TOOLS[name] = {"fn": func, ...} or func directly
 
+    # Smart arg injection: if calc gets a non-numeric expression, try to extract
+    # a real number from prior web_search results (handles "0.5 * current_price" pattern)
+    if tool_name == "calc" and args.get("expression"):
+        expr = str(args["expression"])
+        import re as _re
+        # If expression contains word-like tokens (not pure math), try to substitute
+        # from previous web_search results
+        if _re.search(r'[a-zA-Z_]{4,}', expr):
+            # Find the most recent web_search result
+            for prev in reversed(msg.tool_results):
+                if prev.get("tool") == "web_search" and prev.get("success"):
+                    raw = prev.get("result", {})
+                    results_text = str(raw)
+                    # Extract first number that looks like a price (5+ digits with optional decimal)
+                    prices = _re.findall(r'[\$]?([\d]{4,}(?:[,\d]*)?(?:\.\d{1,2})?)', results_text)
+                    if prices:
+                        # Clean and use the first price found
+                        price_str = prices[0].replace(",", "")
+                        try:
+                            price_val = float(price_str)
+                            # Rebuild expression: replace word tokens with extracted price
+                            new_expr = _re.sub(r'[a-zA-Z_][a-zA-Z0-9_]*', price_str, expr)
+                            new_expr = new_expr.replace(",", "")
+                            args = dict(args)
+                            args["expression"] = new_expr
+                            print(f"[L5] calc smart-inject: {expr!r} → {new_expr!r} (price={price_val})")
+                        except ValueError:
+                            pass
+                    break
+
     print(f"[L5] step={step}  tool={tool_name}  action={action[:60]!r}")
 
     try:
