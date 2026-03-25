@@ -178,17 +178,28 @@ _GEMINI_MODEL = "gemini-2.5-flash-lite"
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API", "")
 OPENROUTER_MODEL   = os.getenv("OPENROUTER_MODEL", "google/gemini-2.5-flash")
 
-def gemini_chat(system: str, user: str, max_tokens: int = 2048, json_mode: bool = False) -> str:
-    """LLM chat via OpenRouter (or Gemini direct as fallback).
-    Drop-in replacement — all callers unchanged.
-    json_mode=True: instructs model to return valid JSON only."""
+def gemini_chat(system: str, user: str, max_tokens: int = 2048, json_mode: bool = False, model: str = "") -> str:
+    """LLM chat with full fallback chain:
+    1. OpenRouter (model param or OPENROUTER_MODEL env — supports Gemini 2.5 Flash, Opus, any model)
+    2. Gemini direct API (round-robin across all GEMINI_KEYS — up to 11 keys)
+    3. Groq (strongest free model — final safety net)
+    model param: pass any OpenRouter model string to override (e.g. "anthropic/claude-opus-4-5")
+    json_mode=True: instructs model to return valid JSON only.
+    """
+    active_model = model or OPENROUTER_MODEL
+
+    # ── Tier 1: OpenRouter ────────────────────────────────────────────────────
     if OPENROUTER_API_KEY:
-        prompt = f"{system}\n\n{user}" if system else user
+        # Proper system/user separation for best reasoning quality
+        messages = []
+        if system:
+            messages.append({"role": "system", "content": system})
+        messages.append({"role": "user", "content": user})
         payload = {
-            "model": OPENROUTER_MODEL,
+            "model": active_model,
             "max_tokens": max_tokens,
             "temperature": 0.1,
-            "messages": [{"role": "user", "content": prompt}],
+            "messages": messages,
         }
         if json_mode:
             payload["response_format"] = {"type": "json_object"}
@@ -205,11 +216,11 @@ def gemini_chat(system: str, user: str, max_tokens: int = 2048, json_mode: bool 
                         "X-Title": "CORE AGI",
                     },
                     json=payload,
-                    timeout=15,
+                    timeout=60,  # 60s — supports long Opus/agentic calls
                 )
                 _elapsed = round(time.monotonic() - _t0, 2)
                 if _elapsed > 5:
-                    print(f"[OPENROUTER] SLOW: {_elapsed}s attempt={attempt+1}")
+                    print(f"[OPENROUTER] SLOW: {_elapsed}s model={active_model} attempt={attempt+1}")
                 if r.status_code == 429:
                     last_err = "429 rate limit"
                     time.sleep(3 * (attempt + 1))
@@ -219,53 +230,66 @@ def gemini_chat(system: str, user: str, max_tokens: int = 2048, json_mode: bool 
             except Exception as e:
                 last_err = str(e)
                 continue
-        raise RuntimeError(f"OpenRouter failed after 3 attempts. Last: {last_err}")
+        # Don't raise — fall through to Gemini direct
+        print(f"[OPENROUTER] Failed after 3 attempts: {last_err} — trying Gemini direct")
 
-    # Fallback: Gemini direct (if OPENROUTER_API_KEY not set)
+    # ── Tier 2: Gemini direct (round-robin all keys) ──────────────────────────
     global _GEMINI_KEY_INDEX
-    if not _GEMINI_KEYS:
-        raise RuntimeError("Neither OPENROUTER_API_KEY nor GEMINI_KEYS is set")
-    attempts = len(_GEMINI_KEYS)
-    last_err = None
-    for _ in range(attempts):
-        key = _GEMINI_KEYS[_GEMINI_KEY_INDEX % len(_GEMINI_KEYS)]
-        _GEMINI_KEY_INDEX = (_GEMINI_KEY_INDEX + 1) % len(_GEMINI_KEYS)
-        try:
-            prompt = f"{system}\n\n{user}" if system else user
-            r = httpx.post(
-                f"https://generativelanguage.googleapis.com/v1beta/models/{_GEMINI_MODEL}:generateContent",
-                params={"key": key},
-                headers={"Content-Type": "application/json"},
-                json={"contents": [{"parts": [{"text": prompt}]}],
-                      "generationConfig": {
-                          "maxOutputTokens": max_tokens,
-                          "temperature": 0.1,
-                          **({"responseMimeType": "application/json"} if json_mode else {})
-                      },
-                      "safetySettings": [
-                          {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
-                          {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
-                          {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
-                          {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"}
-                      ]},
-                timeout=30,
-            )
-            if r.status_code == 429:
-                last_err = f"429 on key index {(_GEMINI_KEY_INDEX - 1) % len(_GEMINI_KEYS)}"
-                time.sleep(2)
+    if _GEMINI_KEYS:
+        attempts = len(_GEMINI_KEYS)
+        last_err = None
+        for _ in range(attempts):
+            key = _GEMINI_KEYS[_GEMINI_KEY_INDEX % len(_GEMINI_KEYS)]
+            _GEMINI_KEY_INDEX = (_GEMINI_KEY_INDEX + 1) % len(_GEMINI_KEYS)
+            try:
+                prompt = f"{system}\n\n{user}" if system else user
+                r = httpx.post(
+                    f"https://generativelanguage.googleapis.com/v1beta/models/{_GEMINI_MODEL}:generateContent",
+                    params={"key": key},
+                    headers={"Content-Type": "application/json"},
+                    json={"contents": [{"parts": [{"text": prompt}]}],
+                          "generationConfig": {
+                              "maxOutputTokens": max_tokens,
+                              "temperature": 0.1,
+                              **({("responseMimeType"): "application/json"} if json_mode else {})
+                          },
+                          "safetySettings": [
+                              {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
+                              {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
+                              {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
+                              {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"}
+                          ]},
+                    timeout=30,
+                )
+                if r.status_code == 429:
+                    last_err = f"429 on key {(_GEMINI_KEY_INDEX - 1) % len(_GEMINI_KEYS)}"
+                    time.sleep(2)
+                    continue
+                r.raise_for_status()
+                resp_json = r.json()
+                candidate = resp_json.get("candidates", [{}])[0]
+                parts = candidate.get("content", {}).get("parts", [])
+                if not parts:
+                    last_err = f"empty parts (finish={candidate.get('finishReason','?')})"
+                    continue
+                return parts[0]["text"].strip()
+            except Exception as e:
+                last_err = str(e)
                 continue
-            r.raise_for_status()
-            resp_json = r.json()
-            candidate = resp_json.get("candidates", [{}])[0]
-            parts = candidate.get("content", {}).get("parts", [])
-            if not parts:
-                last_err = f"empty parts (finish={candidate.get('finishReason','?')})"
-                continue
-            return parts[0]["text"].strip()
-        except Exception as e:
-            last_err = str(e)
-            continue
-    raise RuntimeError(f"All {attempts} Gemini keys exhausted. Last error: {last_err}")
+        # Don't raise — fall through to Groq
+        print(f"[GEMINI] All {attempts} keys exhausted: {last_err} — trying Groq")
+
+    # ── Tier 3: Groq (strongest free model — final safety net) ───────────────
+    try:
+        return groq_chat(system=system, user=user, model=GROQ_MODEL, max_tokens=max_tokens)
+    except Exception as e:
+        raise RuntimeError(
+            f"All LLM tiers failed. "
+            f"OpenRouter: {'skipped (no key)' if not OPENROUTER_API_KEY else 'failed'}. "
+            f"Gemini: {len(_GEMINI_KEYS)} keys tried. "
+            f"Groq: {e}"
+        )
+
 
 def build_live_schema(supabase_ref: str = "", supabase_pat: str = "") -> dict:
     """

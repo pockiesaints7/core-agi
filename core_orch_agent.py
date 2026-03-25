@@ -82,43 +82,23 @@ def _compress_history(history: List[Dict], keep_last: int = 5):
 # ── LLM think call ───────────────────────────────────────────────────────────
 def _llm_think(system: str, prompt: str, max_tokens: int = 1024) -> str:
     """
-    Call the agent LLM.
-    AGENT_MODEL="" -> Groq (default, fast, cheap)
-    AGENT_MODEL="anthropic/claude-opus-4-5" -> Opus via OpenRouter
+    Agent LLM call using the full fallback chain from core_config.gemini_chat:
+      1. OpenRouter → AGENT_MODEL (or OPENROUTER_MODEL if AGENT_MODEL not set)
+         - Today: google/gemini-2.5-flash
+         - Opus:  set AGENT_MODEL=anthropic/claude-opus-4-5
+      2. Gemini direct API (round-robin all GEMINI_KEYS — up to 11 keys)
+      3. Groq (strongest free model — final safety net)
+    No custom HTTP code needed — gemini_chat handles everything.
     """
-    openrouter_key = os.getenv("OPENROUTER_API", "")
-    if AGENT_MODEL and openrouter_key:
-        t0 = time.monotonic()
-        try:
-            r = httpx.post(
-                "https://openrouter.ai/api/v1/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {openrouter_key}",
-                    "Content-Type": "application/json",
-                    "HTTP-Referer": f"https://{os.getenv('PUBLIC_DOMAIN', 'core-agi.duckdns.org')}",
-                    "X-Title": "CORE AGI Agent",
-                },
-                json={
-                    "model": AGENT_MODEL,
-                    "max_tokens": max_tokens,
-                    "temperature": 0.1,
-                    "messages": [
-                        {"role": "system", "content": system},
-                        {"role": "user",   "content": prompt},
-                    ],
-                },
-                timeout=90,
-            )
-            elapsed = round(time.monotonic() - t0, 2)
-            if elapsed > 10:
-                print(f"[AGENT] LLM slow: {elapsed}s model={AGENT_MODEL}")
-            r.raise_for_status()
-            return r.json()["choices"][0]["message"]["content"].strip()
-        except Exception as e:
-            print(f"[AGENT] OpenRouter failed: {e}, falling back to Groq")
-    # Groq default
-    from core_config import groq_chat, GROQ_MODEL
-    return groq_chat(system=system, user=prompt, model=GROQ_MODEL, max_tokens=max_tokens)
+    from core_config import gemini_chat
+    # Use AGENT_MODEL env var if set, otherwise gemini_chat uses OPENROUTER_MODEL
+    return gemini_chat(
+        system=system,
+        user=prompt,
+        max_tokens=max_tokens,
+        model=AGENT_MODEL,  # "" = use OPENROUTER_MODEL default (gemini-2.5-flash)
+    )
+
 
 
 # ── Tool executor ─────────────────────────────────────────────────────────────
