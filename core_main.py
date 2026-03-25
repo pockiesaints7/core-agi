@@ -115,16 +115,16 @@ def get_system_counts():
     except:
         counts["task_queue_pending"] = -1
     # evolution_queue — counts by status
-    for status in ("pending", "applied", "rejected"):
+    for evo_status in ("pending", "applied", "rejected"):
         try:
             r = httpx.get(
-                f"{SUPABASE_URL}/rest/v1/evolution_queue?select=id&limit=1&status=eq.{status}",
+                f"{SUPABASE_URL}/rest/v1/evolution_queue?select=id&limit=1&status=eq.{evo_status}",
                 headers=_sbh_count_svc(), timeout=10
             )
             cr = r.headers.get("content-range", "*/0")
-            counts[f"evolution_{status}"] = int(cr.split("/")[-1]) if "/" in cr else 0
+            counts[f"evolution_{evo_status}"] = int(cr.split("/")[-1]) if "/" in cr else 0
         except:
-            counts[f"evolution_{status}"] = -1
+            counts[f"evolution_{evo_status}"] = -1
     return counts
 
 
