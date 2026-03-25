@@ -20,20 +20,28 @@ def _get_tools() -> Dict[str, Any]:
         return {}
 
 
-# Tool name aliases to handle /command → t_function mapping
+# Tool name aliases to handle /command → TOOLS registry key mapping
+# IMPORTANT: values must match TOOLS registry keys exactly (no t_ prefix)
 _COMMAND_TOOL_ALIASES = {
-    "/health":      "t_health",
-    "/state":       "t_state",
-    "/status":      "t_state",
-    "/tasks":       "t_session_start",
-    "/evolutions":  "t_list_evolutions",
-    "/kb":          "t_search_kb",
-    "/mistakes":    "t_get_mistakes",
-    "/train":       "t_trigger_cold_processor",
-    "/cold":        "t_trigger_cold_processor",
-    "/deploy":      "t_deploy_and_wait",
-    "/listen":      "t_listen",
-    "/checkpoint":  "t_checkpoint",
+    "/health":      "get_system_health",
+    "/state":       "get_state",
+    "/status":      "get_state",
+    "/tasks":       "get_state",
+    "/evolutions":  "list_evolutions",
+    "/kb":          "search_kb",
+    "/mistakes":    "get_mistakes",
+    "/train":       "trigger_cold_processor",
+    "/cold":        "trigger_cold_processor",
+    "/deploy":      "deploy_status",
+    "/listen":      "listen",
+    "/checkpoint":  "checkpoint",
+    "/ask":         "search_kb",
+    "/search":      "search_kb",
+    "/time":        "get_time",
+    "/calc":        "calc",
+    "/weather":     "weather",
+    "/tools":       "list_tools",
+    "/run":         "run_python",
 }
 
 # Trusted-tier blocked tools (destructive)
