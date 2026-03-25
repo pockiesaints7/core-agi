@@ -294,7 +294,7 @@ async def run_agent_loop(msg: OrchestratorMessage, goal: str) -> None:
             force_conclude = True
             prompt = _build_prompt(goal, history, compressed_summary, tools_summary, conclude=True)
 
-        print(f"[AGENT] step={step} thinking (~{char_count//4} tokens) elapsed={elapsed:.1f}s")
+        print(f"[AGENT] step={step} prompt≈{char_count//4}t ingested≈{total_chars_ingested//4}t elapsed={elapsed:.1f}s")
 
         # ── LLM think ──────────────────────────────────────────────────────────
         try:
