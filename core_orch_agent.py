@@ -251,7 +251,22 @@ async def run_agent_loop(msg: OrchestratorMessage, goal: str) -> None:
     compressed_summary = ""
     start_time = time.monotonic()
     step = 0
-    force_conclude = False  # set True when token budget is critical
+    force_conclude = False  # set True when any budget is critical
+
+    # ── Cumulative ingestion budget ───────────────────────────────────────────
+    # Tracks total chars of raw tool results processed this session.
+    # Independent of prompt size — catches the case where compression keeps
+    # resetting prompt budget but the model has still seen enormous data overall.
+    # Per-model practical limits (tokens × 4 chars × 0.85 safety margin):
+    _MODEL_CHAR_LIMITS = {
+        "groq":   460_000,    # 128k tokens × 4 × 0.90
+        "gemini": 900_000,    # 250k tokens × 4 × 0.90
+        "opus":   680_000,    # 200k tokens × 4 × 0.85
+    }
+    _model_key = "opus" if "opus" in model_label else ("gemini" if "gemini" in model_label else "groq")
+    total_chars_ingested = 0
+    cumulative_limit = _MODEL_CHAR_LIMITS[_model_key]
+    print(f"[AGENT] Budgets: prompt={AGENT_TOKEN_BUDGET//4}t cumulative={cumulative_limit//4}t timeout={AGENT_TIMEOUT_SEC}s")
 
     while True:
         step += 1
