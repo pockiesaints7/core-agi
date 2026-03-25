@@ -41,17 +41,29 @@ _COMMAND_INTENT_MAP = {
 # Order matters: first cluster match wins.
 _FUZZY_INTENT_CLUSTERS: list[tuple[str, bool, set[str]]] = [
     # (intent_name, requires_tools, keyword_set)
-    ("system_health",    True,  {"health", "healthy", "alive", "ping", "heartbeat", "up?", "running ok", "online"}),
-    ("system_state",     True,  {"state", "status", "running", "active", "what's up", "current state", "system info"}),
-    ("task_list",        True,  {"tasks", "task list", "open tasks", "pending tasks", "my tasks", "todos", "task queue"}),
-    ("evolution_list",   True,  {"evolution", "evolutions", "pending evo", "evolution queue", "suggested changes"}),
-    ("kb_search",        True,  {"search kb", "find in kb", "knowledge base query"}),
-    ("kb_query",         True,  {"what is", "what are", "explain", "how does", "tell me about", "describe", "definition of", "meaning of", "knowledge", "kb", "what do you know"}),
-    ("mistake_list",     True,  {"mistakes", "errors", "mistake log", "what went wrong", "past errors", "error log"}),
-    ("trigger_training", True,  {"train", "training", "run training", "start training", "trigger train"}),
-    ("trigger_cold",     True,  {"cold", "cold processor", "cold run", "cold cycle", "run cold"}),
-    ("deploy_status",    True,  {"deploy", "deployment", "redeploy", "build", "railway", "vm status", "oracle vm"}),
-    ("conversation",     False, {"hi", "hello", "hey", "thanks", "thank you", "ok", "cool", "got it", "nice", "good"}),
+    # --- System ops ---
+    ("system_health",    True,  {"health", "healthy", "alive", "ping", "heartbeat", "up?", "running ok", "online", "are you up", "check system", "system ok"}),
+    ("system_state",     True,  {"state", "status", "running", "active", "what's up", "current state", "system info", "show state", "full state", "dump state"}),
+    ("task_list",        True,  {"tasks", "task list", "open tasks", "pending tasks", "my tasks", "todos", "task queue", "what tasks", "list tasks", "show tasks"}),
+    ("evolution_list",   True,  {"evolution", "evolutions", "pending evo", "evolution queue", "suggested changes", "show evolutions", "list evolutions"}),
+    # --- Knowledge / brain ---
+    ("kb_search",        True,  {"search kb", "find in kb", "knowledge base query", "search knowledge", "look up", "find in knowledge"}),
+    ("kb_query",         True,  {"what is", "what are", "explain", "how does", "tell me about", "describe", "definition of", "meaning of", "do you know", "what do you know", "what do you remember", "recall"}),
+    # --- Mistakes / learning ---
+    ("mistake_list",     True,  {"mistakes", "errors", "mistake log", "what went wrong", "past errors", "error log", "show mistakes", "list mistakes", "recent mistakes"}),
+    # --- Training ---
+    ("trigger_training", True,  {"run training", "start training", "trigger train", "trigger training"}),
+    ("trigger_cold",     True,  {"cold processor", "cold run", "cold cycle", "run cold", "trigger cold"}),
+    # --- Deploy / infra ---
+    ("deploy_status",    True,  {"deploy", "deployment", "redeploy", "build status", "railway", "vm status", "oracle vm", "show deploy", "deployment status"}),
+    # --- Tools / execution ---
+    ("general_tool",     True,  {"what time", "current time", "time now", "what's the time", "what day", "calculate", "compute", "convert", "translate", "weather", "search web", "web search", "fetch", "currency", "price of", "how much is", "run python", "execute"}),
+    ("task_execution",   True,  {"do this", "run this", "execute this", "perform", "make it", "fix this", "fix the", "update the", "change the", "create a", "generate a", "write a", "add a", "delete the", "remove the", "patch", "deploy it", "call tool", "use tool", "run tool"}),
+    ("list_tools",       True,  {"list tools", "show tools", "what tools", "available tools", "what can you do", "your capabilities", "all tools"}),
+    # --- Logs / monitoring ---
+    ("deploy_status",    True,  {"railway logs", "live logs", "show logs", "check logs", "log output"}),
+    # --- Simple greetings (NO tools) ---
+    ("conversation",     False, {"hi", "hello", "hey", "thanks", "thank you", "ok", "cool", "got it", "nice", "good job", "well done"}),
 ]
 
 _CLASSIFY_SYSTEM = (
