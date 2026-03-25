@@ -38,8 +38,6 @@ from core_tools import TOOLS, handle_jsonrpc
 # ── Orchestrator v2 ───────────────────────────────────────────────────────────
 from core_orch_main import handle_telegram_message_v2, startup_v2
 
- --- 1. Global State & Auth Dependency ---
-# Add this near the top of your core_main.py
 _sse_sessions: Dict[str, asyncio.Queue] = {}
 
 # ---------------------------------------------------------------------------
