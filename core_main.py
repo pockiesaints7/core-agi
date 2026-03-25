@@ -762,7 +762,7 @@ async def backfill_start(req: Request, batch_size: int = 20):
     """Start backfill job in background. Returns job_id immediately. Poll /backfill/status."""
     global _backfill_job
     secret = req.headers.get("X-MCP-Secret", "")
-    if secret != MCP_SECRET:
+    if not secrets.compare_digest(str(secret), str(MCP_SECRET)):
         raise HTTPException(status_code=401, detail="Unauthorized")
     with _backfill_lock:
         if _backfill_job.get("status") == "running":
@@ -779,7 +779,7 @@ async def backfill_start(req: Request, batch_size: int = 20):
 async def backfill_status(req: Request):
     """Poll backfill job status. Returns inserted count + done/running/error."""
     secret = req.headers.get("X-MCP-Secret", "")
-    if secret != MCP_SECRET:
+    if not secrets.compare_digest(str(secret), str(MCP_SECRET)):
         raise HTTPException(status_code=401, detail="Unauthorized")
     with _backfill_lock:
         job = dict(_backfill_job)
