@@ -4438,18 +4438,19 @@ def t_sb_delete(table: str, filters: str, confirm: str = "") -> dict:
         return {"ok": False, "error": f"BLOCKED: {table} is a protected audit table -- deletes not allowed"}
     if table not in _ALLOWED:
         return {"ok": False, "error": f"BLOCKED: {table} not in allowed list. Allowed: {sorted(_ALLOWED)}"}
-    # Dry-run: preview rows that would be deleted
+    # Dry-run: preview rows that would be deleted — ok=False so caller knows action still needed
     if str(confirm).strip() != "DELETE":
         try:
             preview = sb_get(table, f"{filters}&limit=10", svc=True)
             return {
-                "ok": True,
+                "ok": False,  # False = no action taken yet, confirmation required
                 "dry_run": True,
                 "table": table,
                 "filters": filters,
-                "would_delete_preview": preview,
-                "row_count_estimate": len(preview),
-                "message": "Dry run -- pass confirm='DELETE' to execute"
+                "would_delete_preview": preview if isinstance(preview, list) else [],
+                "row_count_estimate": len(preview) if isinstance(preview, list) else 0,
+                "message": "DRY RUN — no rows deleted. Pass confirm='DELETE' to execute.",
+                "action_required": "Call again with confirm='DELETE' to actually delete"
             }
         except Exception as e:
             return {"ok": False, "error": f"dry-run preview failed: {e}"}
