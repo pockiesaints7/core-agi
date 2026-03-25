@@ -71,7 +71,7 @@ _FUZZY_INTENT_CLUSTERS: list[tuple[str, bool, set[str]]] = [
                                   "vm status", "oracle vm", "show deploy", "deployment status"}),
     # --- Tools / execution --- (AFTER system clusters to avoid stealing "current")
     ("general_tool",     True,  {"what time", "time now", "what's the time", "what day",
-                                  "calculate", "compute", "convert", "translate", "weather",
+                                  "compute", "convert", "translate", "weather",  # "calculate" removed — too greedy for multi-step queries
                                   "search web", "web search", "fetch", "currency",
                                   "price of", "how much is", "run python", "execute"}),
     ("task_execution",   True,  {"do this", "run this", "execute this", "perform", "make it",
@@ -82,7 +82,8 @@ _FUZZY_INTENT_CLUSTERS: list[tuple[str, bool, set[str]]] = [
                                   "read the file", "read file", "write to file", "check the file",
                                   "run on vm", "run on the vm", "execute on vm", "shell command",
                                   "search the web", "search web for", "look up on the web",
-                                  "then calculate", "then add", "then save", "then write"}),
+                                  "then calculate", "then add", "then save", "then write",
+                                  "calculate "}),
     ("list_tools",       True,  {"list tools", "show tools", "what tools", "available tools",
                                   "what can you do", "your capabilities", "all tools",
                                   "how many tools", "name your tools"}),
