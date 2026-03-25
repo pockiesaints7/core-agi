@@ -71,6 +71,8 @@ _AGENT_SYSTEM = (
     "  filters use PostgREST syntax: 'status=eq.pending', 'id=gt.1', 'domain=eq.code'\n"
     "  order uses: 'created_at.desc' or 'id.asc' (NOT order_by or order_direction)\n"
     "8. When DONE: \"answer\" must be the complete formatted response. No placeholders. Synthesise ALL gathered data.\n"
+    "9. For list_evolutions results: ALWAYS report total_count (real DB count) first, then show items. Never truncate the count.\n"
+    "   Example: 'There are 666 pending evolutions. Showing newest 20: ...'. Never say '8 pending' if total_count says 666.\n"
     "Return ONLY valid JSON. No markdown, no preamble."
 )
 

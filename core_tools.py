@@ -1387,18 +1387,45 @@ def t_listen_result() -> dict:
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
-def t_list_evolutions(status="pending", limit="20"):
+def t_list_evolutions(status="pending", limit="20") -> dict:
+    """List evolution_queue entries by status.
+    Returns items (capped at limit) PLUS total_count from DB — so caller always
+    knows the real queue depth even when limit < total.
+    status: pending|applied|rejected (default pending)
+    limit: max items to return (default 20). Use 'all' to return up to 200."""
     try:
-        # C.5: accept limit param (was hardcoded 20)
-        lim = int(limit) if limit else 20
+        import httpx as _hx
+        from core_config import SUPABASE_URL, _sbh_count_svc
+        # Resolve limit
+        lim = 200 if str(limit).lower() == "all" else max(1, min(int(limit) if limit else 20, 200))
         rows = sb_get("evolution_queue",
                   f"select={_sel_force('evolution_queue', ['id','status','change_type','change_summary','confidence','pattern_key','created_at'])}&status=eq.{status}&id=gt.1&order=created_at.desc&limit={lim}",
                   svc=True)
-        return {"evolutions": rows, "count": len(rows)}
-
-
+        # Get real total count from DB — not just len(rows)
+        total_count = lim  # fallback
+        try:
+            r = _hx.get(
+                f"{SUPABASE_URL}/rest/v1/evolution_queue?select=id&status=eq.{status}&id=gt.1&limit=1",
+                headers=_sbh_count_svc(), timeout=8
+            )
+            cr = r.headers.get("content-range", "*/0")
+            total_count = int(cr.split("/")[-1]) if "/" in cr else len(rows)
+        except Exception:
+            total_count = len(rows)
+        return {
+            "ok": True,
+            "status": status,
+            "total_count": total_count,
+            "returned": len(rows),
+            "showing": f"{len(rows)} of {total_count}",
+            "note": f"Use limit='all' to see all {total_count} entries" if total_count > lim else None,
+            "evolutions": rows,
+            "count": len(rows),
+        }
     except Exception as e:
         return {"ok": False, "error": str(e)}
+
+
 def t_bulk_reject_evolutions(change_type: str = "", ids: str = "", reason: str = "", include_synthesized: str = "false") -> dict:
     try:
         id_list = [int(i.strip()) for i in ids.split(",") if i.strip().isdigit()] if ids else []
