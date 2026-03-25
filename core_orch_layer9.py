@@ -11,7 +11,7 @@ def _get_cached_tool_list() -> tuple:
         cats: dict = {cat: [] for cat in TOOL_CATEGORY_KEYWORDS}
         cats["misc"] = []
         for tn, fn in TOOLS.items():
-            doc = (fn.__doc__ or "").split("\n")[0][:60]
+            doc = (fn.get("desc", "") if isinstance(fn, dict) else (fn.__doc__ or "")).split("\n")[0][:60]
             placed = False
             for cat, kws in TOOL_CATEGORY_KEYWORDS.items():
                 if any(kw in tn for kw in kws):

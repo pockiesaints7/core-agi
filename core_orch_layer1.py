@@ -33,7 +33,7 @@ def _is_duplicate(message_id: int) -> bool:
 async def _send_typing(chat_id: int) -> None:
     """Fire-and-forget sendChatAction typing ? masks processing latency."""
     import httpx
-    token = os.getenv("TELEGRAM_TOKEN", "")
+    token = os.getenv("TELEGRAM_BOT_TOKEN", "")
     if not token or not chat_id:
         return
     try:
