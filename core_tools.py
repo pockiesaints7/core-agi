@@ -3700,8 +3700,8 @@ def t_crash_report() -> dict:
 
 def t_review_evolutions() -> dict:
     try:
-        railway_url = os.environ.get("RAILWAY_PUBLIC_DOMAIN", "core-agi-production.up.railway.app")
-        url = f"https://{railway_url}/review"
+        domain = os.environ.get("PUBLIC_DOMAIN", "core-agi.duckdns.org")
+        url = f"https://{domain}/review"
         return {"ok": True, "url": url, "note": "Open URL in browser to review pending evolutions."}
 
 
