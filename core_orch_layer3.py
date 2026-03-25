@@ -24,6 +24,15 @@ _COMMAND_INTENT_MAP = {
     "/listen":      ("listen_mode",     True),
     "/checkpoint":  ("checkpoint",      True),
     "/help":        ("help",            False),
+    "/ask":         ("kb_query",        True),
+    "/search":      ("kb_search",       True),
+    "/time":        ("general_tool",    True),
+    "/calc":        ("general_tool",    True),
+    "/weather":     ("general_tool",    True),
+    "/run":         ("task_execution",  True),
+    "/do":          ("task_execution",  True),
+    "/log":         ("task_execution",  True),
+    "/tools":       ("list_tools",      True),
 }
 
 # ── L3 Fuzzy Intent Clusters ──────────────────────────────────────────────────
