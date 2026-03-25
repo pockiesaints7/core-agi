@@ -249,11 +249,8 @@ async def _build_plan(msg: OrchestratorMessage) -> Dict[str, Any]:
             # Build smart args from message text for search-type tools
             smart_args: dict = {}
             if tools[0] == "list_tools":
-                # Extract limit from text if user asks for a specific count
-                import re as _re
-                m = _re.search(r'\b(\d+)\b', msg.text)
-                limit = m.group(1) if m else "20"
-                smart_args = {"limit": limit}
+                # Pass search="" to get all tools; L9 will pick top 10 from the result
+                smart_args = {"search": "", "category": ""}
             elif tools[0] in ("search_kb",) and msg.text:
                 # Strip slash-command prefix for KB searches
                 query_text = msg.text.strip()
