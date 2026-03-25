@@ -440,6 +440,36 @@ def api_evolutions():
     return {"evolutions": rows, "count": len(rows)}
 
 
+class TranslateRequest(BaseModel):
+    id: int
+    change_type: str = ""
+    change_summary: str = ""
+    confidence: float = 0.0
+
+
+@app.post("/api/translate-evolution")
+async def translate_evolution(body: TranslateRequest):
+    """Server-side evolution translation using backend LLM (gemini_chat/groq_chat).
+    Called by /review widget — replaces broken client-side Anthropic API call."""
+    try:
+        from core_config import gemini_chat
+        system = (
+            "You are CORE's evolution analyst. Translate a raw evolution entry into a structured prompt.\n"
+            'Output MUST be valid JSON: {"what":"1-2 sentences","why":"1-2 sentences",'
+            '"where":"which component","how":"2-4 concrete steps","expected_outcome":"1 sentence"}\n'
+            "Output ONLY valid JSON, no preamble."
+        )
+        user = (
+            f"Evolution ID: {body.id}\nType: {body.change_type}\n"
+            f"Summary: {body.change_summary}\nConfidence: {body.confidence}\n"
+            "Translate this evolution."
+        )
+        raw = gemini_chat(system=system, user=user, max_tokens=1000, json_mode=True)
+        return {"ok": True, "result": raw}
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+
+
 @app.post("/patch")
 async def patch_file(body: PatchRequest):
     if not secrets.compare_digest(str(body.secret), str(MCP_SECRET)):
