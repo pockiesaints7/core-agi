@@ -67,12 +67,17 @@ RULES:
 - type must be "tool_execution" or "multi_step" for ANY non-trivial request
 - Use "direct_response" ONLY for pure greetings like "hi" or "thanks"
 - tool names must EXACTLY match the registry above
+- If request contains "then", "and then", "after that" → type MUST be "multi_step" with 2+ subtasks
 - For kb_query/search: use "search_kb" with args {{"query": "<search term>"}}
 - For time: use "get_time" or "datetime_now"
 - For system health: use "get_system_health"
-- For state: use "get_state"
-- For calculations: use "calc" with args {{"expr": "<expression>"}}
+- For state/session/tasks: use "get_state"
+- For calculations: use "calc" with args {{"expression": "<expression>"}}
 - For web search: use "web_search" with args {{"query": "<query>"}}
+- For listing VM files/directories: use "file_list" with args {{"path": "<path>", "pattern": "*"}}
+- For VM shell/bash commands: use "shell" with args {{"command": "<bash command>"}}
+- For running Python code: use "run_python" with args {{"code": "<python code>"}}
+- For adding to knowledge base: use "add_knowledge" with args {{"domain": "<domain>", "topic": "<topic>", "content": "<content>"}}
 - For mistakes: use "get_mistakes"
 - For evolutions: use "list_evolutions"
 - For tasks: use "get_state" or "task_add"
