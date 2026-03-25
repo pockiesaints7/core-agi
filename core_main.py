@@ -695,7 +695,7 @@ async def listen_mode(req: Request):
     """
     global _listen_job
     secret = req.headers.get("X-MCP-Secret", "")
-    if secret != MCP_SECRET:
+    if not secrets.compare_digest(str(secret), str(MCP_SECRET)):
         raise HTTPException(status_code=401, detail="Unauthorized")
 
     with _listen_lock:
@@ -714,7 +714,7 @@ async def listen_mode(req: Request):
 async def listen_status(req: Request):
     """Poll listen job status. Returns current chunks + done/running/error status."""
     secret = req.headers.get("X-MCP-Secret", "")
-    if secret != MCP_SECRET:
+    if not secrets.compare_digest(str(secret), str(MCP_SECRET)):
         raise HTTPException(status_code=401, detail="Unauthorized")
     with _listen_lock:
         job = dict(_listen_job)
