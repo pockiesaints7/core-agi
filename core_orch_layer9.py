@@ -238,20 +238,21 @@ async def layer_9_tone(msg: OrchestratorMessage):
             if isinstance(result, dict) and result.get("ok"):
                 tools = result.get("tools", [])
                 total = result.get("total", len(tools))
-                # Sort: show most useful categories first, push railway/misc to end
-                _priority = {"system": 0, "knowledge": 1, "web": 2, "utils": 3,
-                             "code": 4, "task": 5, "training": 6, "deploy": 7,
-                             "document": 8, "crypto": 9, "railway": 10, "misc": 11}
+                # Prioritise most useful/recognisable tools first
+                _top = ["get_system_health", "get_state", "search_kb", "web_search",
+                        "web_fetch", "run_python", "shell", "calc", "weather",
+                        "get_mistakes", "list_evolutions", "get_time", "notify_owner",
+                        "task_add", "sb_query", "file_read", "gh_search_replace",
+                        "deploy_status", "trigger_cold_processor", "generate_image"]
+                top_set = {n: i for i, n in enumerate(_top)}
                 tools_sorted = sorted(
                     tools,
-                    key=lambda t: _priority.get(t.get("category", "misc"), 10)
+                    key=lambda t: top_set.get(t.get("name", ""), 999)
                 )
-                # Show first 15 real tool names with descriptions
                 lines = [f"<b>{total} tools available.</b> Here are 15:\n"]
                 for t in tools_sorted[:15]:
                     name = t.get("name", "?")
                     desc = (t.get("desc") or "")[:80].rstrip()
-                    # Clean mid-word cuts — truncate at last space
                     if len(t.get("desc") or "") > 80 and " " in desc:
                         desc = desc[:desc.rfind(" ")] + "…"
                     lines.append(f"<code>{name}</code> — {desc}" if desc else f"<code>{name}</code>")
