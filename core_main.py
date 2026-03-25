@@ -38,7 +38,6 @@ from core_tools import TOOLS, handle_jsonrpc
 # ── Orchestrator v2 ───────────────────────────────────────────────────────────
 from core_orch_main import handle_telegram_message_v2, startup_v2
 
-
 # ---------------------------------------------------------------------------
 # Shared helpers (used by routes + tools — defined here, imported by core_tools)
 # ---------------------------------------------------------------------------
