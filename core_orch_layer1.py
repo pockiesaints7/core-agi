@@ -294,7 +294,9 @@ async def layer_1_triage(
         return msg
 
     except Exception as exc:
+        import traceback
         print(f"[L1] FATAL parse error: {exc}")
+        print(f"[L1] Traceback:\n{traceback.format_exc()}")
         err_msg = OrchestratorMessage(
             text=str(raw_input)[:200],
             chat_id=int(os.getenv("TELEGRAM_CHAT_ID", os.getenv("TELEGRAM_CHAT", "0"))),
