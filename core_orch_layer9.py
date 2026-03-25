@@ -210,12 +210,25 @@ async def layer_9_tone(msg: OrchestratorMessage):
     msg.track_layer("L9-START")
     print(f"[L9] Styling response ...")
 
+    # Extract KB snippets and behavioral rules from context for injection
+    kb_snippets = msg.context.get("kb_snippets", [])
+    kb_str = "\n".join(
+        f"- [{r.get('domain','?')}] {r.get('topic','')} : {r.get('instruction','')[:120]}"
+        for r in kb_snippets[:5]
+    ) if kb_snippets else "none"
+
+    behavioral_rules = msg.context.get("behavioral_rules", [])
+    rules_str = "\n".join(
+        f"- {r.get('instruction','')[:120]}"
+        for r in behavioral_rules[:5]
+    ) if behavioral_rules else "none"
+
     try:
         tool_summary = _format_tool_summary(msg.tool_results)
         errors_str = _format_errors(msg.errors)
 
         if msg.tool_results or msg.has_errors:
-            # Tool-driven response
+            # Tool-driven response — inject KB + rules for context-aware answers
             prompt = _PERSONA_TEMPLATE.format(
                 text=msg.text[:400],
                 intent=msg.intent or "unknown",
@@ -223,8 +236,10 @@ async def layer_9_tone(msg: OrchestratorMessage):
                 errors=errors_str,
                 domain=msg.context.get("current_domain", "general"),
                 tier=msg.tier,
+                behavioral_rules=rules_str,
+                kb_snippets=kb_str,
             )
-            # GAP-NEW-21: prompt length guard — truncate before Groq
+            # Prompt length guard
             if len(prompt) > 12000:
                 prompt = prompt[:12000] + "\n[...truncated]"
             styled = groq_chat(
@@ -240,21 +255,23 @@ async def layer_9_tone(msg: OrchestratorMessage):
                 # L4 already supplied the answer — just let CORE voice it
                 styled = direct_answer
             else:
-                # Inject live session state so CORE can answer "what are you working on?" etc.
+                # Inject live session state + KB + rules for rich conversational answers
                 session_state = _build_session_state(msg)
                 prompt = _CONVO_TEMPLATE.format(
                     text=msg.text[:400],
                     intent=msg.intent or "conversation",
                     session_state=session_state,
+                    kb_snippets=kb_str,
+                    behavioral_rules=rules_str,
                 )
-                # GAP-NEW-21: prompt length guard on conversational path
+                # Prompt length guard on conversational path
                 if len(prompt) > 8000:
                     prompt = prompt[:8000] + "\n[...truncated]"
                 styled = groq_chat(
                     system=_CONVO_SYSTEM,
                     user=prompt,
                     model=GROQ_FAST,
-                    max_tokens=600,
+                    max_tokens=800,
                 )
 
         # GAP-NEW-12: append preflight warning note if present
