@@ -231,6 +231,29 @@ async def layer_9_tone(msg: OrchestratorMessage):
         tool_summary = _format_tool_summary(msg.tool_results)
         errors_str = _format_errors(msg.errors)
 
+        # --- Direct format bypass for structured data intents ---
+        # These don't need Groq to "style" them — direct formatting is more accurate
+        if msg.intent == "list_tools" and msg.tool_results:
+            result = msg.tool_results[0].get("result", {})
+            if isinstance(result, dict) and result.get("ok"):
+                tools = result.get("tools", [])
+                total = result.get("total", len(tools))
+                # Show first 15 real tool names with descriptions
+                lines = [f"<b>{total} tools available.</b> Here are 15:\n"]
+                for t in tools[:15]:
+                    name = t.get("name", "?")
+                    desc = (t.get("desc") or "")[:60]
+                    lines.append(f"<code>{name}</code> — {desc}" if desc else f"<code>{name}</code>")
+                cats = result.get("available_cats", [])
+                if cats:
+                    lines.append(f"\nCategories: {', '.join(cats)}")
+                msg.styled_response = "\n".join(lines)
+                msg.track_layer("L9-DIRECT-LIST_TOOLS")
+                print(f"[L9] Direct format: list_tools ({total} tools)")
+                from core_orch_layer10 import layer_10_output
+                await layer_10_output(msg)
+                return
+
         if msg.tool_results or msg.has_errors:
             # Tool-driven response — inject KB + rules for context-aware answers
             prompt = _PERSONA_TEMPLATE.format(
