@@ -16,18 +16,22 @@ _DESTRUCTIVE_KW = frozenset([
 ])
 
 # Intent → tool mapping for simple one-tool dispatches
+# IMPORTANT: keys must match TOOLS registry exactly (no t_ prefix)
 _INTENT_TOOL_MAP: Dict[str, List[str]] = {
-    "system_health":    ["t_health"],
-    "system_state":     ["t_state"],
-    "task_list":        ["t_session_start"],
-    "evolution_list":   ["t_list_evolutions"],
-    "kb_search":        ["t_search_kb"],
-    "mistake_list":     ["t_get_mistakes"],
-    "trigger_training": ["t_trigger_cold_processor"],
-    "trigger_cold":     ["t_trigger_cold_processor"],
-    "deploy_status":    ["t_deploy_and_wait"],
-    "listen_mode":      ["t_listen"],
-    "checkpoint":       ["t_checkpoint"],
+    "system_health":    ["get_system_health"],
+    "system_state":     ["get_state"],
+    "task_list":        ["get_state"],
+    "evolution_list":   ["list_evolutions"],
+    "kb_search":        ["search_kb"],
+    "kb_query":         ["search_kb"],
+    "mistake_list":     ["get_mistakes"],
+    "trigger_training": ["trigger_cold_processor"],
+    "trigger_cold":     ["trigger_cold_processor"],
+    "deploy_status":    ["deploy_status"],
+    "listen_mode":      ["listen"],
+    "checkpoint":       ["checkpoint"],
+    "list_tools":       ["list_tools"],
+    "general_tool":     [],  # handled by Groq planning — too varied for fast-path
 }
 
 _PLAN_SYSTEM = (
