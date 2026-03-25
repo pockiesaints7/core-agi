@@ -799,10 +799,13 @@ async def webhook(req: Request):
     try:
         u = await req.json()
         if "message" in u:
-            threading.Thread(target=handle_msg, args=(u["message"],), daemon=True).start()
+            # Fire-and-forget in a thread — webhook must return 200 immediately
+            # to prevent Telegram retry storms. ALL processing is async/threaded.
+            msg = u["message"]
+            threading.Thread(target=handle_msg, args=(msg,), daemon=True).start()
     except Exception as e:
         print(f"[WEBHOOK] {e}")
-    return {"ok": True}
+    return {"ok": True}  # Always return 200 immediately — never block here
 
 
 # ---------------------------------------------------------------------------
