@@ -208,10 +208,30 @@ def _llm_think(system: str, prompt: str, max_tokens: int = 1500):
         except Exception as e:
             print(f"[AGENT] Gemini direct failed ({e}) — trying Groq")
 
-    # ── Tier 3: Groq ──────────────────────────────────────────────────────────
-    from core_config import groq_chat, GROQ_MODEL
-    text = groq_chat(system=system, user=prompt, model=GROQ_MODEL, max_tokens=max_tokens)
-    return text, len(prompt) // 4  # estimate only
+    # ── Tier 3: Groq — also returns real prompt_tokens (same OpenAI format) ───
+    from core_config import GROQ_MODEL
+    import httpx as _hx2
+    groq_key = os.getenv("GROQ_API_KEY", "")
+    if groq_key:
+        try:
+            messages = []
+            if system:
+                messages.append({"role": "system", "content": system})
+            messages.append({"role": "user", "content": prompt})
+            r = _hx2.post(
+                "https://api.groq.com/openai/v1/chat/completions",
+                headers={"Authorization": f"Bearer {groq_key}", "Content-Type": "application/json"},
+                json={"model": GROQ_MODEL, "max_tokens": max_tokens, "temperature": 0.1, "messages": messages},
+                timeout=30,
+            )
+            r.raise_for_status()
+            data = r.json()
+            text = data["choices"][0]["message"]["content"].strip()
+            # Groq also returns prompt_tokens in usage (OpenAI-compatible format)
+            prompt_tokens = data.get("usage", {}).get("prompt_tokens", len(prompt) // 4)
+            return text, prompt_tokens
+        except Exception as e:
+            raise RuntimeError(f"All LLM tiers failed. Groq: {e}")
 
 # ── Tool executor ─────────────────────────────────────────────────────────────
 async def _run_tool(tool_name: str, args: Dict[str, Any], msg: OrchestratorMessage) -> Dict[str, Any]:
