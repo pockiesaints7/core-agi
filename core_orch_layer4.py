@@ -303,7 +303,7 @@ async def _build_plan(msg: OrchestratorMessage) -> Dict[str, Any]:
             expr = cmd_args or msg.text
             return {"type": "tool_execution", "subtasks": [
                 {"step": 1, "action": "Calculate", "tool": "calc",
-                 "args": {"expr": expr}, "expected_output": "calculation result"}
+                 "args": {"expression": expr}, "expected_output": "calculation result"}
             ], "estimated_complexity": "low", "requires_confirmation": False}
         if any(w in text_lower for w in ("weather", "temperature", "forecast", "rain", "humid")):
             loc = cmd_args or "Jakarta"
