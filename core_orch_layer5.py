@@ -44,13 +44,13 @@ _COMMAND_TOOL_ALIASES = {
     "/run":         "run_python",
 }
 
-# Trusted-tier blocked tools (destructive)
+# Trusted-tier blocked tools (destructive) — match TOOLS registry keys exactly
 _TRUSTED_BLOCKED = frozenset([
-    "t_write_file", "t_gh_search_replace", "t_multi_patch",
-    "t_core_py_rollback", "t_sb_insert", "t_maintenance_purge",
-    "t_railway_env_set", "t_approve_evolution", "t_reject_evolution",
-    "t_bulk_reject_evolutions", "t_trigger_cold_processor",
-    "t_session_end",
+    "write_file", "gh_search_replace", "multi_patch",
+    "core_py_rollback", "sb_insert", "maintenance_purge",
+    "railway_env_set", "approve_evolution", "reject_evolution",
+    "bulk_reject_evolutions", "trigger_cold_processor",
+    "session_end", "sb_delete", "sb_patch",
 ])
 
 
