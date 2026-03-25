@@ -278,8 +278,8 @@ async def _build_plan(msg: OrchestratorMessage) -> Dict[str, Any]:
         text_lower = msg.text.lower()
         # Map command → tool directly
         _cmd_to_tool = {
-            "/time": ("get_time", {}),
-            "/calc": ("calc", {"expr": cmd_args} if cmd_args else {"expr": msg.text}),
+            "/time": ("get_time", {"timezone": "Asia/Jakarta"}),
+            "/calc": ("calc", {"expression": cmd_args} if cmd_args else {"expression": msg.text}),
             "/weather": ("weather", {"location": cmd_args} if cmd_args else {"location": "Jakarta"}),
             "/run": ("run_python", {"code": cmd_args} if cmd_args else {}),
         }
