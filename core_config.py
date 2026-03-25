@@ -195,6 +195,7 @@ def gemini_chat(system: str, user: str, max_tokens: int = 2048, json_mode: bool 
         last_err = None
         for attempt in range(3):
             try:
+                _t0 = time.monotonic()
                 r = httpx.post(
                     "https://openrouter.ai/api/v1/chat/completions",
                     headers={
@@ -206,6 +207,9 @@ def gemini_chat(system: str, user: str, max_tokens: int = 2048, json_mode: bool 
                     json=payload,
                     timeout=15,
                 )
+                _elapsed = round(time.monotonic() - _t0, 2)
+                if _elapsed > 5:
+                    print(f"[OPENROUTER] SLOW: {_elapsed}s attempt={attempt+1}")
                 if r.status_code == 429:
                     last_err = "429 rate limit"
                     time.sleep(3 * (attempt + 1))
