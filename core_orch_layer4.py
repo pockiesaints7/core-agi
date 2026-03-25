@@ -61,11 +61,25 @@ COMMAND_ARGS: {args}
 Available tools (live registry — {tool_count} total):
 {tool_list}
 
+RULES:
+- type must be "tool_execution" or "multi_step" for ANY non-trivial request
+- Use "direct_response" ONLY for pure greetings like "hi" or "thanks"
+- tool names must EXACTLY match the registry above
+- For kb_query/search: use "search_kb" with args {{"query": "<search term>"}}
+- For time: use "get_time" or "datetime_now"
+- For system health: use "get_system_health"
+- For state: use "get_state"
+- For calculations: use "calc" with args {{"expr": "<expression>"}}
+- For web search: use "web_search" with args {{"query": "<query>"}}
+- For mistakes: use "get_mistakes"
+- For evolutions: use "list_evolutions"
+- For tasks: use "get_state" or "task_add"
+
 Return JSON:
 {{
   "type": "direct_response|tool_execution|multi_step",
   "subtasks": [
-    {{"step": 1, "action": "description", "tool": "t_tool_name", "args": {{}}, "expected_output": "description"}}
+    {{"step": 1, "action": "description", "tool": "exact_tool_name", "args": {{}}, "expected_output": "description"}}
   ],
   "estimated_complexity": "low|medium|high",
   "requires_confirmation": false,
