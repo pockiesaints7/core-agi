@@ -286,9 +286,26 @@ async def run_agent_loop(msg: OrchestratorMessage, goal: str) -> None:
             if step % AGENT_PROGRESS_EVERY == 0:
                 asyncio.ensure_future(_send_progress(msg, step, AGENT_MAX_STEPS, progress))
 
+            # Repeat guard: if same tool+args failed last step, skip and inject error into history
+            if (history and history[-1].get("type") == "action"
+                    and history[-1].get("tool") == tool_name
+                    and history[-1].get("args") == tool_args
+                    and not history[-1].get("result", {}).get("ok", True)):
+                print(f"[AGENT] step={step} SKIP — {tool_name} already failed with same args last step")
+                history.append({
+                    "type": "thought_only",
+                    "thought": f"SKIPPED {tool_name} — already failed with same args. Try different approach.",
+                    "step": step,
+                })
+                consecutive_errors += 1
+                if consecutive_errors >= AGENT_ERROR_THRESHOLD:
+                    msg.styled_response = f"CORE agent aborted: stuck repeating {tool_name} with no progress."
+                    break
+                continue
+
             # Execute
             result = await _run_tool(tool_name, tool_args, msg)
-            ok = result.get("ok", False) if isinstance(result, dict) else True
+            ok = result.get("ok", True) if isinstance(result, dict) else True  # missing ok = success
             print(f"[AGENT] step={step} {tool_name} ok={ok}")
 
             if not ok:
