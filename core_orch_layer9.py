@@ -213,7 +213,7 @@ async def layer_9_tone(msg: OrchestratorMessage):
     # Extract KB snippets and behavioral rules from context for injection
     kb_snippets = msg.context.get("kb_snippets", [])
     kb_str = "\n".join(
-        f"- [{r.get('domain','?')}] {r.get('topic','')} : {r.get('instruction','')[:120]}"
+        f"- [{r.get('domain','?')}] {r.get('topic','')} : {(r.get('instruction') or '')[:120]}"
         for r in kb_snippets[:5]
     ) if kb_snippets else "none"
 
