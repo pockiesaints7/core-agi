@@ -195,7 +195,7 @@ def gemini_chat(system: str, user: str, max_tokens: int = 2048, json_mode: bool 
                     headers={
                         "Authorization": f"Bearer {OPENROUTER_API_KEY}",
                         "Content-Type": "application/json",
-                        "HTTP-Referer": "https://core-agi-production.up.railway.app",
+                        "HTTP-Referer": f"https://{os.environ.get('PUBLIC_DOMAIN', 'core-agi.duckdns.org')}",
                         "X-Title": "CORE AGI",
                     },
                     json=payload,
