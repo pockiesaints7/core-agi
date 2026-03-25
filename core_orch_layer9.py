@@ -242,7 +242,10 @@ async def layer_9_tone(msg: OrchestratorMessage):
                 lines = [f"<b>{total} tools available.</b> Here are 15:\n"]
                 for t in tools[:15]:
                     name = t.get("name", "?")
-                    desc = (t.get("desc") or "")[:60]
+                    desc = (t.get("desc") or "")[:80].rstrip()
+                    # Clean mid-word cuts — truncate at last space
+                    if len(t.get("desc") or "") > 80 and " " in desc:
+                        desc = desc[:desc.rfind(" ")] + "…"
                     lines.append(f"<code>{name}</code> — {desc}" if desc else f"<code>{name}</code>")
                 cats = result.get("available_cats", [])
                 if cats:
