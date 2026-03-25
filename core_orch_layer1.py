@@ -113,6 +113,27 @@ _NLU_SYNONYMS: list[tuple[str, str]] = [
     ("show help",          "/help"),
     ("list commands",      "/help"),
     ("what can you do",    "/help"),
+    # time
+    ("what time is it",    "/time"),
+    ("what time is now",   "/time"),
+    ("current time",       "/time"),
+    ("what's the time",    "/time"),
+    ("what day is it",     "/time"),
+    ("what date is it",    "/time"),
+    ("time now",           "/time"),
+    # calc
+    ("calculate",          "/calc"),
+    ("compute",            "/calc"),
+    ("what is",            "/calc"),
+    # weather
+    ("what's the weather", "/weather"),
+    ("weather today",      "/weather"),
+    ("weather in",         "/weather"),
+    # tools
+    ("list tools",         "/tools"),
+    ("show tools",         "/tools"),
+    ("available tools",    "/tools"),
+    ("what tools do you have", "/tools"),
 ]
 
 
