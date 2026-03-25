@@ -384,7 +384,7 @@ def _load_schema_registry():
 def _validate_write(table: str, data: dict) -> list:
     """Validate data dict against _SB_SCHEMA before any Supabase write.
     Returns list of error strings (empty = OK). Logs violations to Railway stdout.
-    Checks: tombstone table, unknown columns, required fields, enum values."""
+    Checks: tombstone table, unknown table, unknown columns, required fields, enum values."""
     errors = []
     # Block tombstone tables
     if table in _SB_SCHEMA.get("_tombstone", set()):
@@ -393,7 +393,14 @@ def _validate_write(table: str, data: dict) -> list:
         return errors
     schema = _sb_schema(table)
     if not schema:
-        print(f"[SCHEMA] WARNING: table '{table}' not in registry -- write proceeding unvalidated")
+        # Unknown table — block with helpful hint instead of proceeding unvalidated
+        known = sorted(_SB_SCHEMA.get("tables", {}).keys())
+        errors.append(
+            f"UNKNOWN_TABLE: '{table}' not in schema registry. "
+            f"Known tables: {known}. "
+            f"Common mistake: 'tasks' → 'task_queue'"
+        )
+        print(f"[SCHEMA VIOLATION] {table}: UNKNOWN_TABLE blocked")
         return errors
     known_cols = schema.get("columns", {})
     enums      = schema.get("enums", {})
