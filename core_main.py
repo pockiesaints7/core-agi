@@ -38,6 +38,10 @@ from core_tools import TOOLS, handle_jsonrpc
 # ── Orchestrator v2 ───────────────────────────────────────────────────────────
 from core_orch_main import handle_telegram_message_v2, startup_v2
 
+ --- 1. Global State & Auth Dependency ---
+# Add this near the top of your core_main.py
+_sse_sessions: Dict[str, asyncio.Queue] = {}
+
 # ---------------------------------------------------------------------------
 # Shared helpers (used by routes + tools — defined here, imported by core_tools)
 # ---------------------------------------------------------------------------
@@ -454,146 +458,139 @@ async def patch_file(body: PatchRequest):
         notify(f"Patch applied: `{body.path}`\n{body.message[:100]}")
     return result
 
+async def get_mcp_identity(
+    x_mcp_secret: Optional[str] = Header(None, alias="X-MCP-Secret"),
+    authorization: Optional[str] = Header(None),
+    secret_query: Optional[str] = Query(None, alias="secret")
+):
+    """
+    Centralized Auth. Securely extracts the secret from Headers or Query.
+    """
+    token = x_mcp_secret or secret_query
+    if not token and authorization and authorization.startswith("Bearer "):
+        token = authorization[7:]
+    
+    # Timing-attack resistant comparison against your core_config.MCP_SECRET
+    if not token or not secrets.compare_digest(str(token), str(MCP_SECRET)):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={"jsonrpc": "2.0", "error": {"code": -32600, "message": "Unauthorized"}}
+        )
+    return True
+
+# --- 2. Refactored Endpoints (Replace your existing ones) ---
 
 @app.post("/mcp/sse")
-async def mcp_post(req: Request):
-    secret = req.headers.get("X-MCP-Secret", "") or req.query_params.get("secret", "")
-    if not secret:
-        auth = req.headers.get("Authorization", "")
-        if auth.startswith("Bearer "):
-            secret = auth[7:]
-    if secret and secret != MCP_SECRET:
-        return JSONResponse(
-            {"jsonrpc": "2.0", "error": {"code": -32600, "message": "Unauthorized"}},
-            status_code=401
-        )
+async def mcp_post(req: Request, _auth=Depends(get_mcp_identity)):
     try:
         body = await req.json()
-    except:
+    except json.JSONDecodeError:
         return JSONResponse(
             {"jsonrpc": "2.0", "id": None, "error": {"code": -32700, "message": "Parse error"}},
             status_code=400
         )
+
     if isinstance(body, list):
         return JSONResponse([r for item in body if (r := handle_jsonrpc(item)) is not None])
+    
     response = handle_jsonrpc(body)
     if response is None:
         return JSONResponse({}, status_code=204)
-    if "text/event-stream" in req.headers.get("accept", ""):
+
+    # If client wants an SSE response for a single POST (standard MCP behavior)
+    if "text/event-stream" in req.headers.get("accept", "").lower():
         async def sse_single():
             yield f"data: {json.dumps(response)}\n\n"
         return StreamingResponse(
-            sse_single(), media_type="text/event-stream",
-            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no",
-                     "mcp-session-id": str(uuid.uuid4())}
+            sse_single(), 
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache", 
+                "X-Accel-Buffering": "no",
+                "mcp-session-id": str(uuid.uuid4())
+            }
         )
     return JSONResponse(response)
 
-
 @app.get("/mcp/sse")
-async def mcp_sse_get(req: Request):
-    secret = req.headers.get("X-MCP-Secret", "") or req.query_params.get("secret", "")
-    if not secret:
-        auth = req.headers.get("Authorization", "")
-        if auth.startswith("Bearer "):
-            secret = auth[7:]
-    if secret and secret != MCP_SECRET:
-        raise HTTPException(401, "Unauthorized")
+async def mcp_sse_get(req: Request, _auth=Depends(get_mcp_identity)):
     session_id = str(uuid.uuid4())
-    queue: asyncio.Queue = asyncio.Queue()
+    queue: asyncio.Queue = asyncio.Queue(maxsize=100)
     _sse_sessions[session_id] = queue
 
     async def event_stream():
         try:
+            # Tell the client where to send POST messages
             yield f"event: endpoint\ndata: {json.dumps(f'/mcp/messages?session_id={session_id}')}\n\n"
             while True:
                 if await req.is_disconnected():
                     break
                 try:
+                    # 25s heartbeat to keep Railway/Nginx connections alive
                     msg = await asyncio.wait_for(queue.get(), timeout=25.0)
                     yield f"data: {json.dumps(msg)}\n\n"
                 except asyncio.TimeoutError:
-                    yield f": ping\n\n"
+                    yield ": ping\n\n"
         finally:
             _sse_sessions.pop(session_id, None)
 
     return StreamingResponse(
-        event_stream(), media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no",
-                 "X-Session-Id": session_id}
+        event_stream(), 
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache", 
+            "X-Accel-Buffering": "no",
+            "X-Session-Id": session_id
+        }
     )
 
-
 @app.post("/mcp/messages")
-async def mcp_messages(req: Request):
-    session_id = req.query_params.get("session_id", "")
-    secret = req.headers.get("X-MCP-Secret", "") or req.query_params.get("secret", "")
-    if not secret:
-        auth = req.headers.get("Authorization", "")
-        if auth.startswith("Bearer "):
-            secret = auth[7:]
-    if secret and secret != MCP_SECRET:
-        return JSONResponse({"error": "Unauthorized"}, status_code=401)
+async def mcp_messages(req: Request, session_id: str = Query(...), _auth=Depends(get_mcp_identity)):
     try:
         body = await req.json()
-    except:
+    except json.JSONDecodeError:
         return JSONResponse({"error": "Parse error"}, status_code=400)
+
     response = handle_jsonrpc(body)
-    if session_id and session_id in _sse_sessions:
+    
+    if session_id in _sse_sessions:
         if response is not None:
             await _sse_sessions[session_id].put(response)
         return JSONResponse({"ok": True}, status_code=202)
+    
     return JSONResponse(response) if response else JSONResponse({}, status_code=204)
-
-
-@app.post("/mcp/startup")
-async def mcp_startup(body: Handshake, req: Request):
-    if body.secret != MCP_SECRET:
-        raise HTTPException(401, "Invalid secret")
-    from core_tools import t_state, t_health, t_constitution
-    tok = mcp_new(req.client.host)
-    resume = get_resume_task()
-    notify(f"MCP Session\nClient: {body.client_id}\nToken: {tok[:8]}...")
-    return {
-        "session_token": tok,
-        "expires_hours": SESSION_TTL_H,
-        "state": t_state(),
-        "health": t_health(),
-        "constitution": t_constitution(),
-        "tools": list(TOOLS.keys()),
-        "note": f"CORE v6.0 ready. {resume}",
-    }
-
-
-@app.post("/mcp/auth")
-async def mcp_auth(body: Handshake, req: Request):
-    if body.secret != MCP_SECRET:
-        notify(f"Invalid MCP auth from {req.client.host}")
-        raise HTTPException(401, "Invalid secret")
-    return {"session_token": mcp_new(req.client.host), "expires_hours": SESSION_TTL_H}
-
 
 @app.post("/mcp/tool")
 async def mcp_tool(body: ToolCall):
+    # Keep using your custom mcp_ok check for session tokens
     if not mcp_ok(body.session_token):
         raise HTTPException(401, "Invalid/expired session")
+    
     if not L.mcp(body.session_token):
         raise HTTPException(429, "Rate limit exceeded")
-    if body.tool not in TOOLS:
+    
+    # O(1) Tool lookup
+    tool_data = TOOLS.get(body.tool)
+    if not tool_data:
         raise HTTPException(404, f"Tool not found: {body.tool}")
+        
     try:
-        res = TOOLS[body.tool]["fn"](**body.args) if body.args else TOOLS[body.tool]["fn"]()
-        return {"ok": True, "tool": body.tool, "perm": TOOLS[body.tool]["perm"], "result": res}
-    except HTTPException:
-        raise
+        fn = tool_data["fn"]
+        res = fn(**(body.args or {}))
+        return {
+            "ok": True, 
+            "tool": body.tool, 
+            "perm": tool_data.get("perm"), 
+            "result": res
+        }
     except Exception as e:
+        # Structured error return instead of crashing
         return {"ok": False, "tool": body.tool, "error": str(e)}
-
 
 @app.get("/mcp/tools")
 def list_tools():
-    return {n: {"perm": t["perm"], "args": t["args"]} for n, t in TOOLS.items()}
-
+    # Modern dictionary comprehension
+    return {n: {"perm": t.get("perm"), "args": t.get("args")} for n, t in TOOLS.items()}
 
 @app.get("/debug/sim")
 def debug_sim():
