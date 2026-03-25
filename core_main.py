@@ -933,9 +933,11 @@ def handle_msg(msg):
     else:
         # ── Orchestrator v2: all freeform messages routed through L0→L10 pipeline
         # Pass raw msg dict — core_orch_main wraps it into {"message": msg} internally.
-        # Do NOT double-wrap here.
+        # Use sync wrapper (handle_telegram_message) — creates its own event loop safely.
+        from core_orch_main import handle_telegram_message
         threading.Thread(
-            target=lambda: asyncio.run(handle_telegram_message_v2(msg)),
+            target=handle_telegram_message,
+            args=(msg,),
             daemon=True
         ).start()
 
