@@ -87,6 +87,19 @@ async def _execute_subtask(
     args = subtask.get("args", {}) or {}
     step = subtask.get("step", "?")
 
+    # Resolve command aliases (e.g. "/health" → "get_system_health")
+    if tool_name in _COMMAND_TOOL_ALIASES:
+        resolved = _COMMAND_TOOL_ALIASES[tool_name]
+        print(f"[L5] Alias resolved: {tool_name!r} → {resolved!r}")
+        tool_name = resolved
+
+    # Fuzzy fallback: try stripping t_ prefix if tool not found (legacy name guard)
+    if tool_name not in tools and tool_name.startswith("t_"):
+        stripped = tool_name[2:]
+        if stripped in tools:
+            print(f"[L5] Legacy t_ prefix stripped: {tool_name!r} → {stripped!r}")
+            tool_name = stripped
+
     # Permission check for trusted tier
     if msg.tier == "trusted" and tool_name in _TRUSTED_BLOCKED:
         err = f"Trusted tier cannot call {tool_name}"
@@ -98,7 +111,7 @@ async def _execute_subtask(
     if tool_name not in tools:
         err = f"Tool {tool_name!r} not found in TOOLS registry"
         msg.add_tool_result(tool_name, False, {"error": err})
-        print(f"[L5] UNKNOWN tool={tool_name}")
+        print(f"[L5] UNKNOWN tool={tool_name}  (registry has {len(tools)} tools)")
         return False
 
     tool_entry = tools[tool_name]
