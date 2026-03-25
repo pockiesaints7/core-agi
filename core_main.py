@@ -921,8 +921,11 @@ def handle_msg(msg):
 
     else:
         # ── Orchestrator v2: all freeform messages routed through L0→L10 pipeline
+        # IMPORTANT: wrap msg back into full Telegram update dict
+        # layer_1_triage expects {"message": {...}}, not the inner message directly
+        update = {"message": msg}
         threading.Thread(
-            target=lambda: asyncio.run(handle_telegram_message_v2(msg)),
+            target=lambda: asyncio.run(handle_telegram_message_v2(update)),
             daemon=True
         ).start()
 
