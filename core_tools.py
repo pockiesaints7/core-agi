@@ -4388,7 +4388,7 @@ def t_sb_patch(table: str = "", filters: str = "", data="") -> dict:
 
 
 def t_sb_upsert(table: str = "", data="", on_conflict: str = "") -> dict:
-    """Schema-validated Supabase upsert. Blocks tombstone, validates columns+enums+required.
+    """Schema-validated Supabase upsert. Blocks tombstone+unknown-table, validates columns+enums+required.
     data: JSON string or dict of the full row.
     on_conflict: column(s) defining uniqueness. If omitted, schema default is used.
     Schema defaults: knowledge_base=domain,topic | script_templates=name | pattern_frequency=pattern_key"""
@@ -4396,6 +4396,11 @@ def t_sb_upsert(table: str = "", data="", on_conflict: str = "") -> dict:
         return {"ok": False, "error": "table required"}
     if table in _SB_SCHEMA.get("_tombstone", set()):
         return {"ok": False, "error": f"TOMBSTONE: '{table}' is retired"}
+    if table not in _SB_SCHEMA.get("tables", {}):
+        known = sorted(_SB_SCHEMA.get("tables", {}).keys())
+        return {"ok": False, "error": f"UNKNOWN_TABLE: '{table}' not in schema registry.",
+                "hint": f"Known tables: {known}",
+                "tip": "Common mistake: 'tasks' should be 'task_queue'"}
     if isinstance(data, str):
         try: data = json.loads(data)
         except Exception as e:
