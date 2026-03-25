@@ -49,18 +49,19 @@ _AGENT_SYSTEM = (
     "get_state, get_system_health, task_add, notify_owner, sb_query, sb_insert, "
     "deploy_status, railway_logs_live, get_mistakes, list_evolutions, and more.\n\n"
     "You are in AGENTIC MODE — a ReAct loop: Think -> Act -> Observe -> repeat.\n\n"
-    "RULES:\n"
+    "CRITICAL RULES:\n"
     "1. Return EXACTLY one JSON object per iteration — no other text.\n"
     "2. Use one of these response types:\n\n"
     "   ACTION: {\"type\": \"action\", \"thought\": \"why\", \"tool\": \"exact_tool_name\", \"args\": {}, \"progress\": \"brief status\"}\n"
     "   DONE:   {\"type\": \"done\", \"thought\": \"what was accomplished\", \"answer\": \"full response to user\"}\n"
     "   STUCK:  {\"type\": \"stuck\", \"reason\": \"what blocks\", \"partial_answer\": \"what was found\"}\n\n"
     "3. Tool names must EXACTLY match the registry.\n"
-    "4. Use \"thought\" to reason step-by-step before choosing action.\n"
-    "5. When DONE: \"answer\" must be the complete, final, formatted response. No placeholders.\n"
-    "6. Be efficient — never repeat a completed step. Use all gathered info before calling DONE.\n"
-    "7. If a tool fails, try a different approach — do NOT retry the same call.\n"
-    "Return ONLY valid JSON. No markdown, no preamble, no explanation outside the JSON."
+    "4. EFFICIENCY — before each action ask: do I already have this data from a previous step? If YES → do NOT call the tool again, use what you have.\n"
+    "5. CONVERGENCE — once you have gathered enough data to answer the goal, return type=done IMMEDIATELY. Do not keep collecting more data.\n"
+    "6. DONE threshold: if you have attempted every distinct subtask in the goal at least once, return type=done with a full synthesis of everything collected.\n"
+    "7. If a tool fails once, try ONE alternative approach. If that also fails, skip it and note it in the answer.\n"
+    "8. When DONE: \"answer\" must be the complete formatted response. No placeholders. Synthesise ALL gathered data.\n"
+    "Return ONLY valid JSON. No markdown, no preamble."
 )
 
 # Injected when token budget is running low — tells LLM to wrap up
@@ -468,18 +469,21 @@ async def run_agent_loop(msg: OrchestratorMessage, goal: str) -> None:
             if step % AGENT_PROGRESS_EVERY == 0:
                 asyncio.ensure_future(_send_progress(msg, step, elapsed, progress))
 
-            # Repeat guard: same tool + same args failed last step → skip, inject note
-            if (history
-                    and history[-1].get("type") == "action"
-                    and history[-1].get("tool") == tool_name
-                    and history[-1].get("args") == tool_args
-                    and not history[-1].get("result", {}).get("ok", True)):
-                note = f"SKIPPED: {tool_name} already failed with identical args. Use a different tool or different args."
-                print(f"[AGENT] step={step} repeat-skip {tool_name}")
+            # Repeat guard: same tool + same args called recently → skip
+            # Catches both: repeated failures AND repeated successful calls (infinite loop)
+            recent_calls = [(h.get("tool"), json.dumps(h.get("args",{}), sort_keys=True))
+                            for h in history[-5:] if h.get("type") == "action"]
+            this_call = (tool_name, json.dumps(tool_args, sort_keys=True))
+            repeat_count = recent_calls.count(this_call)
+            if repeat_count >= 2:
+                note = (f"STOP REPEATING: {tool_name} with these args was already called "
+                        f"{repeat_count} times recently. You have that data. "
+                        f"Move on to the next goal or return type=done with what you have.")
+                print(f"[AGENT] step={step} repeat-guard {tool_name} (×{repeat_count} in last 5 steps)")
                 history.append({"type": "thought_only", "thought": note, "step": step})
                 consecutive_errors += 1
                 if consecutive_errors >= AGENT_ERROR_THRESHOLD:
-                    msg.styled_response = f"⚠️ CORE stuck in loop on {tool_name} — aborting."
+                    msg.styled_response = f"⚠️ CORE stuck looping on {tool_name} — aborting."
                     break
                 continue
 
