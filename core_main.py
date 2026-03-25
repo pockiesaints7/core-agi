@@ -443,7 +443,7 @@ def api_evolutions():
 
 @app.post("/patch")
 async def patch_file(body: PatchRequest):
-    if body.secret != MCP_SECRET:
+    if not secrets.compare_digest(str(body.secret), str(MCP_SECRET)):
         raise HTTPException(401, "Invalid secret")
     from core_tools import t_gh_search_replace
     from core_config import GITHUB_REPO
