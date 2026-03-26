@@ -4866,6 +4866,180 @@ def t_get_time(timezone: str = 'UTC') -> dict:
         'timezone_note': 'Always UTC.',
     }
 
+# ── Agentic session state management ─────────────────────────────────────────
+# Solves the "step 6 can't remember step 4" infinite loop problem.
+# The agent writes named variables to agentic_sessions.state (jsonb scratchpad)
+# and reads them back on every iteration — state survives across LLM calls.
+
+def t_agent_state_set(session_id: str, key: str, value: str) -> dict:
+    """Write a named variable to the agentic session state scratchpad.
+    Solves cross-iteration memory: agent writes 'kb_entry_id=9789' after step 4,
+    reads it back in step 6 instead of re-searching.
+    session_id: Telegram chat_id or 'default'.
+    key: variable name (e.g. 'kb_entry_id', 'last_inserted_topic').
+    value: value to store (stored as string in jsonb).
+    """
+    try:
+        from core_config import SUPABASE_URL, _sbh
+        import httpx as _hx, json as _j
+        # Load existing state
+        r = _hx.get(
+            f"{SUPABASE_URL}/rest/v1/agentic_sessions?session_id=eq.{session_id}&order=created_at.desc&limit=1&select=id,state",
+            headers=_sbh(True), timeout=10
+        )
+        rows = r.json() if r.is_success else []
+        if not rows:
+            return {"ok": False, "error": f"No agentic session found for session_id={session_id}"}
+        row_id = rows[0]["id"]
+        current_state = rows[0].get("state") or {}
+        if isinstance(current_state, str):
+            try: current_state = _j.loads(current_state)
+            except Exception: current_state = {}
+        current_state[key] = value
+        # Patch state + last_updated
+        patch = _hx.patch(
+            f"{SUPABASE_URL}/rest/v1/agentic_sessions?id=eq.{row_id}",
+            headers={**_sbh(True), "Prefer": "return=minimal"},
+            json={"state": current_state, "last_updated": __import__("datetime").datetime.utcnow().isoformat()},
+            timeout=10
+        )
+        if not patch.is_success:
+            return {"ok": False, "error": f"Patch failed: {patch.status_code} {patch.text[:100]}"}
+        return {"ok": True, "session_id": session_id, "key": key, "value": value, "state": current_state}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def t_agent_state_get(session_id: str, key: str = "") -> dict:
+    """Read named variable(s) from the agentic session state scratchpad.
+    session_id: Telegram chat_id or 'default'.
+    key: specific variable to read. Empty = return entire state dict.
+    """
+    try:
+        from core_config import SUPABASE_URL, _sbh
+        import httpx as _hx, json as _j
+        r = _hx.get(
+            f"{SUPABASE_URL}/rest/v1/agentic_sessions?session_id=eq.{session_id}&order=created_at.desc&limit=1&select=id,state,step_index,current_step,completed_steps",
+            headers=_sbh(True), timeout=10
+        )
+        rows = r.json() if r.is_success else []
+        if not rows:
+            return {"ok": False, "error": f"No session found for {session_id}", "state": {}, "value": None}
+        state = rows[0].get("state") or {}
+        if isinstance(state, str):
+            try: state = _j.loads(state)
+            except Exception: state = {}
+        if key:
+            return {"ok": True, "session_id": session_id, "key": key,
+                    "value": state.get(key), "found": key in state}
+        return {"ok": True, "session_id": session_id, "state": state,
+                "step_index": rows[0].get("step_index", 0),
+                "current_step": rows[0].get("current_step"),
+                "completed_steps": rows[0].get("completed_steps") or []}
+    except Exception as e:
+        return {"ok": False, "error": str(e), "state": {}}
+
+
+def t_agent_step_done(session_id: str, step_name: str, result: str = "") -> dict:
+    """Mark an agentic step as completed and store its result.
+    Call after EVERY step completes — prevents re-running completed steps.
+    session_id: Telegram chat_id or 'default'.
+    step_name: human-readable step label (e.g. 'insert_kb_entry', 'query_tasks').
+    result: brief outcome to store (e.g. 'id=9789', 'found 3 rows').
+    """
+    try:
+        from core_config import SUPABASE_URL, _sbh
+        import httpx as _hx, json as _j
+        from datetime import datetime
+        r = _hx.get(
+            f"{SUPABASE_URL}/rest/v1/agentic_sessions?session_id=eq.{session_id}&order=created_at.desc&limit=1&select=id,step_index,completed_steps,state",
+            headers=_sbh(True), timeout=10
+        )
+        rows = r.json() if r.is_success else []
+        if not rows:
+            return {"ok": False, "error": f"No session found for {session_id}"}
+        row = rows[0]
+        row_id = row["id"]
+        completed = row.get("completed_steps") or []
+        if isinstance(completed, str):
+            try: completed = _j.loads(completed)
+            except Exception: completed = []
+        step_record = {"step": step_name, "result": result, "ts": datetime.utcnow().isoformat()}
+        # Check if already done (dedup)
+        if any(s.get("step") == step_name for s in completed):
+            return {"ok": True, "already_done": True, "step": step_name,
+                    "note": "Step already recorded — not duplicating"}
+        completed.append(step_record)
+        new_index = (row.get("step_index") or 0) + 1
+        patch = _hx.patch(
+            f"{SUPABASE_URL}/rest/v1/agentic_sessions?id=eq.{row_id}",
+            headers={**_sbh(True), "Prefer": "return=minimal"},
+            json={"completed_steps": completed, "step_index": new_index,
+                  "current_step": step_name, "last_updated": datetime.utcnow().isoformat()},
+            timeout=10
+        )
+        if not patch.is_success:
+            return {"ok": False, "error": f"Patch failed: {patch.status_code}"}
+        return {"ok": True, "step": step_name, "result": result,
+                "step_index": new_index, "total_steps_done": len(completed)}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def t_agent_session_init(session_id: str, goal: str = "", chat_id: str = "") -> dict:
+    """Create or reset an agentic session with a clean state scratchpad.
+    Call at the START of any multi-step agentic task.
+    session_id: unique identifier (use Telegram chat_id for Telegram sessions).
+    goal: what this session is trying to accomplish.
+    Returns the session row id for reference.
+    """
+    try:
+        from core_config import SUPABASE_URL, _sbh
+        import httpx as _hx
+        from datetime import datetime
+        # Upsert on session_id — resets state/steps for fresh run
+        data = {
+            "session_id": session_id,
+            "goal": goal or "multi-step agentic task",
+            "chat_id": chat_id or session_id,
+            "state": {},
+            "step_index": 0,
+            "status": "active",
+            "completed_steps": [],
+            "current_step": None,
+            "action_log": [],
+            "last_updated": datetime.utcnow().isoformat(),
+        }
+        # Try to find existing
+        r = _hx.get(
+            f"{SUPABASE_URL}/rest/v1/agentic_sessions?session_id=eq.{session_id}&order=created_at.desc&limit=1&select=id",
+            headers=_sbh(True), timeout=10
+        )
+        rows = r.json() if r.is_success else []
+        if rows:
+            # Reset existing
+            row_id = rows[0]["id"]
+            patch = _hx.patch(
+                f"{SUPABASE_URL}/rest/v1/agentic_sessions?id=eq.{row_id}",
+                headers={**_sbh(True), "Prefer": "return=minimal"},
+                json={k: v for k, v in data.items() if k != "session_id"},
+                timeout=10
+            )
+            return {"ok": True, "action": "reset", "session_id": session_id, "row_id": row_id}
+        else:
+            # Insert new
+            ins = _hx.post(
+                f"{SUPABASE_URL}/rest/v1/agentic_sessions",
+                headers={**_sbh(True), "Prefer": "return=representation"},
+                json=data, timeout=10
+            )
+            new_row = ins.json()[0] if ins.is_success and ins.json() else {}
+            return {"ok": True, "action": "created", "session_id": session_id,
+                    "row_id": new_row.get("id")}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
 TOOLS = {
     "get_time":               {"fn": t_get_time, "perm": "READ", "args": ["timezone"],
                                "desc": "Get current UTC date and time. Use for any question about current time, date, or day of week."},
@@ -4994,6 +5168,18 @@ TOOLS = {
                                "desc": "TASK-28: Write mid-session checkpoint. Call after every subtask gate to prevent context collapse on long tasks. active_task_id=UUID of current task. last_action=brief description of last completed step. last_result=outcome or next step. session_start returns resume_checkpoint field with this data."},
     "session_end":            {"fn": t_session_end,            "perm": "WRITE",   "args": ["summary", "actions", "domain", "patterns", "quality", "skill_file_updated", "force_close", "active_task_ids", "owner_corrections"],
                                "desc": "One-call session close. actions=pipe-separated strings (| only, NOT comma). quality clamped 0.0-1.0 auto. BEFORE calling: (1) log_mistake for every error, (2) add_knowledge for every new insight, (3) changelog_add for every deploy, (4) update task statuses in task_queue. active_task_ids=pipe-separated UUIDs of tasks touched -- warns if any still pending/in_progress. skill_file_updated gate RETIRED (owner 2026-03-19) -- always pass skill_file_updated=true. All new rules go to Supabase behavioral_rules via add_behavioral_rule only. Returns: training_ok (bool), duration_seconds, reflection_warning if hot reflection failed, task_status_warnings if tasks left open."},
+    "agent_session_init": {"fn": t_agent_session_init, "perm": "WRITE",
+        "args": ["session_id", "goal", "chat_id"],
+        "desc": "Create/reset agentic session with clean state scratchpad. Call at START of any multi-step task. Prevents step bleed between runs."},
+    "agent_state_set":    {"fn": t_agent_state_set,    "perm": "WRITE",
+        "args": ["session_id", "key", "value"],
+        "desc": "Write named variable to agentic session scratchpad. Use after every step that produces data used later (e.g. agent_state_set(key='kb_id', value='9789')). Solves cross-iteration memory loss."},
+    "agent_state_get":    {"fn": t_agent_state_get,    "perm": "READ",
+        "args": ["session_id", "key"],
+        "desc": "Read named variable from agentic session scratchpad. Use INSTEAD of re-querying when you already inserted/found data in a previous step."},
+    "agent_step_done":    {"fn": t_agent_step_done,    "perm": "WRITE",
+        "args": ["session_id", "step_name", "result"],
+        "desc": "Mark a step complete with its result. Prevents re-running completed steps. Call after EVERY successful step."},
     "core_py_rollback":       {"fn": t_core_py_rollback,       "perm": "EXECUTE", "args": ["commit_sha"],
                                "desc": "Emergency restore: fetch any CORE file at commit_sha, write back, redeploy. file= param (default: core_main.py)."},
     "diff":                   {"fn": t_diff,                   "perm": "READ",    "args": ["path", "sha_a", "sha_b"],

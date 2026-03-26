@@ -73,6 +73,11 @@ _AGENT_SYSTEM = (
     "8. When DONE: \"answer\" must be the complete formatted response. No placeholders. Synthesise ALL gathered data.\n"
     "9. For list_evolutions results: ALWAYS report total_count (real DB count) first, then show items. Never truncate the count.\n"
     "   Example: 'There are 666 pending evolutions. Showing newest 20: ...'. Never say '8 pending' if total_count says 666.\n"
+    "10. PERSISTENT STATE — use agent_state_set/agent_state_get to remember data across steps:\n"
+    "    - After inserting/creating anything: agent_state_set(key='kb_id', value='<id>')\n"
+    "    - Before re-querying: check PERSISTENT STATE section above — if the data is there, use it directly.\n"
+    "    - NEVER re-search for data you already have in PERSISTENT STATE.\n"
+    "    - For multi-step tasks: call agent_session_init at start, agent_step_done after each step.\n"
     "Return ONLY valid JSON. No markdown, no preamble."
 )
 
@@ -338,8 +343,16 @@ def _build_prompt(
     compressed_summary: str,
     tools_summary: str,
     conclude: bool = False,
+    agent_state: dict = None,
 ) -> str:
     parts = [f"GOAL: {goal}", ""]
+    # Inject persistent state scratchpad — survives across iterations
+    if agent_state:
+        import json as _j
+        state_str = _j.dumps(agent_state, default=str)
+        parts.append(f"PERSISTENT STATE (from previous steps — use this instead of re-querying):")
+        parts.append(state_str)
+        parts.append("")
     if compressed_summary:
         parts.append(compressed_summary)
         parts.append("")
@@ -401,6 +414,18 @@ async def run_agent_loop(msg: OrchestratorMessage, goal: str) -> None:
     last_prompt_tokens = 0   # updated every step from API response
     print(f"[AGENT] Budgets: prompt_compress={int(AGENT_TOKEN_COMPRESS*100)}% prompt_conclude={int(AGENT_TOKEN_CONCLUDE*100)}% timeout={AGENT_TIMEOUT_SEC}s")
 
+    # Load agentic session state (shared scratchpad across iterations)
+    _agent_session_id = msg.chat_id if hasattr(msg, "chat_id") and msg.chat_id else "default"
+    _agent_state: dict = {}
+    try:
+        from core_tools import TOOLS as _T
+        _sg = _T.get("agent_state_get", {}).get("fn")
+        if _sg:
+            _sr = _sg(session_id=str(_agent_session_id))
+            _agent_state = _sr.get("state", {}) if _sr.get("ok") else {}
+    except Exception as _se:
+        print(f"[AGENT] state load error (non-fatal): {_se}")
+
     while True:
         step += 1
         elapsed = time.monotonic() - start_time
@@ -411,7 +436,7 @@ async def run_agent_loop(msg: OrchestratorMessage, goal: str) -> None:
             force_conclude = True  # fall through to conclusion
 
         # ── Build prompt + check token budget ─────────────────────────────────
-        prompt = _build_prompt(goal, history, compressed_summary, tools_summary, conclude=force_conclude)
+        prompt = _build_prompt(goal, history, compressed_summary, tools_summary, conclude=force_conclude, agent_state=_agent_state)
         char_count = _chars(prompt)
 
         # Use real token count from last API call if available, else estimate from chars
@@ -422,13 +447,13 @@ async def run_agent_loop(msg: OrchestratorMessage, goal: str) -> None:
         if not force_conclude and effective_tokens > compress_threshold:
             print(f"[AGENT] step={step} compressing history (tokens={effective_tokens} > {compress_threshold})")
             compressed_summary, history = _compress_history(history, keep_last=6)
-            prompt = _build_prompt(goal, history, compressed_summary, tools_summary, conclude=False)
+            prompt = _build_prompt(goal, history, compressed_summary, tools_summary, conclude=False, agent_state=_agent_state)
             char_count = _chars(prompt)
 
         if not force_conclude and effective_tokens > conclude_threshold:
             print(f"[AGENT] step={step} token budget critical (tokens={effective_tokens} > {conclude_threshold}) — forcing conclusion")
             force_conclude = True
-            prompt = _build_prompt(goal, history, compressed_summary, tools_summary, conclude=True)
+            prompt = _build_prompt(goal, history, compressed_summary, tools_summary, conclude=True, agent_state=_agent_state)
 
         print(f"[AGENT] step={step} prompt_real={last_prompt_tokens}t prompt_est≈{char_count//4}t elapsed={elapsed:.1f}s")
 
@@ -542,6 +567,37 @@ async def run_agent_loop(msg: OrchestratorMessage, goal: str) -> None:
                 "summary": summary,
             })
             msg.add_tool_result(tool_name, ok, result)
+
+            # Auto-save useful results to persistent state scratchpad
+            if ok and isinstance(result, dict):
+                try:
+                    from core_tools import TOOLS as _T2
+                    _sset = _T2.get("agent_state_set", {}).get("fn")
+                    if _sset:
+                        # Save IDs from insert/query results
+                        if "id" in result:
+                            _sset(session_id=str(_agent_session_id), key=f"{tool_name}_id", value=str(result["id"]))
+                            _agent_state[f"{tool_name}_id"] = str(result["id"])
+                        # Save first item ID from list results
+                        data = result.get("data") or result.get("evolutions") or result.get("rows", [])
+                        if isinstance(data, list) and data and isinstance(data[0], dict):
+                            first_id = data[0].get("id")
+                            if first_id:
+                                _sset(session_id=str(_agent_session_id), key=f"{tool_name}_first_id", value=str(first_id))
+                                _agent_state[f"{tool_name}_first_id"] = str(first_id)
+                        # Save knowledge KB insert results
+                        if tool_name in ("add_knowledge", "kb_update") and result.get("action") in ("inserted", "upserted"):
+                            topic = tool_args.get("topic", "")
+                            if topic:
+                                _sset(session_id=str(_agent_session_id), key="last_kb_topic", value=topic)
+                                _agent_state["last_kb_topic"] = topic
+                        # Mark step done
+                        _sdone = _T2.get("agent_step_done", {}).get("fn")
+                        if _sdone:
+                            _sdone(session_id=str(_agent_session_id), step_name=f"step_{step}_{tool_name}",
+                                   result=str(result)[:200])
+                except Exception as _ae:
+                    pass  # state save is non-fatal — never block execution
 
             # Token budget: checked at top of loop via last_prompt_tokens (real API value)
             # No additional tracking needed here — the API response tells us truth each step
