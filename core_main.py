@@ -942,6 +942,36 @@ def handle_msg(msg):
             cid
         )
 
+    elif text == "/restart":
+        # Owner-only: restart the core-agi systemd service
+        # Kills any running agentic loop immediately
+        notify("🔄 Restarting CORE service...", cid)
+        import subprocess, threading
+        def _do_restart():
+            import time
+            time.sleep(1)  # let the notify send first
+            subprocess.run(["sudo", "systemctl", "restart", "core-agi"], check=False)
+        threading.Thread(target=_do_restart, daemon=True).start()
+        # Note: no reply after this — service will be dead momentarily
+
+    elif text == "/kill":
+        # Owner-only: kill any running agentic loop without full restart
+        # Finds the agentic loop task and marks it aborted, then notifies
+        notify("🛑 Killing active agentic loop...", cid)
+        try:
+            import httpx as _hx
+            from core_config import SUPABASE_URL, _sbh
+            # Mark any active agentic sessions as aborted
+            _hx.patch(
+                f"{SUPABASE_URL}/rest/v1/agentic_sessions?status=eq.active",
+                headers={**_sbh(True), "Prefer": "return=minimal"},
+                json={"status": "aborted"},
+                timeout=5
+            )
+            notify("✅ Loop killed (sessions marked aborted). Use /restart if CORE is stuck.", cid)
+        except Exception as e:
+            notify(f"⚠️ Kill failed: {e}", cid)
+
     elif text.startswith("/project"):
         from core_tools import t_project_list, t_project_prepare
         parts = text.split()[1:]
