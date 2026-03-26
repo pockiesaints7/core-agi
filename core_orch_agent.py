@@ -355,12 +355,14 @@ def _build_prompt(
 ) -> str:
     parts = [f"GOAL: {goal}", ""]
     # Inject persistent state scratchpad — survives across iterations
-    if agent_state:
-        import json as _j
-        state_str = _j.dumps(agent_state, default=str)
-        parts.append(f"PERSISTENT STATE (from previous steps — use this instead of re-querying):")
-        parts.append(state_str)
-        parts.append("")
+    import json as _j
+    effective_state = agent_state or {}
+    state_str = _j.dumps(effective_state, default=str)
+    parts.append(f"PERSISTENT STATE (use these values — do NOT re-query for data already here):")
+    parts.append(state_str)
+    sid = effective_state.get("session_id", "default")
+    parts.append(f"YOUR SESSION_ID IS: {sid!r} — use this exact value for all agent_* tool calls.")
+    parts.append("")
     if compressed_summary:
         parts.append(compressed_summary)
         parts.append("")
@@ -423,14 +425,20 @@ async def run_agent_loop(msg: OrchestratorMessage, goal: str) -> None:
     print(f"[AGENT] Budgets: prompt_compress={int(AGENT_TOKEN_COMPRESS*100)}% prompt_conclude={int(AGENT_TOKEN_CONCLUDE*100)}% timeout={AGENT_TIMEOUT_SEC}s")
 
     # Load agentic session state (shared scratchpad across iterations)
-    _agent_session_id = msg.chat_id if hasattr(msg, "chat_id") and msg.chat_id else "default"
-    _agent_state: dict = {}
+    _agent_session_id = str(msg.chat_id) if hasattr(msg, "chat_id") and msg.chat_id else "default"
+    _agent_state: dict = {"session_id": _agent_session_id}  # always inject session_id
+    # Auto-init session in Supabase if not exists
     try:
         from core_tools import TOOLS as _T
+        _sinit = _T.get("agent_session_init", {}).get("fn")
+        if _sinit:
+            _init_r = _sinit(session_id=_agent_session_id, goal=goal[:200], chat_id=_agent_session_id)
+            print(f"[AGENT] session_init: {_init_r.get('action','?')} id={_agent_session_id}")
         _sg = _T.get("agent_state_get", {}).get("fn")
         if _sg:
-            _sr = _sg(session_id=str(_agent_session_id))
-            _agent_state = _sr.get("state", {}) if _sr.get("ok") else {}
+            _sr = _sg(session_id=_agent_session_id)
+            loaded = _sr.get("state", {}) if _sr.get("ok") else {}
+            _agent_state.update(loaded)
     except Exception as _se:
         print(f"[AGENT] state load error (non-fatal): {_se}")
 
@@ -528,8 +536,7 @@ async def run_agent_loop(msg: OrchestratorMessage, goal: str) -> None:
                             for h in history[-5:] if h.get("type") == "action"]
             this_call = (tool_name, json.dumps(tool_args, sort_keys=True))
             repeat_count = recent_calls.count(this_call)
-            # Also count how many times agent_step_done was called with same step_name
-            # (LLM tends to call it on every iteration with the same label)
+            # Also count agent_step_done with same step_name
             if tool_name == "agent_step_done":
                 sn = tool_args.get("step_name", "")
                 same_step_calls = sum(
@@ -540,15 +547,35 @@ async def run_agent_loop(msg: OrchestratorMessage, goal: str) -> None:
                 if same_step_calls >= 2:
                     repeat_count = same_step_calls
             if repeat_count >= 2:
-                note = (f"STOP REPEATING: {tool_name} with these args was already called "
-                        f"{repeat_count} times recently. You have that data. "
-                        f"Move on to the next goal or return type=done with what you have.")
-                print(f"[AGENT] step={step} repeat-guard {tool_name} (×{repeat_count} in last 5 steps)")
-                history.append({"type": "thought_only", "thought": note, "step": step})
-                consecutive_errors += 1
-                if consecutive_errors >= AGENT_ERROR_THRESHOLD:
-                    msg.styled_response = f"⚠️ CORE stuck looping on {tool_name} — aborting."
-                    break
+                print(f"[AGENT] step={step} repeat-guard {tool_name} (×{repeat_count}) — injecting cached result")
+                # Find the last SUCCESSFUL result for this tool in history
+                cached_result = None
+                for h in reversed(history):
+                    if h.get("tool") == tool_name and h.get("type") == "action" and h.get("result"):
+                        cached_result = h.get("result")
+                        break
+                # Inject as if tool ran successfully — LLM sees data and can move on
+                synthetic = {
+                    "type": "action", "tool": tool_name, "args": tool_args,
+                    "thought": f"[REPEAT-GUARD] Using cached result from earlier call — not re-executing.",
+                    "result": cached_result or {"ok": True, "note": "cached — already ran this step"},
+                    "summary": f"[CACHED] {tool_name} — data already retrieved, advancing",
+                    "step": step,
+                }
+                history.append(synthetic)
+                msg.add_tool_result(tool_name, True, cached_result or {"ok": True, "cached": True})
+                # Auto-advance: save step to state so LLM knows it's done
+                try:
+                    from core_tools import TOOLS as _TRG
+                    _sdone = _TRG.get("agent_step_done", {}).get("fn")
+                    if _sdone and _agent_session_id:
+                        _sdone(session_id=str(_agent_session_id),
+                               step_name=f"auto_{tool_name}_{step}",
+                               result="repeat-guard: cached result injected")
+                        _agent_state[f"auto_step_{step}_done"] = tool_name
+                except Exception:
+                    pass
+                # Do NOT increment consecutive_errors — this is expected behavior
                 continue
 
             # Execute tool
@@ -565,10 +592,15 @@ async def run_agent_loop(msg: OrchestratorMessage, goal: str) -> None:
                     )
                     break
             else:
-                # Don't reset error count for pure state-management tools —
-                # they succeed even mid-loop and would mask real repeat errors
+                # Don't reset error count for state-management tools or tools that
+                # just had a repeat-guard trigger (they'd reset and loop forever)
                 _STATE_TOOLS = {"agent_step_done", "agent_state_set", "agent_state_get", "agent_session_init"}
-                if tool_name not in _STATE_TOOLS:
+                # Only reset if this tool hasn't appeared in recent repeat-guards
+                _recent_guard_tools = {
+                    h.get("tool") for h in history[-6:]
+                    if "[REPEAT-GUARD]" in str(h.get("thought", ""))
+                }
+                if tool_name not in _STATE_TOOLS and tool_name not in _recent_guard_tools:
                     consecutive_errors = 0
 
             # Compact result summary for history

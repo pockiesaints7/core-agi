@@ -4871,7 +4871,7 @@ def t_get_time(timezone: str = 'UTC') -> dict:
 # The agent writes named variables to agentic_sessions.state (jsonb scratchpad)
 # and reads them back on every iteration — state survives across LLM calls.
 
-def t_agent_state_set(session_id: str, key: str, value: str) -> dict:
+def t_agent_state_set(session_id: str = "default", key: str = "", value: str = "") -> dict:
     """Write a named variable to the agentic session state scratchpad.
     Solves cross-iteration memory: agent writes 'kb_entry_id=9789' after step 4,
     reads it back in step 6 instead of re-searching.
@@ -4910,7 +4910,7 @@ def t_agent_state_set(session_id: str, key: str, value: str) -> dict:
         return {"ok": False, "error": str(e)}
 
 
-def t_agent_state_get(session_id: str, key: str = "") -> dict:
+def t_agent_state_get(session_id: str = "default", key: str = "") -> dict:
     """Read named variable(s) from the agentic session state scratchpad.
     session_id: Telegram chat_id or 'default'.
     key: specific variable to read. Empty = return entire state dict.
@@ -4940,7 +4940,7 @@ def t_agent_state_get(session_id: str, key: str = "") -> dict:
         return {"ok": False, "error": str(e), "state": {}}
 
 
-def t_agent_step_done(session_id: str, step_name: str, result: str = "") -> dict:
+def t_agent_step_done(session_id: str = "default", step_name: str = "", result: str = "") -> dict:
     """Mark an agentic step as completed and store its result.
     Call after EVERY step completes — prevents re-running completed steps.
     session_id: Telegram chat_id or 'default'.
@@ -4986,7 +4986,7 @@ def t_agent_step_done(session_id: str, step_name: str, result: str = "") -> dict
         return {"ok": False, "error": str(e)}
 
 
-def t_agent_session_init(session_id: str, goal: str = "", chat_id: str = "") -> dict:
+def t_agent_session_init(session_id: str = "default", goal: str = "", chat_id: str = "") -> dict:
     """Create or reset an agentic session with a clean state scratchpad.
     Call at the START of any multi-step agentic task.
     session_id: unique identifier (use Telegram chat_id for Telegram sessions).
