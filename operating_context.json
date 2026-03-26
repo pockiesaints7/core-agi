@@ -1,10 +1,13 @@
 {
   "_meta": {
     "purpose": "Ground-truth schema registry for all CORE Supabase tables. Read this before ANY write. Never assume column names, types, or enum values. This file is the single source of truth.",
-    "last_verified": "2026-03-19",
+    "last_verified": "2026-03-26",
+    "runtime": "Oracle VM — core-agi.duckdns.org:8081 — systemd service core-agi. NOT Railway.",
     "how_to_use": "Before calling sb_post/sb_insert/sb_patch on any table: (1) Check columns list -- only these columns exist. (2) Check enums -- only these values accepted. (3) Check required -- these cannot be null. (4) Check types -- pass correct Python type.",
     "timestamp_rule": "All timestamp filters must use strftime('%Y-%m-%dT%H:%M:%SZ') format. Never isoformat() -- microseconds cause PostgREST 400.",
-    "mcp_arg_rule": "All MCP tool args arrive as strings. Always cast explicitly: int(x), float(x), x.lower()=='true' for bool. Never trust type hints alone."
+    "mcp_arg_rule": "All MCP tool args arrive as strings. Always cast explicitly: int(x), float(x), x.lower()=='true' for bool. Never trust type hints alone.",
+    "task_queue_pk_rule": "task_queue PK is UUID -- id=gt.1 filter does NOT work. Use status= or source= filters only.",
+    "filter_rule": "Multiple PostgREST filters MUST use & separator: 'domain=eq.test&topic=eq.foo'. NEVER comma."
   },
   "tables": {
     "knowledge_base": {
