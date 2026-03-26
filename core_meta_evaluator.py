@@ -72,13 +72,11 @@ def _store_kb_entry(kb: dict, source: str) -> bool:
         return False
     try:
         row = {
-            "topic":       kb.get("topic", "auto_generated"),
-            "instruction": kb["instruction"][:800],
-            "domain":      kb.get("domain", "general"),
-            "confidence":  kb.get("confidence", "medium"),
-            "active":      True,
-            "source":      f"worker_auto|{source}",
-            "created_at":  datetime.utcnow().isoformat(),
+            "topic":      kb.get("topic", "auto_generated"),
+            "content":    kb.get("instruction", kb.get("content", ""))[:800],
+            "domain":     kb.get("domain", "general"),
+            "confidence": kb.get("confidence", "medium"),
+            "source":     "worker_auto|" + source,
         }
         ok = sb_post("knowledge_base", row)
         if ok:
@@ -109,13 +107,14 @@ def _store_mistake(mistake: dict, source: str) -> bool:
         row = {
             "what_failed":      mistake["what_failed"][:400],
             "correct_approach": (mistake.get("correct_approach") or "")[:400],
+            "how_to_avoid":     (mistake.get("correct_approach") or "")[:300],
             "severity":         mistake.get("severity", "medium"),
             "root_cause":       (mistake.get("root_cause") or "")[:300],
             "domain":           "auto_detected",
-            "source":           f"worker_auto|{source}",
-            "created_at":       datetime.utcnow().isoformat(),
+            "context":          "worker_auto|" + source,
+            "tags":             ["auto_generated", source],
         }
-        return sb_post("domain_mistakes", row)
+        return sb_post("mistakes", row)
     except Exception as e:
         print(f"[META] store_mistake failed: {e}")
         return False
