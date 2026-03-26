@@ -484,6 +484,34 @@ async def patch_file(body: PatchRequest):
         notify(f"Patch applied: `{body.path}`\n{body.message[:100]}")
     return result
 
+
+class TradingReflectionRequest(BaseModel):
+    output_text: str
+    context: dict = {}
+
+
+@app.post("/internal/trading/reflect")
+async def trading_reflect(body: TradingReflectionRequest, req: Request):
+    """
+    Called by core-trading-bot via core_bridge.fire_trading() after every trade close.
+    Triggers the full CORE L11 pipeline: critic -> causal -> reflect -> meta evaluator.
+    Auth: X-MCP-Secret header required.
+    source='trading' so critic/causal/reflect know to treat this as trade outcome.
+    """
+    secret = req.headers.get("X-MCP-Secret", "")
+    if not secrets.compare_digest(str(secret), str(MCP_SECRET)):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+    from core_orch_layer11 import fire_trading
+    fire_trading(body.output_text, body.context or {})
+
+    return {
+        "ok": True,
+        "queued": True,
+        "source": "trading",
+        "ts": datetime.utcnow().isoformat(),
+    }
+
 async def get_mcp_identity(
     x_mcp_secret: Optional[str] = Header(None, alias="X-MCP-Secret"),
     authorization: Optional[str] = Header(None),
