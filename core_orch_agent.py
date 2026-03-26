@@ -69,6 +69,8 @@ _AGENT_SYSTEM = (
     "  log_mistake(domain, what_failed, correct_approach, severity='low')\n"
     "  Known tables: knowledge_base, task_queue, mistakes, sessions, behavioral_rules, evolution_queue\n"
     "  filters use PostgREST syntax: 'status=eq.pending', 'id=gt.1', 'domain=eq.code'\n"
+    "  CRITICAL: multiple filters MUST use & separator: 'domain=eq.test&topic=eq.foo' NOT comma.\n"
+    "  NEVER use comma in filters: 'domain=eq.test,topic=eq.foo' is WRONG and returns 0 rows.\n"
     "  order uses: 'created_at.desc' or 'id.asc' (NOT order_by or order_direction)\n"
     "8. When DONE: \"answer\" must be the complete formatted response. No placeholders. Synthesise ALL gathered data.\n"
     "9. For list_evolutions results: ALWAYS report total_count (real DB count) first, then show items. Never truncate the count.\n"
@@ -78,6 +80,12 @@ _AGENT_SYSTEM = (
     "    - Before re-querying: check PERSISTENT STATE section above — if the data is there, use it directly.\n"
     "    - NEVER re-search for data you already have in PERSISTENT STATE.\n"
     "    - For multi-step tasks: call agent_session_init at start, agent_step_done after each step.\n"
+    "    - agent_step_done: use a UNIQUE step_name per step ('step_1_query_tasks', 'step_2_kb_query', etc). NEVER reuse the same step_name.\n"
+    "    - Call agent_step_done ONCE per step then immediately proceed to the NEXT step.\n"
+    "11. STEP SEQUENCING for multi-step tasks:\n"
+    "    - Execute steps IN ORDER: 1,2,3...10. Do not skip ahead or repeat a step.\n"
+    "    - After completing ALL steps, return type=done with the full report.\n"
+    "    - If you see already_done=True from agent_step_done, that step is complete — move to NEXT step.\n"
     "Return ONLY valid JSON. No markdown, no preamble."
 )
 
@@ -520,6 +528,17 @@ async def run_agent_loop(msg: OrchestratorMessage, goal: str) -> None:
                             for h in history[-5:] if h.get("type") == "action"]
             this_call = (tool_name, json.dumps(tool_args, sort_keys=True))
             repeat_count = recent_calls.count(this_call)
+            # Also count how many times agent_step_done was called with same step_name
+            # (LLM tends to call it on every iteration with the same label)
+            if tool_name == "agent_step_done":
+                sn = tool_args.get("step_name", "")
+                same_step_calls = sum(
+                    1 for h in history[-8:] if h.get("type") == "action"
+                    and h.get("tool") == "agent_step_done"
+                    and h.get("args", {}).get("step_name") == sn
+                )
+                if same_step_calls >= 2:
+                    repeat_count = same_step_calls
             if repeat_count >= 2:
                 note = (f"STOP REPEATING: {tool_name} with these args was already called "
                         f"{repeat_count} times recently. You have that data. "
@@ -546,7 +565,11 @@ async def run_agent_loop(msg: OrchestratorMessage, goal: str) -> None:
                     )
                     break
             else:
-                consecutive_errors = 0
+                # Don't reset error count for pure state-management tools —
+                # they succeed even mid-loop and would mask real repeat errors
+                _STATE_TOOLS = {"agent_step_done", "agent_state_set", "agent_state_get", "agent_session_init"}
+                if tool_name not in _STATE_TOOLS:
+                    consecutive_errors = 0
 
             # Compact result summary for history
             if isinstance(result, dict):
