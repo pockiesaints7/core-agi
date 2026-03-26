@@ -302,6 +302,32 @@
         "promotion_threshold": "integer"
       }
     }
+    "agentic_sessions": {
+      "pk": "id",
+      "pk_type": "uuid",
+      "required": ["session_id"],
+      "columns": {
+        "id": "uuid",
+        "session_id": "text",
+        "goal": "text",
+        "action_log": "jsonb",
+        "created_at": "timestamptz",
+        "state": "jsonb",
+        "step_index": "integer",
+        "status": "text",
+        "chat_id": "text",
+        "last_updated": "timestamptz",
+        "completed_steps": "jsonb",
+        "current_step": "text"
+      },
+      "defaults": {
+        "state": "{}",
+        "step_index": 0,
+        "status": "active",
+        "completed_steps": "[]"
+      },
+      "notes": "Persistent scratchpad for agentic loops. state=jsonb key-value store survives across LLM iterations. completed_steps=list of {step, result, ts}. Use agent_state_set/get/step_done tools — never write raw."
+    }
   },
   "write_rules": {
     "before_any_filter": "Use strftime('%Y-%m-%dT%H:%M:%SZ') for timestamps. isoformat() produces microseconds that PostgREST rejects with 400.",
