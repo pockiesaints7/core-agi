@@ -464,16 +464,25 @@ async def run_agent_loop(msg: OrchestratorMessage, goal: str) -> None:
                 _fresh = [s for s in _done_steps if isinstance(s, dict)
                           and s.get("ts", "") >= _loop_start_ts]
                 if len(_fresh) >= 10:
-                    print(f"[AGENT] step={step} auto-done: {len(_fresh)} fresh steps completed this run")
-                    _lines = [f"Health check complete — {len(_fresh)} steps:"]
-                    for _i, _s in enumerate(_fresh[:10], 1):
-                        _lines.append(f"Step {_i} — {_s.get('step','?')}: {str(_s.get('result',''))[:200]}")
-                    _state_data = _sd.get("state", {})
-                    if _state_data:
-                        _lines.append(f"\nState: {str(_state_data)[:300]}")
-                    msg.styled_response = "\n".join(_lines)
-                    msg.track_layer(f"AGENT-DONE-auto-step{step}")
-                    break
+                    print(f"[AGENT] step={step} auto-done: {len(_fresh)} fresh steps done — forcing LLM conclusion")
+                    # Don't build raw dict report — force the LLM to write the proper answer
+                    # with full 4000 token budget so it formats data correctly
+                    force_conclude = True
+                    # Inject a clear summary of what was done so LLM has it
+                    _step_summary = ", ".join(
+                        f"{_s.get('step','?')}={str(_s.get('result',''))[:60]}"
+                        for _s in _fresh[:10]
+                    )
+                    history.append({
+                        "type": "thought_only",
+                        "thought": (
+                            f"ALL {len(_fresh)} STEPS COMPLETED THIS RUN. "
+                            f"Steps: {_step_summary[:400]}. "
+                            f"State: {str(_sd.get('state',{}))[:200]}. "
+                            f"Return type=done NOW with full formatted report of all step results."
+                        ),
+                        "step": step,
+                    })
         except Exception:
             pass  # non-fatal — never block loop on state read error
 
