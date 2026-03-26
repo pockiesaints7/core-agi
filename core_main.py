@@ -1082,6 +1082,13 @@ async def deploy_webhook(req: Request):
 def on_start():
     set_webhook()
     startup_v2()  # ── Orchestrator v2 init
+    # Auto-embed sync — patches sb_post to embed all semantic table inserts
+    try:
+        from core_embed_sync import install, install_critical
+        install()
+        install_critical()
+    except Exception as _es_e:
+        print(f"[EMBED_SYNC] install failed (non-fatal): {_es_e}")
     threading.Thread(target=queue_poller, daemon=True).start()
     threading.Thread(target=cold_processor_loop, daemon=True).start()
     # self_sync_check disabled -- CORE_SELF.md is tombstoned, superseded by system_map
