@@ -2,7 +2,7 @@
 core_orch_layer11.py — L11: Self-Improvement Pipeline
 ======================================================
 Fires AFTER every output, async, non-blocking.
-Processes ALL output sources: session, autonomous, background_research, system_prompt.
+Processes ALL output sources: session, autonomous, background_research, system_prompt, trading.
 
 Wiring:
   Output sent → asyncio.create_task(layer11_post_output(...))
@@ -16,6 +16,13 @@ Wiring:
           KB | Mistake | Evo queue
 
 Never blocks the main response pipeline.
+
+Sources:
+  session           — owner chat responses
+  autonomous        — agentic task outputs
+  background_research — cold processor outputs
+  system_prompt     — prompt quality evaluation
+  trading           — trade outcomes from core-trading-bot (Week 1 integration)
 """
 import asyncio
 from datetime import datetime
@@ -39,7 +46,7 @@ async def layer11_post_output(
 
     Args:
         output_text:    The CORE output to process
-        source:         'session' | 'autonomous' | 'background_research' | 'system_prompt'
+        source:         'session' | 'autonomous' | 'background_research' | 'system_prompt' | 'trading'
         session_id:     Optional session UUID
         context:        Optional context dict (intent, domain, etc.)
         prompt_target:  If source='system_prompt', which prompt (e.g. 'background_researcher')
@@ -151,3 +158,34 @@ def fire_system_prompt(prompt_text: str, target: str, version: int) -> None:
             ))
     except Exception as e:
         print(f"[L11] fire_system_prompt error: {e}")
+
+
+def fire_trading(output_text: str, context: dict = None) -> None:
+    """
+    Call from core-trading-bot (via core_bridge.py) after every trade close.
+
+    The trading bot writes hot_reflections + KB + mistakes directly to Supabase.
+    This wrapper fires the full critic → causal → reflect → meta pipeline on top,
+    enabling CORE to auto-generate behavioral_rules(domain=trading) evolutions.
+
+    source='trading' routes through the standard critic with domain context.
+    context should include: symbol, strategy, regime, bias, pnl, close_reason.
+
+    Non-blocking — trading bot fires and forgets.
+    """
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            asyncio.create_task(layer11_post_output(
+                output_text=output_text,
+                source="trading",
+                context=context or {},
+            ))
+        else:
+            loop.run_until_complete(layer11_post_output(
+                output_text=output_text,
+                source="trading",
+                context=context or {},
+            ))
+    except Exception as e:
+        print(f"[L11] fire_trading error: {e}")
