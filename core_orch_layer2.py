@@ -109,25 +109,13 @@ async def _load_domain_mistakes(domain: str) -> List[Dict[str, Any]]:
 
 
 async def _load_relevant_kb(text: str, domain: str) -> List[Dict[str, Any]]:
-    """Pull KB snippets relevant to the current message text."""
+    """Pull KB snippets relevant to the current message — semantic vector search."""
     try:
-        import re as _re
-        # Aggressively clean query — strip all special chars that break Supabase ilike
-        q = text.strip()[:120]
-        # Keep only alphanumeric, spaces, hyphens
-        q = _re.sub(r"[^a-zA-Z0-9 \-]", " ", q)
-        # Collapse whitespace, take first 6 meaningful words only
-        words = q.split()[:6]
-        q = " ".join(words).strip()
-        if not q or len(q) < 3:
+        if not text or len(text.strip()) < 3:
             return []
-        rows = sb_get(
-            "knowledge_base",
-            f"select=domain,topic,instruction,confidence"
-            f"&or=(content.ilike.*{q}*,topic.ilike.*{q}*,instruction.ilike.*{q}*)"
-            f"&limit=5",
-            svc=True,
-        ) or []
+        from core_semantic import search as sem_search
+        filters = f"&domain=eq.{domain}" if domain and domain not in ("all", "") else ""
+        rows = sem_search("knowledge_base", text.strip()[:200], limit=5, filters=filters)
         return rows
     except Exception as exc:
         print(f"[L2] kb_search error (non-fatal): {exc}")

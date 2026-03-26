@@ -446,9 +446,9 @@ def _reconcile_gaps(hots: list) -> int:
             priority = int(item.get("priority", 2))
             if not gap_text:
                 continue
-            existing = sb_get("evolution_queue",
-                f"select=id&pattern_key=ilike.%25{gap_text[:100].replace(' ', '%25')}%25&status=eq.pending&limit=1",
-                svc=True)
+            from core_semantic import search as _sem
+            existing = _sem("evolution_queue", gap_text[:200], limit=1,
+                threshold=0.88, filters="&status=eq.pending") or []
             if existing:
                 print(f"[COLD] Skipped duplicate gap (pending): {gap_text[:80]}")
                 continue
@@ -678,9 +678,8 @@ def _run_memory_consolidation(dry_run: bool = False):
             topic_slug = (r.get("topic") or "")[:50]
             domain_slug = (r.get("domain") or "")
             # Check if referenced in mistakes
-            refs = sb_get("mistakes",
-                f"select=id&or=(what_failed.ilike.*{topic_slug}*,correct_approach.ilike.*{topic_slug}*)&limit=1",
-                svc=True) or []
+            from core_semantic import search as _sem
+            refs = _sem("mistakes", topic_slug, limit=1, threshold=0.85) or []
             if refs:
                 continue  # Referenced in mistakes -- keep
             if not dry_run:

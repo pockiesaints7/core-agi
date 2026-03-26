@@ -540,31 +540,18 @@ def t_constitution():
     return {"constitution": txt, "immutable": True}
 
 def t_search_kb(query="", domain="", limit=10):
-    """Search knowledge_base. Multi-word queries search content, topic, and instruction fields.
-    P3-01: if ilike returns 0 results, automatically retries with semantic (vector) search.
+    """Search knowledge_base via semantic vector search (primary).
     AGI-05: increments access_count + updates last_accessed on every hit (fire-and-forget)."""
     lim = int(limit) if limit else 10
-    qs = f"select=id,domain,topic,instruction,content,confidence&limit={lim}"
-    if domain and domain not in ("all", ""):
-        qs += f"&domain=eq.{domain}"
-    if query:
-        q = query.strip().replace("'", "").replace('"', "")
-        words = q.split()
-        # I.3: multi-word queries -- use first keyword as primary ilike filter
-        primary = words[0] if words else q
-        qs += f"&or=(content.ilike.*{primary}*,topic.ilike.*{primary}*,instruction.ilike.*{primary}*)"
-    rows = sb_get("knowledge_base", qs)
-
-    # P3-01: semantic fallback when ilike returns nothing
-    if not rows and query:
-        try:
-            from core_embeddings import t_semantic_kb_search
-            sem = t_semantic_kb_search(query=query, domain=domain, limit=str(lim))
-            if sem.get("ok") and sem.get("results"):
-                rows = sem["results"]
-                print(f"[P3-01] semantic fallback returned {len(rows)} results for: {query[:60]}")
-        except Exception as _se:
-            print(f"[P3-01] semantic fallback error (non-fatal): {_se}")
+    if not query:
+        qs = f"select=id,domain,topic,instruction,content,confidence&limit={lim}&id=gt.1"
+        if domain and domain not in ("all", ""):
+            qs += f"&domain=eq.{domain}"
+        rows = sb_get("knowledge_base", qs)
+    else:
+        from core_semantic import search as sem_search
+        filters = f"&domain=eq.{domain}" if domain and domain not in ("all", "") else ""
+        rows = sem_search("knowledge_base", query, limit=lim, filters=filters)
 
     # C.2: batch access tracking
     try:
@@ -737,9 +724,9 @@ def t_log_mistake(context="", what_failed="", correct_approach="", domain="gener
     try:
         cutoff = (datetime.utcnow() - timedelta(hours=24)).isoformat()
         _wf = (what_failed or "")[:40].replace("'", "")
-        existing = sb_get("mistakes",
-            f"domain=eq.{domain}&what_failed=ilike.*{_wf}*&created_at=gte.{cutoff}&select=id&limit=1",
-            svc=True) or []
+        from core_semantic import search as _sem
+        existing = _sem("mistakes", _wf, limit=1, threshold=0.92,
+            filters=f"&domain=eq.{domain}") or []
         if existing:
             return {"ok": True, "action": "skipped_duplicate", "hint": "identical mistake already logged in last 24h"}
     except Exception:
@@ -2101,9 +2088,9 @@ def t_session_start() -> dict:
                 # Search OTHER domains for entries sharing those keywords
                 seen_ids = set()
                 for kw in keywords[:3]:  # top 3 keywords only -- keep it fast
-                    cross = sb_get("knowledge_base",
-                        f"select=id,domain,topic,instruction&id=gt.1&domain=neq.{detected_domain}&or=(topic.ilike.*{kw}*,instruction.ilike.*{kw}*)&order=access_count.desc&limit=2",
-                        svc=True) or []
+                    from core_semantic import search as _sem
+                    cross = _sem("knowledge_base", kw, limit=2,
+                        filters=f"&domain=neq.{detected_domain}") or []
                     for r in cross:
                         rid = r.get("id")
                         if rid and rid not in seen_ids and len(associated_context) < 3:
@@ -3032,10 +3019,11 @@ def t_search_mistakes(query: str = "", domain: str = "", limit: int = 10):
         qs = f"select={_sel_force('mistakes', ['domain','context','what_failed','correct_approach','root_cause','how_to_avoid','severity'])}&order=created_at.desc&limit={lim}&id=gt.1"
         if domain and domain not in ("all", ""): qs += f"&domain=eq.{domain}"
         if query:
-            q = query.strip().replace("'", "").replace('"', "")
-            qs += (f"&or=(what_failed.ilike.*{q}*,context.ilike.*{q}*,"
-                   f"correct_approach.ilike.*{q}*,root_cause.ilike.*{q}*,how_to_avoid.ilike.*{q}*)")
-        results = sb_get("mistakes", qs, svc=True)
+            from core_semantic import search as sem_search
+            domain_filter = f"&domain=eq.{domain}" if domain and domain not in ("all", "") else ""
+            results = sem_search("mistakes", query, limit=lim, filters=domain_filter)
+        else:
+            results = sb_get("mistakes", qs, svc=True) or []
         return {"ok": True, "count": len(results), "mistakes": results}
     except Exception as e:
         return {"ok": False, "error": str(e)}
@@ -4649,26 +4637,9 @@ def _predict_failure(operation: str = "", context: str = "", domain: str = "", s
             return {"predicted": False, "warnings": [], "predicted_failure_modes": [],
                     "top_mistake": None, "confidence": 0.0}
 
-        # Pass 1: match on what_failed (existing behavior)
-        qs1 = f"what_failed=ilike.%25{operation}%25&order=created_at.desc&limit=5"
-        if domain:
-            qs1 += f"&domain=eq.{domain}"
-        rows = sb_get("mistakes", qs1) or []
-
-        # Pass 2: match on root_cause or context fields (broader causal signal)
-        if len(rows) < 3:
-            op_slug = operation.replace("_", " ")
-            qs2 = f"root_cause=ilike.%25{op_slug}%25&order=created_at.desc&limit=5"
-            if domain:
-                qs2 += f"&domain=eq.{domain}"
-            rows2 = sb_get("mistakes", qs2) or []
-            # Deduplicate by id
-            seen = {r.get("id") for r in rows}
-            for r in rows2:
-                if r.get("id") not in seen:
-                    rows.append(r)
-                    seen.add(r.get("id"))
-
+        from core_semantic import search as _sem
+        _dom_f = f"&domain=eq.{domain}" if domain else ""
+        rows = _sem("mistakes", operation, limit=8, filters=_dom_f) or []
         if not rows:
             return {"predicted": False, "warnings": [], "predicted_failure_modes": [],
                     "top_mistake": None, "confidence": 0.0,
