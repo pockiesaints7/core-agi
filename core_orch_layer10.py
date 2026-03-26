@@ -176,6 +176,12 @@ async def layer_10_output(msg: OrchestratorMessage):
             asyncio.ensure_future(_log_conversation(msg.chat_id, msg.text, text, msg.user))
             asyncio.ensure_future(_write_history_turn(msg.chat_id, "user", msg.text))
             asyncio.ensure_future(_write_history_turn(msg.chat_id, "assistant", text))
+            # L11: self-improvement pipeline (non-blocking)
+            try:
+                from core_orch_layer11 import fire_session
+                fire_session(text, session_id=str(getattr(msg, "session_id", "") or ""), context=msg.context)
+            except Exception as _l11e:
+                print(f"[L10] L11 fire_session non-fatal: {_l11e}")
 
         elif msg.source == "mcp":
             payload = _format_mcp(msg)

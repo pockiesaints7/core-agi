@@ -1569,7 +1569,7 @@ def _extract_real_signal() -> bool:
             for r in mistakes
         ]) or "No mistakes yet."
 
-        system = """You are CORE's pattern extraction engine. Analyze real activity logs and output BEHAVIORAL DIRECTIVES not observations.
+        _default_researcher_system = """You are CORE's pattern extraction engine. Analyze real activity logs and output BEHAVIORAL DIRECTIVES not observations.
 Patterns must be actionable rules: what CORE should DO differently, not just what happened.
 Output MUST be valid JSON:
 {
@@ -1579,6 +1579,7 @@ Output MUST be valid JSON:
   "summary": "1 sentence behavioral directive"
 }
 Output ONLY valid JSON, no preamble."""
+        system = _load_researcher_prompt("background_researcher") or _default_researcher_system
 
         user = (f"KB total entries: {kb_total}\n"
                 f"Recent changelog:\n{changelog_text}\n\n"
@@ -2158,6 +2159,21 @@ def _ingest_public_sources() -> str:
 _last_smap_update: float = 0.0
 _SMAP_UPDATE_INTERVAL = 21600  # 6 hours -- sync system_map tool_count + reconcile
 
+
+def _load_researcher_prompt(target: str):
+    """Load active system prompt for researcher from Supabase. Returns None if not found."""
+    try:
+        rows = sb_get(
+            "system_prompts",
+            f"select=content&target=eq.{target}&active=eq.true&order=version.desc&limit=1",
+            svc=True,
+        ) or []
+        return rows[0]["content"] if rows else None
+    except Exception as e:
+        print(f"[RESEARCH] _load_researcher_prompt failed: {e}")
+        return None
+
+
 def background_researcher():
     global _last_research_run, _last_public_source_run, _last_smap_update
     print("[RESEARCH] background researcher started - real signal + simulation + public source mode")
@@ -2197,6 +2213,23 @@ def background_researcher():
                 _last_research_run = now
                 sb_post("sessions", {"summary": f"[state_update] last_research_ts: {now}", "actions": ["last_research_ts persisted"], "interface": "mcp"})
                 _cycle_count += 1
+                # Every 10 cycles: evaluate researcher system prompt
+                if _cycle_count % 10 == 0:
+                    try:
+                        from core_orch_layer11 import fire_system_prompt
+                        sp_rows = sb_get(
+                            "system_prompts",
+                            "select=content,version&target=eq.background_researcher&active=eq.true&order=version.desc&limit=1",
+                            svc=True,
+                        ) or []
+                        if sp_rows:
+                            fire_system_prompt(
+                                sp_rows[0]["content"],
+                                target="background_researcher",
+                                version=int(sp_rows[0].get("version", 1)),
+                            )
+                    except Exception as _spe:
+                        print(f"[RESEARCH] system prompt eval non-fatal: {_spe}")
 
                 public_content = ""
                 if now - _last_public_source_run >= _PUBLIC_SOURCE_INTERVAL:
@@ -2245,6 +2278,12 @@ def background_researcher():
                         if public_content:
                             parts.append("public sources ingested")
                         notify(f"[CORE] Researcher cycle #{_cycle_count}\n" + " | ".join(parts))
+                        # L11: evaluate research output (non-blocking)
+                        try:
+                            from core_orch_layer11 import fire_background_research
+                            fire_background_research(" | ".join(parts))
+                        except Exception as _l11e:
+                            print(f"[RESEARCH] L11 fire non-fatal: {_l11e}")
                 except Exception:
                     pass
 
