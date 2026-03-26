@@ -440,6 +440,7 @@ async def run_agent_loop(msg: OrchestratorMessage, goal: str) -> None:
         if _sinit:
             _init_r = _sinit(session_id=_agent_session_id, goal=goal[:200], chat_id=_agent_session_id)
             print(f"[AGENT] session_init: {_init_r.get('action','?')} id={_agent_session_id}")
+        _loop_start_ts = __import__("datetime").datetime.utcnow().isoformat()[:19]  # ts anchor for fresh-step filter
         _sg = _T.get("agent_state_get", {}).get("fn")
         if _sg:
             _sr = _sg(session_id=_agent_session_id)
@@ -452,21 +453,24 @@ async def run_agent_loop(msg: OrchestratorMessage, goal: str) -> None:
         step += 1
         elapsed = time.monotonic() - start_time
 
-        # ── Early done: all steps completed in agentic state ────────────────────────────
+        # ── Early done: all steps completed THIS run (use _loop_start_ts to exclude stale steps)
         try:
             from core_tools import TOOLS as _TED
             _sget = _TED.get("agent_state_get", {}).get("fn")
-            if _sget:
+            if _sget and step > 5:  # don't check before at least 5 steps run
                 _sd = _sget(session_id=str(_agent_session_id))
                 _done_steps = _sd.get("completed_steps", []) if _sd.get("ok") else []
-                if isinstance(_done_steps, list) and len(_done_steps) >= 10:
-                    print(f"[AGENT] step={step} auto-done: {len(_done_steps)} steps completed in state")
-                    _lines = [f"Health check completed — {len(_done_steps)} steps done:"]
-                    for _i, _s in enumerate(_done_steps[:10], 1):
+                # Only count steps logged AFTER this loop started (not from previous runs)
+                _fresh = [s for s in _done_steps if isinstance(s, dict)
+                          and s.get("ts", "") >= _loop_start_ts]
+                if len(_fresh) >= 10:
+                    print(f"[AGENT] step={step} auto-done: {len(_fresh)} fresh steps completed this run")
+                    _lines = [f"Health check complete — {len(_fresh)} steps:"]
+                    for _i, _s in enumerate(_fresh[:10], 1):
                         _lines.append(f"Step {_i} — {_s.get('step','?')}: {str(_s.get('result',''))[:200]}")
-                    _state = _sd.get("state", {})
-                    if _state:
-                        _lines.append(f"\nKey state: {str(_state)[:300]}")
+                    _state_data = _sd.get("state", {})
+                    if _state_data:
+                        _lines.append(f"\nState: {str(_state_data)[:300]}")
                     msg.styled_response = "\n".join(_lines)
                     msg.track_layer(f"AGENT-DONE-auto-step{step}")
                     break
