@@ -60,7 +60,7 @@
         "updated_at": "timestamptz"
       },
       "enums": {
-        "domain": ["auth","code","failure_recovery","github","groq","local_pc","postgres","powershell","project","railway","reasoning","supabase","telegram","universal","zapier"]
+        "domain": ["auth","code","failure_recovery","github","groq","local_pc","oracle_vm","postgres","powershell","project","reasoning","supabase","telegram","universal","zapier"]
       },
       "constraints": {
         "priority": "1-10 integer",
