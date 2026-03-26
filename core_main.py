@@ -867,9 +867,11 @@ def handle_msg(msg):
             f"<b>CORE v6.0</b>\n{resume}\n"
             f"Knowledge: {counts.get('knowledge_base',0)} | Sessions: {counts.get('sessions',0)}\n\n"
             f"<b>Commands:</b>\n"
-            f"/status \u2014 health + system\n"
-            f"/tstatus \u2014 training pipeline detail\n"
-            f"/project [list|id] \u2014 project context",
+            f"/status — health + system\n"
+            f"/tstatus — training pipeline detail\n"
+            f"/restart — restart CORE service (kills any stuck loop)\n"
+            f"/kill — abort active agentic loop without restart\n"
+            f"/project [list|id] — project context",
             cid
         )
 
