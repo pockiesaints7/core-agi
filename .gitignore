@@ -15,3 +15,7 @@ CREDENTIALS.md
 *.secret
 secrets.json
 gemini-secrets.json
+*.log
+*.bak
+nohup.out
+backups/

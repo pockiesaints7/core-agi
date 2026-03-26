@@ -1,9 +1,0 @@
-nohup: ignoring input
-Traceback (most recent call last):
-  File "/home/ubuntu/core-agi/core_orch_layer10.py", line 6, in <module>
-    from core_config import sb_get, sb_post, sb_delete, L, notify
-  File "/home/ubuntu/core-agi/core_config.py", line 16, in <module>
-    GROQ_API_KEY   = os.environ["GROQ_API_KEY"]
-  File "/usr/lib/python3.10/os.py", line 680, in __getitem__
-    raise KeyError(key) from None
-KeyError: 'GROQ_API_KEY'
