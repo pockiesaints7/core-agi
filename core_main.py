@@ -948,12 +948,13 @@ def handle_msg(msg):
         # Owner-only: restart the core-agi systemd service
         # Kills any running agentic loop immediately
         notify("🔄 Restarting CORE service...", cid)
-        import subprocess, threading
+        import subprocess as _sp
+        import time as _time
         def _do_restart():
-            import time
-            time.sleep(1)  # let the notify send first
-            subprocess.run(["sudo", "systemctl", "restart", "core-agi"], check=False)
-        threading.Thread(target=_do_restart, daemon=True).start()
+            _time.sleep(1)  # let the notify send first
+            _sp.run(["sudo", "systemctl", "restart", "core-agi"], check=False)
+        import threading as _thr
+        _thr.Thread(target=_do_restart, daemon=True).start()
         # Note: no reply after this — service will be dead momentarily
 
     elif text == "/kill":
