@@ -294,7 +294,9 @@ def auto_hot_reflection(session_data: dict):
                 f"Respond ONLY as JSON: "
                 f'{{"patterns": ["..."], "quality": 0.8, "gaps": "..or null"}}'
             )
-            raw = gemini_chat(system="You are CORE's pattern extraction engine. Return only valid JSON.", user=prompt, max_tokens=500, json_mode=True)
+            _sys_hot = _load_prompt("hot_pattern_extractor", "You are CORE's pattern extraction engine. Return only valid JSON.")
+            _maybe_eval_prompt("hot_pattern_extractor", _sys_hot, 20)
+            raw = gemini_chat(system=_sys_hot, user=prompt, max_tokens=500, json_mode=True)
             raw_clean = raw.strip().lstrip("```json").lstrip("```").rstrip("```").strip()
             parsed = json.loads(raw_clean)
             groq_patterns = [p for p in parsed.get("patterns", []) if isinstance(p, str) and len(p) > 5][:5]
@@ -350,8 +352,10 @@ def _ingest_to_hot_reflection(topic: str, source_type: str, concept_clusters: li
                     f"Respond ONLY as JSON: "
                     f'{{"patterns": ["..."], "gap": "..or null"}}'
                 )
+                _sys_ingest = _load_prompt("knowledge_ingest_synthesizer", "You are CORE's knowledge synthesis engine. Return only valid JSON.")
+                _maybe_eval_prompt("knowledge_ingest_synthesizer", _sys_ingest, 20)
                 raw = groq_chat(
-                    system="You are CORE's knowledge synthesis engine. Return only valid JSON.",
+                    system=_sys_ingest,
                     user=prompt, model=GROQ_FAST, max_tokens=400,
                 )
                 parsed = json.loads(raw.strip().lstrip("```json").rstrip("```").strip())
@@ -415,8 +419,10 @@ def _reconcile_gaps(hots: list) -> int:
         )
         deduped = None
         try:
+            _sys_gaps = _load_prompt("gaps_reconciliation", "You are CORE's gap reconciliation engine. Respond only with valid JSON array. No preamble.")
+            _maybe_eval_prompt("gaps_reconciliation", _sys_gaps, 15)
             raw = gemini_chat(
-                system="You are CORE's gap reconciliation engine. Respond only with valid JSON array. No preamble.",
+                system=_sys_gaps,
                 user=prompt, max_tokens=600, json_mode=True,
             )
             parsed = json.loads(raw.strip())
@@ -496,8 +502,10 @@ def _groq_synthesize_cold(hots: list, batch_counts: Counter, batch_domain: dict)
             f"  \"summary\": \"3-5 sentence plain text synthesis combining all above\"\n"
             f"}}\n"
         )
+        _sys_cold = _load_prompt("cold_processor_synthesis", "You are CORE's cold processor synthesis engine. Respond only with valid JSON. No preamble.")
+        _maybe_eval_prompt("cold_processor_synthesis", _sys_cold, 15)
         raw = gemini_chat(
-            system="You are CORE's cold processor synthesis engine. Respond only with valid JSON. No preamble.",
+            system=_sys_cold,
             user=prompt, max_tokens=500, json_mode=True,
         )
         try:
@@ -535,7 +543,9 @@ def _groq_kb_content(pattern_key: str, domain: str, frequency: int, src_key: str
             f"4. Any known exceptions\n"
             f"Max 200 words. No markdown headers. Plain paragraphs only."
         )
-        content = gemini_chat(system="You are CORE's knowledge synthesis engine. Write clear actionable KB content.", user=prompt, max_tokens=350)
+        _sys_kb = _load_prompt("kb_content_writer", "You are CORE's knowledge synthesis engine. Write clear actionable KB content.")
+        _maybe_eval_prompt("kb_content_writer", _sys_kb, 30)
+        content = gemini_chat(system=_sys_kb, user=prompt, max_tokens=350)
         content = content.strip()
         if len(content) > 30:
             return content
@@ -740,8 +750,10 @@ def _run_causal_quality_analysis():
             f"In 2-3 sentences: what is the most likely causal explanation for the quality decline? "
             f"Be specific about what changed. Output plain text, no lists."
         )
+        _sys_qual = _load_prompt("quality_decline_analyst", "You are CORE AGI's causal analyst. Be concise and precise.")
+        _maybe_eval_prompt("quality_decline_analyst", _sys_qual, 10)
         explanation = gemini_chat(
-            system="You are CORE AGI's causal analyst. Be concise and precise.",
+            system=_sys_qual,
             user=prompt,
             max_tokens=200,
             temperature=0.1,
@@ -1127,8 +1139,10 @@ def apply_evolution(evolution_id: int):
                           f"- Add docstring explaining purpose\n"
                           f"- Follow CORE naming: t_<n>\n\n"
                           f"Output ONLY the Python function, no explanation.")
+                _sys_code = _load_prompt("code_generation", "You are CORE's code generation engine. Output only valid Python. No markdown, no preamble.")
+                _maybe_eval_prompt("code_generation", _sys_code, 10)
                 fn_code = groq_chat(
-                    "You are CORE's code generation engine. Output only valid Python. No markdown, no preamble.",
+                    _sys_code,
                     prompt, model=GROQ_MODEL, max_tokens=600
                 )
                 fn_name = ""
@@ -1703,7 +1717,7 @@ def _run_simulation_batch() -> bool:
             task_summary = f"Custom simulation: {instruction[:150]}"
             print(f"[RESEARCH/SIM] Running custom simulation: {instruction[:80]}")
         else:
-            system = """You are simulating 1,000,000 users of CORE - a personal AGI orchestration system.
+            _default_sim = """You are simulating 1,000,000 users of CORE - a personal AGI orchestration system.
 Output MUST be valid JSON:
 {
   "domain": "code|db|bot|mcp|training|kb|general",
@@ -1712,6 +1726,8 @@ Output MUST be valid JSON:
   "summary": "1 sentence"
 }
 Output ONLY valid JSON, no preamble."""
+            system = _load_prompt("simulation_1m_users", _default_sim)
+            _maybe_eval_prompt("simulation_1m_users", system, 25)
             user = (f"{runtime_context}\n\nSimulate 1,000,000 users. What patterns emerge?")
             task_summary = "Simulated 1M user population batch"
             print("[RESEARCH/SIM] Running default 1M user simulation")
@@ -1850,13 +1866,15 @@ def _run_rarl_epoch() -> bool:
     )
 
     # Step 4: build prompts
-    _sys = (
+    _default_rarl = (
         "You are the Recursive Autonomous AGI Research Laboratory (RARL). "
         "You simulate 10 specialized agents: Planner, Architect, Theory, Literature, "
         "Critic, Experiment, Evaluation, Archivist, Meta-Learning, Prompt Evolution. "
         "Target architectures that advance AGI. Be technically grounded. "
         "Mark uncertain reasoning [CONJECTURE]. Output ONLY valid JSON."
     )
+    _sys = _load_prompt("rarl_researcher", _default_rarl)
+    _maybe_eval_prompt("rarl_researcher", _sys, 10)
     _json_schema = (
         '{"research_goal":"<one sentence confirming goal>",'
         '"rarl_benchmark_task":"<name one SPECIFIC real CORE failure from the mistakes list above that this architecture would prevent — be exact>",'
@@ -2160,6 +2178,41 @@ _last_smap_update: float = 0.0
 _SMAP_UPDATE_INTERVAL = 21600  # 6 hours -- sync system_map tool_count + reconcile
 
 
+
+# ── Dynamic prompt loader (L11 self-improvement) ──────────────────────────────
+_PROMPT_CYCLE_COUNTERS: dict = {}
+
+def _load_prompt(target: str, default: str) -> str:
+    """Load active system prompt from system_prompts table. Falls back to default."""
+    try:
+        rows = sb_get(
+            "system_prompts",
+            f"select=content&target=eq.{target}&active=eq.true&order=version.desc&limit=1",
+            svc=True,
+        ) or []
+        return rows[0]["content"] if rows else default
+    except Exception as e:
+        print(f"[PROMPT] _load_prompt failed for {target} (using default): {e}")
+        return default
+
+def _maybe_eval_prompt(target: str, system: str, every: int) -> None:
+    """Increment cycle counter for target. Fire L11 eval every N cycles."""
+    global _PROMPT_CYCLE_COUNTERS
+    _PROMPT_CYCLE_COUNTERS[target] = _PROMPT_CYCLE_COUNTERS.get(target, 0) + 1
+    if _PROMPT_CYCLE_COUNTERS[target] % every == 0:
+        try:
+            from core_config import sb_get as _sbg
+            rows = _sbg(
+                "system_prompts",
+                f"select=version&target=eq.{target}&active=eq.true&order=version.desc&limit=1",
+                svc=True,
+            ) or []
+            ver = int(rows[0]["version"]) if rows else 1
+            from core_orch_layer11 import fire_system_prompt
+            fire_system_prompt(system, target=target, version=ver)
+        except Exception as e:
+            print(f"[PROMPT] eval trigger failed for {target} (non-fatal): {e}")
+
 def _load_researcher_prompt(target: str):
     """Load active system prompt for researcher from Supabase. Returns None if not found."""
     try:
@@ -2327,7 +2380,9 @@ def _groq_cluster_patterns(batch_counts: "Counter", batch_domain: dict, batch_so
             "Example: {\"1\": \"canonical text\", \"2\": \"canonical text\", \"3\": \"different rule\"}\n"
             "No preamble. No markdown. Pure JSON only."
         )
-        raw = gemini_chat(system="You are CORE's pattern clustering engine. Return only valid JSON.", user=prompt, max_tokens=2000, json_mode=True)
+        _sys_dedup = _load_prompt("pattern_deduplicator", "You are CORE's pattern clustering engine. Return only valid JSON.")
+        _maybe_eval_prompt("pattern_deduplicator", _sys_dedup, 20)
+        raw = gemini_chat(system=_sys_dedup, user=prompt, max_tokens=2000, json_mode=True)
         raw = raw.strip().lstrip("```json").lstrip("```").rstrip("```").strip()
         mapping_by_num = json.loads(raw)
 
@@ -2721,6 +2776,8 @@ def _extract_owner_profile_signals(hots: list) -> int:
             + "\n\nWhat NEW behavioral signals about the owner can you infer?"
         )
 
+        system_p = _load_prompt("owner_behavior_analyst", system_p)
+        _maybe_eval_prompt("owner_behavior_analyst", system_p, 15)
         raw = gemini_chat(system=system_p, user=user_p, max_tokens=600, json_mode=True)
         parsed = json.loads(raw.strip())
         observations = parsed.get("observations", [])
@@ -2906,11 +2963,13 @@ def _run_cross_domain_synthesis():
         f"Domain '{d}': " + " | ".join(ps[:3])
         for d, ps in list(domain_patterns.items())[:10]
     )
-    system_prompt = (
+    _default_synth = (
         "You are an expert at finding structural patterns across different knowledge domains. "
         "Given patterns from multiple domains, identify which patterns share the same ROOT CAUSE structure "
         "even if they appear in different contexts. Focus on actionable insights."
     )
+    system_prompt = _load_prompt("cross_domain_synthesizer", _default_synth)
+    _maybe_eval_prompt("cross_domain_synthesizer", system_prompt, 10)
     user_prompt = (
         f"Analyze these patterns from CORE AGI's operational domains:\n\n{domain_summary}\n\n"
         "Find 3-5 cross-domain insights where the same root cause appears in multiple domains. "
