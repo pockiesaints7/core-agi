@@ -1,14 +1,20 @@
 # CORE SESSION MASTER
-> Last updated: 2026-03-16 | Owner: REINVAGNAR | Version: CORE v6.0
+> Last updated: 2026-03-26 | Owner: REINVAGNAR | Version: CORE v6.0
 > This file is static — no longer auto-written by session_end.
 
-## last_good_commit: STALE — SESSION.md is no longer auto-updated by session_end
-> Railway recovery: DO NOT rely on this file for last_good_commit. It is frozen at 2026-03-15.
-> CORRECT RECOVERY: Query GitHub commits API directly:
->   PowerShell: `Invoke-WebRequest https://api.github.com/repos/pockiesaints7/core-agi/commits -Headers @{Authorization="Bearer <PAT>"}`
->   Find last commit BEFORE the crash commit. Use that SHA for rollback via GitHub PUT API.
-> Do NOT use core-agi: tools when Railway is confirmed down — they all fail simultaneously.
-> PAT location: C:\Users\rnvgg\.claude-skills\services\CREDENTIALS.md
+## Runtime: Oracle VM (NOT Railway)
+CORE runs on Oracle Cloud Ubuntu VM via systemd service `core-agi`.
+- SSH: `ubuntu@core-agi.duckdns.org` — key at `C:\Users\rnvgg\.claude-skills\ssh-key-2026-03-22.key`
+- .env: `/home/ubuntu/core-agi/.env`
+- MCP endpoint: `https://core-agi.duckdns.org/mcp/sse`
+
+## Recovery
+CORRECT RECOVERY after crash:
+1. SSH to VM: check `systemctl status core-agi` and `journalctl -u core-agi -n 50`
+2. If code broken: `cd /home/ubuntu/core-agi && git log --oneline -5` to find last good commit
+3. Rollback: `git checkout <SHA> -- <file>` then `systemctl restart core-agi`
+4. Deploy new code: push to GitHub → GitHub Actions calls `/deploy-webhook` → auto git pull + restart
+5. PAT location: `C:\Users\rnvgg\.claude-skills\services\CREDENTIALS.md`
 
 ---
 
