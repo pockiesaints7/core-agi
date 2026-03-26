@@ -30,7 +30,7 @@ MCP endpoint: `https://core-agi.duckdns.org/mcp/sse`
 
 ## MCP Surface
 
-171 tools across three classes:
+175+ tools across three classes:
 
 - **Read** — query state, search the knowledge base, inspect code, get crypto prices
 - **Write** — log knowledge, reflect, queue evolutions, send notifications
