@@ -30,7 +30,7 @@ MCP endpoint: `https://core-agi.duckdns.org/mcp/sse`
 
 ## MCP Surface
 
-171 tools across three classes:
+175+ tools across three classes:
 
 - **Read** — query state, search the knowledge base, inspect code, get crypto prices
 - **Write** — log knowledge, reflect, queue evolutions, send notifications
@@ -42,8 +42,8 @@ One call to `session_start` bootstraps full context. One call to `session_end` c
 
 ## Current state
 
-Knowledge base: **6,081 entries** · Sessions: **962** · Mistakes: **1,248** · Evolutions applied: **1,314**
-Training pipeline: active · Quality 7d avg: **0.786** (improving)
+Knowledge base: **6,097 entries** · Sessions: **963** · Mistakes: **1,251** · Evolutions applied: **1,317**
+Training pipeline: active · Quality 7d avg: **0.802** (improving) · Auto-deploy: GitHub Actions → Oracle VM
 
 ---
 
