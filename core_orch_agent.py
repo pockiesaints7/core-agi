@@ -25,7 +25,7 @@ from orchestrator_message import OrchestratorMessage
 # ── Config ────────────────────────────────────────────────────────────────────
 AGENT_MODEL           = os.getenv("AGENT_MODEL", "")         # empty = OPENROUTER_MODEL
 AGENT_TOKEN_BUDGET    = int(os.getenv("AGENT_TOKEN_BUDGET", "140000"))   # chars/4 ≈ tokens
-AGENT_TOKEN_COMPRESS  = float(os.getenv("AGENT_TOKEN_COMPRESS", "0.75")) # compress at 75% budget
+AGENT_TOKEN_COMPRESS  = float(os.getenv("AGENT_TOKEN_COMPRESS", "0.50")) # compress at 50% budget (was 75% — too late)
 AGENT_TOKEN_CONCLUDE  = float(os.getenv("AGENT_TOKEN_CONCLUDE", "0.92")) # force conclusion at 92%
 AGENT_TIMEOUT_SEC     = int(os.getenv("AGENT_TIMEOUT_SEC", "600"))       # 10min wall clock
 AGENT_ERROR_THRESHOLD = int(os.getenv("AGENT_ERROR_THRESHOLD", "4"))     # consecutive failures
@@ -452,6 +452,27 @@ async def run_agent_loop(msg: OrchestratorMessage, goal: str) -> None:
         step += 1
         elapsed = time.monotonic() - start_time
 
+        # ── Early done: all steps completed in agentic state ────────────────────────────
+        try:
+            from core_tools import TOOLS as _TED
+            _sget = _TED.get("agent_state_get", {}).get("fn")
+            if _sget:
+                _sd = _sget(session_id=str(_agent_session_id))
+                _done_steps = _sd.get("completed_steps", []) if _sd.get("ok") else []
+                if isinstance(_done_steps, list) and len(_done_steps) >= 10:
+                    print(f"[AGENT] step={step} auto-done: {len(_done_steps)} steps completed in state")
+                    _lines = [f"Health check completed — {len(_done_steps)} steps done:"]
+                    for _i, _s in enumerate(_done_steps[:10], 1):
+                        _lines.append(f"Step {_i} — {_s.get('step','?')}: {str(_s.get('result',''))[:200]}")
+                    _state = _sd.get("state", {})
+                    if _state:
+                        _lines.append(f"\nKey state: {str(_state)[:300]}")
+                    msg.styled_response = "\n".join(_lines)
+                    msg.track_layer(f"AGENT-DONE-auto-step{step}")
+                    break
+        except Exception:
+            pass  # non-fatal — never block loop on state read error
+
         # ── Termination: wall-clock timeout ───────────────────────────────────
         if elapsed > AGENT_TIMEOUT_SEC:
             print(f"[AGENT] Timeout after {elapsed:.0f}s at step {step}")
@@ -467,8 +488,10 @@ async def run_agent_loop(msg: OrchestratorMessage, goal: str) -> None:
         conclude_threshold = int(AGENT_TOKEN_BUDGET * AGENT_TOKEN_CONCLUDE // 4)
 
         if not force_conclude and effective_tokens > compress_threshold:
-            print(f"[AGENT] step={step} compressing history (tokens={effective_tokens} > {compress_threshold})")
-            compressed_summary, history = _compress_history(history, keep_last=6)
+            # More aggressive compression at higher token counts
+            _keep = 4 if effective_tokens > 12000 else 6
+            print(f"[AGENT] step={step} compressing history (tokens={effective_tokens} > {compress_threshold}, keep_last={_keep})")
+            compressed_summary, history = _compress_history(history, keep_last=_keep)
             prompt = _build_prompt(goal, history, compressed_summary, tools_summary, conclude=False, agent_state=_agent_state)
             char_count = _chars(prompt)
 
@@ -481,7 +504,9 @@ async def run_agent_loop(msg: OrchestratorMessage, goal: str) -> None:
 
         # ── LLM think ──────────────────────────────────────────────────────────
         try:
-            raw, last_prompt_tokens = _llm_think(_AGENT_SYSTEM, prompt, max_tokens=1500)
+            # Scale output tokens: more room when forced to conclude or deep in loop
+            _out_tokens = 4000 if (force_conclude or step > 30) else 1500
+            raw, last_prompt_tokens = _llm_think(_AGENT_SYSTEM, prompt, max_tokens=_out_tokens)
             raw = raw.strip().lstrip("```json").lstrip("```").rstrip("```").strip()
             decision = json.loads(raw)
             consecutive_errors = 0
