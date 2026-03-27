@@ -583,6 +583,26 @@ def t_health():
     h["overall"] = "ok" if all(v == "ok" for v in h["components"].values()) else "degraded"
     return h
 
+def t_external_service_preflight(targets: str = "supabase,groq,telegram,github") -> dict:
+    """Run a focused pre-flight health check for external services before risky writes/deploys."""
+    try:
+        wanted = [t.strip().lower() for t in (targets or "").split(",") if t.strip()]
+        wanted = wanted or ["supabase", "groq", "telegram", "github"]
+        health = t_health()
+        components = health.get("components", {}) or {}
+        checked = {name: components.get(name, "unknown") for name in wanted}
+        blocked = [name for name, status in checked.items() if status != "ok"]
+        return {
+            "ok": not blocked,
+            "targets": wanted,
+            "checked": checked,
+            "blocked": blocked,
+            "overall": "ok" if not blocked else "degraded",
+            "health": health,
+        }
+    except Exception as e:
+        return {"ok": False, "error": str(e), "targets": [], "checked": {}, "blocked": ["preflight_error"], "overall": "degraded"}
+
 def t_constitution():
     try:
         with open("constitution.txt") as f: txt = f.read()
@@ -4380,6 +4400,9 @@ def t_redeploy(reason: str = "") -> dict:
     Calls /deploy-webhook on the VM. Replaces old Railway empty-commit approach.
     reason: optional description logged to Telegram and Supabase."""
     try:
+        preflight = t_external_service_preflight("github,telegram")
+        if not preflight.get("ok"):
+            return {"ok": False, "error": "deploy preflight failed", "preflight": preflight}
         r = httpx.post(
             f"{BASE_URL}/deploy-webhook",
             headers={"X-MCP-Secret": MCP_SECRET, "Content-Type": "application/json"},
@@ -4447,6 +4470,9 @@ def t_changelog_add(version: str = "", component: str = "", summary: str = "",
                     before: str = "", after: str = "", change_type: str = "upgrade") -> dict:
     """Log a completed change to the changelog table + Telegram notify."""
     try:
+        preflight = t_external_service_preflight("supabase,telegram")
+        if "supabase" in (preflight.get("blocked") or []):
+            return {"ok": False, "error": "changelog preflight failed", "preflight": preflight}
         ts = datetime.utcnow().isoformat()
         ver = version.strip() or datetime.utcnow().strftime("v%Y%m%d")
         # A.3: dedup guard -- skip if identical title+component already logged today
@@ -6167,6 +6193,8 @@ TOOLS = {
                                "desc": "Get current CORE state: last session, counts, in_progress+pending tasks. session_md=full SESSION.md content (static bootstrap doc). Pass include_operating_context=true to also load operating_context.json."},
     "get_system_health":      {"fn": t_health,                 "perm": "READ",    "args": [],
                                "desc": "Check health of all components: Supabase, Groq, Telegram, GitHub"},
+    "external_service_preflight": {"fn": t_external_service_preflight, "perm": "READ", "args": ["targets"],
+                               "desc": "Focused pre-flight check before risky external-service calls. targets=supabase,groq,telegram,github. Returns blocked services and full health snapshot."},
     "get_constitution":       {"fn": t_constitution,           "perm": "READ",    "args": [],
                                "desc": "Get CORE immutable constitution"},
     "get_quality_trend":      {"fn": t_get_quality_trend,      "perm": "READ",    "args": ["days"],
