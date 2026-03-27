@@ -619,6 +619,1088 @@ def t_search_kb(query="", domain="", limit=10):
         pass
     return rows
 
+
+def _group_memory_hits(rows: list) -> dict:
+    grouped = {}
+    for row in rows or []:
+        table = row.get("semantic_table") or row.get("_table") or "knowledge_base"
+        grouped.setdefault(table, []).append(row)
+    return grouped
+
+
+def t_search_memory(query: str = "", domain: str = "", limit: int = 10, tables: str = "") -> dict:
+    """Unified semantic memory search across KB + native semantic tables."""
+    try:
+        if not query:
+            return {"ok": False, "error": "query required", "results": []}
+        lim = max(1, min(int(limit) if limit else 10, 50))
+        table_list = [t.strip() for t in tables.split(",") if t.strip()] if tables else None
+        from core_semantic import search_many
+        rows = search_many(query, tables=table_list, limit=lim, domain=domain) or []
+        grouped = _group_memory_hits(rows)
+        try:
+            kb_ids = [str(r["id"]) for r in grouped.get("knowledge_base", []) if r.get("id") and r["id"] != 1]
+            if kb_ids:
+                sb_patch("knowledge_base", f"id=in.({','.join(kb_ids)})", {"last_accessed": datetime.utcnow().isoformat()})
+        except Exception:
+            pass
+        return {
+            "ok": True,
+            "query": query,
+            "domain": domain or "",
+            "count": len(rows),
+            "results": rows,
+            "by_table": {k: len(v) for k, v in grouped.items()},
+        }
+    except Exception as e:
+        return {"ok": False, "error": str(e), "results": []}
+
+
+def t_reasoning_packet(query: str = "", domain: str = "", limit: str = "10", tables: str = "", per_table: str = "2") -> dict:
+    """Build the canonical reasoning packet for a query (single unified memory read)."""
+    try:
+        if not query:
+            return {"ok": False, "error": "query required"}
+        try:
+            lim = max(1, min(int(limit), 50))
+        except Exception:
+            lim = 10
+        try:
+            pt = max(1, min(int(per_table), 5))
+        except Exception:
+            pt = 2
+        table_list = [t.strip() for t in tables.split(",") if t.strip()] if tables else None
+        from core_reasoning_packet import build_reasoning_packet
+        return build_reasoning_packet(query=query, domain=domain, tables=table_list, limit=lim, per_table=pt)
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+class StateEvaluator:
+    """Evaluate an environment or system state using unified memory context."""
+
+    def __init__(
+        self,
+        query: str,
+        domain: str = "general",
+        tables: list | None = None,
+        limit: int = 10,
+        per_table: int = 2,
+        state_hint: str = "",
+    ):
+        self.query = (query or "").strip()
+        self.domain = (domain or "general").strip()
+        self.tables = tables
+        self.limit = max(1, min(int(limit or 10), 50))
+        self.per_table = max(1, min(int(per_table or 2), 5))
+        self.state_hint = (state_hint or "").strip()
+
+    @staticmethod
+    def _risk_markers(text: str) -> int:
+        text = (text or "").lower()
+        markers = [
+            "error", "failed", "fail", "broken", "degraded", "stale",
+            "blocked", "collision", "conflict", "missing", "invalid",
+            "unauthorized", "crash", "traceback", "timeout",
+        ]
+        return sum(1 for m in markers if m in text)
+
+    def evaluate(self) -> dict:
+        from core_reasoning_packet import build_reasoning_packet
+
+        packet = build_reasoning_packet(
+            self.query,
+            domain=self.domain,
+            tables=self.tables,
+            limit=self.limit,
+            per_table=self.per_table,
+        )
+        pkt = packet.get("packet") or {}
+        hits = pkt.get("top_hits") or []
+        by_table = pkt.get("memory_by_table") or {}
+        focus = pkt.get("focus", "")
+        context = pkt.get("context", "")
+
+        table_support = len([k for k, v in by_table.items() if int(v or 0) > 0])
+        evidence_count = len(hits)
+        risk_markers = self._risk_markers(" ".join([
+            self.query,
+            self.state_hint,
+            focus,
+            context,
+            " ".join(h.get("title", "") for h in hits[:5]),
+            " ".join(h.get("body", "") for h in hits[:5]),
+        ]))
+
+        coherence_score = round(min(1.0, 0.35 + (table_support * 0.08) + (evidence_count * 0.03)), 3)
+        evidence_score = round(min(1.0, 0.25 + (evidence_count * 0.08)), 3)
+        risk_score = round(min(1.0, 0.12 * risk_markers), 3)
+        readiness_score = round(max(0.0, min(1.0, (coherence_score * 0.45) + (evidence_score * 0.35) - (risk_score * 0.4))), 3)
+        confidence = round(max(0.0, min(1.0, (evidence_score * 0.5) + (coherence_score * 0.3) + ((1.0 - risk_score) * 0.2))), 3)
+        recommendation = "proceed" if readiness_score >= 0.72 and risk_score <= 0.24 else "defer" if risk_score >= 0.48 else "reassess"
+
+        return {
+            "ok": True,
+            "query": self.query,
+            "domain": self.domain,
+            "packet_focus": focus,
+            "context": context,
+            "memory_by_table": by_table,
+            "evidence_count": evidence_count,
+            "table_support": table_support,
+            "coherence_score": coherence_score,
+            "evidence_score": evidence_score,
+            "risk_score": risk_score,
+            "readiness_score": readiness_score,
+            "confidence": confidence,
+            "recommendation": recommendation,
+            "state_hint": self.state_hint,
+            "top_hits": hits[:10],
+        }
+
+
+def t_evaluate_state(query: str = "", domain: str = "general", tables: str = "", limit: str = "10", per_table: str = "2", state_hint: str = "") -> dict:
+    """Evaluate a state/query and return a compact scorecard."""
+    try:
+        if not query:
+            return {"ok": False, "error": "query required"}
+        try:
+            lim = max(1, min(int(limit), 50))
+        except Exception:
+            lim = 10
+        try:
+            pt = max(1, min(int(per_table), 5))
+        except Exception:
+            pt = 2
+        table_list = [t.strip() for t in tables.split(",") if t.strip()] if tables else None
+        return StateEvaluator(
+            query=query,
+            domain=domain,
+            tables=table_list,
+            limit=lim,
+            per_table=pt,
+            state_hint=state_hint,
+        ).evaluate()
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+class DynamicRelationalGraph:
+    """Build a lightweight relational graph from a unified reasoning packet."""
+
+    def __init__(
+        self,
+        query: str,
+        domain: str = "general",
+        tables: list | None = None,
+        limit: int = 10,
+        per_table: int = 2,
+        state_hint: str = "",
+    ):
+        self.query = (query or "").strip()
+        self.domain = (domain or "general").strip()
+        self.tables = tables
+        self.limit = max(1, min(int(limit or 10), 50))
+        self.per_table = max(1, min(int(per_table or 2), 5))
+        self.state_hint = (state_hint or "").strip()
+
+    @staticmethod
+    def _node_id(table: str, raw_id, title: str) -> str:
+        safe_title = _re.sub(r"[^a-z0-9]+", "-", (title or "item").lower()).strip("-")[:24]
+        return f"{table}:{raw_id}:{safe_title or 'node'}"
+
+    @staticmethod
+    def _node_type(table: str) -> str:
+        return {
+            "knowledge_base": "memory",
+            "behavioral_rules": "rule",
+            "mistakes": "mistake",
+            "hot_reflections": "reflection",
+            "output_reflections": "reflection",
+            "evolution_queue": "evolution",
+            "conversation_episodes": "episode",
+            "sessions": "session",
+            "pattern_frequency": "pattern",
+        }.get(table, "memory")
+
+    def build(self) -> dict:
+        from core_reasoning_packet import build_reasoning_packet
+
+        packet = build_reasoning_packet(
+            self.query,
+            domain=self.domain,
+            tables=self.tables,
+            limit=self.limit,
+            per_table=self.per_table,
+        )
+        pkt = packet.get("packet") or {}
+        hits = pkt.get("top_hits") or []
+        by_table = pkt.get("memory_by_table") or {}
+
+        nodes = [{
+            "id": "query",
+            "label": self.query[:120],
+            "type": "query",
+            "table": "query",
+            "score": 1.0,
+        }]
+        edges = []
+        seen = {"query"}
+        table_nodes = {}
+
+        for hit in hits:
+            table = hit.get("table") or "unknown"
+            raw = hit.get("raw") or {}
+            raw_id = raw.get("id") or hit.get("id") or hit.get("topic") or hit.get("title") or "0"
+            title = hit.get("title") or hit.get("body") or str(raw_id)
+            node_id = self._node_id(table, raw_id, title)
+            if node_id in seen:
+                continue
+            seen.add(node_id)
+            node = {
+                "id": node_id,
+                "label": str(title)[:120],
+                "type": self._node_type(table),
+                "table": table,
+                "score": round(float(hit.get("score") or hit.get("semantic_score") or 0.0), 3),
+                "raw_id": raw_id,
+            }
+            nodes.append(node)
+            table_nodes.setdefault(table, []).append(node_id)
+            edges.append({
+                "from": "query",
+                "to": node_id,
+                "type": "retrieved_from",
+                "weight": node["score"],
+            })
+
+        for table, node_ids in table_nodes.items():
+            if len(node_ids) > 1:
+                head = node_ids[0]
+                for other in node_ids[1:]:
+                    edges.append({
+                        "from": head,
+                        "to": other,
+                        "type": "same_table",
+                        "weight": 0.35,
+                    })
+
+        graph = {
+            "ok": True,
+            "query": self.query,
+            "domain": self.domain,
+            "context": pkt.get("context", ""),
+            "focus": pkt.get("focus", ""),
+            "memory_by_table": by_table,
+            "state_hint": self.state_hint,
+            "node_count": len(nodes),
+            "edge_count": len(edges),
+            "nodes": nodes,
+            "edges": edges,
+        }
+        graph["density"] = round(len(edges) / max(1, len(nodes)), 3)
+        graph["dominant_table"] = max(by_table.items(), key=lambda kv: int(kv[1] or 0))[0] if by_table else None
+        return graph
+
+
+def t_dynamic_relational_graph(query: str = "", domain: str = "general", tables: str = "", limit: str = "10", per_table: str = "2", state_hint: str = "") -> dict:
+    """Build a deterministic relational graph from unified memory context."""
+    try:
+        if not query:
+            return {"ok": False, "error": "query required"}
+        try:
+            lim = max(1, min(int(limit), 50))
+        except Exception:
+            lim = 10
+        try:
+            pt = max(1, min(int(per_table), 5))
+        except Exception:
+            pt = 2
+        table_list = [t.strip() for t in tables.split(",") if t.strip()] if tables else None
+        return DynamicRelationalGraph(
+            query=query,
+            domain=domain,
+            tables=table_list,
+            limit=lim,
+            per_table=pt,
+            state_hint=state_hint,
+        ).build()
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+class MonteCarloTreeSearch:
+    """Flexible MCTS bridge over CORE reasoning packets.
+
+    The bridge prefers an injected external MonteCarloTreeSearch class when a
+    class_path is provided. Otherwise it falls back to a deterministic, read-only
+    internal search that uses StateEvaluator + the unified reasoning packet.
+    """
+
+    def __init__(
+        self,
+        query: str,
+        domain: str = "general",
+        tables: list | None = None,
+        limit: int = 10,
+        per_table: int = 2,
+        state_hint: str = "",
+        candidate_actions: list | None = None,
+        rollouts: int = 12,
+        exploration_weight: float = 1.2,
+        class_path: str = "",
+    ):
+        self.query = (query or "").strip()
+        self.domain = (domain or "general").strip()
+        self.tables = tables
+        self.limit = max(1, min(int(limit or 10), 50))
+        self.per_table = max(1, min(int(per_table or 2), 5))
+        self.state_hint = (state_hint or "").strip()
+        self.candidate_actions = self._normalize_actions(candidate_actions)
+        self.rollouts = max(1, min(int(rollouts or 12), 64))
+        try:
+            self.exploration_weight = max(0.1, min(float(exploration_weight or 1.2), 4.0))
+        except Exception:
+            self.exploration_weight = 1.2
+        self.class_path = (class_path or "").strip()
+
+    @staticmethod
+    def _normalize_actions(candidate_actions) -> list[str]:
+        if candidate_actions in (None, "", []):
+            return []
+        if isinstance(candidate_actions, str):
+            raw = candidate_actions.strip()
+            if not raw:
+                return []
+            if raw.startswith("["):
+                try:
+                    parsed = json.loads(raw)
+                    if isinstance(parsed, list):
+                        return [str(item).strip() for item in parsed if str(item).strip()]
+                except Exception:
+                    pass
+            return [part.strip() for part in raw.split(",") if part.strip()]
+        if isinstance(candidate_actions, (list, tuple, set)):
+            return [str(item).strip() for item in candidate_actions if str(item).strip()]
+        return [str(candidate_actions).strip()] if str(candidate_actions).strip() else []
+
+    @staticmethod
+    def _call_with_fallback(fn, *attempts):
+        last_error = None
+        for args, kwargs in attempts:
+            try:
+                return fn(*args, **kwargs)
+            except TypeError as e:
+                last_error = e
+            except Exception as e:
+                last_error = e
+        if last_error:
+            raise last_error
+        return None
+
+    def _load_external_class(self):
+        if not self.class_path:
+            return None
+        try:
+            import importlib
+            module_name, _, class_name = self.class_path.rpartition(".")
+            if not module_name or not class_name:
+                return None
+            module = importlib.import_module(module_name)
+            return getattr(module, class_name, None)
+        except Exception:
+            return None
+
+    @staticmethod
+    def _score_from_statecard(statecard: dict, graph: dict | None = None) -> float:
+        readiness = float(statecard.get("readiness_score") or 0.0)
+        confidence = float(statecard.get("confidence") or 0.0)
+        coherence = float(statecard.get("coherence_score") or 0.0)
+        evidence = float(statecard.get("evidence_score") or 0.0)
+        risk = float(statecard.get("risk_score") or 0.0)
+        density = float((graph or {}).get("density") or 0.0)
+        score = (readiness * 0.48) + (confidence * 0.18) + (coherence * 0.12) + (evidence * 0.12) + (min(1.0, density) * 0.10) - (risk * 0.20)
+        return round(max(0.0, min(1.0, score)), 3)
+
+    def _evaluate_action(self, action: str, graph: dict | None = None) -> dict:
+        query = f"{self.query}\nACTION: {action}"
+        scorecard = StateEvaluator(
+            query=query,
+            domain=self.domain,
+            tables=self.tables,
+            limit=self.limit,
+            per_table=self.per_table,
+            state_hint=self.state_hint,
+        ).evaluate()
+        score = self._score_from_statecard(scorecard, graph=graph)
+        return {
+            "action": action,
+            "score": score,
+            "statecard": scorecard,
+            "recommendation": scorecard.get("recommendation", "reassess"),
+        }
+
+    def _external_run(self, packet: dict, graph: dict) -> dict | None:
+        cls = self._load_external_class()
+        if not cls:
+            return None
+        actions = self.candidate_actions or ["proceed", "reassess", "defer"]
+        payload = {
+            "query": self.query,
+            "packet": packet,
+            "graph": graph,
+            "domain": self.domain,
+            "tables": self.tables,
+            "candidate_actions": actions,
+            "state_hint": self.state_hint,
+            "rollouts": self.rollouts,
+            "exploration_weight": self.exploration_weight,
+        }
+        instance = None
+        for ctor_args, ctor_kwargs in [
+            ((), payload),
+            ((payload,), {}),
+            ((), {}),
+        ]:
+            try:
+                instance = cls(*ctor_args, **ctor_kwargs)
+                break
+            except TypeError:
+                continue
+            except Exception:
+                continue
+        if instance is None:
+            return None
+        for method_name in ("run", "search", "plan", "evaluate"):
+            method = getattr(instance, method_name, None)
+            if not callable(method):
+                continue
+            attempts = [
+                ((), {"packet": packet, "graph": graph, "candidate_actions": actions, "state_hint": self.state_hint, "query": self.query}),
+                ((packet, graph, actions), {}),
+                ((packet,), {}),
+                ((), {}),
+            ]
+            try:
+                result = self._call_with_fallback(method, *attempts)
+                if isinstance(result, dict):
+                    result.setdefault("external_integration", True)
+                    result.setdefault("class_path", self.class_path)
+                    return result
+                return {
+                    "ok": True,
+                    "external_integration": True,
+                    "class_path": self.class_path,
+                    "result": result,
+                    "actions": actions,
+                }
+            except Exception:
+                continue
+        return None
+
+    def _internal_run(self, packet: dict, graph: dict) -> dict:
+        actions = self.candidate_actions or ["proceed", "reassess", "defer"]
+        nodes = {
+            action: {
+                "action": action,
+                "visits": 0,
+                "value": 0.0,
+                "avg_value": 0.0,
+                "last_score": 0.0,
+                "recommendation": "",
+                "statecard": {},
+            }
+            for action in actions
+        }
+        trace = []
+        for rollout in range(self.rollouts):
+            total_visits = sum(node["visits"] for node in nodes.values())
+            if rollout < len(actions):
+                action = actions[rollout]
+            else:
+                def _uct_score(node: dict) -> float:
+                    if node["visits"] <= 0:
+                        return 10.0
+                    exploitation = node["avg_value"]
+                    exploration = self.exploration_weight * ((__import__("math").log(total_visits + 1) / node["visits"]) ** 0.5)
+                    return exploitation + exploration
+
+                action = max(actions, key=lambda act: _uct_score(nodes[act]))
+            evaluated = self._evaluate_action(action, graph=graph)
+            node = nodes[action]
+            node["visits"] += 1
+            node["value"] += float(evaluated["score"] or 0.0)
+            node["avg_value"] = round(node["value"] / max(1, node["visits"]), 3)
+            node["last_score"] = float(evaluated["score"] or 0.0)
+            node["recommendation"] = evaluated.get("recommendation", "")
+            node["statecard"] = evaluated.get("statecard") or {}
+            trace.append({
+                "rollout": rollout + 1,
+                "action": action,
+                "score": evaluated["score"],
+                "recommendation": evaluated.get("recommendation", ""),
+            })
+        best = max(nodes.values(), key=lambda n: (n["avg_value"], n["visits"], n["last_score"]))
+        return {
+            "ok": True,
+            "query": self.query,
+            "domain": self.domain,
+            "class_path": self.class_path,
+            "external_integration": False,
+            "candidate_actions": actions,
+            "rollouts": self.rollouts,
+            "exploration_weight": self.exploration_weight,
+            "packet_focus": packet.get("packet", {}).get("focus", ""),
+            "packet_context": packet.get("packet", {}).get("context", ""),
+            "graph_density": graph.get("density", 0.0),
+            "graph_dominant_table": graph.get("dominant_table"),
+            "best_action": best["action"],
+            "best_score": round(float(best["avg_value"] or 0.0), 3),
+            "nodes": list(nodes.values()),
+            "trace": trace,
+        }
+
+    def run(self) -> dict:
+        if not self.query:
+            return {"ok": False, "error": "query required"}
+        statecard = StateEvaluator(
+            query=self.query,
+            domain=self.domain,
+            tables=self.tables,
+            limit=self.limit,
+            per_table=self.per_table,
+            state_hint=self.state_hint,
+        ).evaluate()
+        from core_reasoning_packet import build_reasoning_packet
+        reasoning_packet = build_reasoning_packet(
+            query=self.query,
+            domain=self.domain,
+            tables=self.tables,
+            limit=self.limit,
+            per_table=self.per_table,
+        )
+        graph = DynamicRelationalGraph(
+            query=self.query,
+            domain=self.domain,
+            tables=self.tables,
+            limit=self.limit,
+            per_table=self.per_table,
+            state_hint=self.state_hint,
+        ).build()
+        external = self._external_run(reasoning_packet, graph)
+        if external is not None:
+            if isinstance(external, dict):
+                external.setdefault("query", self.query)
+                external.setdefault("domain", self.domain)
+                external.setdefault("class_path", self.class_path)
+                external.setdefault("state_recommendation", statecard.get("recommendation", ""))
+                external.setdefault("graph_density", graph.get("density", 0.0))
+                external.setdefault("graph_dominant_table", graph.get("dominant_table"))
+            return external
+        return self._internal_run(reasoning_packet, graph)
+
+
+def t_monte_carlo_tree_search(
+    query: str = "",
+    domain: str = "general",
+    tables: str = "",
+    limit: str = "10",
+    per_table: str = "2",
+    state_hint: str = "",
+    candidate_actions: str = "",
+    rollouts: str = "12",
+    exploration_weight: str = "1.2",
+    class_path: str = "",
+) -> dict:
+    """Run a flexible MCTS bridge over CORE's unified reasoning packet."""
+    try:
+        if not query:
+            return {"ok": False, "error": "query required"}
+        try:
+            lim = max(1, min(int(limit), 50))
+        except Exception:
+            lim = 10
+        try:
+            pt = max(1, min(int(per_table), 5))
+        except Exception:
+            pt = 2
+        try:
+            ro = max(1, min(int(rollouts), 64))
+        except Exception:
+            ro = 12
+        try:
+            ew = max(0.1, min(float(exploration_weight), 4.0))
+        except Exception:
+            ew = 1.2
+        actions = None
+        if candidate_actions:
+            raw = candidate_actions.strip()
+            if raw.startswith("["):
+                try:
+                    parsed = json.loads(raw)
+                    if isinstance(parsed, list):
+                        actions = [str(item).strip() for item in parsed if str(item).strip()]
+                except Exception:
+                    actions = [part.strip() for part in raw.split(",") if part.strip()]
+            else:
+                actions = [part.strip() for part in raw.split(",") if part.strip()]
+        return MonteCarloTreeSearch(
+            query=query,
+            domain=domain,
+            tables=[t.strip() for t in tables.split(",") if t.strip()] if tables else None,
+            limit=lim,
+            per_table=pt,
+            state_hint=state_hint,
+            candidate_actions=actions,
+            rollouts=ro,
+            exploration_weight=ew,
+            class_path=class_path,
+        ).run()
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+class DynamicRouter:
+    """Route world-model outputs using bounded policy scoring.
+
+    This is read-only. It can optionally consume a policy from KB and use the
+    unified reasoning packet / state evaluator for additional context.
+    """
+
+    def __init__(
+        self,
+        predictions: dict | None,
+        confidences: dict | None = None,
+        candidates: list[str] | None = None,
+        policy: dict | None = None,
+        query: str = "",
+        domain: str = "general",
+        state_hint: str = "",
+        use_state_evaluator: bool = False,
+        exploration_weight: float = 0.0,
+    ):
+        self.predictions = predictions if isinstance(predictions, dict) else {}
+        self.confidences = confidences if isinstance(confidences, dict) else {}
+        self.candidates = [c for c in (candidates or []) if str(c).strip()]
+        self.policy = policy if isinstance(policy, dict) else {}
+        self.query = (query or "").strip()
+        self.domain = (domain or "general").strip()
+        self.state_hint = (state_hint or "").strip()
+        self.use_state_evaluator = bool(use_state_evaluator)
+        try:
+            self.exploration_weight = max(0.0, min(float(exploration_weight or 0.0), 1.0))
+        except Exception:
+            self.exploration_weight = 0.0
+
+    @staticmethod
+    def _clamp01(value, default: float = 0.5) -> float:
+        try:
+            v = float(value)
+        except Exception:
+            v = default
+        return max(0.0, min(1.0, v))
+
+    @staticmethod
+    def _score_from_prediction(value) -> float:
+        if isinstance(value, (int, float)):
+            return DynamicRouter._clamp01(value, 0.5)
+        if isinstance(value, dict):
+            for k in ("score", "p", "prob", "value", "expected_gain"):
+                if k in value:
+                    return DynamicRouter._clamp01(value.get(k), 0.5)
+        if isinstance(value, str):
+            try:
+                return DynamicRouter._clamp01(float(value.strip()), 0.5)
+            except Exception:
+                return 0.5
+        return 0.5
+
+    def _policy_weight(self, candidate: str) -> float:
+        if not self.policy:
+            return 0.5
+        c = (candidate or "").strip()
+        for key in (c, c.lower()):
+            if key in self.policy and isinstance(self.policy.get(key), (int, float, str)):
+                return self._clamp01(self.policy.get(key), 0.5)
+        for bucket_key in ("route_weights", "work_track_weights", "weights"):
+            bucket = self.policy.get(bucket_key)
+            if isinstance(bucket, dict):
+                for key in (c, c.lower()):
+                    if key in bucket:
+                        return self._clamp01(bucket.get(key), 0.5)
+        return 0.5
+
+    def _evaluator_adjust(self, candidate: str) -> tuple[float, dict]:
+        if not (self.use_state_evaluator and self.query):
+            return 0.0, {}
+        try:
+            state_query = f"{self.query}\nROUTE: {candidate}"
+            card = StateEvaluator(
+                query=state_query,
+                domain=self.domain,
+                tables=None,
+                limit=8,
+                per_table=2,
+                state_hint=self.state_hint,
+            ).evaluate()
+            readiness = self._clamp01(card.get("readiness_score"), 0.0)
+            risk = self._clamp01(card.get("risk_score"), 0.0)
+            return round((readiness * 0.15) - (risk * 0.05), 3), {
+                "readiness": readiness,
+                "risk": risk,
+                "recommendation": card.get("recommendation", ""),
+            }
+        except Exception as e:
+            return 0.0, {"error": str(e)}
+
+    def route(self) -> dict:
+        if not self.candidates:
+            self.candidates = sorted({str(k) for k in (self.predictions or {}).keys() if str(k).strip()})[:25]
+        if not self.candidates:
+            return {"ok": False, "error": "candidates required (or provide predictions keys)"}
+
+        scored = []
+        for cand in self.candidates:
+            pred_val = self.predictions.get(cand) if cand in self.predictions else self.predictions.get(cand.lower())
+            pred_score = self._score_from_prediction(pred_val)
+            conf_val = self.confidences.get(cand) if cand in self.confidences else self.confidences.get(cand.lower())
+            conf_score = self._clamp01(conf_val, 0.5)
+            pol_score = self._policy_weight(cand)
+            eval_adj, eval_meta = self._evaluator_adjust(cand)
+            base = (pred_score * 0.55) + (pol_score * 0.30) + (conf_score * 0.15)
+            explore = self.exploration_weight * (0.5 - conf_score) * 0.10
+            final = round(max(0.0, min(1.0, base + eval_adj + explore)), 3)
+            scored.append({
+                "candidate": cand,
+                "score": final,
+                "components": {
+                    "prediction": round(pred_score, 3),
+                    "policy": round(pol_score, 3),
+                    "confidence": round(conf_score, 3),
+                    "evaluator_adjust": eval_adj,
+                    "explore": round(explore, 3),
+                },
+                "evaluator": eval_meta,
+            })
+
+        scored.sort(key=lambda x: float(x.get("score") or 0.0), reverse=True)
+        best = scored[0]
+        return {
+            "ok": True,
+            "best": best.get("candidate"),
+            "best_score": best.get("score"),
+            "query": self.query,
+            "domain": self.domain,
+            "used_policy": bool(self.policy),
+            "use_state_evaluator": bool(self.use_state_evaluator and self.query),
+            "candidates": scored,
+        }
+
+
+def t_dynamic_router(
+    predictions: str = "",
+    confidences: str = "",
+    candidates: str = "",
+    policy_topic: str = "dynamic_router_policy",
+    policy_domain: str = "meta",
+    policy_override: str = "",
+    query: str = "",
+    domain: str = "general",
+    state_hint: str = "",
+    use_state_evaluator: str = "false",
+    exploration_weight: str = "0.0",
+) -> dict:
+    """Route a decision based on world-model outputs + optional learned policy."""
+    try:
+        def _parse_json_dict(v: str) -> dict:
+            if not v:
+                return {}
+            if isinstance(v, dict):
+                return v
+            if isinstance(v, str):
+                try:
+                    parsed = json.loads(v)
+                    return parsed if isinstance(parsed, dict) else {}
+                except Exception:
+                    return {}
+            return {}
+
+        pred = _parse_json_dict(predictions)
+        conf = _parse_json_dict(confidences)
+
+        cand_list: list[str] = []
+        if candidates:
+            raw = (candidates or "").strip()
+            if raw.startswith("["):
+                try:
+                    parsed = json.loads(raw)
+                    if isinstance(parsed, list):
+                        cand_list = [str(x).strip() for x in parsed if str(x).strip()]
+                except Exception:
+                    cand_list = []
+            if not cand_list:
+                cand_list = [c.strip() for c in raw.split(",") if c.strip()]
+
+        policy = {}
+        try:
+            rows = sb_get(
+                "knowledge_base",
+                f"select=content,instruction&domain=eq.{policy_domain}&topic=eq.{policy_topic}&limit=1",
+                svc=True,
+            ) or []
+            if rows:
+                blob = (rows[0].get("instruction") or rows[0].get("content") or "").strip()
+                start = blob.find("{")
+                end = blob.rfind("}")
+                if start != -1 and end != -1 and end > start:
+                    try:
+                        maybe = json.loads(blob[start : end + 1])
+                        if isinstance(maybe, dict):
+                            policy = maybe
+                    except Exception:
+                        policy = {}
+        except Exception:
+            policy = {}
+        try:
+            override = _parse_json_dict(policy_override)
+            if override:
+                merged = dict(policy or {})
+                merged.update(override)
+                policy = merged
+        except Exception:
+            pass
+
+        u = str(use_state_evaluator or "false").strip().lower() in {"1", "true", "yes", "on"}
+        try:
+            ew = float(exploration_weight)
+        except Exception:
+            ew = 0.0
+
+        return DynamicRouter(
+            predictions=pred,
+            confidences=conf,
+            candidates=cand_list,
+            policy=policy,
+            query=query,
+            domain=domain,
+            state_hint=state_hint,
+            use_state_evaluator=u,
+            exploration_weight=ew,
+        ).route()
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+class MetaRepresentation:
+    """Serializable meta representation for passing structured state between modules.
+
+    This class is intentionally lightweight:
+    - JSON-friendly (to_dict/from_dict)
+    - mergeable (overlay/union)
+    - no external deps (numpy/torch not required)
+    """
+
+    def __init__(
+        self,
+        name: str = "",
+        version: int = 1,
+        features: dict | None = None,
+        metadata: dict | None = None,
+        embedding: list[float] | None = None,
+    ):
+        self.name = (name or "").strip() or "meta_representation"
+        try:
+            self.version = int(version or 1)
+        except Exception:
+            self.version = 1
+        self.features = features if isinstance(features, dict) else {}
+        self.metadata = metadata if isinstance(metadata, dict) else {}
+        self.embedding = embedding if isinstance(embedding, list) else None
+
+    def to_dict(self) -> dict:
+        return {
+            "name": self.name,
+            "version": self.version,
+            "features": self.features,
+            "metadata": self.metadata,
+            "embedding": self.embedding,
+        }
+
+    @classmethod
+    def from_dict(cls, value) -> "MetaRepresentation":
+        if isinstance(value, MetaRepresentation):
+            return value
+        if isinstance(value, str):
+            try:
+                value = json.loads(value)
+            except Exception:
+                value = {"name": value}
+        if not isinstance(value, dict):
+            value = {"name": str(value)}
+        return cls(
+            name=value.get("name") or "",
+            version=value.get("version") or 1,
+            features=value.get("features") if isinstance(value.get("features"), dict) else {},
+            metadata=value.get("metadata") if isinstance(value.get("metadata"), dict) else {},
+            embedding=value.get("embedding") if isinstance(value.get("embedding"), list) else None,
+        )
+
+    def merge(self, other, strategy: str = "overlay") -> "MetaRepresentation":
+        """Merge another MetaRepresentation into this one.
+
+        strategy:
+        - overlay: other.features overwrites self.features
+        - union:   keep existing keys, only add missing keys from other
+        """
+        other_obj = MetaRepresentation.from_dict(other)
+        strategy = (strategy or "overlay").strip().lower()
+        merged = MetaRepresentation(
+            name=self.name,
+            version=max(self.version, other_obj.version),
+            features=dict(self.features),
+            metadata=dict(self.metadata),
+            embedding=self.embedding,
+        )
+        if strategy == "union":
+            for k, v in (other_obj.features or {}).items():
+                if k not in merged.features:
+                    merged.features[k] = v
+        else:
+            merged.features.update(other_obj.features or {})
+        merged.metadata.update(other_obj.metadata or {})
+        if merged.embedding is None and other_obj.embedding is not None:
+            merged.embedding = other_obj.embedding
+        return merged
+
+
+def t_meta_representation(
+    op: str = "new",
+    name: str = "",
+    version: str = "1",
+    features: str = "",
+    metadata: str = "",
+    a: str = "",
+    b: str = "",
+    strategy: str = "overlay",
+) -> dict:
+    """Create/merge/validate a MetaRepresentation payload.
+
+    op=new:    build from name/version/features/metadata
+    op=merge:  merge payload a with payload b using strategy overlay|union
+    op=validate: parse payload a and return normalized form
+    """
+    try:
+        op = (op or "new").strip().lower()
+
+        def _parse_obj(v: str) -> dict:
+            if not v:
+                return {}
+            if isinstance(v, dict):
+                return v
+            if isinstance(v, str):
+                try:
+                    parsed = json.loads(v)
+                    return parsed if isinstance(parsed, dict) else {"value": parsed}
+                except Exception:
+                    return {"value": v}
+            return {"value": str(v)}
+
+        if op == "merge":
+            left = MetaRepresentation.from_dict(a)
+            merged = left.merge(b, strategy=strategy)
+            return {"ok": True, "op": "merge", "meta": merged.to_dict()}
+        if op == "validate":
+            meta = MetaRepresentation.from_dict(a)
+            return {"ok": True, "op": "validate", "meta": meta.to_dict()}
+
+        # op=new (default)
+        try:
+            ver = int(version or 1)
+        except Exception:
+            ver = 1
+        meta = MetaRepresentation(
+            name=name,
+            version=ver,
+            features=_parse_obj(features),
+            metadata=_parse_obj(metadata),
+        )
+        return {"ok": True, "op": "new", "meta": meta.to_dict()}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def t_task_similarity_metric(task_a: str = "", task_b: str = "") -> dict:
+    """Compare two task JSON blobs or plain text blobs."""
+    try:
+        from core_train import task_similarity_metric as _task_similarity_metric
+
+        def _parse(v):
+            if not v:
+                return {}
+            if isinstance(v, dict):
+                return v
+            if isinstance(v, str):
+                try:
+                    return json.loads(v)
+                except Exception:
+                    return {"title": v}
+            return {"title": str(v)}
+
+        a = _parse(task_a)
+        b = _parse(task_b)
+        return {"ok": True, "similarity": _task_similarity_metric(a, b)}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def t_novelty_assessment(experience: str = "", reference_memory: str = "", limit: str = "25") -> dict:
+    """Assess novelty of an experience against recent memory/task representations."""
+    try:
+        from core_train import novelty_assessment_module as _novelty_assessment_module
+        try:
+            lim = max(5, min(int(limit or 25), 50))
+        except Exception:
+            lim = 25
+
+        refs = []
+        if reference_memory:
+            try:
+                parsed = json.loads(reference_memory)
+                if isinstance(parsed, list):
+                    refs = [item for item in parsed if item]
+                elif isinstance(parsed, dict):
+                    refs = [parsed]
+            except Exception:
+                refs = []
+
+        def _parse(v):
+            if not v:
+                return {}
+            if isinstance(v, dict):
+                return v
+            if isinstance(v, str):
+                try:
+                    return json.loads(v)
+                except Exception:
+                    return {"title": v}
+            return {"title": str(v)}
+
+        return _novelty_assessment_module(_parse(experience), reference_memory=refs or None, limit=lim)
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def t_consolidation_manager(limit: str = "25", similarity_threshold: str = "0.62") -> dict:
+    """Cluster similar queued tasks and return a consolidation summary."""
+    try:
+        from core_train import ConsolidationManager as _ConsolidationManager
+        lim = max(1, min(int(limit or 25), 50))
+        thresh = max(0.1, min(float(similarity_threshold or 0.62), 0.95))
+        return _ConsolidationManager(similarity_threshold=thresh).run(limit=lim)
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
 def t_get_mistakes(domain="", limit=10):
     try: lim = int(limit) if limit else 10
     except: lim = 10
@@ -984,6 +2066,8 @@ def t_debug_fn(fn_name: str, dry_run: str = "true", extra_args: str = None) -> d
             import json as _j; extra_args = _j.loads(extra_args)
         except Exception:
             extra_args = {}
+    if not isinstance(extra_args, dict):
+        extra_args = {}
 
     stages = []
     result = None
@@ -2994,24 +4078,26 @@ def extract_signals(task: str) -> dict:
 
 def t_ask(question: str, domain: str = ""):
     if not question: return {"ok": False, "error": "question required"}
-    kb_results = t_search_kb(question, domain=domain, limit=10)
-    kb_context = "\n\n".join([f"[KB: {r.get('topic','')}]\n{str(r.get('instruction') or r.get('content',''))[:600]}" for r in kb_results]) if kb_results else ""
-    mistakes = t_get_mistakes(domain=domain or "general", limit=3)
-    mistake_context = "\n".join([f"- Avoid: {m.get('what_failed','')} -> {m.get('correct_approach','')[:100]}" for m in mistakes]) if mistakes else ""
+    from core_reasoning_packet import build_reasoning_packet
+    pkt = build_reasoning_packet(question, domain=domain, limit=10, per_table=2)
+    packet = pkt.get("packet") or {}
+    kb_context = packet.get("context", "")
     system = ("You are CORE, a personal AGI assistant with accumulated knowledge from many sessions. "
               "Answer using the knowledge base context provided. Be specific and actionable.")
     user = f"Question: {question}\n\n"
     if kb_context: user += f"Relevant knowledge:\n{kb_context}\n\n"
-    if mistake_context: user += f"Known pitfalls to avoid:\n{mistake_context}\n\n"
+    if packet.get("focus"): user += f"Focus:\n{packet.get('focus')}\n\n"
     user += "Answer:"
+    kb_hit_count = int((packet.get("memory_by_table") or {}).get("knowledge_base") or 0)
+    memory_hits = int(packet.get("hit_count") or 0)
     try:
         answer = gemini_chat(system, user, max_tokens=512)
-        return {"ok": True, "answer": answer, "kb_hits": len(kb_results), "model": "gemini-2.5-flash-lite", "question": question}
+        return {"ok": True, "answer": answer, "kb_hits": kb_hit_count, "memory_hits": memory_hits, "memory_by_table": packet.get("memory_by_table", {}), "packet_focus": packet.get("focus", ""), "model": "gemini-2.5-flash-lite", "question": question}
     except Exception:
         # I.1: Groq fallback -- if Gemini is down, ask() must not fail entirely
         try:
             answer = groq_chat(system, user, max_tokens=512)
-            return {"ok": True, "answer": answer, "kb_hits": len(kb_results), "model": "groq_fallback", "question": question}
+            return {"ok": True, "answer": answer, "kb_hits": kb_hit_count, "memory_hits": memory_hits, "memory_by_table": packet.get("memory_by_table", {}), "packet_focus": packet.get("focus", ""), "model": "groq_fallback", "question": question}
         except Exception as e2:
             return {"ok": False, "error": str(e2), "note": "both Gemini and Groq fallback failed"}
 
@@ -3301,6 +4387,17 @@ def t_redeploy(reason: str = "") -> dict:
         )
         r.raise_for_status()
         notify(f"\U0001f680 CORE redeploy triggered\nReason: {reason or 'manual trigger'}\nHost: oracle_vm")
+        try:
+            t_changelog_add(
+                version=datetime.utcnow().strftime("v%Y%m%d"),
+                component="deploy",
+                summary=f"Oracle VM redeploy triggered. Reason: {reason or 'manual trigger'}",
+                before="deploy state pending",
+                after="deploy webhook accepted and restart scheduled",
+                change_type="config",
+            )
+        except Exception as _changelog_e:
+            print(f"[CHANGELOG] deploy log error: {_changelog_e}")
         import threading as _t
         def _post_deploy_sync():
             import time as _time
@@ -5090,8 +6187,28 @@ TOOLS = {
                                "desc": "Full training pipeline status. Returns: hot (total, unprocessed, simulation_ok, last_real, last_simulation), cold (last_run_ts, last_run_mins_ago, threshold, last_patterns_found, last_evolutions_queued, recent_5_summaries), patterns (active_count, stale_count, top), evolutions (pending, applied), quality (7d_avg, trend), health_flags (simulation_dead|cold_stale_Xmin|unprocessed_backlog_X|zero_patterns_last_5_runs|quality_declining), pipeline_ok. Use at session_start or when diagnosing training issues."},
     "search_kb":              {"fn": t_search_kb,              "perm": "READ",    "args": ["query", "domain", "limit"],
                            "desc": "Search knowledge base by query. Returns domain, topic, content, confidence. ALWAYS include id=gt.1 filter behavior is automatic. IF EMPTY: do NOT give up — try sb_query(table='knowledge_base', filters='id=gt.1&domain=like.*core*') as fallback. Use before any write to check duplicates. EXAMPLE: search_kb(query='railway deploy', domain='core_agi', limit='5')"},
+    "search_memory":          {"fn": t_search_memory,          "perm": "READ",    "args": ["query", "domain", "limit", "tables"],
+                               "desc": "Unified semantic memory search across knowledge_base plus the native semantic tables. Use this when CORE needs one reasoning context for planning, self-correction, ambiguity resolution, or decomposition."},
+    "reasoning_packet":       {"fn": t_reasoning_packet,       "perm": "READ",    "args": ["query", "domain", "limit", "tables", "per_table"],
+                               "desc": "Build the canonical reasoning packet (query+focus+context+top_hits) that agentic tools should consume. Deterministic, no writes."},
+    "evaluate_state":         {"fn": t_evaluate_state,         "perm": "READ",    "args": ["query", "domain", "tables", "limit", "per_table", "state_hint"],
+                               "desc": "Evaluate an environment or system state from unified memory context. Returns readiness, risk, coherence, evidence counts, and a proceed/defer recommendation."},
+    "dynamic_relational_graph": {"fn": t_dynamic_relational_graph, "perm": "READ", "args": ["query", "domain", "limit", "tables", "per_table", "state_hint"],
+                               "desc": "Build a deterministic relational graph from unified memory context. Returns nodes, edges, density, dominant table, and top retrieved context."},
+    "monte_carlo_tree_search": {"fn": t_monte_carlo_tree_search, "perm": "READ", "args": ["query", "domain", "limit", "tables", "per_table", "state_hint", "candidate_actions", "rollouts", "exploration_weight", "class_path"],
+                               "desc": "Run a flexible Monte Carlo Tree Search bridge over CORE reasoning packets. Uses built-in fallback unless class_path points to an external MonteCarloTreeSearch class."},
+    "dynamic_router":          {"fn": t_dynamic_router,          "perm": "READ", "args": ["predictions", "confidences", "candidates", "policy_topic", "policy_domain", "policy_override", "query", "domain", "state_hint", "use_state_evaluator", "exploration_weight"],
+                               "desc": "Deterministic router over world-model outputs (predictions/confidences) plus optional learned policy from KB (meta/dynamic_router_policy). Returns best candidate with component scores."},
+    "meta_representation":    {"fn": t_meta_representation,    "perm": "READ",    "args": ["op", "name", "version", "features", "metadata", "a", "b", "strategy"],
+                               "desc": "Create/merge/validate a MetaRepresentation payload for passing structured state between CORE modules. op=new|merge|validate."},
+    "task_similarity_metric": {"fn": t_task_similarity_metric, "perm": "READ",    "args": ["task_a", "task_b"],
+                               "desc": "Compare two task payloads and return a bounded similarity score for consolidation and routing."},
+    "novelty_assessment":     {"fn": t_novelty_assessment,     "perm": "READ",    "args": ["experience", "reference_memory", "limit"],
+                               "desc": "Assess how novel an experience is relative to recent memory/task representations and return a routing recommendation."},
+    "consolidation_manager":  {"fn": t_consolidation_manager,  "perm": "READ",    "args": ["limit", "similarity_threshold"],
+                               "desc": "Cluster similar queued tasks and return a compact consolidation summary for review."},
     "get_mistakes":           {"fn": t_get_mistakes,           "perm": "READ",    "args": ["domain", "limit"],
-                           "desc": "Get recorded mistakes: what_failed, correct_approach, severity, root_cause. Call before any domain operation to avoid repeating known errors. IF EMPTY or fails: fallback to sb_query(table='mistakes', filters='id=gt.1', order='created_at.desc', limit='5', select='domain,what_failed,fix,created_at') — this ALWAYS works. EXAMPLE: get_mistakes(domain='core_agi', limit='5')"},
+                               "desc": "Get recorded mistakes: what_failed, correct_approach, severity, root_cause. Call before any domain operation to avoid repeating known errors. IF EMPTY or fails: fallback to sb_query(table='mistakes', filters='id=gt.1', order='created_at.desc', limit='5', select='domain,what_failed,fix,created_at') — this ALWAYS works. EXAMPLE: get_mistakes(domain='core_agi', limit='5')"},
     "read_file":              {"fn": t_read_file,              "perm": "READ",    "args": ["path", "repo", "start_line", "end_line"],
                                "desc": "Read file from GitHub repo. Optional start_line/end_line for range. Returns total_line_count + truncated flag. Cap 8000 chars. For large files use gh_read_lines instead."},
     "sb_query":               {"fn": t_sb_query,               "perm": "READ",    "args": ["table", "filters", "limit", "order", "select"],
@@ -5974,6 +7091,11 @@ def t_add_behavioral_rule(trigger: str = "", pointer: str = "", full_rule: str =
         "project","auth","code","reasoning","failure_recovery","local_pc","telegram",
     }
     try:
+        trigger = (trigger or "").strip()
+        pointer = (pointer or "").strip()
+        full_rule = (full_rule or "").strip()
+        domain = (domain or "").strip()
+        source = (source or "").strip()
         if trigger not in VALID_TRIGGERS:
             return {"ok": False, "error_code": "invalid_trigger", "message": f"Invalid trigger '{trigger}'. Valid: {sorted(VALID_TRIGGERS)}", "retry_hint": False, "domain": "behavioral_rules"}
         if domain not in VALID_DOMAINS:
@@ -5995,15 +7117,64 @@ def t_add_behavioral_rule(trigger: str = "", pointer: str = "", full_rule: str =
         existing = sb_get("behavioral_rules", f"select={_sel_force('behavioral_rules', ['id','pointer'])}&active=eq.true&trigger=eq.{trigger}&domain=eq.{domain}&limit=5", svc=True) or []
         for ex in existing:
             if (ex.get("pointer") or "").strip().lower() == (pointer or "").strip().lower():
-                return {"ok": True, "action": "skipped_duplicate", "message": "Rule with same trigger+domain+pointer already exists"}
+                return {
+                    "ok": True,
+                    "action": "skipped_duplicate",
+                    "message": "Rule with same trigger+domain+pointer already exists",
+                    "existing_id": ex.get("id"),
+                    "trigger": trigger,
+                    "domain": domain,
+                }
         row = {"trigger": trigger, "pointer": pointer, "full_rule": full_rule,
                "domain": domain, "priority": prio, "source": source, "confidence": conf, "active": True, "tested": False}
         if expires_at:
             row["expires_at"] = expires_at
         ok = sb_post("behavioral_rules", row)
-        if ok:
+        verify_rows = sb_get(
+            "behavioral_rules",
+            f"select={_sel_force('behavioral_rules', ['id','trigger','domain','pointer','full_rule','source'])}"
+            f"&trigger=eq.{trigger}&domain=eq.{domain}&pointer=eq.{pointer}&order=id.desc&limit=3",
+            svc=True,
+        ) or []
+        matched = next(
+            (
+                r for r in verify_rows
+                if (r.get("pointer") or "").strip().lower() == pointer.lower()
+                and (r.get("trigger") or "").strip() == trigger
+                and (r.get("domain") or "").strip() == domain
+            ),
+            None,
+        )
+        if ok and matched:
             t_add_behavioral_rule._session_insert_count = getattr(t_add_behavioral_rule, "_session_insert_count", 0) + 1
-        return {"ok": ok, "action": "inserted", "trigger": trigger, "domain": domain, "session_inserts": getattr(t_add_behavioral_rule, "_session_insert_count", 0)}
+            return {
+                "ok": True,
+                "action": "inserted_verified",
+                "trigger": trigger,
+                "domain": domain,
+                "rule_id": matched.get("id"),
+                "session_inserts": getattr(t_add_behavioral_rule, "_session_insert_count", 0),
+            }
+        if not ok and matched:
+            t_add_behavioral_rule._session_insert_count = getattr(t_add_behavioral_rule, "_session_insert_count", 0) + 1
+            return {
+                "ok": True,
+                "action": "recovered_partial",
+                "message": "Insert reported failure, but verification found the row in behavioral_rules.",
+                "trigger": trigger,
+                "domain": domain,
+                "rule_id": matched.get("id"),
+                "session_inserts": getattr(t_add_behavioral_rule, "_session_insert_count", 0),
+                "retry_hint": False,
+            }
+        return {
+            "ok": False,
+            "action": "insert_failed",
+            "message": "Behavioral rule insert did not verify in Supabase.",
+            "trigger": trigger,
+            "domain": domain,
+            "retry_hint": True,
+        }
     except Exception as e:
         return {"ok": False, "error": str(e), "error_code": "exception", "retry_hint": True}
 
@@ -6421,15 +7592,29 @@ def t_reason_chain(action: str = "", domain: str = "general"):
     if not action:
         return {"ok": False, "error": "action is required"}
     try:
-        mistakes = sb_get("mistakes", f"domain=eq.{domain}&order=created_at.desc&limit=5&id=gt.1", svc=True) or []
-        # F.1: use semantic search so KB entries are relevant to this specific action, not just domain
-        kb = t_search_kb(query=action, domain=domain, limit=5) or []
+        from core_reasoning_packet import build_reasoning_packet
+        pkt = build_reasoning_packet(
+            action,
+            domain=domain,
+            tables=["knowledge_base", "mistakes", "behavioral_rules", "hot_reflections", "output_reflections", "evolution_queue", "conversation_episodes"],
+            limit=10,
+            per_table=2,
+        )
+        packet = pkt.get("packet") or {}
+        grouped = {}
+        for h in packet.get("top_hits") or []:
+            grouped.setdefault(h.get("table") or "unknown", []).append(h)
+        mistakes = grouped.get("mistakes") or []
+        kb = grouped.get("knowledge_base") or []
         return {
             "ok": True,
             "action": action,
             "domain": domain,
-            "recent_mistakes": [{"context": m.get("context"), "what_failed": m.get("what_failed"), "correct_approach": m.get("correct_approach")} for m in mistakes],
-            "relevant_kb": [{"topic": k.get("topic"), "content": k.get("content")} for k in kb],
+            "packet_focus": packet.get("focus", ""),
+            "memory_by_table": packet.get("memory_by_table", {}),
+            "recent_mistakes": [{"what_failed": m.get("title"), "details": m.get("body")} for m in mistakes[:5]],
+            "relevant_kb": [{"topic": k.get("title"), "content": k.get("body")} for k in kb[:5]],
+            "context": packet.get("context", ""),
             "instruction": "Claude: using this context, generate the causal chain, failure_modes, confidence (0.0-1.0), and proceed_recommended for the planned action."
         }
     except Exception as e:
@@ -6550,19 +7735,26 @@ def t_mid_task_correct(anomaly: str = "", last_action: str = "", last_result: st
     if not anomaly:
         return {"ok": False, "error": "anomaly description is required"}
     try:
-        # F.9: use t_search_mistakes for proper multi-field semantic search (what_failed+context+root_cause+how_to_avoid)
-        search_result = t_search_mistakes(query=anomaly, limit=8)
-        similar = search_result.get("mistakes", []) if search_result.get("ok") else []
-        if not similar:
-            # Fallback: recent mistakes if query returns nothing
-            similar = sb_get("mistakes", "order=created_at.desc&limit=5&id=gt.1", svc=True) or []
+        from core_reasoning_packet import build_reasoning_packet
+        pkt = build_reasoning_packet(
+            anomaly,
+            domain="general",
+            tables=["mistakes", "hot_reflections", "output_reflections", "knowledge_base", "conversation_episodes"],
+            limit=10,
+            per_table=2,
+        )
+        packet = pkt.get("packet") or {}
+        similar = [h for h in (packet.get("top_hits") or []) if (h.get("table") in ("mistakes", "hot_reflections", "output_reflections", "knowledge_base"))]
         return {
             "ok": True,
             "anomaly": anomaly,
             "last_action": last_action,
             "last_result": last_result,
             "task_state": task_state,
-            "similar_past_mistakes": [{"context": m.get("context"), "what_failed": m.get("what_failed"), "correct_approach": m.get("correct_approach"), "root_cause": m.get("root_cause")} for m in similar],
+            "packet_focus": packet.get("focus", ""),
+            "memory_by_table": packet.get("memory_by_table", {}),
+            "context": packet.get("context", ""),
+            "similar_past_mistakes": [{"semantic_table": m.get("table"), "title": m.get("title"), "details": m.get("body")} for m in similar],
             "instruction": "Claude: using this context, diagnose root_cause, what_went_wrong, plan_adjustment, corrected_next_step, and whether to abort."
         }
     except Exception as e:
@@ -6587,15 +7779,29 @@ def t_decompose_task(goal: str = "", domain: str = "general"):
     if not goal:
         return {"ok": False, "error": "goal is required"}
     try:
-        # F.2: semantic search on goal text, not just domain filter -- much more relevant results
-        kb = t_search_kb(query=goal, domain=domain, limit=8) or []
-        mistakes = sb_get("mistakes", f"domain=eq.{domain}&order=created_at.desc&limit=5&id=gt.1", svc=True) or []
+        from core_reasoning_packet import build_reasoning_packet
+        pkt = build_reasoning_packet(
+            goal,
+            domain=domain,
+            tables=["knowledge_base", "mistakes", "behavioral_rules", "hot_reflections", "output_reflections", "evolution_queue", "conversation_episodes"],
+            limit=12,
+            per_table=2,
+        )
+        packet = pkt.get("packet") or {}
+        grouped = {}
+        for h in packet.get("top_hits") or []:
+            grouped.setdefault(h.get("table") or "unknown", []).append(h)
+        kb = grouped.get("knowledge_base") or []
+        mistakes = grouped.get("mistakes") or []
         return {
             "ok": True,
             "goal": goal,
             "domain": domain,
-            "domain_kb": [{"topic": k.get("topic"), "content": k.get("content")} for k in kb],
-            "domain_mistakes": [{"what_failed": m.get("what_failed"), "correct_approach": m.get("correct_approach")} for m in mistakes],
+            "packet_focus": packet.get("focus", ""),
+            "memory_by_table": packet.get("memory_by_table", {}),
+            "context": packet.get("context", ""),
+            "domain_kb": [{"topic": k.get("title"), "content": k.get("body")} for k in kb],
+            "domain_mistakes": [{"what_failed": m.get("title"), "details": m.get("body")} for m in mistakes],
             "instruction": "Claude: using this context, decompose the goal into subtasks with id, title, description, depends_on, effort_estimate. Return execution_order, parallel_candidates, total_effort, critical_path."
         }
     except Exception as e:
@@ -6616,13 +7822,28 @@ def t_resolve_ambiguity(instruction: str = ""):
     if not instruction:
         return {"ok": False, "error": "instruction is required"}
     try:
-        rules = sb_get("behavioral_rules", "domain=eq.universal&active=eq.true&limit=10&id=gt.1", svc=True) or []
-        kb = sb_get("knowledge_base", "domain=eq.core_agi&limit=5&id=gt.1", svc=True) or []
+        from core_reasoning_packet import build_reasoning_packet
+        pkt = build_reasoning_packet(
+            instruction,
+            domain="core_agi",
+            tables=["knowledge_base", "behavioral_rules", "output_reflections", "hot_reflections"],
+            limit=10,
+            per_table=3,
+        )
+        packet = pkt.get("packet") or {}
+        grouped = {}
+        for h in packet.get("top_hits") or []:
+            grouped.setdefault(h.get("table") or "unknown", []).append(h)
+        rules = grouped.get("behavioral_rules") or []
+        kb = grouped.get("knowledge_base") or []
         return {
             "ok": True,
             "instruction": instruction,
-            "relevant_rules": [{"trigger": r.get("trigger"), "pointer": r.get("pointer")} for r in rules],
-            "relevant_kb": [{"topic": k.get("topic"), "content": k.get("content")} for k in kb],
+            "packet_focus": packet.get("focus", ""),
+            "memory_by_table": packet.get("memory_by_table", {}),
+            "context": packet.get("context", ""),
+            "relevant_rules": [{"trigger": r.get("title"), "full_rule": r.get("body")} for r in rules],
+            "relevant_kb": [{"topic": k.get("title"), "content": k.get("body")} for k in kb],
             "instruction_to_claude": "Claude: identify ambiguities in the instruction, list interpretations, pick lowest-risk one. Return ambiguities[], safe_to_proceed, interpretation_chosen, confidence, needs_owner_clarification, clarification_question."
         }
     except Exception as e:
