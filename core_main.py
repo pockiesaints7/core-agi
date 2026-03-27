@@ -24,7 +24,7 @@ import httpx
 from fastapi import FastAPI, HTTPException, Request, Header, Query, Depends, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from core_config import (
     MCP_SECRET, MCP_PROTOCOL_VERSION, PORT, SESSION_TTL_H,
@@ -510,7 +510,7 @@ async def patch_file(body: PatchRequest):
 
 class TradingReflectionRequest(BaseModel):
     output_text: str
-    context: dict = {}
+    context: dict = Field(default_factory=dict)
 
 
 class EmbedRequest(BaseModel):
@@ -530,12 +530,21 @@ async def trading_reflect(body: TradingReflectionRequest, req: Request):
         raise HTTPException(status_code=401, detail="Unauthorized")
 
     from core_orch_layer11 import fire_trading
-    fire_trading(body.output_text, body.context or {})
+    context = body.context or {}
+    trace_id = context.get("trace_id")
+    position_id = context.get("position_id")
+    decision_id = context.get("decision_id")
+    print(
+        f"[TRADING_REFLECT] trace_id={trace_id} decision_id={decision_id} "
+        f"position_id={position_id} queued"
+    )
+    fire_trading(body.output_text, context)
 
     return {
         "ok": True,
         "queued": True,
         "source": "trading",
+        "trace_id": trace_id,
         "ts": datetime.utcnow().isoformat(),
     }
 

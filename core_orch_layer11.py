@@ -178,18 +178,23 @@ def fire_trading(output_text: str, context: dict = None) -> None:
     Non-blocking — trading bot fires and forgets.
     """
     try:
+        ctx = context or {}
+        print(
+            f"[L11] fire_trading trace_id={ctx.get('trace_id')} "
+            f"decision_id={ctx.get('decision_id')} position_id={ctx.get('position_id')}"
+        )
         loop = asyncio.get_event_loop()
         if loop.is_running():
             asyncio.create_task(layer11_post_output(
                 output_text=output_text,
                 source="trading",
-                context=context or {},
+                context=ctx,
             ))
         else:
             loop.run_until_complete(layer11_post_output(
                 output_text=output_text,
                 source="trading",
-                context=context or {},
+                context=ctx,
             ))
     except Exception as e:
         print(f"[L11] fire_trading error: {e}")
