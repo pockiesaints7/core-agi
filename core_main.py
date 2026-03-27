@@ -17,7 +17,9 @@ import threading
 import time
 import uuid
 import secrets
+import subprocess
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Optional
 
 import httpx
@@ -246,6 +248,73 @@ async def require_mcp_secret(
         token = authorization[7:]
     if not token or not secrets.compare_digest(str(token), str(MCP_SECRET)):
         raise HTTPException(status_code=401, detail="Unauthorized")
+    return True
+
+
+def _git_commit() -> Optional[str]:
+    try:
+        return subprocess.check_output(
+            ["git", "rev-parse", "HEAD"],
+            cwd=Path(__file__).resolve().parent,
+            text=True,
+            timeout=5,
+        ).strip()
+    except Exception:
+        return None
+
+
+def _file_sha256(path: Path) -> str:
+    h = hashlib.sha256()
+    with path.open("rb") as f:
+        for chunk in iter(lambda: f.read(65536), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _deployment_manifest() -> dict:
+    base = Path(__file__).resolve().parent
+    files = ["core_main.py", "core_orch_layer11.py", "core_meta_evaluator.py", "core_worker_critic.py", "core_worker_reflect.py"]
+    manifest = {}
+    for rel in files:
+        path = base / rel
+        manifest[rel] = {
+            "sha256": _file_sha256(path),
+            "bytes": path.stat().st_size,
+        }
+    return {
+        "service": "core-agi",
+        "pid": os.getpid(),
+        "git_commit": _git_commit(),
+        "cwd": str(base),
+        "files": manifest,
+        "generated_at": datetime.utcnow().isoformat(),
+    }
+
+
+def _trade_tokens(position_id: Optional[int], decision_id: Optional[int]) -> list[str]:
+    tokens = []
+    if position_id is not None:
+        tokens.extend([f"Position ID: {position_id}", f"position_id={position_id}", f"_p{position_id}"])
+    if decision_id is not None:
+        tokens.extend([f"Decision ID: {decision_id}", f"decision_id={decision_id}", f"_d{decision_id}"])
+    return tokens
+
+
+def _matches_trade_trace(text: str, position_id: Optional[int], decision_id: Optional[int]) -> bool:
+    haystack = str(text or "")
+    if not haystack:
+        return False
+    matched = False
+    for token in _trade_tokens(position_id, decision_id):
+        if token in haystack:
+            matched = True
+            break
+    if not matched:
+        return False
+    if position_id is not None and f"{position_id}" not in haystack:
+        return False
+    if decision_id is not None and f"{decision_id}" not in haystack:
+        return False
     return True
 
 
@@ -547,6 +616,108 @@ async def trading_reflect(body: TradingReflectionRequest, req: Request):
         "trace_id": trace_id,
         "ts": datetime.utcnow().isoformat(),
     }
+
+
+@app.get("/internal/trading/reflections/query")
+async def trading_reflection_query(
+    position_id: Optional[int] = Query(None),
+    decision_id: Optional[int] = Query(None),
+    _auth=Depends(require_mcp_secret),
+):
+    if position_id is None and decision_id is None:
+        raise HTTPException(status_code=400, detail="position_id or decision_id is required")
+
+    critiques = [
+        row for row in sb_get(
+            "output_critiques",
+            "source=eq.trading&select=id,session_id,output_text,verdict,score,reason,failure_pattern,created_at"
+            "&order=created_at.desc&limit=200",
+            svc=True,
+        )
+        if _matches_trade_trace(row.get("output_text", ""), position_id, decision_id)
+    ]
+    session_ids = {row.get("session_id") for row in critiques if row.get("session_id")}
+
+    causal_rows = [
+        row for row in sb_get(
+            "causal_chains",
+            "source=eq.trading&select=session_id,root_knowledge,reasoning_type,confidence,created_at"
+            "&order=created_at.desc&limit=200",
+            svc=True,
+        )
+        if row.get("session_id") in session_ids
+    ]
+    reflection_rows = [
+        row for row in sb_get(
+            "output_reflections",
+            "source=eq.trading&select=session_id,gap,gap_domain,new_behavior,evo_worthy,created_at"
+            "&order=created_at.desc&limit=200",
+            svc=True,
+        )
+        if row.get("session_id") in session_ids
+    ]
+    hot_rows = [
+        row for row in sb_get(
+            "hot_reflections",
+            "domain=eq.trading&select=id,reflection_text,quality_score,created_at"
+            "&order=created_at.desc&limit=200",
+            svc=True,
+        )
+        if _matches_trade_trace(row.get("reflection_text", ""), position_id, decision_id)
+    ]
+    kb_rows = [
+        row for row in sb_get(
+            "knowledge_base",
+            "domain=eq.trading&select=id,topic,content,confidence,created_at"
+            "&order=created_at.desc&limit=200",
+            svc=True,
+        )
+        if _matches_trade_trace(
+            f"{row.get('topic', '')}\n{row.get('content', '')}",
+            position_id,
+            decision_id,
+        )
+    ]
+    mistake_rows = [
+        row for row in sb_get(
+            "mistakes",
+            "select=id,domain,what_failed,context,created_at&order=created_at.desc&limit=200",
+            svc=True,
+        )
+        if _matches_trade_trace(
+            f"{row.get('what_failed', '')}\n{row.get('context', '')}",
+            position_id,
+            decision_id,
+        )
+    ]
+
+    return {
+        "ok": True,
+        "position_id": position_id,
+        "decision_id": decision_id,
+        "session_ids": sorted(session_ids),
+        "counts": {
+            "output_critiques": len(critiques),
+            "causal_chains": len(causal_rows),
+            "output_reflections": len(reflection_rows),
+            "hot_reflections": len(hot_rows),
+            "knowledge_base": len(kb_rows),
+            "mistakes": len(mistake_rows),
+        },
+        "artifacts": {
+            "output_critiques": critiques[:10],
+            "causal_chains": causal_rows[:10],
+            "output_reflections": reflection_rows[:10],
+            "hot_reflections": hot_rows[:10],
+            "knowledge_base": kb_rows[:10],
+            "mistakes": mistake_rows[:10],
+        },
+    }
+
+
+@app.get("/deployment-check")
+async def deployment_check(_auth=Depends(require_mcp_secret)):
+    return _deployment_manifest()
 
 
 @app.post("/embed")

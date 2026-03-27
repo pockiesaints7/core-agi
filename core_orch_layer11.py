@@ -56,6 +56,7 @@ async def layer11_post_output(
         return
 
     print(f"[L11] Post-output pipeline firing | source={source}")
+    effective_session_id = session_id or ((context or {}).get("trace_id") if context else "")
 
     try:
         # Step 1: Critic (sync in thread to not block event loop)
@@ -63,7 +64,7 @@ async def layer11_post_output(
             critique_output,
             output_text,
             source,
-            session_id,
+            effective_session_id,
             context,
             prompt_target,
             prompt_version,
@@ -71,10 +72,10 @@ async def layer11_post_output(
 
         # Step 2: Causal + Reflect in parallel
         causal_task  = asyncio.create_task(
-            extract_causality(output_text, source, session_id, context)
+            extract_causality(output_text, source, effective_session_id, context)
         )
         reflect_task = asyncio.create_task(
-            reflect_on_gaps(output_text, critique, source, session_id, prompt_target)
+            reflect_on_gaps(output_text, critique, source, effective_session_id, prompt_target)
         )
         causal_result, reflection = await asyncio.gather(
             causal_task, reflect_task, return_exceptions=True
@@ -87,7 +88,7 @@ async def layer11_post_output(
         if not isinstance(reflection, dict):
             reflection = {}
 
-        await evaluate(critique, reflection, source)
+        await evaluate(critique, reflection, source, context=context)
 
         print(f"[L11] Pipeline complete | verdict={critique.get('verdict')} source={source}")
 

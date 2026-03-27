@@ -18,6 +18,21 @@ _FREQ_ESCALATE    = 4   # seen N times → push to evo queue
 _SIM_THRESHOLD    = 0.88  # cosine similarity to consider patterns "same"
 
 
+def _trace_suffix(context: dict | None) -> str:
+    ctx = context or {}
+    parts = []
+    for key in ("trace_id", "decision_id", "position_id"):
+        value = ctx.get(key)
+        if value not in (None, ""):
+            parts.append(f"{key}={value}")
+    return " ".join(parts)
+
+
+def _source_label(source: str, context: dict | None) -> str:
+    suffix = _trace_suffix(context)
+    return f"{source}|{suffix}" if suffix else source
+
+
 def _find_similar_pattern(pattern_text: str) -> dict | None:
     """
     Semantic dedup: check if this pattern already exists in meta_decisions.
@@ -66,17 +81,29 @@ def _find_similar_pattern(pattern_text: str) -> dict | None:
     return None
 
 
-def _store_kb_entry(kb: dict, source: str) -> bool:
+def _store_kb_entry(kb: dict, source: str, context: dict | None = None) -> bool:
     """Write a new KB entry and trigger embedding."""
     if not kb or not kb.get("instruction"):
         return False
     try:
+        trace_suffix = _trace_suffix(context)
+        content = kb.get("instruction", kb.get("content", ""))
+        if trace_suffix:
+            content = f"{content}\n\nTRACE: {trace_suffix}"
+        topic = kb.get("topic", "auto_generated")
+        if source == "trading":
+            decision_id = (context or {}).get("decision_id")
+            position_id = (context or {}).get("position_id")
+            if decision_id not in (None, ""):
+                topic += f"_d{decision_id}"
+            if position_id not in (None, ""):
+                topic += f"_p{position_id}"
         row = {
-            "topic":      kb.get("topic", "auto_generated"),
-            "content":    kb.get("instruction", kb.get("content", ""))[:800],
+            "topic":      topic[:200],
+            "content":    content[:800],
             "domain":     kb.get("domain", "general"),
             "confidence": kb.get("confidence", "medium"),
-            "source":     "worker_auto|" + source,
+            "source":     "worker_auto|" + _source_label(source, context),
         }
         ok = sb_post("knowledge_base", row)
         if ok:
@@ -99,11 +126,12 @@ def _store_kb_entry(kb: dict, source: str) -> bool:
         return False
 
 
-def _store_mistake(mistake: dict, source: str) -> bool:
+def _store_mistake(mistake: dict, source: str, context: dict | None = None) -> bool:
     """Write a mistake entry."""
     if not mistake or not mistake.get("what_failed"):
         return False
     try:
+        source_label = _source_label(source, context)
         row = {
             "what_failed":      mistake["what_failed"][:400],
             "correct_approach": (mistake.get("correct_approach") or "")[:400],
@@ -111,8 +139,8 @@ def _store_mistake(mistake: dict, source: str) -> bool:
             "severity":         mistake.get("severity", "medium"),
             "root_cause":       (mistake.get("root_cause") or "")[:300],
             "domain":           "auto_detected",
-            "context":          "worker_auto|" + source,
-            "tags":             ["auto_generated", source],
+            "context":          "worker_auto|" + source_label,
+            "tags":             ["auto_generated", source_label[:100]],
         }
         return sb_post("mistakes", row)
     except Exception as e:
@@ -120,7 +148,7 @@ def _store_mistake(mistake: dict, source: str) -> bool:
         return False
 
 
-def _push_evo_queue(pattern: str, reflection: dict, source: str) -> bool:
+def _push_evo_queue(pattern: str, reflection: dict, source: str, context: dict | None = None) -> bool:
     """Push a recurring failure to evolution_queue for review."""
     if not pattern:
         return False
@@ -133,7 +161,8 @@ def _push_evo_queue(pattern: str, reflection: dict, source: str) -> bool:
             "diff_content":   json.dumps({
                 "gap":          gap,
                 "new_behavior": behavior,
-                "source":       source,
+                "source":       _source_label(source, context),
+                "trace":        _trace_suffix(context),
                 "prompt_patch": reflection.get("prompt_patch"),
             }),
             "confidence":     0.75,
@@ -148,7 +177,7 @@ def _push_evo_queue(pattern: str, reflection: dict, source: str) -> bool:
         return False
 
 
-async def evaluate(critique: dict, reflection: dict, source: str = "session") -> dict:
+async def evaluate(critique: dict, reflection: dict, source: str = "session", context: dict | None = None) -> dict:
     """
     Core meta decision engine.
     Deduplicates patterns, decides action, writes meta_decisions row.
@@ -173,8 +202,8 @@ async def evaluate(critique: dict, reflection: dict, source: str = "session") ->
         action    = "add_kb"
         frequency = 1
 
-        _store_kb_entry(reflection.get("kb_entry"), source)
-        _store_mistake(reflection.get("mistake_entry"), source)
+        _store_kb_entry(reflection.get("kb_entry"), source, context=context)
+        _store_mistake(reflection.get("mistake_entry"), source, context=context)
 
         # Embed the pattern for future semantic dedup
         vec = _embed_text_safe(pattern)
@@ -197,7 +226,7 @@ async def evaluate(critique: dict, reflection: dict, source: str = "session") ->
 
         if freq >= _FREQ_ESCALATE and not existing.get("escalated"):
             action = "add_evo"
-            _push_evo_queue(pattern, reflection, source)
+            _push_evo_queue(pattern, reflection, source, context=context)
             escalated = True
             print(f"[META] RECURRING (x{freq}) → add_evo | pattern='{pattern[:60]}'")
         elif freq >= _FREQ_REINFORCE:
