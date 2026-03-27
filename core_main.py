@@ -286,6 +286,13 @@ def _deployment_manifest() -> dict:
         "pid": os.getpid(),
         "git_commit": _git_commit(),
         "cwd": str(base),
+        "runtime_mode": {
+            "port": PORT,
+            "mcp_protocol_version": MCP_PROTOCOL_VERSION,
+            "telegram_webhook_secret_configured": bool(TELEGRAM_WEBHOOK_SECRET),
+            "mcp_secret_configured": bool(MCP_SECRET),
+            "supabase_host": SUPABASE_URL.split("://", 1)[-1].split("/", 1)[0] if SUPABASE_URL else "",
+        },
         "files": manifest,
         "generated_at": datetime.utcnow().isoformat(),
     }
@@ -603,6 +610,13 @@ async def trading_reflect(body: TradingReflectionRequest, req: Request):
     trace_id = context.get("trace_id")
     position_id = context.get("position_id")
     decision_id = context.get("decision_id")
+    if not body.output_text or len(body.output_text.strip()) < 20:
+        raise HTTPException(status_code=400, detail="output_text is too short")
+    if not trace_id or position_id in (None, "") or decision_id in (None, ""):
+        raise HTTPException(
+            status_code=400,
+            detail="trace_id, position_id, and decision_id are required in context",
+        )
     print(
         f"[TRADING_REFLECT] trace_id={trace_id} decision_id={decision_id} "
         f"position_id={position_id} queued"
@@ -1315,10 +1329,33 @@ async def deploy_webhook(req: Request):
                 capture_output=True, text=True, timeout=60
             )
             print(f"[DEPLOY] git pull: {pull.stdout.strip()} {pull.stderr.strip()}")
+            if pull.returncode != 0:
+                notify(
+                    f"⚠️ <b>CORE Auto-Deploy Failed</b>\n"
+                    f"git pull returned {pull.returncode}\n{(pull.stderr or pull.stdout)[:300]}"
+                )
+                return
             notify(f"🚀 <b>CORE Auto-Deploy</b>\n{pull.stdout.strip() or 'already up to date'}")
             if "Already up to date" not in pull.stdout:
-                # New commits — restart service to pick them up
-                subprocess.run(["systemctl", "restart", "core-agi"], timeout=10)
+                restart = subprocess.run(
+                    ["sudo", "-n", "systemctl", "restart", "core-agi.service"],
+                    capture_output=True, text=True, timeout=15
+                )
+                if restart.returncode != 0:
+                    notify(
+                        f"⚠️ <b>CORE Auto-Deploy Restart Failed</b>\n"
+                        f"{(restart.stderr or restart.stdout)[:300]}"
+                    )
+                    return
+                current = subprocess.run(
+                    ["git", "rev-parse", "HEAD"],
+                    cwd="/home/ubuntu/core-agi",
+                    capture_output=True, text=True, timeout=10
+                )
+                notify(
+                    f"✅ <b>CORE Auto-Deploy Restarted</b>\n"
+                    f"commit={current.stdout.strip()[:12] if current.returncode == 0 else 'unknown'}"
+                )
         except Exception as e:
             print(f"[DEPLOY] error: {e}")
             notify(f"⚠️ CORE Deploy error: {e}")

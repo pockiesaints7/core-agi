@@ -111,7 +111,7 @@ def _store_kb_entry(kb: dict, source: str, context: dict | None = None) -> bool:
             try:
                 rows = sb_get(
                     "knowledge_base",
-                    f"select=id&topic=eq.{kb.get('topic','')}"
+                    f"select=id&topic=eq.{topic[:200]}"
                     f"&order=created_at.desc&limit=1",
                     svc=True,
                 ) or []
@@ -138,8 +138,8 @@ def _store_mistake(mistake: dict, source: str, context: dict | None = None) -> b
             "how_to_avoid":     (mistake.get("correct_approach") or "")[:300],
             "severity":         mistake.get("severity", "medium"),
             "root_cause":       (mistake.get("root_cause") or "")[:300],
-            "domain":           "auto_detected",
-            "context":          "worker_auto|" + source_label,
+            "domain":           "trading" if source == "trading" else "auto_detected",
+            "context":          "worker_auto|" + source_label + ("|" + _trace_suffix(context) if _trace_suffix(context) else ""),
             "tags":             ["auto_generated", source_label[:100]],
         }
         return sb_post("mistakes", row)
