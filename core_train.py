@@ -2118,6 +2118,13 @@ def _run_rarl_epoch() -> bool:
                     "epoch": epoch_number,
                     "arch_id": arch_id,
                     "discovery_score": ds,
+                    "autonomy": {
+                        "kind": "architecture_proposal",
+                        "source": "rarl",
+                        "domain": "code",
+                        "verification": "evolution_queue artifact",
+                        "expected_artifact": "evolution_queue",
+                    },
                 })
                 task_ok = sb_post("task_queue", {
                     "task":     task_payload,
@@ -3206,11 +3213,34 @@ def _run_self_diagnosis():
             if title_key in existing_titles:
                 print(f"[DIAG] Skipped duplicate self-assigned task: {gap['title']}")
                 continue
+            autonomy_kind = {
+                "kb_coverage": "kb_expand",
+                "mistake_cluster": "behavioral_remediation",
+                "quality_decline": "behavioral_remediation",
+                "stale_tasks": "behavioral_remediation",
+            }.get(gap.get("source", ""), "analysis_only")
+            domain_match = None
+            if "domain" in gap["title"].lower():
+                try:
+                    domain_match = gap["title"].split("domain:", 1)[1].strip()
+                except Exception:
+                    domain_match = None
             task_payload = {
                 "task": json.dumps({
                     "title": gap["title"],
                     "description": gap["description"],
                     "source": "self_assigned",
+                    "autonomy": {
+                        "kind": autonomy_kind,
+                        "source": gap.get("source", ""),
+                        "domain": domain_match or "",
+                        "verification": "task_queue checkpoint + durable artifact",
+                        "expected_artifact": (
+                            "knowledge_base" if autonomy_kind == "kb_expand"
+                            else "behavioral_rules" if autonomy_kind == "behavioral_remediation"
+                            else "evolution_queue"
+                        ),
+                    },
                 }),
                 "status": "pending",
                 "priority": gap["priority"],
@@ -3243,7 +3273,7 @@ def _run_self_diagnosis():
                 f"[DIAG] Nightly self-diagnosis complete.\n"
                 f"{len(tasks_created)} gap(s) identified and queued (source=self_assigned, status=pending):\n"
                 f"{task_list}\n\n"
-                f"Review in next session before execution."
+                f"Queued for autonomous processing with checkpoint+verification gates."
             )
         else:
             notify("[DIAG] Nightly self-diagnosis: no gaps found. All systems nominal.")

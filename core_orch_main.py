@@ -54,19 +54,11 @@ def startup_v2():
     print(f"[ORCH-V2] Started. Primary model: {model}")
     print("[ORCH-V2] Layer chain: L0→L1→L2→L3→L4→L5→L9 (L6/L7/L8 inlined)")
 
-    # Notify owner
-    try:
-        from core_github import notify
-        from core_orch_layer0 import OWNER_ID
-        notify(
-            f"🧠 <b>CORE Orchestrator v2 Online</b>\n"
-            f"Model: {model}\n"
-            f"Layers: L0–L9 active\n"
-            f"Blueprint: 11-layer compliant",
-            OWNER_ID,
-        )
-    except Exception as e:
-        print(f"[ORCH-V2] Startup notify failed (non-fatal): {e}")
+    return {
+        "model": model,
+        "layers": "L0-L9 active",
+        "blueprint": "11-layer compliant",
+    }
 
 
 # ── Main entry point ──────────────────────────────────────────────────────────

@@ -38,6 +38,12 @@ from core_config import (
 from core_github import gh_read, gh_write, notify, set_webhook
 from core_train import cold_processor_loop, background_researcher
 from core_tools import TOOLS, handle_jsonrpc
+from core_reflection_audit import (
+    build_reflection_context,
+    fetch_reflection_events,
+    register_reflection_event,
+)
+from core_task_autonomy import AUTONOMY_ENABLED, autonomy_loop, autonomy_status, run_autonomy_cycle
 
 # ── Orchestrator v2 ───────────────────────────────────────────────────────────
 from core_orch_main import handle_telegram_message_v2, startup_v2
@@ -129,6 +135,29 @@ def get_system_counts():
         except:
             counts[f"evolution_{evo_status}"] = -1
     return counts
+
+
+def _build_startup_brief(resume: str, counts: dict, orch: dict) -> str:
+    task_pending = counts.get("task_queue_pending", 0)
+    if resume and resume != "No active tasks":
+        task_summary = resume
+    elif task_pending > 0:
+        task_summary = f"Pending backlog: {task_pending} task(s)"
+    else:
+        task_summary = "Task queue idle"
+    evo_pending = counts.get("evolution_pending", 0)
+    evo_applied = counts.get("evolution_applied", 0)
+    evo_rejected = counts.get("evolution_rejected", 0)
+    return (
+        f"🧠 <b>CORE Online</b>\n"
+        f"Orchestrator: <b>{orch.get('model', 'unknown')}</b> | {orch.get('layers', 'L0-L9 active')} | {orch.get('blueprint', '')}\n\n"
+        f"<b>State</b>\n"
+        f"KB: {counts.get('knowledge_base', 0)} | Mistakes: {counts.get('mistakes', 0)} | Sessions: {counts.get('sessions', 0)}\n"
+        f"Task queue: {task_pending} pending | {task_summary}\n"
+        f"Evolutions: pending {evo_pending} | applied {evo_applied} | rejected {evo_rejected}\n"
+        f"Autonomy: {'enabled' if AUTONOMY_ENABLED else 'disabled'} | checkpoint->verify->complete loop\n"
+        f"MCP: {len(TOOLS)} tools | Webhook: set | Loops: queue, cold, research, synthesis, diagnosis"
+    )
 
 
 def self_sync_check():
@@ -273,7 +302,17 @@ def _file_sha256(path: Path) -> str:
 
 def _deployment_manifest() -> dict:
     base = Path(__file__).resolve().parent
-    files = ["core_main.py", "core_orch_layer11.py", "core_meta_evaluator.py", "core_worker_critic.py", "core_worker_reflect.py"]
+    files = [
+        "core_main.py",
+        "core_orch_layer11.py",
+        "core_meta_evaluator.py",
+        "core_tools.py",
+        "core_reflection_audit.py",
+        "core_task_autonomy.py",
+        "core_worker_critic.py",
+        "core_worker_reflect.py",
+        "run_reflection_audit_ddl.py",
+    ]
     manifest = {}
     for rel in files:
         path = base / rel
@@ -617,18 +656,59 @@ async def trading_reflect(body: TradingReflectionRequest, req: Request):
             status_code=400,
             detail="trace_id, position_id, and decision_id are required in context",
         )
-    print(
-        f"[TRADING_REFLECT] trace_id={trace_id} decision_id={decision_id} "
-        f"position_id={position_id} queued"
+    context = build_reflection_context(
+        body.context or {},
+        source_domain="trading",
+        source_branch="unknown",
+        source_service="core-trading-bot",
+        output_text=body.output_text,
     )
+    ingress = register_reflection_event(context, body.output_text)
+    if ingress is None:
+        raise HTTPException(status_code=500, detail="failed to persist reflection event")
+    print(
+        f"[TRADING_REFLECT] event_id={context['event_id']} trace_id={trace_id} "
+        f"decision_id={decision_id} position_id={position_id} queued"
+    )
+    context["event_id"] = ingress["event_id"]
+    context["l11_session_id"] = ingress.get("l11_session_id")
     fire_trading(body.output_text, context)
 
     return {
         "ok": True,
         "queued": True,
         "source": "trading",
+        "event_id": context["event_id"],
         "trace_id": trace_id,
         "ts": datetime.utcnow().isoformat(),
+    }
+
+
+@app.get("/internal/reflection-events/query")
+async def reflection_events_query(
+    event_id: Optional[str] = Query(None),
+    trace_id: Optional[str] = Query(None),
+    decision_id: Optional[int] = Query(None),
+    position_id: Optional[int] = Query(None),
+    source_domain: Optional[str] = Query(None),
+    source_branch: Optional[str] = Query(None),
+    source_service: Optional[str] = Query(None),
+    _auth=Depends(require_mcp_secret),
+):
+    rows = fetch_reflection_events(
+        event_id=event_id,
+        trace_id=trace_id,
+        decision_id=decision_id,
+        position_id=position_id,
+        source_domain=source_domain,
+        source_branch=source_branch,
+        source_service=source_service,
+        limit=50,
+    )
+    return {
+        "ok": True,
+        "count": len(rows),
+        "events": rows,
     }
 
 
@@ -640,6 +720,13 @@ async def trading_reflection_query(
 ):
     if position_id is None and decision_id is None:
         raise HTTPException(status_code=400, detail="position_id or decision_id is required")
+
+    ledger_rows = fetch_reflection_events(
+        decision_id=decision_id,
+        position_id=position_id,
+        source_domain="trading",
+        limit=25,
+    )
 
     critiques = [
         row for row in sb_get(
@@ -725,6 +812,7 @@ async def trading_reflection_query(
             "hot_reflections": hot_rows[:10],
             "knowledge_base": kb_rows[:10],
             "mistakes": mistake_rows[:10],
+            "reflection_events": ledger_rows,
         },
     }
 
@@ -742,6 +830,20 @@ async def embed_text(body: EmbedRequest, _auth=Depends(require_mcp_secret)):
     if not text:
         raise HTTPException(status_code=400, detail="text is required")
     return {"ok": True, "embedding": _get_embedding(text)}
+
+
+@app.get("/operator/autonomy/status")
+async def operator_autonomy_status(_auth=Depends(require_mcp_secret)):
+    return autonomy_status()
+
+
+@app.post("/operator/autonomy/run")
+async def operator_autonomy_run(
+    max_tasks: int = Query(1, ge=1, le=10),
+    source: str = Query("self_assigned"),
+    _auth=Depends(require_mcp_secret),
+):
+    return run_autonomy_cycle(max_tasks=max_tasks, source=source)
 
 async def get_mcp_identity(
     x_mcp_secret: Optional[str] = Header(None, alias="X-MCP-Secret"),
@@ -778,6 +880,12 @@ async def mcp_post(req: Request, _auth=Depends(get_mcp_identity)):
     if isinstance(body, list):
         return JSONResponse([r for item in body if (r := handle_jsonrpc(item)) is not None])
     
+    session_id = (
+        req.query_params.get("session_id")
+        or req.headers.get("X-Session-Id")
+        or req.headers.get("mcp-session-id")
+        or ""
+    )
     response = handle_jsonrpc(body, session_id=session_id)
     if response is None:
         return JSONResponse({}, status_code=204)
@@ -1280,10 +1388,16 @@ def queue_poller():
     """Notify-only mode — no auto-execution without owner approval.
     Polls task_queue for pending tasks and notifies owner via Telegram."""
     print("[QUEUE] Started - notify-only mode (no auto-execution)")
+    notify_sources = ("core_v6_registry", "mcp_session")
     _notified: set = set()
     while True:
         try:
-            tasks = sb_get("task_queue", "status=eq.pending&order=priority.asc&limit=5")
+            tasks = sb_get(
+                "task_queue",
+                "status=eq.pending"
+                f"&source=in.({','.join(notify_sources)})"
+                "&order=priority.asc&limit=5",
+            )
             if tasks:
                 for t in tasks:
                     tid = t["id"]
@@ -1370,7 +1484,7 @@ async def deploy_webhook(req: Request):
 @app.on_event("startup")
 def on_start():
     set_webhook()
-    startup_v2()  # ── Orchestrator v2 init
+    orch = startup_v2() or {}
     # Auto-embed sync — patches sb_post to embed all semantic table inserts
     try:
         from core_embed_sync import install, install_critical
@@ -1382,11 +1496,10 @@ def on_start():
     threading.Thread(target=cold_processor_loop, daemon=True).start()
     # self_sync_check disabled -- CORE_SELF.md is tombstoned, superseded by system_map
     threading.Thread(target=background_researcher, daemon=True).start()
+    if AUTONOMY_ENABLED:
+        threading.Thread(target=autonomy_loop, daemon=True).start()
     counts = get_system_counts()
     resume = get_resume_task()
-    evo_pending  = counts.get('evolution_pending', 0)
-    evo_applied  = counts.get('evolution_applied', 0)
-    evo_rejected = counts.get('evolution_rejected', 0)
     # Show in_progress tasks brief
     try:
         in_progress = sb_get(
@@ -1423,14 +1536,9 @@ def on_start():
                 task_line = "No active tasks"
     except Exception as e:
         task_line = f"Tasks: unavailable ({e})"
-    evo_line = f"Evolutions — pending: {evo_pending} | applied: {evo_applied} | rejected: {evo_rejected}"
-    notify(
-        f"<b>CORE Online</b>\n{resume}\n"
-        f"KB: {counts.get('knowledge_base',0)} | Mistakes: {counts.get('mistakes',0)} | Sessions: {counts.get('sessions',0)}\n"
-        f"MCP: {len(TOOLS)} tools\n"
-        f"{evo_line}\n"
-        f"{task_line}"
-    )
+    brief = _build_startup_brief(resume if resume != "No active tasks" else task_line, counts, orch)
+    notify_ok = notify(brief)
+    print(f"[CORE] startup notify sent={notify_ok}")
     print(f"[CORE] v6.0 online :{PORT} - {resume}")
 
 

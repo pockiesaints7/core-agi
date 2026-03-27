@@ -47,7 +47,16 @@ def get_latest_session():
 
 def get_system_counts():
     counts = {}
-    for table in ["knowledge_base", "mistakes", "sessions", "task_queue", "hot_reflections", "evolution_queue"]:
+    for table in [
+        "knowledge_base",
+        "mistakes",
+        "sessions",
+        "task_queue",
+        "hot_reflections",
+        "evolution_queue",
+        "reflection_events",
+        "reflection_event_stages",
+    ]:
         try:
             r = httpx.get(
                 f"{SUPABASE_URL}/rest/v1/{table}?select=id&limit=1",
@@ -127,6 +136,47 @@ _SB_SCHEMA = {
             "fat_columns": ["new_patterns", "new_mistakes", "gaps_identified", "task_summary", "reflection_text"],
             "safe_select": "id,domain,quality_score,source,processed_by_cold,created_at",
             "notes": "Use id=gt.1. PROTECTED -- no deletes."
+        },
+        "reflection_events": {
+            "pk": "id", "pk_type": "bigserial",
+            "columns": {
+                "id": "bigint", "event_id": "uuid", "source": "text",
+                "source_domain": "text", "source_branch": "text", "source_service": "text",
+                "event_type": "text", "trace_id": "text", "decision_id": "text",
+                "position_id": "text", "session_id": "uuid", "symbol": "text",
+                "strategy": "text", "strategy_family": "text", "regime_at_entry": "text",
+                "bias_at_entry": "text", "verdict": "text", "pnl_usd": "float8",
+                "pnl_pct": "float8", "funding_usd": "float8", "capital_usd": "float8",
+                "confidence": "float8", "close_reason": "text", "output_text": "text",
+                "context": "jsonb", "producer_created_at": "timestamptz",
+                "core_received_at": "timestamptz", "status": "text",
+                "l11_session_id": "uuid", "critic_at": "timestamptz", "causal_at": "timestamptz",
+                "reflect_at": "timestamptz", "meta_at": "timestamptz",
+                "last_error": "text", "artifacts": "jsonb", "prompt_target": "text",
+                "prompt_version": "integer", "current_stage": "text",
+                "current_stage_status": "text", "updated_at": "timestamptz"
+            },
+            "required": ["event_id", "source", "source_domain", "source_branch", "source_service", "status"],
+            "enums": {},
+            "fat_columns": ["output_text", "context", "artifacts", "last_error"],
+            "safe_select": "event_id,source_domain,source_branch,source_service,status,trace_id,decision_id,position_id,core_received_at,updated_at",
+            "on_conflict": "event_id",
+            "notes": "Canonical reflection audit ledger for every L11 source. Use this before legacy artifact lookups."
+        },
+        "reflection_event_stages": {
+            "pk": "id", "pk_type": "bigserial",
+            "columns": {
+                "id": "bigint", "event_id": "uuid", "stage_name": "text",
+                "status": "text", "source": "text", "details": "jsonb",
+                "error": "text", "started_at": "timestamptz", "completed_at": "timestamptz",
+                "updated_at": "timestamptz"
+            },
+            "required": ["event_id", "stage_name", "status"],
+            "enums": {},
+            "fat_columns": ["details", "error"],
+            "safe_select": "id,event_id,stage_name,status,source,started_at,completed_at,updated_at",
+            "on_conflict": "event_id,stage_name",
+            "notes": "Per-stage audit trail for reflection_events."
         },
         "mistakes": {
             "pk": "id", "pk_type": "bigserial",
