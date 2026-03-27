@@ -15,7 +15,7 @@ load_dotenv()  # loads ~/core-agi/.env automatically
 from core_config import (
     L,
     GITHUB_PAT, GITHUB_REPO,
-    TELEGRAM_TOKEN, TELEGRAM_CHAT,
+    TELEGRAM_TOKEN, TELEGRAM_CHAT, TELEGRAM_WEBHOOK_SECRET,
 )
 
 # -- Telegram ------------------------------------------------------------------
@@ -42,16 +42,22 @@ def notify_owner(msg):
 
 
 def set_webhook():
-    import httpx
-    # HARDCODE DOMAIN KAMU
-    target_url = "https://core-agi.duckdns.org/webhook"
-    token = os.environ.get("TELEGRAM_TOKEN")
-    
-    print(f"[CORE] Hardcoding Webhook to: {target_url}")
+    target_domain = os.environ.get("PUBLIC_DOMAIN", "core-agi.duckdns.org").strip()
+    if "://" in target_domain:
+        target_domain = target_domain.split("://", 1)[1]
+    if target_domain.endswith(":80"):
+        target_domain = target_domain[:-3]
+    target_url = f"https://{target_domain}/webhook"
+
+    print(f"[CORE] Setting webhook to: {target_url}")
     try:
         resp = httpx.post(
-            f"https://api.telegram.org/bot{token}/setWebhook",
-            data={"url": target_url}
+            f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/setWebhook",
+            data={
+                "url": target_url,
+                "secret_token": TELEGRAM_WEBHOOK_SECRET,
+            },
+            timeout=10,
         )
         print(f"[CORE] Webhook Response: {resp.text}")
     except Exception as e:

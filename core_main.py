@@ -29,6 +29,7 @@ from pydantic import BaseModel
 from core_config import (
     MCP_SECRET, MCP_PROTOCOL_VERSION, PORT, SESSION_TTL_H,
     SUPABASE_URL, COLD_KB_GROWTH_THRESHOLD,
+    TELEGRAM_CHAT, TELEGRAM_WEBHOOK_SECRET,
     L, sb_get, sb_post, sb_patch, sb_upsert, sb_post_critical,
     _sbh, _sbh_count_svc, groq_chat,
 )
@@ -170,6 +171,15 @@ def self_sync_check():
 _sessions: dict = {}
 
 
+def _is_owner_chat(chat_id: str) -> bool:
+    return bool(chat_id) and secrets.compare_digest(str(chat_id), str(TELEGRAM_CHAT))
+
+
+def _telegram_webhook_ok(req: Request) -> bool:
+    token = req.headers.get("X-Telegram-Bot-Api-Secret-Token", "")
+    return bool(token) and secrets.compare_digest(str(token), str(TELEGRAM_WEBHOOK_SECRET))
+
+
 def mcp_new(ip: str) -> str:
     tok = hashlib.sha256(f"{MCP_SECRET}{ip}{time.time()}".encode()).hexdigest()[:32]
     _sessions[tok] = {
@@ -226,6 +236,19 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], all
 _sse_sessions: dict = {}
 
 
+async def require_mcp_secret(
+    x_mcp_secret: Optional[str] = Header(None, alias="X-MCP-Secret"),
+    authorization: Optional[str] = Header(None),
+    secret_query: Optional[str] = Query(None, alias="secret")
+):
+    token = x_mcp_secret or secret_query
+    if not token and authorization and authorization.startswith("Bearer "):
+        token = authorization[7:]
+    if not token or not secrets.compare_digest(str(token), str(MCP_SECRET)):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    return True
+
+
 # ---------------------------------------------------------------------------
 # Knowledge ingestion endpoints (TASK-22)
 # ---------------------------------------------------------------------------
@@ -238,7 +261,7 @@ class IngestRequest(BaseModel):
 
 
 @app.post("/ingest/knowledge")
-async def ingest_knowledge_endpoint(req: IngestRequest):
+async def ingest_knowledge_endpoint(req: IngestRequest, _auth=Depends(require_mcp_secret)):
     """Trigger knowledge ingestion pipeline for a topic."""
     try:
         from scraper.knowledge import ingest_knowledge
@@ -430,7 +453,7 @@ load();
 
 
 @app.get("/api/evolutions")
-def api_evolutions():
+def api_evolutions(_auth=Depends(require_mcp_secret)):
     rows = sb_get(
         "evolution_queue",
         "select=id,status,change_type,change_summary,confidence,pattern_key,diff_content,created_at"
@@ -448,7 +471,7 @@ class TranslateRequest(BaseModel):
 
 
 @app.post("/api/translate-evolution")
-async def translate_evolution(body: TranslateRequest):
+async def translate_evolution(body: TranslateRequest, _auth=Depends(require_mcp_secret)):
     """Server-side evolution translation using backend LLM (gemini_chat/groq_chat).
     Called by /review widget — replaces broken client-side Anthropic API call."""
     try:
@@ -490,6 +513,10 @@ class TradingReflectionRequest(BaseModel):
     context: dict = {}
 
 
+class EmbedRequest(BaseModel):
+    text: str
+
+
 @app.post("/internal/trading/reflect")
 async def trading_reflect(body: TradingReflectionRequest, req: Request):
     """
@@ -511,6 +538,16 @@ async def trading_reflect(body: TradingReflectionRequest, req: Request):
         "source": "trading",
         "ts": datetime.utcnow().isoformat(),
     }
+
+
+@app.post("/embed")
+async def embed_text(body: EmbedRequest, _auth=Depends(require_mcp_secret)):
+    from core_embeddings import _get_embedding
+
+    text = (body.text or "").strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="text is required")
+    return {"ok": True, "embedding": _get_embedding(text)}
 
 async def get_mcp_identity(
     x_mcp_secret: Optional[str] = Header(None, alias="X-MCP-Secret"),
@@ -547,7 +584,7 @@ async def mcp_post(req: Request, _auth=Depends(get_mcp_identity)):
     if isinstance(body, list):
         return JSONResponse([r for item in body if (r := handle_jsonrpc(item)) is not None])
     
-    response = handle_jsonrpc(body)
+    response = handle_jsonrpc(body, session_id=session_id)
     if response is None:
         return JSONResponse({}, status_code=204)
 
@@ -605,7 +642,7 @@ async def mcp_messages(req: Request, session_id: str = Query(...), _auth=Depends
     except json.JSONDecodeError:
         return JSONResponse({"error": "Parse error"}, status_code=400)
 
-    response = handle_jsonrpc(body)
+    response = handle_jsonrpc(body, session_id=session_id)
     
     if session_id in _sse_sessions:
         if response is not None:
@@ -647,7 +684,7 @@ def list_tools():
     return {n: {"perm": t.get("perm"), "args": t.get("args")} for n, t in TOOLS.items()}
 
 @app.get("/debug/sim")
-def debug_sim():
+def debug_sim(_auth=Depends(require_mcp_secret)):
     """Patch _run_simulation_batch to expose the raw Groq response + actual failure point."""
     import traceback, json as _json
     from core_config import groq_chat, GROQ_MODEL, sb_get, SUPABASE_URL, _sbh_count_svc
@@ -857,6 +894,8 @@ async def backfill_status(req: Request):
 @app.post("/webhook")
 async def webhook(req: Request):
     try:
+        if not _telegram_webhook_ok(req):
+            raise HTTPException(status_code=401, detail="Unauthorized")
         u = await req.json()
         keys = list(u.keys())
         print(f"[WEBHOOK] update keys={keys} update_id={u.get('update_id','?')}")
@@ -871,6 +910,8 @@ async def webhook(req: Request):
         else:
             # Non-message update (edited_message, callback_query, etc) — log and ignore
             print(f"[WEBHOOK] non-message update ignored: keys={keys}")
+    except HTTPException:
+        raise
     except Exception as e:
         print(f"[WEBHOOK] error: {e}")
     return {"ok": True}  # Always return 200 immediately — never block here
@@ -883,6 +924,9 @@ def handle_msg(msg):
     cid  = str(msg.get("chat", {}).get("id", ""))
     text = msg.get("text", "").strip()
     if not text:
+        return
+    if not _is_owner_chat(cid):
+        print(f"[WEBHOOK] unauthorized chat rejected: chat_id={cid}")
         return
     # Strip bot username suffix from commands (e.g. /status@reinvagnarbot -> /status)
     if text.startswith("/") and "@" in text:
