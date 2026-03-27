@@ -25,12 +25,22 @@ Sources:
   trading           — trade outcomes from core-trading-bot (Week 1 integration)
 """
 import asyncio
+import uuid
 from datetime import datetime
 
 from core_worker_critic  import critique_output
 from core_worker_causal  import extract_causality
 from core_worker_reflect import reflect_on_gaps
 from core_meta_evaluator import evaluate
+
+
+def _effective_session_id(session_id: str = "", context: dict = None) -> str:
+    if session_id:
+        return session_id
+    trace_id = (context or {}).get("trace_id")
+    if not trace_id:
+        return ""
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, str(trace_id)))
 
 
 async def layer11_post_output(
@@ -56,7 +66,7 @@ async def layer11_post_output(
         return
 
     print(f"[L11] Post-output pipeline firing | source={source}")
-    effective_session_id = session_id or ((context or {}).get("trace_id") if context else "")
+    effective_session_id = _effective_session_id(session_id, context)
 
     try:
         # Step 1: Critic (sync in thread to not block event loop)
