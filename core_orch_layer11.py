@@ -120,17 +120,21 @@ def fire_autonomous(output_text: str, session_id: str = "", context: dict = None
 def fire_background_research(output_text: str) -> None:
     """Call from background_researcher() in core_train.py after each cycle output."""
     try:
-        loop = asyncio.get_event_loop()
-        if loop.is_running():
-            asyncio.create_task(layer11_post_output(
+        try:
+            loop = asyncio.get_running_loop()
+            loop.create_task(layer11_post_output(
                 output_text=output_text,
                 source="background_research",
             ))
-        else:
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
             loop.run_until_complete(layer11_post_output(
                 output_text=output_text,
                 source="background_research",
             ))
+            loop.close()
+            asyncio.set_event_loop(None)
     except Exception as e:
         print(f"[L11] fire_background_research error: {e}")
 
