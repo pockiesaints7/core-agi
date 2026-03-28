@@ -603,6 +603,18 @@ def t_external_service_preflight(targets: str = "supabase,groq,telegram,github")
     except Exception as e:
         return {"ok": False, "error": str(e), "targets": [], "checked": {}, "blocked": ["preflight_error"], "overall": "degraded"}
 
+def _require_external_service_preflight(targets: str, operation: str) -> dict | None:
+    """Shared guard for risky write paths.
+
+    Returns None when the requested services are healthy. Returns a structured
+    error payload when the preflight fails so callers can stop before mutating
+    external state.
+    """
+    preflight = t_external_service_preflight(targets)
+    if preflight.get("ok"):
+        return None
+    return {"ok": False, "error": f"{operation} preflight failed", "preflight": preflight}
+
 def t_constitution():
     try:
         with open("constitution.txt") as f: txt = f.read()
@@ -911,6 +923,9 @@ def t_get_mistakes(domain="", limit=10):
 
 def t_update_state(key="", value="", reason=""):
     try:
+        preflight = _require_external_service_preflight("supabase", "update_state")
+        if preflight:
+            return preflight
         ok = sb_post("sessions", {"summary": f"[state_update] {key}: {str(value)[:200]}",
                               "actions": [f"{key}={str(value)[:100]} - {reason}"], "interface": "mcp"})
         return {"ok": ok, "key": key}
@@ -921,6 +936,9 @@ def t_add_knowledge(domain="", topic="", instruction="", content="", tags="", co
     """Add knowledge entry. instruction = behavioral directive for CORE (primary). content = supporting detail. At least one required. source_type=manual|ingested|evolved|session. source_ref=URL or session_id."""
     if not instruction and not content:
         return {"ok": False, "error": "At least one of instruction or content is required"}
+    preflight = _require_external_service_preflight("supabase", "add_knowledge")
+    if preflight:
+        return preflight
     # TASK-27.B: Contradiction + duplicate check before insert
     try:
         existing = sb_get("knowledge_base",
@@ -998,6 +1016,9 @@ def t_set_simulation(instruction: str) -> dict:
     Call with empty instruction to reset to default 1M user simulation.
     """
     try:
+        preflight = _require_external_service_preflight("supabase", "set_simulation")
+        if preflight:
+            return preflight
         instruction = (instruction or "").strip()
         if not instruction:
             # Clear custom simulation -- reset to default
@@ -1063,6 +1084,9 @@ def t_log_mistake(context="", what_failed="", correct_approach="", domain="gener
             return {"ok": True, "action": "skipped_duplicate", "hint": "identical mistake already logged in last 24h"}
     except Exception:
         pass  # dedup failure is non-fatal -- proceed with write
+    preflight = _require_external_service_preflight("supabase", "log_mistake")
+    if preflight:
+        return preflight
     ok = sb_post("mistakes", {"domain": domain, "context": context, "what_failed": what_failed,
                               "correct_approach": correct_approach, "root_cause": root_cause or what_failed,
                               "how_to_avoid": how_to_avoid or correct_approach, "severity": severity, "tags": []})
@@ -1094,6 +1118,9 @@ def t_read_file(path, repo="", start_line="", end_line=""):
 def t_write_file(path="", content="", message="", repo=""):
     """Write file to GitHub repo - FULL OVERWRITE. Use for NEW files only.
     GUARD: blocked for core_main.py and core_tools.py - use patch_file or gh_search_replace for surgical edits."""
+    preflight = _require_external_service_preflight("github", "write_file")
+    if preflight:
+        return preflight
     # D.4: expand blocked set -- core_train.py and core_config.py also critical, full overwrite risk
     blocked = {"core_main.py", "core_tools.py", "core_train.py", "core_config.py"}
     clean_path = path.strip().lstrip("/")
@@ -2009,6 +2036,9 @@ def t_gh_search_replace(path="", old_str="", new_str=None, message="", repo="", 
     """Surgical find-replace using Blobs API (atomic commit, no SHA conflict, no size limit).
     allow_deletion: must be 'true' to permit empty new_str. Default false -- blocks accidental deletion."""
     try:
+        preflight = _require_external_service_preflight("github", "gh_search_replace")
+        if preflight:
+            return preflight
         repo = repo or GITHUB_REPO
         # DELETION GUARD: block empty/missing new_str unless allow_deletion=true
         _allow_del = str(allow_deletion).lower() == "true"
@@ -4696,6 +4726,9 @@ def t_task_add(title: str = "", description: str = "", priority: str = "5",
     Only source=mcp_session allowed -- self_assigned tasks must not be created via this tool."""
     if not title:
         return {"ok": False, "error": "title required"}
+    preflight = _require_external_service_preflight("supabase", "task_add")
+    if preflight:
+        return preflight
     try: pri = int(priority) if priority else 5
     except Exception: pri = 5
     task_json = json.dumps({
@@ -4812,6 +4845,9 @@ def t_kb_update(domain: str, topic: str, instruction: str = "",
         return {"ok": False, "error": "domain and topic required"}
     if not instruction and not content:
         return {"ok": False, "error": "at least one of instruction or content required"}
+    preflight = _require_external_service_preflight("supabase", "kb_update")
+    if preflight:
+        return preflight
     try:
         # TASK-27.C: Check for existing entry -- notify owner if instruction is being changed
         existing = sb_get("knowledge_base",
@@ -4896,6 +4932,9 @@ def t_add_evolution_rule(
     try:
         if not rule or not domain:
             return {"ok": False, "error": "rule and domain are required"}
+        preflight = _require_external_service_preflight("supabase", "add_evolution_rule")
+        if preflight:
+            return preflight
 
         persisted_to = []
 
@@ -6386,6 +6425,9 @@ def t_add_behavioral_rule(trigger: str = "", pointer: str = "", full_rule: str =
         "project","auth","code","reasoning","failure_recovery","local_pc","telegram",
     }
     try:
+        preflight = _require_external_service_preflight("supabase", "add_behavioral_rule")
+        if preflight:
+            return preflight
         trigger = (trigger or "").strip()
         pointer = (pointer or "").strip()
         full_rule = (full_rule or "").strip()
@@ -6543,6 +6585,9 @@ def t_update_infrastructure_status(component: str = "", status: str = "", notes:
             return {"ok": False, "error_code": "missing_params", "message": "component and status are required", "retry_hint": False, "domain": "infrastructure_map"}
         if status == "tombstone" and str(owner_confirm).strip().lower() not in ("true","1","yes"):
             return {"ok": False, "error_code": "permission_denied", "message": "Tombstoning a component requires owner_confirm=true. This is an irreversible action.", "retry_hint": False, "domain": "infrastructure_map"}
+        preflight = _require_external_service_preflight("supabase", "update_infrastructure_status")
+        if preflight:
+            return preflight
         updates = {"status": status, "last_checked": datetime.utcnow().isoformat()}
         if notes:
             updates["notes"] = notes
@@ -8040,6 +8085,9 @@ def t_sync_system_map(trigger: str = "manual", notify_on_changes: str = "true") 
     """
     _notify = str(notify_on_changes).strip().lower() not in ("false", "0", "no")
     try:
+        preflight = _require_external_service_preflight("supabase,github", "sync_system_map")
+        if preflight:
+            return preflight
         rows = sb_get(
             "system_map",
             "select=id,layer,component,item_type,name,role,responsibility,key_facts,is_volatile,status,notes"
