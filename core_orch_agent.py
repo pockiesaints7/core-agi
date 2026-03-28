@@ -436,6 +436,11 @@ def _seed_repo_map_state(goal: str, agent_state: dict, evidence_gate: dict) -> N
         "status": status_packet,
         "component_packet": _compact_component_packet(component_packet),
         "graph_packet": _compact_graph_packet(graph_packet),
+        "recommended_paths": [
+            p.get("path")
+            for p in _compact_component_packet(component_packet).get("top_components", [])
+            if p.get("path")
+        ][:5],
         "target_paths": targets,
         "goal": goal[:240],
     }
@@ -471,6 +476,13 @@ def _build_prompt(
         parts.append("REPO MAP SEED (use this before re-listing files; do NOT start with file_list or shell if it already has enough signal):")
         parts.append(_j.dumps(repo_seed, default=str))
         parts.append("")
+        recommended = repo_seed.get("recommended_paths") or []
+        if recommended:
+            parts.append("CODE INVESTIGATION STARTING POINTS:")
+            for path in recommended:
+                parts.append(f"- file_read({path})")
+            parts.append("Instruction: inspect one of the starting points or repo_component_packet(query=goal) before any file_list/shell/list_tools.")
+            parts.append("")
     if history:
         parts.append("STEP HISTORY (most recent last):")
         for h in history:
