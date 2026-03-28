@@ -59,6 +59,8 @@ _last_meta_learning_run: float = -1.0
 _META_LEARNING_INTERVAL = 21600  # 6 hours
 _last_meta_training_run: float = -1.0
 _META_TRAINING_INTERVAL = 21600  # 6 hours
+_last_causal_discovery_run: float = -1.0
+_CAUSAL_DISCOVERY_INTERVAL = 21600  # 6 hours
 _last_joint_training_run: float = -1.0
 _JOINT_TRAINING_INTERVAL = 21600  # 6 hours
 _JOINT_TRAINING_PLANNER_ENABLED = os.getenv("JOINT_TRAINING_PLANNER_ENABLED", "").strip().lower() in {"1", "true", "yes", "on"}
@@ -1696,6 +1698,154 @@ def _run_meta_training_phase(cycle_count: int = 0) -> dict:
         return {"ok": False, "reason": "kb_upsert_failed"}
     except Exception as e:
         print(f"[META] training phase error (non-fatal): {e}")
+        return {"ok": False, "error": str(e)}
+
+
+def _run_causal_discovery_phase(cycle_count: int = 0) -> dict:
+    """Bounded causal-discovery phase run before standard RL training.
+
+    This does not train weights. It records a causal abstraction contract from
+    recent tasks, mistakes, evolutions, and hot reflections so the main RL
+    epoch can follow a better abstraction layer.
+    """
+    try:
+        curriculum = _build_task_embedding_curriculum(limit=16)
+        counts = curriculum.get("counts", {}) or {}
+        items = curriculum.get("items", []) or []
+        recent_hots = sb_get(
+            "hot_reflections",
+            "select=domain,quality_score,task_summary,new_patterns,new_mistakes,gaps_identified,source,created_at"
+            "&order=created_at.desc&limit=8",
+            svc=True,
+        ) or []
+        recent_mistakes = sb_get(
+            "mistakes",
+            "select=domain,what_failed,severity,root_cause,how_to_avoid&order=created_at.desc&limit=8",
+            svc=True,
+        ) or []
+        recent_evos = sb_get(
+            "evolution_queue",
+            "select=change_type,change_summary,confidence,impact,recommendation,status,source"
+            "&status=in.(pending,applied,rejected,synthesized)&order=created_at.desc&limit=8",
+            svc=True,
+        ) or []
+
+        diverse_items = []
+        seen_tracks = set()
+        for item in items:
+            track = (item.get("work_track") or "general").strip()
+            if track not in seen_tracks:
+                diverse_items.append(item)
+                seen_tracks.add(track)
+            if len(diverse_items) >= 8:
+                break
+        if len(diverse_items) < 8:
+            for item in items:
+                if item not in diverse_items:
+                    diverse_items.append(item)
+                if len(diverse_items) >= 8:
+                    break
+
+        task_graph = []
+        for item in diverse_items[:8]:
+            title = (item.get("title") or item.get("topic") or item.get("summary") or "")[:180]
+            track = (item.get("work_track") or "general").strip()
+            task_graph.append({
+                "track": track,
+                "title": title,
+                "priority": item.get("priority"),
+                "source": item.get("source") or "",
+            })
+
+        causal_layers = []
+        for idx, item in enumerate(task_graph[:6]):
+            causal_layers.append({
+                "layer": idx + 1,
+                "cause": item.get("track") or "general",
+                "effect": item.get("title") or "",
+                "confidence": round(0.5 + min(0.4, 0.05 * idx), 3),
+            })
+
+        avg_quality = None
+        quality_scores = [float(h.get("quality_score") or 0.0) for h in recent_hots if h.get("quality_score") is not None]
+        if quality_scores:
+            avg_quality = round(sum(quality_scores) / len(quality_scores), 3)
+
+        track_counts = Counter((item.get("work_track") or "general") for item in diverse_items)
+        focus_track = None
+        if counts:
+            try:
+                focus_track = sorted(counts.items(), key=lambda kv: int(kv[1] or 0))[0][0]
+            except Exception:
+                focus_track = None
+
+        phase_packet = {
+            "cycle_count": int(cycle_count or 0),
+            "phase": "causal_discovery",
+            "focus_track": focus_track or "mixed",
+            "task_curriculum_counts": counts,
+            "task_graph": task_graph,
+            "causal_layers": causal_layers,
+            "meta_learning_objective": {
+                "objective": "Learn abstraction-layer routing from causal structure before the RL epoch.",
+                "inputs": [
+                    "task_graph",
+                    "causal_layers",
+                    "recent_hot_reflections",
+                    "recent_mistakes",
+                    "recent_evolutions",
+                ],
+                "rule": "prefer causal predecessors that improve sample efficiency and generalization",
+            },
+            "performance_metrics": {
+                "hot_reflections": len(recent_hots),
+                "mistakes": len(recent_mistakes),
+                "evolutions": len(recent_evos),
+                "avg_quality_score": avg_quality,
+                "track_diversity": len(track_counts),
+                "top_track": track_counts.most_common(1)[0][0] if track_counts else None,
+            },
+            "recent_mistakes": [
+                (m.get("what_failed") or m.get("root_cause") or "")[:160]
+                for m in recent_mistakes[:8]
+            ],
+            "recent_evolutions": [
+                (e.get("change_summary") or "")[:160]
+                for e in recent_evos[:8]
+            ],
+            "notes": "Planner-only causal discovery phase. This records the abstraction contract and does not change model weights.",
+        }
+
+        today = datetime.utcnow().strftime("%Y-%m-%d")
+        topic = f"causal_discovery_phase_{today}"
+        content = "Causal discovery phase (bounded).\n" + json.dumps(phase_packet, ensure_ascii=True)[:5000]
+        ok = sb_upsert("knowledge_base", {
+            "domain": "meta",
+            "topic": topic,
+            "content": content,
+            "instruction": content,
+            "source": "causal_discovery_phase",
+            "source_type": "training_phase",
+            "source_ref": f"background_researcher:cycle={int(cycle_count or 0)}",
+            "confidence": "low",
+            "tags": ["meta", "training", "phase", "causal", "abstraction"],
+            "active": True,
+        }, on_conflict="domain,topic")
+        if ok:
+            sb_post("sessions", {
+                "summary": f"[state_update] last_causal_discovery_ts: {time.time()}",
+                "actions": ["last_causal_discovery_ts persisted", "causal_discovery_phase captured"],
+                "interface": "mcp",
+            })
+            return {
+                "ok": True,
+                "topic": topic,
+                "focus_track": focus_track or "mixed",
+                "metrics": phase_packet["performance_metrics"],
+            }
+        return {"ok": False, "reason": "kb_upsert_failed"}
+    except Exception as e:
+        print(f"[CAUSAL] discovery phase error (non-fatal): {e}")
         return {"ok": False, "error": str(e)}
 
 
@@ -3493,7 +3643,7 @@ def _load_researcher_prompt(target: str):
 
 
 def background_researcher():
-    global _last_research_run, _last_public_source_run, _last_smap_update, _last_meta_learning_run, _last_meta_training_run, _last_joint_training_run, _last_router_policy_run
+    global _last_research_run, _last_public_source_run, _last_smap_update, _last_meta_learning_run, _last_meta_training_run, _last_causal_discovery_run, _last_joint_training_run, _last_router_policy_run
     print("[RESEARCH] background researcher started - real signal + simulation + public source mode")
     _cycle_count = 0
 
@@ -3546,6 +3696,18 @@ def background_researcher():
     except Exception as e:
         print(f"[RESEARCH] restore meta_training_ts error: {e}")
         _last_meta_training_run = time.time() - (_META_TRAINING_INTERVAL + 60)
+
+    try:
+        rows = sb_get("sessions", "select=summary&summary=like.*last_causal_discovery_ts*&order=created_at.desc&limit=1", svc=True)
+        if rows:
+            val = rows[0]["summary"].split("last_causal_discovery_ts:")[-1].strip().split()[0]
+            _last_causal_discovery_run = float(val)
+            print(f"[RESEARCH] Restored last_causal_discovery_ts: {datetime.utcfromtimestamp(_last_causal_discovery_run).isoformat()}")
+        else:
+            _last_causal_discovery_run = time.time() - (_CAUSAL_DISCOVERY_INTERVAL + 60)
+    except Exception as e:
+        print(f"[RESEARCH] restore causal_discovery_ts error: {e}")
+        _last_causal_discovery_run = time.time() - (_CAUSAL_DISCOVERY_INTERVAL + 60)
 
     try:
         rows = sb_get("sessions", "select=summary&summary=like.*last_router_policy_ts*&order=created_at.desc&limit=1", svc=True)
@@ -3610,6 +3772,15 @@ def background_researcher():
 
                 real_ok = _extract_real_signal()
                 time.sleep(3)
+                causal_discovery_ok = False
+                if now - _last_causal_discovery_run >= _CAUSAL_DISCOVERY_INTERVAL:
+                    print("[RESEARCH] Running causal-discovery phase...")
+                    _last_causal_discovery_run = now
+                    sb_post("sessions", {"summary": f"[state_update] last_causal_discovery_ts: {now}", "actions": ["last_causal_discovery_ts persisted"], "interface": "mcp"})
+                    causal_phase = _run_causal_discovery_phase(cycle_count=_cycle_count)
+                    causal_discovery_ok = bool(causal_phase.get("ok"))
+                    if causal_discovery_ok:
+                        print(f"[CAUSAL] Discovery phase stored: {causal_phase.get('topic')} focus={causal_phase.get('focus_track')}")
                 meta_train_ok = False
                 if now - _last_meta_training_run >= _META_TRAINING_INTERVAL:
                     print("[RESEARCH] Running meta-training phase...")
@@ -3654,6 +3825,8 @@ def background_researcher():
                         parts = []
                         if real_ok:
                             parts.append("new patterns extracted")
+                        if causal_discovery_ok:
+                            parts.append("causal discovery phase stored")
                         if meta_train_ok:
                             parts.append("meta training phase stored")
                         if sim_ok:
