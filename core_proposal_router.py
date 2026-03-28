@@ -203,6 +203,9 @@ def _owner_review_cluster_packet(rows: list[dict], persist: bool = True) -> dict
             ),
             "shared_artifact": "evolution_queue",
             "shared_route": cluster["route_worker"],
+            "close_ready": True,
+            "close_eligible_members": len(members),
+            "close_blocked_members": 0,
         }
         packets.append(packet)
 
@@ -249,6 +252,194 @@ def _owner_review_cluster_packet(rows: list[dict], persist: bool = True) -> dict
         "persisted": persisted,
         "persist_errors": persist_errors,
     }
+
+
+def _index_cluster_packets(packet: dict) -> tuple[dict[str, dict], dict[str, dict]]:
+    clusters = packet.get("clusters") or []
+    by_id = {}
+    by_key = {}
+    for cluster in clusters:
+        cid = _safe_text(cluster.get("cluster_id") or "", 64)
+        ckey = _safe_text(cluster.get("cluster_key") or "", 200)
+        if cid:
+            by_id[cid] = cluster
+        if ckey:
+            by_key[ckey] = cluster
+    return by_id, by_key
+
+
+def _resolve_cluster_for_close(
+    packet: dict,
+    cluster_id: str = "",
+    cluster_key: str = "",
+) -> dict:
+    by_id, by_key = _index_cluster_packets(packet)
+    cid = _safe_text(cluster_id or "", 64)
+    ckey = _safe_text(cluster_key or "", 200)
+    if cid and cid in by_id:
+        return by_id[cid]
+    if ckey and ckey in by_key:
+        return by_key[ckey]
+    if cid:
+        return {}
+    if ckey:
+        return {}
+    return {}
+
+
+def _cluster_close_note(
+    cluster: dict,
+    outcome: str,
+    reason: str = "",
+    reviewer: str = "owner",
+) -> str:
+    core = (
+        f"Cluster batch-close by {reviewer}: cluster={_safe_text(cluster.get('cluster_id') or '', 40)} "
+        f"key={_safe_text(cluster.get('cluster_key') or '', 140)} "
+        f"outcome={outcome} count={int(cluster.get('count') or 0)}."
+    )
+    if reason:
+        core += f" Reason: {_safe_text(reason, 420)}"
+    return core[:780]
+
+
+def owner_review_cluster_close(
+    cluster_id: str = "",
+    cluster_key: str = "",
+    outcome: str = "applied",
+    reason: str = "",
+    reviewed_by: str = "owner",
+    dry_run: str = "false",
+) -> dict:
+    """Close a full owner-only cluster in one controlled loop.
+
+    Outcome is `applied` or `rejected`. This function only targets rows that are
+    still `status=pending` and owner-only by the current proposal-router policy.
+    """
+    target_outcome = _safe_text(outcome or "applied", 20).lower()
+    if target_outcome not in {"applied", "rejected"}:
+        return {"ok": False, "error": "invalid outcome", "valid_outcomes": ["applied", "rejected"]}
+
+    dry = str(dry_run or "").strip().lower() in {"1", "true", "yes", "on"}
+    rows = _fetch_pending_reviews(limit=5000)
+    owner_rows = []
+    for row in rows:
+        strat = _row_strategy(row)
+        if _is_owner_only(row, strat):
+            owner_rows.append(row)
+
+    packet = _owner_review_cluster_packet(owner_rows, persist=False)
+    cluster = _resolve_cluster_for_close(packet, cluster_id=cluster_id, cluster_key=cluster_key)
+    if not cluster:
+        clusters = packet.get("clusters") or []
+        return {
+            "ok": False,
+            "error": "cluster not found",
+            "requested_cluster_id": _safe_text(cluster_id, 64),
+            "requested_cluster_key": _safe_text(cluster_key, 200),
+            "available_cluster_ids": [_safe_text(c.get("cluster_id") or "", 20) for c in clusters[:25]],
+            "available_cluster_keys": [_safe_text(c.get("cluster_key") or "", 120) for c in clusters[:25]],
+            "pending_owner_only": len(owner_rows),
+        }
+
+    members = [int(mid) for mid in (cluster.get("member_ids") or []) if int(mid or 0) > 0]
+    if not members:
+        return {"ok": False, "error": "cluster has no members", "cluster_id": cluster.get("cluster_id")}
+
+    now = datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
+    reviewer = _safe_text(reviewed_by or "owner", 40) or "owner"
+    note = _cluster_close_note(cluster, target_outcome, reason=reason, reviewer=reviewer)
+    patch_payload = {
+        "status": target_outcome,
+        "approval_tier": "owner_review",
+        "tier_applied_at": now,
+        "recommendation": note,
+    }
+    if target_outcome == "applied":
+        patch_payload["applied_at"] = now
+    if target_outcome == "rejected":
+        patch_payload["rejected_by_owner"] = True
+
+    attempted = 0
+    updated = []
+    failed = []
+    for mid in members:
+        attempted += 1
+        if dry:
+            updated.append(mid)
+            continue
+        ok = sb_patch("evolution_queue", f"id=eq.{mid}&status=eq.pending", patch_payload)
+        if ok:
+            updated.append(mid)
+        else:
+            failed.append(mid)
+
+    result = {
+        "ok": len(failed) == 0,
+        "cluster_id": cluster.get("cluster_id"),
+        "cluster_key": cluster.get("cluster_key"),
+        "outcome": target_outcome,
+        "attempted": attempted,
+        "updated": len(updated),
+        "failed": len(failed),
+        "updated_ids": updated[:100],
+        "failed_ids": failed[:100],
+        "dry_run": dry,
+        "note": note,
+        "pending_owner_only_now": _count_rows(
+            "evolution_queue",
+            "select=id&status=eq.pending&approval_tier=in.(owner_only,owner_review)",
+        ),
+    }
+    result["close_state"] = "complete" if len(failed) == 0 else "partial"
+    result["closed_at"] = now
+    result["closed_by"] = reviewer
+    if dry:
+        result["kb_persisted"] = False
+        result["kb_persist_error"] = ""
+        return result
+
+    close_packet = dict(cluster)
+    close_packet.update({
+        "closed": True,
+        "close_state": result["close_state"],
+        "closed_at": now,
+        "closed_by": reviewer,
+        "decision": target_outcome,
+        "reason": _safe_text(reason, 1200),
+        "reviewed_by": reviewer,
+        "updated_ids": updated[:100],
+        "failed_ids": failed[:100],
+        "close_note": note,
+    })
+    kb_persisted = False
+    kb_persist_error = ""
+    try:
+        from core_tools import t_kb_update
+
+        kb_res = t_kb_update(
+            domain="owner_review_cluster",
+            topic=f"cluster:{cluster.get('cluster_id')}",
+            instruction="Use this owner-review cluster packet as the canonical closure record.",
+            content=json.dumps(close_packet, default=str),
+            confidence="high",
+            source_type="evolved",
+            source_ref=f"owner_review_cluster:{cluster.get('cluster_key')}",
+        )
+        kb_persisted = bool(kb_res.get("ok"))
+    except Exception as exc:
+        kb_persist_error = str(exc)
+    result["kb_persisted"] = kb_persisted
+    result["kb_persist_error"] = kb_persist_error
+    if not dry and len(updated) > 0:
+        try:
+            notify(
+                f"Owner-review cluster closed: {cluster.get('cluster_id')} "
+                f"({target_outcome}) updated={len(updated)} failed={len(failed)}"
+            )
+        except Exception:
+            pass
+    return result
 
 
 def _count_rows(table: str, qs: str) -> int:
@@ -528,6 +719,12 @@ def proposal_router_status(limit: int = 5) -> dict:
             "top_clusters": top_clusters,
             "cluster_persisted": cluster_packet.get("persisted", []),
             "cluster_persist_errors": cluster_packet.get("persist_errors", []),
+            "cluster_close_ready_count": sum(
+                1 for c in (cluster_packet.get("clusters") or []) if bool(c.get("close_ready"))
+            ),
+            "cluster_close_ready_rows": sum(
+                int(c.get("close_eligible_members") or 0) for c in (cluster_packet.get("clusters") or [])
+            ),
             "auto_routed_counts": auto.get("auto_route_counts", {}),
             "auto_routed": auto.get("auto_routed", []),
             "auto_route_errors": auto.get("auto_errors", []),
@@ -557,6 +754,8 @@ def proposal_router_status(limit: int = 5) -> dict:
             "top_clusters": [],
             "cluster_persisted": [],
             "cluster_persist_errors": [],
+            "cluster_close_ready_count": 0,
+            "cluster_close_ready_rows": 0,
             "auto_routed_counts": {},
             "auto_routed": [],
             "auto_route_errors": [],
@@ -575,6 +774,7 @@ def render_proposal_router_dashboard(status: dict | None = None, summary_note: s
         f"Tracks: " + (", ".join(f"{_escape(k)}={v}" for k, v in sorted((status.get('track_counts') or {}).items())) or "none"),
         f"Routes: " + (", ".join(f"{_escape(k)}={v}" for k, v in sorted((status.get('route_counts') or {}).items())) or "none"),
         f"Owner-review clusters: {status.get('cluster_count', 0)} groups / {status.get('cluster_member_count', 0)} rows",
+        f"Cluster close-ready: {status.get('cluster_close_ready_count', 0)} groups / {status.get('cluster_close_ready_rows', 0)} rows",
         f"Cluster themes: " + (", ".join(f"{_escape(k)}={v}" for k, v in sorted((status.get('cluster_theme_counts') or {}).items())) or "none"),
         "Cluster packets are mirrored into knowledge_base as domain=owner_review_cluster.",
         f"Auto-routed: " + (", ".join(f"{_escape(k)}={v}" for k, v in sorted((status.get('auto_routed_counts') or {}).items())) or "none"),
@@ -729,6 +929,8 @@ def proposal_router_summary(limit: int = 5) -> dict:
         "task_group_counts": status.get("task_group_counts", {}),
         "cluster_count": status.get("cluster_count", 0),
         "cluster_member_count": status.get("cluster_member_count", 0),
+        "cluster_close_ready_count": status.get("cluster_close_ready_count", 0),
+        "cluster_close_ready_rows": status.get("cluster_close_ready_rows", 0),
         "cluster_theme_counts": status.get("cluster_theme_counts", {}),
         "auto_routed_counts": status.get("auto_routed_counts", {}),
         "review_packets": top_packets,
@@ -762,6 +964,8 @@ def owner_review_cluster_packet(limit: int = 5, persist: str = "true") -> dict:
         "owner_pending": len(owner_rows),
         "cluster_count": cluster_packet.get("cluster_count", 0),
         "cluster_member_count": cluster_packet.get("member_count", 0),
+        "cluster_close_ready_count": sum(1 for c in clusters if bool(c.get("close_ready"))),
+        "cluster_close_ready_rows": sum(int(c.get("close_eligible_members") or 0) for c in clusters),
         "theme_counts": dict(sorted(theme_counts.items())),
         "target_counts": dict(sorted(target_counts.items())),
         "clusters": clusters[:lim],
@@ -770,6 +974,7 @@ def owner_review_cluster_packet(limit: int = 5, persist: str = "true") -> dict:
         "summary": (
             f"owner_review_clusters={cluster_packet.get('cluster_count', 0)} | "
             f"members={cluster_packet.get('member_count', 0)} | "
+            f"close_ready_groups={sum(1 for c in clusters if bool(c.get('close_ready')))} | "
             f"themes={', '.join(f'{k}={v}' for k, v in sorted(theme_counts.items())) or 'none'}"
         ),
     }
@@ -796,6 +1001,26 @@ def register_tools() -> None:
             "args": [
                 {"name": "limit", "type": "string", "description": "Maximum clusters to return (default 5)."},
                 {"name": "persist", "type": "string", "description": "Whether to persist cluster packets to KB (default true)."},
+            ],
+        }
+    if "owner_review_cluster_close" not in TOOLS:
+        TOOLS["owner_review_cluster_close"] = {
+            "fn": lambda cluster_id="", cluster_key="", outcome="applied", reason="", reviewed_by="owner", dry_run="false": owner_review_cluster_close(
+                cluster_id=cluster_id,
+                cluster_key=cluster_key,
+                outcome=outcome,
+                reason=reason,
+                reviewed_by=reviewed_by,
+                dry_run=dry_run,
+            ),
+            "desc": "Batch-close one owner-only cluster by cluster_id or cluster_key. outcome=applied|rejected. Uses pending-owner rows only.",
+            "args": [
+                {"name": "cluster_id", "type": "string", "description": "Cluster id from owner_review_cluster_packet."},
+                {"name": "cluster_key", "type": "string", "description": "Cluster key fallback if cluster_id is unknown."},
+                {"name": "outcome", "type": "string", "description": "applied or rejected (default applied)."},
+                {"name": "reason", "type": "string", "description": "Optional audit reason for the batch close."},
+                {"name": "reviewed_by", "type": "string", "description": "Reviewer label (default owner)."},
+                {"name": "dry_run", "type": "string", "description": "true to preview affected rows without patching."},
             ],
         }
 

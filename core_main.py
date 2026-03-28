@@ -313,6 +313,63 @@ def _render_review_dashboard(rows: list[dict], summary_note: str = "") -> str:
     return _render_section("Proposal Router", render_proposal_router_dashboard(status, summary_note=summary_note).splitlines())
 
 
+def _proposal_router_cluster_close(
+    cluster_id: str = "",
+    cluster_key: str = "",
+    decision: str = "applied",
+    reason: str = "",
+    verification_note: str = "",
+    reviewed_by: str = "owner",
+    dry_run: str = "false",
+) -> dict:
+    """Call cluster close handler from core_proposal_router with safe fallback."""
+    try:
+        import core_proposal_router as _pr  # local import to avoid hard startup coupling
+    except Exception as e:
+        return {"ok": False, "error": f"proposal router unavailable: {e}"}
+
+    candidates = (
+        "owner_review_cluster_close",
+        "close_owner_review_cluster",
+        "owner_review_cluster_resolve",
+        "proposal_router_cluster_close",
+    )
+    fn = None
+    for name in candidates:
+        maybe = getattr(_pr, name, None)
+        if callable(maybe):
+            fn = maybe
+            break
+    if not fn:
+        return {
+            "ok": False,
+            "error": "cluster close function not available in core_proposal_router",
+            "expected_any": list(candidates),
+        }
+    try:
+        return fn(
+            cluster_id=cluster_id,
+            cluster_key=cluster_key,
+            outcome=decision,
+            reason=reason,
+            verification_note=verification_note,
+            reviewed_by=reviewed_by,
+            dry_run=dry_run,
+        )
+    except TypeError:
+        # Backward-compatible call signature if newer kwargs are not yet supported.
+        return fn(
+            cluster_id=cluster_id,
+            cluster_key=cluster_key,
+            outcome=decision,
+            reason=reason,
+            reviewed_by=reviewed_by,
+            dry_run=dry_run,
+        )
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
 def _queue_review_reroute(row: dict, route: str, reason: str = "") -> dict:
     return queue_review_reroute(row, route, reason=reason)
 
@@ -1360,6 +1417,33 @@ async def operator_proposal_router_run(
     _auth=Depends(require_mcp_secret),
 ):
     return proposal_router_summary(limit=limit)
+
+
+@app.post("/operator/proposal-router/cluster-close")
+async def operator_proposal_router_cluster_close(
+    cluster_id: str = Query("", description="Owner-review cluster_id to close."),
+    cluster_key: str = Query("", description="Owner-review cluster_key to close."),
+    decision: str = Query("applied", pattern="^(applied|rejected)$"),
+    reason: str = Query("", description="Reason or note for this cluster decision."),
+    verification_note: str = Query("", description="Verification evidence note for applied closes."),
+    reviewed_by: str = Query("owner", description="Reviewer identity label."),
+    dry_run: bool = Query(False, description="Preview the cluster close without changing any rows."),
+    _auth=Depends(require_mcp_secret),
+):
+    if not str(cluster_id or "").strip() and not str(cluster_key or "").strip():
+        raise HTTPException(status_code=400, detail="cluster_id or cluster_key is required")
+    result = _proposal_router_cluster_close(
+        cluster_id=str(cluster_id or "").strip(),
+        cluster_key=str(cluster_key or "").strip(),
+        decision=str(decision or "applied").strip().lower(),
+        reason=str(reason or "").strip(),
+        verification_note=str(verification_note or "").strip(),
+        reviewed_by=str(reviewed_by or "owner").strip(),
+        dry_run="true" if dry_run else "false",
+    )
+    if not result.get("ok"):
+        return JSONResponse(result, status_code=400)
+    return result
 
 
 @app.get("/operator/semantic-projection/status")
