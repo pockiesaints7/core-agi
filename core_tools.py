@@ -4420,6 +4420,134 @@ def t_changelog_tracking_packet(limit: int = 10) -> dict:
     return build_changelog_packet(limit=limit)
 
 
+@dataclass
+class MistakePacket:
+    total_rows: int = 0
+    today_rows: int = 0
+    recent_rows: list[dict] | None = None
+    domain_counts: dict | None = None
+    severity_counts: dict | None = None
+    missing_context_rows: int = 0
+    missing_root_cause_rows: int = 0
+    missing_how_to_avoid_rows: int = 0
+    tracking_state: str = "unknown"
+    stalled: bool = False
+    tracking_score: float = 0.0
+    passed_checks: list[str] | None = None
+    failed_checks: list[str] | None = None
+    warnings: list[str] | None = None
+    summary: str = ""
+
+    def to_dict(self) -> dict:
+        data = asdict(self)
+        data["recent_rows"] = list(self.recent_rows or [])
+        data["domain_counts"] = dict(self.domain_counts or {})
+        data["severity_counts"] = dict(self.severity_counts or {})
+        data["passed_checks"] = list(self.passed_checks or [])
+        data["failed_checks"] = list(self.failed_checks or [])
+        data["warnings"] = list(self.warnings or [])
+        return data
+
+
+def build_mistake_tracking_packet(limit: int = 10) -> dict:
+    try:
+        lim = max(1, min(int(limit or 10), 25))
+    except Exception:
+        lim = 10
+
+    try:
+        rows = sb_get(
+            "mistakes",
+            f"select=id,domain,context,what_failed,correct_approach,root_cause,how_to_avoid,severity,created_at&order=created_at.desc&limit={lim}",
+            svc=True,
+        ) or []
+        today = datetime.utcnow().date().isoformat()
+        today_rows = [r for r in rows if str(r.get("created_at") or "").startswith(today)]
+        domain_counts = Counter((r.get("domain") or "general") for r in rows)
+        severity_counts = Counter((r.get("severity") or "unknown") for r in rows)
+        missing_context_rows = sum(1 for r in rows if not (r.get("context") or "").strip())
+        missing_root_cause_rows = sum(1 for r in rows if not (r.get("root_cause") or "").strip())
+        missing_how_to_avoid_rows = sum(1 for r in rows if not (r.get("how_to_avoid") or "").strip())
+        passed = ["mistake_rows_loaded"]
+        failed = []
+        warnings = []
+        if rows:
+            passed.append("latest_row_present")
+        else:
+            failed.append("mistake_rows_missing")
+        if missing_context_rows:
+            warnings.append(f"missing_context:{missing_context_rows}")
+        if missing_root_cause_rows:
+            warnings.append(f"missing_root_cause:{missing_root_cause_rows}")
+        if missing_how_to_avoid_rows:
+            warnings.append(f"missing_how_to_avoid:{missing_how_to_avoid_rows}")
+        if len(rows) < 2:
+            warnings.append("sample_low")
+        tracking_state = "healthy" if rows and not missing_context_rows else ("degraded" if rows else "empty")
+        stalled = not rows
+        score = 0.0
+        if rows:
+            score += 0.55
+        if not missing_context_rows:
+            score += 0.15
+        if not missing_root_cause_rows:
+            score += 0.15
+        if not missing_how_to_avoid_rows:
+            score += 0.1
+        if len(rows) >= 2:
+            score += 0.05
+        if today_rows:
+            score += 0.05
+        score = max(0.0, min(1.0, round(score, 2)))
+
+        packet = MistakePacket(
+            total_rows=len(rows),
+            today_rows=len(today_rows),
+            recent_rows=rows,
+            domain_counts=dict(domain_counts.most_common()),
+            severity_counts=dict(severity_counts.most_common()),
+            missing_context_rows=missing_context_rows,
+            missing_root_cause_rows=missing_root_cause_rows,
+            missing_how_to_avoid_rows=missing_how_to_avoid_rows,
+            tracking_state=tracking_state,
+            stalled=stalled,
+            tracking_score=score,
+            passed_checks=passed,
+            failed_checks=failed,
+            warnings=warnings,
+            summary=(
+                f"MISTAKES: {tracking_state}"
+                f" | rows {len(rows)}"
+                f" | today {len(today_rows)}"
+                f" | missing_context {missing_context_rows}"
+            ),
+        )
+        return {
+            "ok": True,
+            "tracking_state": tracking_state,
+            "stalled": stalled,
+            "tracking_score": score,
+            "packet": packet.to_dict(),
+            "rows": rows,
+            "message": packet.summary,
+        }
+    except Exception as exc:
+        return {
+            "ok": False,
+            "tracking_state": "error",
+            "stalled": True,
+            "tracking_score": 0.0,
+            "error": str(exc),
+            "failed_checks": ["mistake_packet_error"],
+            "warnings": [str(exc)],
+            "message": f"mistake packet error: {exc}",
+        }
+
+
+def t_mistake_tracking_packet(limit: int = 10) -> dict:
+    return build_mistake_tracking_packet(limit=limit)
+
+
 def t_bulk_apply(executor_override: str = "claude_desktop", dry_run: bool = False):
     """Apply all pending evolution_queue items."""
     if isinstance(dry_run, str):
@@ -6670,6 +6798,8 @@ TOOLS = {
                                "desc": "Canonical changelog tracking packet. Summarizes latest changelog rows, today rows, missing triggered_by fields, and source evidence."},
     "changelog_source_packet": {"fn": t_changelog_source_packet, "perm": "READ", "args": ["limit"],
                                "desc": "Return supporting source evidence for changelog context from sessions, hot_reflections, mistakes, and knowledge_base."},
+    "mistake_tracking_packet": {"fn": t_mistake_tracking_packet, "perm": "READ", "args": ["limit"],
+                               "desc": "Canonical mistake tracking packet. Summarizes recent mistakes, severity/domain mix, and missing context/root_cause/how_to_avoid fields."},
     "bulk_apply":             {"fn": t_bulk_apply,             "perm": "WRITE",   "args": ["executor_override", "dry_run"],
                                "desc": "Apply ALL pending evolution_queue items. executor_override=claude_desktop routes knowledge types to KB. dry_run=true shows plan without applying. Returns slim results to prevent overflow."},
     "list_templates":         {"fn": t_list_templates,         "perm": "READ",    "args": ["limit"],
