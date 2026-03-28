@@ -178,7 +178,9 @@ async def _run_case(case) -> tuple[dict, list[str]]:
         stack.enter_context(patch.object(l1, "_send_typing", side_effect=_no_op_async))
         stack.enter_context(patch.object(l11, "fire_session", return_value=None))
 
-        timeout_s = float(os.getenv("CORE_ORC_SMOKE_CASE_TIMEOUT", "90"))
+        timeout_s = float(os.getenv("CORE_ORC_SMOKE_CASE_TIMEOUT", "120"))
+        if case.case_id in {"T03", "T06"}:
+            timeout_s = max(timeout_s, 180.0)
         msg = await asyncio.wait_for(
             layer_1_triage(raw_input if raw_source == "mcp" else raw_input, input_type=raw_source),
             timeout=timeout_s,

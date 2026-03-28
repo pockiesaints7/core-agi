@@ -9,6 +9,7 @@ import re
 from dataclasses import asdict
 from typing import Any, Dict, Iterable, List
 from datetime import datetime
+from pathlib import Path
 
 import httpx
 
@@ -43,6 +44,18 @@ def _extract_code_targets(text: str) -> List[str]:
     return sorted(candidates)[:5]
 
 
+def _missing_code_targets(text: str) -> List[str]:
+    """Return extracted code/file targets that do not exist on disk."""
+    missing: List[str] = []
+    for target in _extract_code_targets(text):
+        try:
+            if not Path(target).expanduser().exists():
+                missing.append(target)
+        except Exception:
+            missing.append(target)
+    return missing
+
+
 def _signal(text: str, phrases: Iterable[str]) -> bool:
     lower = (text or "").lower()
     return any(p in lower for p in phrases)
@@ -60,6 +73,7 @@ def classify_human_input(
     lower = text.lower().strip()
     cmd = (command or "").lower().strip()
     attachments = attachments or []
+    missing_targets = _missing_code_targets(text)
 
     signals: list[str] = []
     classes: list[str] = []
@@ -124,6 +138,12 @@ def classify_human_input(
     if _signal(lower, ("review", "judge", "evaluate", "compare", "rank", "triage", "approve", "reject", "batch close", "cluster close")):
         bump("evaluate", 2, "evaluation")
         classes.append("evaluate")
+
+    # Missing file/path targets should be clarified instead of guessed.
+    if missing_targets:
+        bump("ask", 4, "missing_target")
+        bump("meta", 1, "missing_target_meta")
+        classes.append("ask")
 
     # Informational / status updates
     if _signal(lower, ("i did", "i added", "i changed", "i fixed", "here is", "this is", "fyi", "for your info", "update:", "status:", "result:")):
@@ -216,6 +236,9 @@ def classify_human_input(
 
     requires_tools = primary_class in {"ask", "act", "evaluate"} or route == "command" or bool(cmd)
     requires_clarification = confidence < 0.5 and primary_class in {"ask", "act", "meta"}
+    if missing_targets:
+        requires_clarification = True
+        route_hint = "clarify"
     if primary_class == "act" and vague_action and not _extract_code_targets(text) and len(lower) < 60:
         requires_clarification = True
         route_hint = "clarify"
@@ -240,6 +263,7 @@ def classify_human_input(
         "message_type": message_type,
         "route": route,
         "command": command,
+        "missing_targets": missing_targets,
     }
 
 
@@ -347,6 +371,7 @@ def build_decision_packet(msg) -> Dict[str, Any]:
     confidence = float(classification.get("confidence", 0.0) or 0.0)
     cmd = msg.context.get("command", "") if hasattr(msg, "context") else ""
     primary_class = input_profile.get("primary_class") or input_profile.get("top_level_class") or ""
+    missing_targets = list(input_profile.get("missing_targets", []) or [])
 
     request_kind = input_profile.get("request_kind") or classify_request_kind(
         msg.text,
@@ -392,6 +417,12 @@ def build_decision_packet(msg) -> Dict[str, Any]:
     elif request_kind in {"question", "conversation", "general_query"} and confidence < 0.45 and not explicit_agentic:
         clarification_needed = True
         clarification_prompt = "I need a bit more detail. What exactly should I do, and what is the expected outcome?"
+    elif missing_targets:
+        clarification_needed = True
+        clarification_prompt = (
+            "I could not find the file or path you referenced. "
+            "Send the correct file path, repo path, URL, commit hash, or upload the missing file."
+        )
 
     hard_non_agentic = {"interrupt", "correct", "constrain", "inform"}
     agentic_hint = False
