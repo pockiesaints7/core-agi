@@ -2348,19 +2348,55 @@ def _safe_recent_changelog_context(limit: int = 5) -> dict:
     is missing, unavailable, or temporarily unreadable. Instead we surface a
     structured status and keep the rest of the recent training context intact.
     """
+    limit = max(1, int(limit))
+    canonical_cols = "version,change_type,component,title,description,before_state,after_state,triggered_by,created_at"
+    legacy_cols = "summary,category"
     try:
         rows = sb_get(
             "changelog",
-            f"select=summary,category&order=id.desc&limit={max(1, int(limit))}",
+            f"select={canonical_cols}&order=id.desc&limit={limit}",
             svc=True,
         )
-        text = "\n".join(
-            f"  [{r.get('category','?')}] {r.get('summary','')[:120]}"
-            for r in rows
-        ) if rows else "None yet."
-        return {"available": True, "rows": rows or [], "text": text, "error": ""}
+        if not rows:
+            text = "None yet."
+        else:
+            text = "\n".join(
+                "  [{ver}|{ctype}] {component} — {title}".format(
+                    ver=(r.get("version") or "?"),
+                    ctype=(r.get("change_type") or "?"),
+                    component=(r.get("component") or "general"),
+                    title=(r.get("title") or r.get("description") or "")[:160],
+                )
+                for r in rows
+            )
+        return {
+            "available": True,
+            "rows": rows or [],
+            "text": text,
+            "error": "",
+            "schema": "canonical",
+        }
     except Exception as exc:
-        return {"available": False, "rows": [], "text": "Unavailable.", "error": str(exc)}
+        try:
+            rows = sb_get(
+                "changelog",
+                f"select={legacy_cols}&order=id.desc&limit={limit}",
+                svc=True,
+            )
+            text = "\n".join(
+                f"  [{r.get('category','?')}] {r.get('summary','')[:120]}"
+                for r in rows
+            ) if rows else "None yet."
+            return {
+                "available": True,
+                "rows": rows or [],
+                "text": text,
+                "error": "",
+                "schema": "legacy",
+                "fallback_error": str(exc),
+            }
+        except Exception as legacy_exc:
+            return {"available": False, "rows": [], "text": "Unavailable.", "error": str(legacy_exc)}
 
 
 def _collect_background_research_context() -> dict:
