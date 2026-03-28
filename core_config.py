@@ -153,29 +153,89 @@ def notify(text: str, chat_id: str = "") -> bool:
 
 # -- Groq chat helper ----------------------------------------------------------
 def groq_chat(system: str, user: str, model: str = None, max_tokens: int = 1024) -> str:
-    """Shared Groq chat helper. Hard 20s timeout — never hangs the pipeline."""
+    """Shared Groq chat helper.
+
+    Behavior:
+    - prefers the requested model, then falls back to GROQ_FAST on transient failure
+    - retries transient HTTP/network failures a few times with short backoff
+    - keeps the hard 20s timeout so the pipeline never hangs
+    """
     import time as _time
-    m = model or GROQ_MODEL
-    t0 = _time.monotonic()
-    r = httpx.post(
-        "https://api.groq.com/openai/v1/chat/completions",
-        headers={"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"},
-        json={"model": m, "max_tokens": max_tokens,
-              "messages": [{"role": "system", "content": system},
-                           {"role": "user", "content": user}]},
-        timeout=20,  # Hard 20s — Groq is fast, >20s means something is wrong
-    )
-    elapsed = round(_time.monotonic() - t0, 2)
-    if elapsed > 5:
-        print(f"[GROQ] SLOW response: {elapsed}s model={m}")
-    r.raise_for_status()
-    return r.json()["choices"][0]["message"]["content"].strip()
+
+    primary = model or GROQ_MODEL
+    fallback = GROQ_FAST if GROQ_FAST and GROQ_FAST != primary else ""
+    candidates = [primary] + ([fallback] if fallback else [])
+    transient_statuses = {429, 500, 502, 503, 504}
+    last_err = None
+
+    for idx, candidate in enumerate(candidates):
+        for attempt in range(3):
+            try:
+                t0 = _time.monotonic()
+                r = httpx.post(
+                    "https://api.groq.com/openai/v1/chat/completions",
+                    headers={"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"},
+                    json={
+                        "model": candidate,
+                        "max_tokens": max_tokens,
+                        "temperature": 0.1,
+                        "messages": [
+                            {"role": "system", "content": system},
+                            {"role": "user", "content": user},
+                        ],
+                    },
+                    timeout=20,  # Hard 20s — Groq is fast, >20s means something is wrong
+                )
+                elapsed = round(_time.monotonic() - t0, 2)
+                if elapsed > 5:
+                    print(f"[GROQ] SLOW response: {elapsed}s model={candidate}")
+                if r.status_code in transient_statuses:
+                    last_err = f"{r.status_code}: {r.text[:240]}"
+                    if attempt < 2:
+                        _time.sleep(min(2 ** attempt, 4))
+                        continue
+                r.raise_for_status()
+                payload = r.json()
+                choices = payload.get("choices") or []
+                if not choices:
+                    raise RuntimeError(f"Groq returned no choices (model={candidate})")
+                message = choices[0].get("message") or {}
+                content = (message.get("content") or "").strip()
+                if not content:
+                    raise RuntimeError(f"Groq returned empty content (model={candidate})")
+                return content
+            except (httpx.TimeoutException, httpx.TransportError, RuntimeError) as e:
+                last_err = str(e)
+                if attempt < 2:
+                    _time.sleep(min(2 ** attempt, 4))
+                    continue
+            except Exception as e:
+                last_err = str(e)
+                # Non-transient error: try fallback model once, otherwise fail out.
+                break
+        print(f"[GROQ] Candidate failed: model={candidate} err={last_err}")
+
+    raise RuntimeError(f"Groq chat failed after {len(candidates)} candidate(s): {last_err}")
 
 
 # -- Gemini chat helper with round-robin key rotation -------------------------
-_GEMINI_KEYS = [k.strip() for k in os.getenv("GEMINI_KEYS", "").replace(" ", "").split(",") if k.strip()]
+def _load_gemini_keys() -> list[str]:
+    """Load GEMINI_KEYS from .env as a stable ordered list."""
+    raw = os.getenv("GEMINI_KEYS", "")
+    seen = set()
+    keys: list[str] = []
+    for part in raw.split(","):
+        key = part.strip()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        keys.append(key)
+    return keys
+
+
+_GEMINI_KEYS = _load_gemini_keys()
 _GEMINI_KEY_INDEX = 0
-_GEMINI_MODEL = "gemini-2.5-flash-lite"
+_GEMINI_MODEL = "gemini-2.5-flash"
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API", "")
 OPENROUTER_MODEL   = os.getenv("OPENROUTER_MODEL", "google/gemini-2.5-flash")
 
