@@ -22,13 +22,9 @@ That's it. All other existing routes (/mcp/*, /webhook, etc.) stay unchanged.
 The new orchestrator only replaces the freeform Telegram conversation path.
 
 Layer wiring:
-  Telegram msg → L0 (rate limit) → L1 (Intent) → L2 (Memory) →
-  L3 (Reasoning) → L4 (Execution) → L5 (Output) → L9 (Learning)
-                                                  ↕
-                              L6 (Validation + Autonomy)
-                              L7 (Observability)
-                              L8 (Model coordination — called by L3/L4)
-                              L10 (Constitution — enforced in L3)
+  Telegram msg → L0 (policy) → L1 (triage) → L2 (context) → L3 (classify)
+  → L4 (plan/route) → L5 (tools) → L6 (validate) → L7 (refine/evo)
+  → L8 (safety) → L9 (synthesis) → L10 (delivery) → L11 (learning)
 """
 
 import asyncio
@@ -52,11 +48,11 @@ def startup_v2():
     # Log active model OPENROUTER_MODEL="google/gemini-2.5-flash"
     model = os.environ.get("OPENROUTER_MODEL", "google/gemini-2.5-flash")
     print(f"[ORCH-V2] Started. Primary model: {model}")
-    print("[ORCH-V2] Layer chain: L0→L1→L2→L3→L4→L5→L9 (L6/L7/L8 inlined)")
+    print("[ORCH-V2] Layer chain: L0→L1→L2→L3→L4→L5→L6→L7→L8→L9→L10→L11")
 
     return {
         "model": model,
-        "layers": "L0-L9 active",
+        "layers": "L0-L11 active",
         "blueprint": "11-layer compliant",
     }
 
@@ -66,7 +62,7 @@ def startup_v2():
 async def handle_telegram_message_v2(msg: dict):
     """
     Async entry point. Called from core_main.py handle_msg() in a thread.
-    Runs the full L1→L9 pipeline.
+    Runs the full L1→L11 orchestrator pipeline.
     """
     try:
         from core_orch_layer1 import layer_1_triage

@@ -7,6 +7,7 @@ import json
 from typing import Any, Dict
 
 from orchestrator_message import OrchestratorMessage
+from core_orch_context import build_decision_packet
 from core_config import groq_chat, GROQ_FAST, GROQ_MODEL, gemini_chat
 
 # Slash-commands that always map to specific intents without Groq
@@ -33,6 +34,7 @@ _COMMAND_INTENT_MAP = {
     "/do":          ("task_execution",  True),
     "/log":         ("task_execution",  True),
     "/tools":       ("list_tools",      True),
+    "/review":      ("owner_review",    True),
 }
 
 # ── L3 Fuzzy Intent Clusters ──────────────────────────────────────────────────
@@ -69,6 +71,12 @@ _FUZZY_INTENT_CLUSTERS: list[tuple[str, bool, set[str]]] = [
     # --- Deploy / infra ---
     ("deploy_status",    True,  {"deploy", "deployment", "redeploy", "build status",
                                   "vm status", "oracle vm", "show deploy", "deployment status"}),
+    ("owner_review",     True,  {"review queue", "owner review", "proposal queue", "owner only", "manual review",
+                                  "owner queue", "batch close", "cluster close", "close cluster", "review cluster",
+                                  "manual queue", "proposal review"}),
+    ("debug_request",    True,  {"debug", "bug", "error", "crash", "broken", "stack trace", "why fail", "fix error"}),
+    ("self_assessment",  True,  {"how advanced", "capability", "capabilities", "your capabilities", "what can you do", "strengths", "weaknesses", "limitations"}),
+    ("clarification_request", False, {"clarify", "unclear", "not sure", "ambiguous", "need detail"}),
     # --- Tools / execution --- (AFTER system clusters to avoid stealing "current")
     ("general_tool",     True,  {"what time", "time now", "what's the time", "what day",
                                   "compute", "convert", "translate", "weather",  # "calculate" removed — too greedy for multi-step queries
@@ -127,6 +135,10 @@ Classify this message. AVAILABLE INTENTS:
 - trigger_training: running cold processor / training
 - trigger_cold: same as trigger_training
 - deploy_status: checking Railway/VM deployment status
+- owner_review: owner-only proposal review or manual queue inspection
+- debug_request: debugging or error investigation
+- self_assessment: capability or system self-evaluation request
+- clarification_request: asking for clarification or acknowledging ambiguity
 - general_tool: any tool use (time, calc, weather, web search, currency, translation, etc)
 - task_execution: performing an action (fix, create, update, delete, run, execute)
 - list_tools: asking what tools CORE has
@@ -318,6 +330,22 @@ async def layer_3_classify(msg: OrchestratorMessage):
         f"[L3] intent={msg.intent}  conf={classification.get('confidence',0):.2f}"
         f"  tools={classification.get('requires_tools')}"
     )
+
+    # Build decision packet (request_kind/response_mode) once intent is known
+    try:
+        decision = build_decision_packet(msg)
+        msg.decision_packet = decision
+        msg.request_kind = decision.get("request_kind", msg.request_kind)
+        msg.response_mode = decision.get("response_mode", msg.response_mode)
+        msg.route_reason = decision.get("route_reason", msg.route_reason)
+        msg.clarification_needed = bool(decision.get("clarification_needed", False))
+        msg.context["request_kind"] = msg.request_kind
+        msg.context["response_mode"] = msg.response_mode
+        msg.context["route_reason"] = msg.route_reason
+        msg.context["clarification_needed"] = msg.clarification_needed
+        msg.context["decision_packet"] = decision
+    except Exception as exc:
+        print(f"[L3] decision_packet build failed (non-fatal): {exc}")
 
     from core_orch_layer4 import layer_4_reason
     await layer_4_reason(msg)

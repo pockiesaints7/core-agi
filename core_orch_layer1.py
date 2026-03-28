@@ -9,6 +9,7 @@ from typing import Dict, Any
 from dotenv import load_dotenv
 load_dotenv()
 from orchestrator_message import OrchestratorMessage
+from core_orch_context import initial_request_profile
 
 # ?? Dedup gate ???????????????????????????????????????????????????????????????
 # Prevents Telegram webhook retries from processing the same message twice.
@@ -213,6 +214,21 @@ async def _parse_telegram(update: Dict[str, Any]) -> OrchestratorMessage:
     # Store raw Telegram message_id for potential reply threading
     msg.context["telegram_message_id"] = message.get("message_id")
 
+    # Initial request profile (intent unknown yet)
+    try:
+        profile = initial_request_profile(msg)
+        msg.request_kind = profile.get("request_kind", "")
+        msg.response_mode = profile.get("response_mode", "")
+        msg.route_reason = profile.get("route_reason", "")
+        msg.clarification_needed = bool(profile.get("clarification_needed", False))
+        msg.context["request_profile"] = profile
+        msg.context["request_kind"] = msg.request_kind
+        msg.context["response_mode"] = msg.response_mode
+        msg.context["route_reason"] = msg.route_reason
+        msg.context["clarification_needed"] = msg.clarification_needed
+    except Exception as exc:
+        print(f"[L1] request_profile init failed (non-fatal): {exc}")
+
     return msg
 
 
@@ -231,6 +247,21 @@ async def _parse_mcp(request: Dict[str, Any]) -> OrchestratorMessage:
     )
     msg.context["mcp_method"] = request.get("method", "")
     msg.context["mcp_params"] = params
+
+    # Initial request profile for MCP
+    try:
+        profile = initial_request_profile(msg)
+        msg.request_kind = profile.get("request_kind", "")
+        msg.response_mode = profile.get("response_mode", "")
+        msg.route_reason = profile.get("route_reason", "")
+        msg.clarification_needed = bool(profile.get("clarification_needed", False))
+        msg.context["request_profile"] = profile
+        msg.context["request_kind"] = msg.request_kind
+        msg.context["response_mode"] = msg.response_mode
+        msg.context["route_reason"] = msg.route_reason
+        msg.context["clarification_needed"] = msg.clarification_needed
+    except Exception as exc:
+        print(f"[L1] request_profile init failed (non-fatal): {exc}")
     return msg
 
 
@@ -245,6 +276,20 @@ async def _parse_system(event: Dict[str, Any]) -> OrchestratorMessage:
         route="background",
     )
     msg.context["event_data"] = event.get("data", {})
+
+    try:
+        profile = initial_request_profile(msg)
+        msg.request_kind = profile.get("request_kind", "")
+        msg.response_mode = profile.get("response_mode", "")
+        msg.route_reason = profile.get("route_reason", "")
+        msg.clarification_needed = bool(profile.get("clarification_needed", False))
+        msg.context["request_profile"] = profile
+        msg.context["request_kind"] = msg.request_kind
+        msg.context["response_mode"] = msg.response_mode
+        msg.context["route_reason"] = msg.route_reason
+        msg.context["clarification_needed"] = msg.clarification_needed
+    except Exception as exc:
+        print(f"[L1] request_profile init failed (non-fatal): {exc}")
     return msg
 
 
