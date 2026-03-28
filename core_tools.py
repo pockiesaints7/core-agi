@@ -4178,14 +4178,37 @@ def _changelog_source_packet(limit: int = 5) -> dict:
             lines.append(_line("mistake", r, ["domain", "what_failed", "created_at"]))
         for r in knowledge[:limit]:
             lines.append(_line("knowledge", r, ["domain", "topic", "source_type", "created_at"]))
+        counts = {
+            "sessions": len(sessions),
+            "hot_reflections": len(hot_reflections),
+            "mistakes": len(mistakes),
+            "knowledge_base": len(knowledge),
+        }
+        passed = ["source_packet_built"]
+        failed = []
+        warnings = []
+        for key, value in counts.items():
+            if value > 0:
+                passed.append(f"{key}_covered")
+            else:
+                failed.append(f"{key}_missing")
+        if counts["sessions"] < 2:
+            warnings.append("sessions_low_sample")
+        if counts["hot_reflections"] < 2:
+            warnings.append("hot_reflections_low_sample")
+        if counts["mistakes"] < 2:
+            warnings.append("mistakes_low_sample")
+        if counts["knowledge_base"] < 2:
+            warnings.append("knowledge_base_low_sample")
+        verified = len(failed) == 0
+        score = 1.0
+        score -= 0.20 if failed else 0.0
+        score -= 0.05 * len(warnings)
+        score = max(0.0, round(score, 2))
+        blocked = not verified or score < 0.8
         return {
             "available": True,
-            "counts": {
-                "sessions": len(sessions),
-                "hot_reflections": len(hot_reflections),
-                "mistakes": len(mistakes),
-                "knowledge_base": len(knowledge),
-            },
+            "counts": counts,
             "rows": {
                 "sessions": sessions,
                 "hot_reflections": hot_reflections,
@@ -4195,6 +4218,16 @@ def _changelog_source_packet(limit: int = 5) -> dict:
             "text": "\n".join(lines) if lines else "None yet.",
             "sources": ["sessions", "hot_reflections", "mistakes", "knowledge_base"],
             "error": "",
+            "verified": verified,
+            "blocked": blocked,
+            "verification_score": score,
+            "passed_checks": passed,
+            "failed_checks": failed,
+            "warnings": warnings,
+            "summary": (
+                f"source_packet: {'verified' if verified else 'unverified'} "
+                f"(warnings={len(warnings)}, failed={len(failed)})"
+            ),
         }
     except Exception as exc:
         return {
@@ -4204,6 +4237,13 @@ def _changelog_source_packet(limit: int = 5) -> dict:
             "text": "Unavailable.",
             "sources": ["sessions", "hot_reflections", "mistakes", "knowledge_base"],
             "error": str(exc),
+            "verified": False,
+            "blocked": True,
+            "verification_score": 0.0,
+            "passed_checks": [],
+            "failed_checks": ["source_packet_error"],
+            "warnings": [str(exc)],
+            "summary": f"source packet error: {exc}",
         }
 
 
