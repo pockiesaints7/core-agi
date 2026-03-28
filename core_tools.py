@@ -4850,21 +4850,7 @@ def t_task_update(task_id: str = "", status: str = "", result: str = "") -> dict
     if status not in valid:
         return {"ok": False, "error": f"status must be one of: {valid}"}
     try:
-        # Try UUID match first (validate UUID format before querying)
-        import re as _re
-        _is_uuid = bool(_re.match(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', task_id.lower()))
-        rows = []
-        if _is_uuid:
-            rows = sb_get("task_queue", f"select=id,task,status&id=eq.{task_id}&limit=1", svc=True) or []
-        if not rows:
-            # Fall back: search task JSON for task_id field (handles TASK-N strings)
-            all_rows = sb_get(
-                "task_queue",
-                f"select=id,task,status&source=in.(core_v6_registry,mcp_session)&limit=200",
-                svc=True
-            ) or []
-            rows = [r for r in all_rows if f'"task_id": "{task_id}"' in str(r.get("task", ""))
-                    or f'"title": "{task_id}"' in str(r.get("task", ""))]
+        rows = _task_resolve_rows(task_id)
         if not rows:
             return {"ok": False, "error": f"task not found: {task_id}"}
         row_id = rows[0]["id"]
@@ -4872,9 +4858,140 @@ def t_task_update(task_id: str = "", status: str = "", result: str = "") -> dict
         if result:
             data["result"] = result
         ok = sb_patch("task_queue", f"id=eq.{row_id}", data)
-        return {"ok": ok, "task_id": task_id, "row_id": row_id, "status": status}
+        verification = t_task_verification_packet(
+            task_id=task_id,
+            expected_status=status,
+            require_result="true" if status in {"done", "failed"} else "false",
+            require_checkpoint="true" if status == "in_progress" else "false",
+        )
+        return {
+            "ok": bool(ok),
+            "task_id": task_id,
+            "row_id": row_id,
+            "status": status,
+            "verified": bool(verification.get("ok") and not verification.get("blocked")),
+            "verification_packet": verification,
+        }
     except Exception as e:
         return {"ok": False, "error": str(e)}
+
+
+def _task_resolve_rows(task_id: str) -> list:
+    """Resolve a task row by UUID or TASK-N/title label."""
+    import re as _re
+    _is_uuid = bool(_re.match(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', task_id.lower()))
+    rows = []
+    if _is_uuid:
+        rows = sb_get("task_queue", f"select=id,task,status,result,checkpoint,created_at,updated_at,priority,source&id=eq.{task_id}&limit=1", svc=True) or []
+    if not rows:
+        # Fall back: search task JSON for task_id field (handles TASK-N strings)
+        all_rows = sb_get(
+            "task_queue",
+            f"select=id,task,status,result,checkpoint,created_at,updated_at,priority,source&source=in.(core_v6_registry,mcp_session)&limit=200",
+            svc=True
+        ) or []
+        rows = [r for r in all_rows if f'"task_id": "{task_id}"' in str(r.get("task", ""))
+                or f'"title": "{task_id}"' in str(r.get("task", ""))]
+    return rows
+
+
+def t_task_verification_packet(
+    task_id: str = "",
+    expected_status: str = "",
+    require_result: str = "false",
+    require_checkpoint: str = "false",
+) -> dict:
+    """Canonical task verification packet.
+
+    Verifies a task row exists, optionally matches an expected status, and
+    optionally requires result/checkpoint fields depending on the task state.
+    """
+    if not task_id:
+        return {"ok": False, "error": "task_id required"}
+    try:
+        rows = _task_resolve_rows(task_id)
+        if not rows:
+            return {
+                "ok": True,
+                "task_id": task_id,
+                "blocked": True,
+                "verification_score": 0.0,
+                "failed_checks": ["task_not_found"],
+                "warnings": [],
+                "message": f"Task not found: {task_id}",
+            }
+
+        row = rows[0]
+        current_status = str(row.get("status") or "")
+        expected_status = str(expected_status or "").strip()
+        require_result_bool = str(require_result).lower() in ("true", "1", "yes", "on")
+        require_checkpoint_bool = str(require_checkpoint).lower() in ("true", "1", "yes", "on")
+
+        passed = ["task_found", f"current_status={current_status or 'unknown'}"]
+        failed = []
+        warnings = []
+
+        if expected_status:
+            if current_status == expected_status:
+                passed.append(f"status_matches:{expected_status}")
+            else:
+                failed.append(f"status_mismatch:{current_status or 'missing'}!= {expected_status}")
+
+        if require_result_bool or current_status in {"done", "failed"}:
+            if row.get("result"):
+                passed.append("result_present")
+            else:
+                failed.append("missing_result")
+
+        if require_checkpoint_bool or current_status == "in_progress":
+            if row.get("checkpoint") or row.get("checkpoint_draft"):
+                passed.append("checkpoint_present")
+            else:
+                failed.append("missing_checkpoint")
+
+        # Soft stale warning for task rows lingering too long without updates.
+        try:
+            from datetime import datetime, timezone, timedelta
+            ts_str = row.get("updated_at") or row.get("created_at") or ""
+            if ts_str:
+                ts = datetime.fromisoformat(str(ts_str).replace("Z", "+00:00"))
+                now = datetime.now(timezone.utc)
+                if current_status == "in_progress" and ts < now - timedelta(hours=24):
+                    warnings.append("in_progress_stale>24h")
+                if current_status == "pending" and ts < now - timedelta(days=7):
+                    warnings.append("pending_stale>7d")
+        except Exception:
+            pass
+
+        score = len(passed) / max(1, len(passed) + len(failed))
+        score = max(0.0, round(score - min(0.15, 0.02 * len(warnings)), 2))
+        blocked = bool(failed) or score < 0.8
+        return {
+            "ok": True,
+            "task_id": task_id,
+            "row_id": row.get("id"),
+            "current_status": current_status,
+            "expected_status": expected_status or None,
+            "verification_score": score,
+            "blocked": blocked,
+            "passed_checks": passed,
+            "failed_checks": failed,
+            "warnings": warnings,
+            "row": {
+                "id": row.get("id"),
+                "priority": row.get("priority"),
+                "source": row.get("source"),
+                "created_at": row.get("created_at"),
+                "updated_at": row.get("updated_at"),
+            },
+            "message": (
+                f"BLOCKED: task verification failed for {task_id}"
+                if blocked else
+                f"CLEAR: task {task_id} verified"
+            ),
+        }
+    except Exception as e:
+        return {"ok": False, "error": str(e), "blocked": True}
 
 
 def t_task_add(title: str = "", description: str = "", priority: str = "5",
@@ -4921,6 +5038,11 @@ def t_task_add(title: str = "", description: str = "", priority: str = "5",
                         "result": json.dumps(duplicate_result, default=str),
                     })
                     if ok:
+                        verification = t_task_verification_packet(
+                            task_id=row["id"],
+                            expected_status="failed",
+                            require_result="true",
+                        )
                         return {
                             "ok": True,
                             "action": "duplicate_recorded",
@@ -4928,6 +5050,8 @@ def t_task_add(title: str = "", description: str = "", priority: str = "5",
                             "priority": pri,
                             "duplicate_of": row["id"],
                             "duplicate_status": row["status"],
+                            "verified": bool(verification.get("ok") and not verification.get("blocked")),
+                            "verification_packet": verification,
                         }
                     return {
                         "ok": False,
@@ -4963,6 +5087,11 @@ def t_task_add(title: str = "", description: str = "", priority: str = "5",
                             "result": json.dumps(duplicate_result, default=str),
                         })
                         if ok:
+                            verification = t_task_verification_packet(
+                                task_id=row["id"],
+                                expected_status="failed",
+                                require_result="true",
+                            )
                             return {
                                 "ok": True,
                                 "action": "duplicate_recorded",
@@ -4970,6 +5099,8 @@ def t_task_add(title: str = "", description: str = "", priority: str = "5",
                                 "priority": pri,
                                 "duplicate_of": row["id"],
                                 "duplicate_status": row["status"],
+                                "verified": bool(verification.get("ok") and not verification.get("blocked")),
+                                "verification_packet": verification,
                             }
                         return {
                             "ok": False,
@@ -4987,7 +5118,17 @@ def t_task_add(title: str = "", description: str = "", priority: str = "5",
             "task": task_json, "status": "pending",
             "priority": pri, "source": "mcp_session",
         })
-        return {"ok": ok, "title": title, "priority": pri}
+        verification = t_task_verification_packet(
+            task_id=title,
+            expected_status="pending",
+        )
+        return {
+            "ok": bool(ok),
+            "title": title,
+            "priority": pri,
+            "verified": bool(verification.get("ok") and not verification.get("blocked")),
+            "verification_packet": verification,
+        }
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
@@ -5788,6 +5929,8 @@ TOOLS = {
                                "desc": "Read back a specific state key written by update_state. Use to retrieve values set via update_state or set_simulation â€” the only way to read back those keys."},
     "task_update":            {"fn": t_task_update,            "perm": "WRITE",   "args": ["task_id", "status", "result"],
                                "desc": "Update a task_queue row status. task_id=UUID or TASK-N string. status=pending/in_progress/done/failed. result=optional outcome note. Use instead of raw sb_query for task status changes."},
+    "task_verification_packet": {"fn": t_task_verification_packet, "perm": "READ", "args": ["task_id", "expected_status", "require_result", "require_checkpoint"],
+                               "desc": "Canonical task verification packet. Verifies a task row exists, matches expected status, and has the required checkpoint/result fields. Use after task updates or before trusting task state."},
     "task_add":               {"fn": t_task_add,               "perm": "WRITE",   "args": ["title", "description", "priority", "subtasks", "blocked_by"],
                                "desc": "Add a new task to task_queue with proper schema. Sets source=mcp_session automatically. Use instead of raw sb_insert for new tasks â€” enforces correct structure."},
     "kb_update":              {"fn": t_kb_update,              "perm": "WRITE",   "args": ["domain", "topic", "instruction", "content", "confidence", "source_type", "source_ref"],
