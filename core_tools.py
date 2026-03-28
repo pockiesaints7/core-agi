@@ -3931,35 +3931,223 @@ def t_changelog_add(version: str = "", component: str = "", summary: str = "",
             return {"ok": False, "error": "changelog preflight failed", "preflight": preflight}
         ts = datetime.utcnow().isoformat()
         ver = version.strip() or datetime.utcnow().strftime("v%Y%m%d")
+        comp = component.strip() or "general"
+        ctype = change_type.strip() or "upgrade"
+        title = summary.strip()[:120]
+        desc = summary.strip()[:500]
+        before_state = before.strip()[:300]
+        after_state = after.strip()[:300]
         # A.3: dedup guard -- skip if identical title+component already logged today
         today = datetime.utcnow().strftime("%Y-%m-%d")
         _title = summary.strip()[:40].replace("'", "")
-        _comp  = component.strip() or "general"
         try:
             existing = sb_get("changelog",
-                f"component=eq.{_comp}&title=ilike.*{_title}*&created_at=gte.{today}&select=id&limit=1",
+                f"component=eq.{comp}&title=ilike.*{_title}*&created_at=gte.{today}&select=id,version,change_type,component,title,description,before_state,after_state,triggered_by,created_at&limit=1",
                 svc=True) or []
             if existing:
-                return {"ok": True, "action": "skipped_duplicate", "version": ver, "component": _comp,
-                        "hint": "identical changelog entry already logged today"}
+                verification = _changelog_verification_packet(
+                    version=ver,
+                    component=comp,
+                    summary=title,
+                    before=before_state,
+                    after=after_state,
+                    change_type=ctype,
+                )
+                return {
+                    "ok": True,
+                    "action": "skipped_duplicate",
+                    "version": ver,
+                    "component": comp,
+                    "hint": "identical changelog entry already logged today",
+                    "verified": bool(verification.get("ok") and not verification.get("blocked")),
+                    "verification_packet": verification,
+                }
         except Exception:
             pass  # dedup failure is non-fatal
         ok = sb_post("changelog", {
             "version":      ver,
-            "change_type":  change_type.strip() or "upgrade",
-            "component":    component.strip() or "general",
-            "title":        summary.strip()[:120],
-            "description":  summary.strip()[:500],
-            "before_state": before.strip()[:300],
-            "after_state":  after.strip()[:300],
+            "change_type":  ctype,
+            "component":    comp,
+            "title":        title,
+            "description":  desc,
+            "before_state": before_state,
+            "after_state":  after_state,
             "triggered_by": "claude_desktop",
             "created_at":   ts,
         })
+        verification = _changelog_verification_packet(
+            version=ver,
+            component=comp,
+            summary=title,
+            before=before_state,
+            after=after_state,
+            change_type=ctype,
+        )
         if ok:
-            notify(f"CHANGELOG [{ver}] {component}\n{summary[:200]}")
-        return {"ok": ok, "version": ver, "component": component, "logged_at": ts}
+            notify(f"CHANGELOG [{ver}] {comp}\n{title[:200]}")
+        return {
+            "ok": ok,
+            "action": "logged" if ok else "insert_failed",
+            "version": ver,
+            "component": comp,
+            "logged_at": ts,
+            "verified": bool(verification.get("ok") and not verification.get("blocked")),
+            "verification_packet": verification,
+        }
     except Exception as e:
         return {"ok": False, "error": str(e)}
+
+
+def _changelog_verification_packet(
+    version: str = "",
+    component: str = "",
+    summary: str = "",
+    before: str = "",
+    after: str = "",
+    change_type: str = "upgrade",
+) -> dict:
+    """Verify a changelog row exists and matches the canonical write contract."""
+    try:
+        ver = version.strip()
+        comp = component.strip() or "general"
+        title = summary.strip()[:120]
+        desc = summary.strip()[:500]
+        before_state = before.strip()[:300]
+        after_state = after.strip()[:300]
+        ctype = change_type.strip() or "upgrade"
+        rows = sb_get(
+            "changelog",
+            f"select=id,version,change_type,component,title,description,before_state,after_state,triggered_by,created_at&version=eq.{ver}&change_type=eq.{ctype}&order=id.desc&limit=20",
+            svc=True,
+        ) or []
+        if not rows:
+            return {
+                "ok": True,
+                "blocked": True,
+                "verified": False,
+                "verification_score": 0.0,
+                "passed_checks": [],
+                "failed_checks": ["changelog_row_missing"],
+                "warnings": [],
+                "summary": f"{ver}/{comp}: changelog row missing",
+            }
+
+        row = None
+        failed = []
+        warnings = []
+        for candidate in rows:
+            cand_title = (candidate.get("title") or "").strip()
+            cand_desc = (candidate.get("description") or "").strip()
+            cand_before = (candidate.get("before_state") or "").strip()
+            cand_after = (candidate.get("after_state") or "").strip()
+            cand_triggered_by = (candidate.get("triggered_by") or "").strip()
+            if cand_title == title and cand_desc == desc:
+                row = candidate
+                if before_state and cand_before != before_state:
+                    warnings.append("before_state_drift")
+                if after_state and cand_after != after_state:
+                    warnings.append("after_state_drift")
+                if cand_triggered_by and cand_triggered_by != "claude_desktop":
+                    warnings.append(f"triggered_by:{cand_triggered_by}")
+                break
+
+        if row is None:
+            row = rows[0]
+            warnings.append("exact_title_description_match_missing")
+
+        passed = ["changelog_row_found"]
+        if (row.get("version") or "") == ver:
+            passed.append("version_match")
+        else:
+            failed.append("version_mismatch")
+        if (row.get("component") or "") == comp:
+            passed.append("component_match")
+        else:
+            failed.append("component_mismatch")
+        if (row.get("change_type") or "") == ctype:
+            passed.append("change_type_match")
+        else:
+            failed.append("change_type_mismatch")
+        if (row.get("title") or "").strip() == title:
+            passed.append("title_match")
+        else:
+            failed.append("title_mismatch")
+        if (row.get("description") or "").strip() == desc:
+            passed.append("description_match")
+        else:
+            failed.append("description_mismatch")
+        if before_state and (row.get("before_state") or "").strip() == before_state:
+            passed.append("before_state_match")
+        elif before_state:
+            warnings.append("before_state_mismatch")
+        if after_state and (row.get("after_state") or "").strip() == after_state:
+            passed.append("after_state_match")
+        elif after_state:
+            warnings.append("after_state_mismatch")
+        if (row.get("triggered_by") or "").strip() == "claude_desktop":
+            passed.append("triggered_by_match")
+        else:
+            failed.append("triggered_by_mismatch")
+
+        verified = len(failed) == 0
+        score = 1.0
+        score -= 0.35 if failed else 0.0
+        score -= 0.05 * len(warnings)
+        score = max(0.0, round(score, 2))
+        blocked = not verified or score < 0.8
+
+        return {
+            "ok": True,
+            "blocked": blocked,
+            "verified": verified,
+            "verification_score": score,
+            "passed_checks": passed,
+            "failed_checks": failed,
+            "warnings": warnings,
+            "row": {
+                "id": row.get("id"),
+                "version": row.get("version"),
+                "change_type": row.get("change_type"),
+                "component": row.get("component"),
+                "title": row.get("title"),
+                "triggered_by": row.get("triggered_by"),
+                "created_at": row.get("created_at"),
+            },
+            "summary": (
+                f"{ver}/{comp}: {'verified' if verified else 'unverified'} "
+                f"(warnings={len(warnings)}, failed={len(failed)})"
+            ),
+        }
+    except Exception as exc:
+        return {
+            "ok": True,
+            "blocked": True,
+            "verified": False,
+            "verification_score": 0.0,
+            "passed_checks": [],
+            "failed_checks": ["changelog_verification_error"],
+            "warnings": [str(exc)],
+            "summary": f"changelog verification error: {exc}",
+        }
+
+
+def t_changelog_verification_packet(
+    version: str = "",
+    component: str = "",
+    summary: str = "",
+    before: str = "",
+    after: str = "",
+    change_type: str = "upgrade",
+) -> dict:
+    """Public wrapper for canonical changelog verification."""
+    return _changelog_verification_packet(
+        version=version,
+        component=component,
+        summary=summary,
+        before=before,
+        after=after,
+        change_type=change_type,
+    )
 
 
 def t_bulk_apply(executor_override: str = "claude_desktop", dry_run: bool = False):
@@ -6199,7 +6387,9 @@ TOOLS = {
     "search_mistakes":        {"fn": t_search_mistakes,        "perm": "READ",    "args": ["query", "domain", "limit"],
                                "desc": "Semantic mistake search by natural language query. Use when you want mistakes related to a concept (e.g. 'railway deploy'). Use get_mistakes for domain-filtered list."},
     "changelog_add":          {"fn": t_changelog_add,          "perm": "WRITE",   "args": ["version", "component", "summary", "before", "after", "change_type"],
-                               "desc": "Log a completed change to the changelog table + Telegram notify. Call after every deploy. before/after describe what changed. change_type=bugfix|feature|config|refactor."},
+                               "desc": "Log a completed change to the changelog table + Telegram notify. Call after every deploy. before/after describe what changed. change_type=bugfix|feature|config|refactor. Returns a verification packet."},
+    "changelog_verification_packet": {"fn": t_changelog_verification_packet, "perm": "READ", "args": ["version", "component", "summary", "before", "after", "change_type"],
+                               "desc": "Verify a changelog row exists and matches the canonical write contract."},
     "bulk_apply":             {"fn": t_bulk_apply,             "perm": "WRITE",   "args": ["executor_override", "dry_run"],
                                "desc": "Apply ALL pending evolution_queue items. executor_override=claude_desktop routes knowledge types to KB. dry_run=true shows plan without applying. Returns slim results to prevent overflow."},
     "list_templates":         {"fn": t_list_templates,         "perm": "READ",    "args": ["limit"],
