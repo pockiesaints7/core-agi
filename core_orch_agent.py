@@ -30,6 +30,7 @@ AGENT_TOKEN_CONCLUDE  = float(os.getenv("AGENT_TOKEN_CONCLUDE", "0.92")) # force
 AGENT_TIMEOUT_SEC     = int(os.getenv("AGENT_TIMEOUT_SEC", "600"))       # 10min wall clock
 AGENT_ERROR_THRESHOLD = int(os.getenv("AGENT_ERROR_THRESHOLD", "4"))     # consecutive failures
 AGENT_PROGRESS_EVERY  = int(os.getenv("AGENT_PROGRESS_EVERY", "3"))      # telegram update interval
+AGENT_DISCOVERY_STEP_LIMIT = int(os.getenv("AGENT_DISCOVERY_STEP_LIMIT", "6"))  # discovery budget
 
 # ── Agentic trigger keywords ──────────────────────────────────────────────────
 AGENTIC_TRIGGERS = frozenset([
@@ -102,6 +103,17 @@ _CONCLUDE_INSTRUCTION = (
     "You MUST return type=done on this step with a comprehensive answer using everything collected so far. "
     "Do not call any more tools. Synthesise all gathered information into the final answer now."
 )
+
+_DISCOVERY_TOOLS = frozenset({
+    "file_list",
+    "shell",
+    "repo_map_status",
+    "repo_component_packet",
+    "repo_graph_packet",
+    "search_kb",
+    "web_search",
+    "ingest_knowledge",
+})
 
 # ── Token utilities ───────────────────────────────────────────────────────────
 def _chars(text: str) -> int:
@@ -450,6 +462,7 @@ async def run_agent_loop(msg: OrchestratorMessage, goal: str) -> None:
     start_time = time.monotonic()
     step = 0
     force_conclude = False  # set True when any budget is critical
+    discovery_steps = 0
 
     # Token tracking: use real prompt_tokens from API response each step.
     # No hardcoded model limits — the API tells us the truth.
@@ -654,6 +667,23 @@ async def run_agent_loop(msg: OrchestratorMessage, goal: str) -> None:
             result = await _run_tool(tool_name, tool_args, msg)
             ok = result.get("ok", True) if isinstance(result, dict) else True
             print(f"[AGENT] step={step} {tool_name} ok={ok}")
+
+            if ok and tool_name in _DISCOVERY_TOOLS:
+                discovery_steps += 1
+                if discovery_steps >= AGENT_DISCOVERY_STEP_LIMIT and not force_conclude:
+                    force_conclude = True
+                    print(
+                        f"[AGENT] step={step} discovery budget reached "
+                        f"({discovery_steps}/{AGENT_DISCOVERY_STEP_LIMIT}) — forcing conclusion"
+                    )
+                    history.append({
+                        "type": "thought_only",
+                        "thought": (
+                            "Discovery budget reached. "
+                            "Conclude now with the best evidence collected instead of listing more files."
+                        ),
+                        "step": step,
+                    })
 
             if not ok:
                 consecutive_errors += 1
