@@ -11,10 +11,13 @@ CORE runs on Oracle Cloud Ubuntu VM via systemd service `core-agi`.
 ## Recovery
 CORRECT RECOVERY after crash:
 1. SSH to VM: check `systemctl status core-agi` and `journalctl -u core-agi -n 50`
-2. If code broken: `cd /home/ubuntu/core-agi && git log --oneline -5` to find last good commit
-3. Rollback: `git checkout <SHA> -- <file>` then `systemctl restart core-agi`
-4. Deploy new code: push to GitHub → GitHub Actions calls `/deploy-webhook` → auto git pull + restart
-5. PAT location: `C:\Users\rnvgg\.claude-skills\services\CREDENTIALS.md`
+2. Record and keep the last known good commit SHA in this file:
+   - `last_good_commit: <SHA>`
+   - update it after every verified deploy
+3. If code broken: `cd /home/ubuntu/core-agi && git log --oneline -5` to find last good commit
+4. Rollback: `git checkout <SHA> -- <file>` then `systemctl restart core-agi`
+5. Deploy new code: push to GitHub → GitHub Actions calls `/deploy-webhook` → auto git pull + restart
+6. PAT location: `C:\Users\rnvgg\.claude-skills\services\CREDENTIALS.md`
 
 ---
 
