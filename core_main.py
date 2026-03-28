@@ -382,12 +382,23 @@ def _render_evolution_status_report(evo_auto: dict) -> str:
     last = evo_auto.get("last_summary") or {}
     if not last and evo_auto.get("details"):
         last = evo_auto
+    monitor = evo_auto.get("backlog_monitor") or last.get("backlog_monitor") or {}
     lines = [
         f"Status: <b>{'enabled' if evo_auto.get('enabled') else 'disabled'}</b> | running={evo_auto.get('running')} | interval={evo_auto.get('interval_seconds')}s | batch={evo_auto.get('batch_limit')}",
         f"Queue: pending {evo_auto.get('pending_evolutions', 0)} | synthesized {evo_auto.get('synthesized_evolutions', 0)} | follow-up tasks {evo_auto.get('pending_improvement_tasks', 0)}",
     ]
     if evo_auto.get("track_counts"):
         lines.append("Tracks: " + ", ".join(f"{_tg_escape(k)}={v}" for k, v in sorted(evo_auto["track_counts"].items())))
+    if monitor:
+        trend = monitor.get("trend") or "unknown"
+        growth = monitor.get("growth")
+        task_growth = monitor.get("task_growth")
+        lines.append(
+            f"Backlog monitor: {_tg_escape(trend, 20)} | window={monitor.get('window', '?')} | growth={growth if growth is not None else '?'} | task_growth={task_growth if task_growth is not None else '?'}"
+        )
+        alert = monitor.get("alert") or ""
+        if alert:
+            lines.append(f"Monitor alert: {_tg_escape(alert, 180)}")
     if last.get("last_run_at"):
         lines.append(f"Last run: {_tg_escape(last.get('finished_at') or evo_auto.get('last_run_at'), 40)}")
     details = last.get("details") or []

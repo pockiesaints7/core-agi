@@ -38,6 +38,12 @@ AUTONOMY_BATCH_LIMIT = max(1, int(os.getenv("CORE_EVOLUTION_AUTONOMY_BATCH_LIMIT
 AUTONOMY_NOTIFY = os.getenv("CORE_EVOLUTION_AUTONOMY_NOTIFY", "true").strip().lower() in {
     "1", "true", "yes", "on"
 }
+AUTONOMY_BACKLOG_MONITOR = os.getenv("CORE_EVOLUTION_AUTONOMY_BACKLOG_MONITOR", "true").strip().lower() in {
+    "1", "true", "yes", "on"
+}
+AUTONOMY_BACKLOG_WINDOW = max(3, int(os.getenv("CORE_EVOLUTION_AUTONOMY_BACKLOG_WINDOW", "3")))
+AUTONOMY_BACKLOG_MIN_GROWTH = max(10, int(os.getenv("CORE_EVOLUTION_AUTONOMY_BACKLOG_MIN_GROWTH", "25")))
+AUTONOMY_BACKLOG_ALERT_COOLDOWN_S = max(300, int(os.getenv("CORE_EVOLUTION_AUTONOMY_BACKLOG_ALERT_COOLDOWN_S", "3600")))
 TASK_SOURCE = "improvement"
 
 _lock = threading.Lock()
@@ -47,6 +53,9 @@ _state = {
     "last_summary": {},
     "last_error": "",
     "last_evolution_id": "",
+    "backlog_samples": [],
+    "last_backlog_monitor": {},
+    "last_backlog_alert_at": "",
 }
 
 
@@ -264,6 +273,96 @@ def _notify_cycle(summary: dict) -> None:
         print(f"[EVO_AUTONOMY] notify failed: {e}")
 
 
+def _monitor_backlog(summary: dict) -> dict:
+    if not AUTONOMY_BACKLOG_MONITOR:
+        monitor = {
+            "enabled": False,
+            "trend": "disabled",
+            "window": AUTONOMY_BACKLOG_WINDOW,
+            "min_growth": AUTONOMY_BACKLOG_MIN_GROWTH,
+            "cooldown_seconds": AUTONOMY_BACKLOG_ALERT_COOLDOWN_S,
+            "sample_count": len(_state.get("backlog_samples") or []),
+            "alert": "",
+        }
+        _state["last_backlog_monitor"] = monitor
+        return monitor
+
+    finished_at = summary.get("finished_at") or _utcnow()
+    pending = int(summary.get("pending_remaining") or 0)
+    task_pending = int(summary.get("pending_improvement_tasks") or 0)
+    samples = list(_state.get("backlog_samples") or [])
+    samples.append({
+        "ts": finished_at,
+        "pending": pending,
+        "task_pending": task_pending,
+    })
+    samples = samples[-max(12, AUTONOMY_BACKLOG_WINDOW * 4):]
+    _state["backlog_samples"] = samples
+
+    window_samples = samples[-AUTONOMY_BACKLOG_WINDOW:]
+    pending_series = [int(item.get("pending") or 0) for item in window_samples]
+    task_series = [int(item.get("task_pending") or 0) for item in window_samples]
+    growth = pending_series[-1] - pending_series[0] if len(pending_series) >= 2 else 0
+    task_growth = task_series[-1] - task_series[0] if len(task_series) >= 2 else 0
+    sustained_growth = len(pending_series) >= AUTONOMY_BACKLOG_WINDOW and all(b > a for a, b in zip(pending_series, pending_series[1:]))
+    stable_task_growth = len(task_series) >= AUTONOMY_BACKLOG_WINDOW and all(b >= a for a, b in zip(task_series, task_series[1:]))
+    trend = "stable"
+    alert = ""
+
+    if sustained_growth and growth >= AUTONOMY_BACKLOG_MIN_GROWTH:
+        trend = "rising"
+    elif len(pending_series) >= 2 and pending_series[-1] < pending_series[0]:
+        trend = "falling"
+    elif len(pending_series) >= 2 and pending_series[-1] == pending_series[0]:
+        trend = "flat"
+
+    if trend == "rising":
+        alert = (
+            f"Evolution backlog rising across {len(pending_series)} cycles: "
+            f"{pending_series[0]} -> {pending_series[-1]} (Δ{growth}); "
+            f"follow-up tasks {task_series[0] if task_series else 0} -> {task_series[-1] if task_series else 0} "
+            f"(Δ{task_growth})."
+        )
+        last_alert = _state.get("last_backlog_alert_at") or ""
+        cooldown_ok = True
+        if last_alert:
+            try:
+                cooldown_ok = (datetime.fromisoformat(finished_at) - datetime.fromisoformat(last_alert)).total_seconds() >= AUTONOMY_BACKLOG_ALERT_COOLDOWN_S
+            except Exception:
+                cooldown_ok = True
+        if cooldown_ok:
+            try:
+                notify(
+                    "<b>EVOLUTION BACKLOG MONITOR</b>\n"
+                    f"Window: {window_samples[0].get('ts', '?')} -> {window_samples[-1].get('ts', '?')}\n"
+                    f"Pending evolutions: {pending_series[0]} -> {pending_series[-1]} (Δ{growth})\n"
+                    f"Follow-up tasks: {task_series[0] if task_series else 0} -> {task_series[-1] if task_series else 0} (Δ{task_growth})\n"
+                    f"Action: keep current drain rate unless this trend persists after another window."
+                )
+                _state["last_backlog_alert_at"] = finished_at
+            except Exception as e:
+                print(f"[EVO_AUTONOMY] backlog monitor notify failed: {e}")
+
+    monitor = {
+        "enabled": True,
+        "trend": trend,
+        "window": AUTONOMY_BACKLOG_WINDOW,
+        "min_growth": AUTONOMY_BACKLOG_MIN_GROWTH,
+        "cooldown_seconds": AUTONOMY_BACKLOG_ALERT_COOLDOWN_S,
+        "sample_count": len(samples),
+        "pending_series": pending_series,
+        "task_series": task_series,
+        "growth": growth,
+        "task_growth": task_growth,
+        "alert": alert,
+        "sustained_growth": sustained_growth,
+        "stable_task_growth": stable_task_growth,
+        "last_alert_at": _state.get("last_backlog_alert_at", ""),
+    }
+    _state["last_backlog_monitor"] = monitor
+    return monitor
+
+
 def process_evolution_row(row: dict) -> dict:
     evolution_id = str(row.get("id") or "")
     summary = _parse_change_summary(row)
@@ -409,6 +508,7 @@ def run_evolution_autonomy_cycle(max_evolutions: int = AUTONOMY_BATCH_LIMIT) -> 
             "details": details,
             "errors": errors,
         }
+        summary["backlog_monitor"] = _monitor_backlog(summary)
         _state["last_run_at"] = summary["finished_at"]
         _state["last_summary"] = summary
         _state["last_error"] = ""
@@ -456,6 +556,7 @@ def evolution_autonomy_status() -> dict:
         "running": _state["running"],
         "interval_seconds": AUTONOMY_INTERVAL_S,
         "batch_limit": AUTONOMY_BATCH_LIMIT,
+        "backlog_monitor": _state.get("last_backlog_monitor", {}),
         "task_source": TASK_SOURCE,
         "last_run_at": _state["last_run_at"],
         "last_error": _state["last_error"],
