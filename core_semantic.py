@@ -14,6 +14,7 @@ Tables covered:
   hot_reflections    — cold processor semantic cluster
   output_reflections — L11 meta evaluator dedup
   evolution_queue    — evo dedup before inserting
+  conversation_episodes — episode memory + session retrieval
 """
 import hashlib
 import time
@@ -73,6 +74,16 @@ def _reflect_text(r):
 def _evo_text(r):
     return " | ".join(p for p in [r.get("change_summary",""), r.get("pattern_key","")] if p)
 
+def _episode_text(r):
+    parts = [
+        r.get("summary",""),
+        r.get("chat_id",""),
+    ]
+    tags = r.get("topic_tags") or []
+    if isinstance(tags, list):
+        parts.extend(tags)
+    return " | ".join(p for p in parts if p)
+
 SEMANTIC_TABLES = {
     "knowledge_base": {
         "text_fn":   _kb_text,
@@ -114,6 +125,12 @@ SEMANTIC_TABLES = {
         "text_fn":   _evo_text,
         "rpc":       "match_evolutions",
         "select":    "id,change_type,change_summary,pattern_key,status,confidence",
+        "threshold": 0.20,
+    },
+    "conversation_episodes": {
+        "text_fn":   _episode_text,
+        "rpc":       "match_conversation_episodes",
+        "select":    "id,chat_id,summary,topic_tags,embedding",
         "threshold": 0.20,
     },
 }
@@ -172,6 +189,51 @@ def search(
     return _ilike_fallback(table, query, limit, filters)
 
 
+def search_many(
+    query: str,
+    tables: list[str] | None = None,
+    limit: int = 10,
+    domain: str = "",
+    filters_by_table: dict[str, str] | None = None,
+) -> list:
+    """Fan out one semantic query across multiple registered tables and merge the results.
+
+    This is the unified memory read path CORE should use when it wants both the KB and
+    the native semantic tables in a single reasoning call.
+    """
+    if not query or len(query.strip()) < 2:
+        return []
+    tables = tables or list(SEMANTIC_TABLES.keys())
+    filters_by_table = filters_by_table or {}
+    per_table_limit = max(1, min(limit, 5))
+    merged = []
+    seen = set()
+    for table in tables:
+        if table not in SEMANTIC_TABLES:
+            continue
+        table_filters = filters_by_table.get(table, "")
+        if not table_filters and domain and domain not in ("", "all"):
+            if table in {"knowledge_base", "mistakes", "behavioral_rules", "pattern_frequency", "hot_reflections", "output_reflections", "evolution_queue"}:
+                table_filters = f"&domain=eq.{domain}"
+        try:
+            rows = search(table, query, limit=per_table_limit, filters=table_filters) or []
+        except Exception:
+            rows = []
+        for row in rows:
+            rid = row.get("id") or row.get("event_id") or row.get("topic") or row.get("pattern_key") or row.get("change_summary") or row.get("summary")
+            key = (table, str(rid))
+            if key in seen:
+                continue
+            seen.add(key)
+            item = dict(row)
+            item["semantic_table"] = table
+            item["semantic_query"] = query
+            item["semantic_score"] = row.get("score") or row.get("similarity") or row.get("match_score") or row.get("_score") or 0
+            merged.append(item)
+    merged.sort(key=lambda r: float(r.get("semantic_score") or 0), reverse=True)
+    return merged[:limit]
+
+
 def _ilike_fallback(table: str, query: str, limit: int, filters: str = "") -> list:
     """Last-resort ilike. Should rarely fire in production (only on Voyage outage)."""
     cfg = SEMANTIC_TABLES[table]
@@ -185,6 +247,7 @@ def _ilike_fallback(table: str, query: str, limit: int, filters: str = "") -> li
         "hot_reflections":   ["reflection_text","task_summary"],
         "output_reflections":["gap","new_behavior"],
         "evolution_queue":   ["change_summary","pattern_key"],
+        "conversation_episodes": ["summary","chat_id"],
     }.get(table, ["content"])
     or_clause = ",".join(f"{c}.ilike.*{kw}*" for c in text_cols)
     qs = f"select={cfg['select']}&or=({or_clause})&limit={limit}{filters}"
@@ -267,7 +330,8 @@ def backfill_all(batch_size: int = 20) -> dict:
     """Backfill all registered tables in priority order."""
     results = {}
     for table in ["mistakes","behavioral_rules","pattern_frequency",
-                  "hot_reflections","output_reflections","evolution_queue"]:
+                  "hot_reflections","output_reflections","evolution_queue",
+                  "conversation_episodes"]:
         print(f"[SEMANTIC] backfilling {table}...")
         results[table] = backfill_table(table, batch_size)
         time.sleep(1)

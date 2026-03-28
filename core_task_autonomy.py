@@ -30,6 +30,7 @@ from core_reflection_audit import (
     note_reflection_stage,
     register_reflection_event,
 )
+from core_work_taxonomy import build_autonomy_contract
 from core_tools import (
     t_add_knowledge,
     t_agent_session_init,
@@ -43,8 +44,11 @@ AUTONOMY_ENABLED = os.getenv("CORE_AUTONOMY_ENABLED", "true").strip().lower() no
 }
 AUTONOMY_INTERVAL_S = max(60, int(os.getenv("CORE_AUTONOMY_INTERVAL_S", "300")))
 AUTONOMY_BATCH_LIMIT = max(1, int(os.getenv("CORE_AUTONOMY_BATCH_LIMIT", "1")))
-AUTONOMY_SOURCE = os.getenv("CORE_AUTONOMY_SOURCE", "self_assigned").strip() or "self_assigned"
-AUTONOMY_NOTIFY = os.getenv("CORE_AUTONOMY_NOTIFY", "false").strip().lower() in {
+AUTONOMY_SOURCES = tuple(
+    s.strip() for s in os.getenv("CORE_AUTONOMY_SOURCES", "self_assigned,improvement").split(",") if s.strip()
+)
+AUTONOMY_SOURCE = ",".join(AUTONOMY_SOURCES) if AUTONOMY_SOURCES else "self_assigned"
+AUTONOMY_NOTIFY = os.getenv("CORE_AUTONOMY_NOTIFY", "true").strip().lower() in {
     "1", "true", "yes", "on"
 }
 
@@ -92,6 +96,27 @@ def _parse_task_blob(row: dict) -> dict:
     return task
 
 
+def _task_kind(task: dict, title: str, description: str, source: str = "") -> dict:
+    autonomy = task.get("autonomy") if isinstance(task, dict) else {}
+    return build_autonomy_contract(title, description, source=source, autonomy=autonomy, context="task_autonomy")
+
+
+def _deferred_worker(strategy: dict) -> str:
+    track = _safe_text(strategy.get("work_track") or "", 40)
+    specialized = _safe_text(strategy.get("specialized_worker") or strategy.get("route") or "", 40)
+    if track == "integration":
+        return specialized or "integration_autonomy"
+    if track in {"code_patch", "new_module"}:
+        return specialized or "code_autonomy"
+    if track == "research":
+        return specialized or "research_autonomy"
+    return ""
+
+
+def _is_deferred_track(strategy: dict) -> bool:
+    return bool(_deferred_worker(strategy))
+
+
 def _slugify(value: str) -> str:
     value = (value or "").strip().lower()
     value = re.sub(r"[^a-z0-9]+", "-", value)
@@ -115,62 +140,17 @@ def _extract_domain(text: str) -> str:
 
 
 def _classify_task(title: str, description: str, source: str = "") -> dict:
-    hay = f"{title}\n{description}\n{source}".lower()
-    domain = _extract_domain(title) if "domain:" in title.lower() else _extract_domain(description)
-    if "expand kb coverage" in hay or "knowledge base is shallow" in hay or "kb coverage" in hay:
-        return {
-            "kind": "kb_expand",
-            "domain": domain,
-            "trigger": "session_open",
-            "artifact_domain": domain,
-            "artifact_topic": f"autonomy:{_slugify(title)}",
-        }
-    if "recurring" in hay and "failure" in hay:
-        return {
-            "kind": "behavioral_remediation",
-            "domain": "code",
-            "trigger": "post_mistake",
-            "artifact_domain": "code",
-            "artifact_topic": f"autonomy:{_slugify(title)}",
-        }
-    if "quality score decline" in hay or "quality declining" in hay or "quality decline" in hay:
-        return {
-            "kind": "behavioral_remediation",
-            "domain": "reasoning",
-            "trigger": "session_open",
-            "artifact_domain": "reasoning",
-            "artifact_topic": f"autonomy:{_slugify(title)}",
-        }
-    if "stale pending tasks" in hay or "stale tasks" in hay or "no progress" in hay:
-        return {
-            "kind": "behavioral_remediation",
-            "domain": "project",
-            "trigger": "on_blocked",
-            "artifact_domain": "project",
-            "artifact_topic": f"autonomy:{_slugify(title)}",
-        }
-    if "[rarl]" in hay or "modify core_train.py" in hay or "meta_replay_update" in hay or "architecture" in hay:
-        return {
-            "kind": "architecture_proposal",
-            "domain": "code",
-            "artifact_domain": "code",
-            "artifact_topic": f"autonomy:{_slugify(title)}",
-        }
-    return {
-        "kind": "architecture_proposal",
-        "domain": "reasoning",
-        "artifact_domain": "code",
-        "artifact_topic": f"autonomy:{_slugify(title)}",
-    }
+    return build_autonomy_contract(title, description, source=source, context="task_autonomy")
 
 
 def _task_rows(limit: int = 1, source: str = AUTONOMY_SOURCE) -> list[dict]:
     if limit <= 0:
         return []
+    source_list = [s.strip() for s in str(source or ",".join(AUTONOMY_SOURCES)).split(",") if s.strip()] or list(AUTONOMY_SOURCES)
     rows = sb_get(
         "task_queue",
         f"select=id,task,status,priority,source,created_at,updated_at,next_step,blocked_by,checkpoint,checkpoint_at,checkpoint_draft"
-        f"&status=eq.pending&source=eq.{source}&order=priority.desc&limit={max(1, min(limit, 10))}",
+        f"&status=eq.pending&source=in.({','.join(source_list)})&order=priority.desc&limit={max(1, min(limit, 10))}",
         svc=True,
     ) or []
     # Prefer oldest among the highest-priority slice to avoid starvation.
@@ -226,7 +206,131 @@ def _init_agentic_session(task_id: str, claim_id: str, title: str, strategy: dic
         print(f"[TASK_AUTONOMY] agentic init failed: {e}")
 
 
+def _notify_task_event(stage: str, task_id: str, title: str, claim_id: str, strategy: dict, detail: str = "") -> None:
+    if not AUTONOMY_NOTIFY:
+        return
+    kind = _safe_text(strategy.get("kind"), 80)
+    work_track = _safe_text(strategy.get("work_track") or "proposal_only", 40)
+    execution_mode = _safe_text(strategy.get("execution_mode") or "proposal", 40)
+    source = _safe_text(strategy.get("origin") or strategy.get("source") or "self_assigned", 40)
+    worker = _safe_text(strategy.get("specialized_worker") or strategy.get("route") or "evolution_autonomy", 40)
+    stage_label = {
+        "claimed": "CLAIMED",
+        "plan": "PLANNED",
+        "completed": "COMPLETED",
+        "failed": "FAILED",
+    }.get(stage, stage.upper())
+    message = (
+        f"<b>TASK AUTONOMY</b>\n"
+        f"State: {stage_label}\n"
+        f"Task: {title}\n"
+        f"Task ID: {task_id}\n"
+        f"Claim: {claim_id}\n"
+        f"Kind: {kind}\n"
+        f"Track: {work_track}\n"
+        f"Mode: {execution_mode}\n"
+        f"Worker: {worker}\n"
+        f"Source: {source}\n"
+    )
+    if detail:
+        message += f"Detail: {detail[:800]}\n"
+    try:
+        notify(message)
+    except Exception as e:
+        print(f"[TASK_AUTONOMY] notify failed: {e}")
+
+
+def _notify_cycle(summary: dict) -> None:
+    if not AUTONOMY_NOTIFY:
+        return
+    processed_tasks = summary.get("processed_tasks") or []
+    success = 0
+    blocked = 0
+    deferred = 0
+    failures = 0
+    artifact_counts: dict[str, int] = {}
+    track_counts: dict[str, int] = {}
+    deferred_counts: dict[str, int] = {}
+    deferred_worker_counts: dict[str, int] = {}
+    for item in processed_tasks:
+        execution = item.get("execution") or {}
+        final = item.get("final") or {}
+        artifact_type = _safe_text(execution.get("artifact_type") or item.get("artifact_type") or "unknown", 80)
+        artifact_counts[artifact_type] = artifact_counts.get(artifact_type, 0) + 1
+        track = _safe_text((item.get("strategy") or {}).get("work_track") or "unknown", 40)
+        track_counts[track] = track_counts.get(track, 0) + 1
+        if item.get("deferred"):
+            deferred += 1
+            deferred_counts[track] = deferred_counts.get(track, 0) + 1
+            worker = _safe_text(item.get("deferred_to") or _deferred_worker(item.get("strategy") or {}), 40) or "unknown"
+            deferred_worker_counts[worker] = deferred_worker_counts.get(worker, 0) + 1
+            continue
+        if final.get("status") == "done" and item.get("ok"):
+            success += 1
+        else:
+            failures += 1
+            if execution.get("blocked") or item.get("blocked"):
+                blocked += 1
+
+    def _fmt_item(item: dict) -> str:
+        execution = item.get("execution") or {}
+        final = item.get("final") or {}
+        status = "done" if item.get("ok") else "failed"
+        artifact = _safe_text(execution.get("artifact_type") or item.get("artifact_type") or "unknown", 80)
+        summary_text = _safe_text(execution.get("summary") or final.get("result", {}).get("summary") or "", 240)
+        if not summary_text:
+            summary_text = _safe_text((execution.get("verification") or {}).get("rows") and "verified", 240)
+        return (
+            f"- #{item.get('task_id')} [{status}] {item.get('title')} "
+            f"({artifact})"
+            + (f" -> {summary_text}" if summary_text else "")
+        )
+
+    parts = [
+        "<b>TASK AUTONOMY CYCLE</b>",
+        f"Window: {summary.get('started_at', '?')} -> {summary.get('finished_at', '?')}",
+        f"Processed: {summary.get('processed', 0)} | Completed: {success} | Deferred: {summary.get('deferred', deferred)} | Failed: {failures} | Blocked: {blocked} | Errors: {summary.get('errors', 0)}",
+        f"Current queue: pending {summary.get('pending_now', '?')} | in_progress {summary.get('in_progress_now', '?')}",
+    ]
+    if track_counts:
+        parts.append("Tracks: " + ", ".join(f"{k}={v}" for k, v in sorted(track_counts.items())))
+    if artifact_counts:
+        parts.append(
+            "Artifacts: " + ", ".join(f"{k}={v}" for k, v in sorted(artifact_counts.items()))
+        )
+    if deferred_counts:
+        parts.append("Deferred tracks: " + ", ".join(f"{k}={v}" for k, v in sorted(deferred_counts.items())))
+    if deferred_worker_counts:
+        parts.append("Deferred workers: " + ", ".join(f"{k}={v}" for k, v in sorted(deferred_worker_counts.items())))
+    for item in processed_tasks[:5]:
+        parts.append(_fmt_item(item))
+    deferred_tasks = summary.get("deferred_tasks") or []
+    if deferred_tasks:
+        parts.append("Deferred tasks:")
+        for item in deferred_tasks[:3]:
+            parts.append(
+                f"  - #{item.get('task_id') or '?'} {item.get('title') or 'unknown'} -> "
+                f"{_safe_text(item.get('deferred_to') or _deferred_worker(item.get('strategy') or {}), 40) or 'evolution_autonomy'}"
+            )
+    error_details = summary.get("error_details") or []
+    if error_details:
+        parts.append("Errors:")
+        for err in error_details[:3]:
+            parts.append(
+                f"  - #{err.get('task_id') or '?'} { _safe_text(err.get('error') or '', 220)}"
+            )
+    try:
+        notify("\n".join(parts))
+    except Exception as e:
+        print(f"[TASK_AUTONOMY] cycle notify failed: {e}")
+
+
 def _build_rule_text(title: str, description: str, kind: str) -> str:
+    track = ""
+    try:
+        track = build_autonomy_contract(title, description, context="task_autonomy").get("work_track", "")
+    except Exception:
+        track = ""
     if kind == "behavioral_remediation":
         return (
             f"When CORE sees the task '{title}', it must checkpoint after each verified substep, "
@@ -237,6 +341,7 @@ def _build_rule_text(title: str, description: str, kind: str) -> str:
         return (
             f"Task '{title}' should be treated as a proposal, not an auto-apply change. "
             f"CORE must emit an evolution_queue artifact, verify it exists, then close the task. "
+            f"Track: {track or 'proposal_only'}. "
             f"Context: {description[:240]}"
         )
     return (
@@ -249,14 +354,18 @@ def _execute_strategy(task_id: str, claim_id: str, task: dict, strategy: dict) -
     title = _safe_text(task.get("title"), 200)
     description = _safe_text(task.get("description"), 1000)
     kind = strategy.get("kind", "analysis_only")
+    work_track = _safe_text(strategy.get("work_track") or "proposal_only", 40)
+    execution_mode = _safe_text(strategy.get("execution_mode") or "proposal", 40)
     domain = strategy.get("domain", "reasoning")
     artifact_domain = strategy.get("artifact_domain", domain)
     artifact_topic = strategy.get("artifact_topic", f"autonomy:{_slugify(title)}")
 
     _init_agentic_session(task_id, claim_id, title, strategy)
     t_agent_step_done(session_id=claim_id, step_name="classify", result=json.dumps(strategy, default=str))
+    t_agent_state_set(session_id=claim_id, key="task_work_track", value=work_track)
+    t_agent_state_set(session_id=claim_id, key="task_execution_mode", value=execution_mode)
 
-    if kind == "kb_expand":
+    if kind == "kb_expand" or execution_mode == "db_write":
         rule = _build_rule_text(title, description, kind)
         created = t_add_knowledge(
             domain=artifact_domain,
@@ -317,6 +426,8 @@ def _execute_strategy(task_id: str, claim_id: str, task: dict, strategy: dict) -
 
     if kind == "architecture_proposal":
         summary = _build_rule_text(title, description, kind)
+        review_scope = _safe_text(strategy.get("review_scope") or ("worker" if work_track in {"db_only", "behavioral_rule", "research"} else "owner"), 40)
+        owner_only = bool(strategy.get("owner_only", review_scope == "owner"))
         evo_ok = sb_post(
             "evolution_queue",
             {
@@ -331,6 +442,22 @@ def _execute_strategy(task_id: str, claim_id: str, task: dict, strategy: dict) -
                         "strategy": strategy,
                         "source": "task_autonomy",
                         "generated_at": _utcnow(),
+                        "autonomy": {
+                            "kind": "architecture_proposal",
+                            "origin": "task_autonomy",
+                            "source": "task_autonomy",
+                            "task_id": task_id,
+                            "claim_id": claim_id,
+                            "work_track": work_track,
+                            "execution_mode": execution_mode,
+                            "review_scope": review_scope,
+                            "owner_only": owner_only,
+                            "verification": strategy.get("verification") or "evolution_queue artifact exists",
+                            "route": "evolution_autonomy",
+                            "specialized_worker": strategy.get("specialized_worker") or "evolution_autonomy",
+                            "expected_artifact": "evolution_queue",
+                            "next_worker": "evolution_autonomy",
+                        },
                     },
                     default=str,
                 ),
@@ -340,6 +467,7 @@ def _execute_strategy(task_id: str, claim_id: str, task: dict, strategy: dict) -
                 "source": "autonomy",
                 "impact": "medium",
                 "recommendation": "Review the proposal and apply only after owner approval.",
+                "approval_tier": "owner_review" if owner_only else "worker",
                 "created_at": _utcnow(),
             },
         )
@@ -445,6 +573,7 @@ def process_task_row(task_row: dict) -> dict:
         "updated_at": _utcnow(),
     }
     if not _patch_task(task_id, claim_patch):
+        _notify_task_event("failed", task_id, title, claim_id, strategy, detail="failed_to_claim")
         return {
             "ok": False,
             "task_id": task_id,
@@ -454,6 +583,18 @@ def process_task_row(task_row: dict) -> dict:
 
     _state["last_claimed_task_id"] = task_id
     _task_checkpoint(task_id, claim_id, "claimed", title, strategy, {"row": task_row}, "plan", "task claimed")
+    _notify_task_event(
+        "claimed",
+        task_id,
+        title,
+        claim_id,
+        strategy,
+        detail=json.dumps({
+            "stage": "claimed",
+            "next_step": "plan",
+            "strategy": strategy,
+        }, default=str),
+    )
 
     event_context = {
         "source": "core_autonomy",
@@ -472,6 +613,8 @@ def process_task_row(task_row: dict) -> dict:
         "task_strategy": strategy,
         "task_source": task_row.get("source", ""),
         "task_priority": task_row.get("priority", 0),
+        "task_work_track": strategy.get("work_track", ""),
+        "task_execution_mode": strategy.get("execution_mode", ""),
         "output_text": f"Autonomy task claimed: {title}",
     }
     ingress = register_reflection_event(event_context, event_context["output_text"])
@@ -485,6 +628,7 @@ def process_task_row(task_row: dict) -> dict:
             "summary": "Failed to persist canonical reflection event",
         }
         _task_checkpoint(task_id, claim_id, "claimed", title, strategy, fail, "owner_review", fail["summary"])
+        _notify_task_event("failed", task_id, title, claim_id, strategy, detail=json.dumps(fail, default=str))
         _patch_task(task_id, {
             "status": "failed",
             "error": fail["summary"],
@@ -534,6 +678,20 @@ def process_task_row(task_row: dict) -> dict:
         finalize_reflection_event(event_id, status="error", current_stage="meta", current_stage_status="failed", last_error="task finalization failed")
         t_agent_step_done(session_id=claim_id, step_name="complete", result="finalization_failed")
 
+    _notify_task_event(
+        "completed" if final.get("ok") else "failed",
+        task_id,
+        title,
+        claim_id,
+        strategy,
+        detail=json.dumps({
+            "status": final.get("status"),
+            "artifact_type": execution.get("artifact_type"),
+            "verification": execution.get("verification", {}),
+            "summary": execution.get("summary"),
+        }, default=str),
+    )
+
     if AUTONOMY_NOTIFY and execution.get("ok"):
         notify(f"[TASK-AUTONOMY] {title}\n{execution.get('summary', '')}")
 
@@ -546,6 +704,8 @@ def process_task_row(task_row: dict) -> dict:
         "strategy": strategy,
         "execution": execution,
         "final": final,
+        "artifact_type": execution.get("artifact_type"),
+        "blocked": bool(execution.get("blocked")),
     }
 
 
@@ -577,12 +737,28 @@ def run_autonomy_cycle(max_tasks: int = AUTONOMY_BATCH_LIMIT, source: str = AUTO
 
     started_at = _utcnow()
     processed: list[dict] = []
+    deferred_tasks: list[dict] = []
     errors: list[dict] = []
+    track_counts: dict[str, int] = {}
     try:
         rows = _task_rows(limit=max_tasks, source=source)
         for row in rows[:max(1, min(int(max_tasks or 1), 10))]:
             try:
-                processed.append(process_task_row(row))
+                task = _parse_task_blob(row)
+                strategy = _classify_task(_safe_text(task.get("title"), 200), _safe_text(task.get("description"), 1000), _safe_text(row.get("source"), 80))
+                if _is_deferred_track(strategy):
+                    deferred_to = _deferred_worker(strategy) or "evolution_autonomy"
+                    deferred_tasks.append({
+                        "task_id": row.get("id"),
+                        "title": _safe_text(task.get("title"), 200),
+                        "strategy": strategy,
+                        "deferred_to": deferred_to,
+                    })
+                    continue
+                result = process_task_row(row)
+                processed.append(result)
+                track = _safe_text((result.get("strategy") or {}).get("work_track") or "unknown", 40)
+                track_counts[track] = track_counts.get(track, 0) + 1
             except Exception as e:
                 errors.append({"task_id": row.get("id"), "error": str(e)})
                 try:
@@ -599,10 +775,30 @@ def run_autonomy_cycle(max_tasks: int = AUTONOMY_BATCH_LIMIT, source: str = AUTO
             "started_at": started_at,
             "finished_at": _utcnow(),
             "processed": len(processed),
+            "deferred": len(deferred_tasks),
             "errors": len(errors),
             "processed_tasks": processed,
+            "deferred_tasks": deferred_tasks,
             "error_details": errors,
+            "track_counts": track_counts,
         }
+        try:
+            source_list = list(AUTONOMY_SOURCES)
+            pending_now = sb_get(
+                "task_queue",
+                f"select=id&status=eq.pending&source=in.({','.join(source_list)})",
+                svc=True,
+            ) or []
+            in_progress_now = sb_get(
+                "task_queue",
+                f"select=id&status=eq.in_progress&source=in.({','.join(source_list)})",
+                svc=True,
+            ) or []
+            summary["pending_now"] = len(pending_now)
+            summary["in_progress_now"] = len(in_progress_now)
+        except Exception:
+            summary["pending_now"] = "?"
+            summary["in_progress_now"] = "?"
         _state["last_run_at"] = summary["finished_at"]
         _state["last_summary"] = summary
         _state["last_error"] = ""
@@ -610,12 +806,13 @@ def run_autonomy_cycle(max_tasks: int = AUTONOMY_BATCH_LIMIT, source: str = AUTO
             sb_post("sessions", {
                 "summary": f"[state_update] task_autonomy_last_run: {_state['last_run_at']}",
                 "actions": [
-                    f"task_autonomy cycle processed={len(processed)} errors={len(errors)}",
+                    f"task_autonomy cycle processed={len(processed)} errors={len(errors)} tracks={track_counts}",
                 ],
                 "interface": "task_autonomy",
             })
         except Exception:
             pass
+        _notify_cycle(summary)
         return {"ok": True, "enabled": True, **summary}
     except Exception as e:
         _state["last_error"] = str(e)
@@ -640,14 +837,15 @@ def autonomy_loop() -> None:
 
 def autonomy_status() -> dict:
     try:
+        source_list = list(AUTONOMY_SOURCES)
         pending = sb_get(
             "task_queue",
-            f"select=id&status=eq.pending&source=eq.{AUTONOMY_SOURCE}",
+            f"select=id&status=eq.pending&source=in.({','.join(source_list)})",
             svc=True,
         ) or []
         in_progress = sb_get(
             "task_queue",
-            f"select=id&status=eq.in_progress&source=eq.{AUTONOMY_SOURCE}",
+            f"select=id&status=eq.in_progress&source=in.({','.join(source_list)})",
             svc=True,
         ) or []
     except Exception:
@@ -659,12 +857,14 @@ def autonomy_status() -> dict:
         "running": _state["running"],
         "interval_seconds": AUTONOMY_INTERVAL_S,
         "batch_limit": AUTONOMY_BATCH_LIMIT,
-        "source": AUTONOMY_SOURCE,
+        "sources": source_list,
         "last_run_at": _state["last_run_at"],
         "last_claimed_task_id": _state["last_claimed_task_id"],
         "last_error": _state["last_error"],
         "pending": len(pending),
         "in_progress": len(in_progress),
+        "deferred": _state["last_summary"].get("deferred", 0),
+        "track_counts": _state["last_summary"].get("track_counts", {}),
         "last_summary": _state["last_summary"],
     }
 
@@ -682,7 +882,7 @@ def register_tools() -> None:
             "perm": "WRITE",
             "args": [
                 {"name": "max_tasks", "type": "string", "description": "Max pending tasks to process in this cycle (default 1)"},
-                {"name": "source", "type": "string", "description": "task_queue source filter (default self_assigned)"},
+                {"name": "source", "type": "string", "description": "task_queue source filter (comma-separated; default self_assigned,improvement)"},
             ],
             "desc": "Run one autonomous claim -> checkpoint -> verify -> complete cycle over pending tasks. Safe by design: only marks done after durable artifact verification.",
         }
@@ -695,12 +895,12 @@ def register_tools() -> None:
         }
 
 
-def t_task_autonomy_run(max_tasks: str = "1", source: str = AUTONOMY_SOURCE) -> dict:
+def t_task_autonomy_run(max_tasks: str = "1", source: str = ",".join(AUTONOMY_SOURCES)) -> dict:
     try:
         lim = int(max_tasks) if max_tasks else AUTONOMY_BATCH_LIMIT
     except Exception:
         lim = AUTONOMY_BATCH_LIMIT
-    return run_autonomy_cycle(max_tasks=lim, source=source or AUTONOMY_SOURCE)
+    return run_autonomy_cycle(max_tasks=lim, source=source or ",".join(AUTONOMY_SOURCES))
 
 
 def t_task_autonomy_status() -> dict:

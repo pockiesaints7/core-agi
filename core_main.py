@@ -11,6 +11,7 @@ Activation: rename/swap after smoke test passes (Task 2.6).
 """
 import asyncio
 import hashlib
+import html
 import json
 import os
 import threading
@@ -35,7 +36,7 @@ from core_config import (
     L, sb_get, sb_post, sb_patch, sb_upsert, sb_post_critical,
     _sbh, _sbh_count_svc, groq_chat,
 )
-from core_github import gh_read, gh_write, notify, set_webhook
+from core_github import gh_read, gh_write, notify, set_telegram_commands, set_webhook
 from core_train import cold_processor_loop, background_researcher
 from core_tools import TOOLS, handle_jsonrpc
 from core_reflection_audit import (
@@ -44,9 +45,72 @@ from core_reflection_audit import (
     register_reflection_event,
 )
 from core_task_autonomy import AUTONOMY_ENABLED, autonomy_loop, autonomy_status, run_autonomy_cycle
+from core_code_autonomy import (
+    AUTONOMY_ENABLED as CODE_AUTONOMY_ENABLED,
+    code_autonomy_loop,
+    code_autonomy_status,
+    render_code_status_report,
+    run_code_autonomy_cycle,
+)
+from core_integration_autonomy import (
+    AUTONOMY_ENABLED as INTEGRATION_AUTONOMY_ENABLED,
+    integration_autonomy_loop,
+    integration_autonomy_status,
+    render_integration_status_report,
+    run_integration_autonomy_cycle,
+)
+from core_evolution_autonomy import (
+    AUTONOMY_ENABLED as EVOLUTION_AUTONOMY_ENABLED,
+    evolution_autonomy_loop,
+    evolution_autonomy_status,
+    run_evolution_autonomy_cycle,
+)
+from core_research_autonomy import (
+    AUTONOMY_ENABLED as RESEARCH_AUTONOMY_ENABLED,
+    render_research_status_report,
+    research_autonomy_loop,
+    research_autonomy_status,
+    run_research_autonomy_cycle,
+)
+from core_proposal_router import (
+    proposal_router_summary,
+    proposal_router_status,
+    queue_review_reroute,
+    render_proposal_router_dashboard,
+)
+from core_semantic_projection import (
+    PROJECTION_ENABLED as SEMANTIC_PROJECTION_ENABLED,
+    semantic_projection_loop,
+    semantic_projection_status,
+    run_semantic_projection_cycle,
+)
+from core_work_taxonomy import build_autonomy_contract
 
 # ── Orchestrator v2 ───────────────────────────────────────────────────────────
 from core_orch_main import handle_telegram_message_v2, startup_v2
+
+CORE_TELEGRAM_COMMANDS = [
+    {"command": "start", "description": "Startup brief and quick actions"},
+    {"command": "help", "description": "Command catalog"},
+    {"command": "status", "description": "Live system and queue summary"},
+    {"command": "health", "description": "Component health check"},
+    {"command": "queues", "description": "Queue depths and backlog"},
+    {"command": "task", "description": "Task autonomy status"},
+    {"command": "tasks", "description": "Task autonomy status"},
+    {"command": "research", "description": "Research autonomy status"},
+    {"command": "code", "description": "Code autonomy status and code plan"},
+    {"command": "integration", "description": "Integration autonomy status and cross-repo contract plans"},
+    {"command": "evolutions", "description": "Evolution autonomy status"},
+    {"command": "review", "description": "Read-only owner-only proposal queue"},
+    {"command": "memory", "description": "Knowledge and semantic memory"},
+    {"command": "autonomy", "description": "Overall autonomy overview"},
+    {"command": "evolution", "description": "Evolution worker details or run"},
+    {"command": "semantic", "description": "Semantic projection status or run"},
+    {"command": "deploycheck", "description": "Running commit and file hashes"},
+    {"command": "project", "description": "Project context tools"},
+    {"command": "restart", "description": "Restart CORE service"},
+    {"command": "kill", "description": "Abort active loop"},
+]
 
 # ---------------------------------------------------------------------------
 # Shared helpers (used by routes + tools — defined here, imported by core_tools)
@@ -137,7 +201,343 @@ def get_system_counts():
     return counts
 
 
-def _build_startup_brief(resume: str, counts: dict, orch: dict) -> str:
+def _tg_escape(value: object, limit: int = 300) -> str:
+    if value in (None, ""):
+        return ""
+    return html.escape(str(value).strip()[:limit], quote=False)
+
+
+def _render_section(title: str, lines: list[str], footer: str = "") -> str:
+    parts = [f"<b>{_tg_escape(title, 120)}</b>"]
+    parts.extend(lines)
+    if footer:
+        parts.append(footer)
+    return "\n".join(parts)
+
+
+def _render_command_catalog() -> str:
+    sections: dict[str, list[str]] = {}
+    for item in CORE_TELEGRAM_COMMANDS:
+        sections.setdefault(item["command"], [])
+    grouped: dict[str, list[dict]] = {
+        "Overview": [],
+        "Monitoring": [],
+        "Workers": [],
+        "Review": [],
+        "Memory": [],
+        "Ops": [],
+    }
+    for item in CORE_TELEGRAM_COMMANDS:
+        if item["command"] in {"start", "help"}:
+            grouped["Overview"].append(item)
+        elif item["command"] in {"status", "health", "queues"}:
+            grouped["Monitoring"].append(item)
+        elif item["command"] in {"tasks", "research", "code", "integration", "evolutions", "autonomy", "evolution", "semantic"}:
+            grouped["Workers"].append(item)
+        elif item["command"] in {"review"}:
+            grouped["Review"].append(item)
+        elif item["command"] in {"memory"}:
+            grouped["Memory"].append(item)
+        else:
+            grouped["Ops"].append(item)
+
+    lines = ["<b>CORE Telegram Commands</b>"]
+    for group, items in grouped.items():
+        if not items:
+            continue
+        lines.append(f"\n<b>{group}</b>")
+        for item in items:
+            lines.append(f"/{item['command']} — {_tg_escape(item['description'], 120)}")
+    lines.append("\nUse /start for the current system snapshot.")
+    return "\n".join(lines)
+
+
+def _count_rows(table: str, qs: str) -> int:
+    try:
+        r = httpx.get(
+            f"{SUPABASE_URL}/rest/v1/{table}?{qs}",
+            headers=_sbh_count_svc(), timeout=10
+        )
+        cr = r.headers.get("content-range", "*/0")
+        return int(cr.split("/")[-1]) if "/" in cr else 0
+    except Exception:
+        return -1
+
+
+def _memory_counts() -> dict:
+    tables = [
+        "knowledge_base",
+        "mistakes",
+        "behavioral_rules",
+        "hot_reflections",
+        "output_reflections",
+        "conversation_episodes",
+        "pattern_frequency",
+    ]
+    out = {}
+    for table in tables:
+        out[table] = _count_rows(table, "select=id&limit=1")
+    return out
+
+
+def _fetch_pending_reviews(limit: int = 5) -> list[dict]:
+    return (proposal_router_status(limit=max(1, min(limit, 25))).get("review_packets") or [])
+
+
+def _fetch_review_item(evolution_id: str | int) -> dict:
+    try:
+        eid = int(evolution_id)
+    except Exception:
+        return {}
+    try:
+        rows = sb_get(
+            "evolution_queue",
+            "select=id,status,change_type,change_summary,confidence,impact,recommendation,pattern_key,source,diff_content,created_at,updated_at"
+            f"&id=eq.{eid}&limit=1",
+            svc=True,
+        ) or []
+        return rows[0] if rows else {}
+    except Exception:
+        return {}
+
+
+def _normalize_review_route(route: str) -> dict:
+    # Backward-compatible wrapper for the dedicated proposal-router module.
+    from core_proposal_router import _normalize_review_route as _route
+    return _route(route)
+
+
+def _render_review_dashboard(rows: list[dict], summary_note: str = "") -> str:
+    status = proposal_router_status(limit=max(1, min(len(rows) or 5, 25)))
+    return _render_section("Proposal Router", render_proposal_router_dashboard(status, summary_note=summary_note).splitlines())
+
+
+def _queue_review_reroute(row: dict, route: str, reason: str = "") -> dict:
+    return queue_review_reroute(row, route, reason=reason)
+
+
+def _parse_task_title(row: dict) -> str:
+    raw = row.get("task", "")
+    if isinstance(raw, dict):
+        task = raw
+    else:
+        try:
+            task = json.loads(raw) if raw else {}
+        except Exception:
+            task = {}
+    if isinstance(task, dict):
+        return str(task.get("title") or task.get("description") or row.get("id") or "task")[:120]
+    return str(row.get("id") or "task")[:120]
+
+
+def _parse_task_track(row: dict) -> str:
+    raw = row.get("task", "")
+    try:
+        task = json.loads(raw) if isinstance(raw, str) else raw
+    except Exception:
+        task = {}
+    if isinstance(task, dict):
+        autonomy = task.get("autonomy") or {}
+        if isinstance(autonomy, str):
+            try:
+                autonomy = json.loads(autonomy)
+            except Exception:
+                autonomy = {}
+        if isinstance(autonomy, dict):
+            return str(autonomy.get("work_track") or autonomy.get("kind") or row.get("source") or "unknown")
+    return str(row.get("source") or "unknown")
+
+
+def _render_task_status_report(task_auto: dict) -> str:
+    last = task_auto.get("last_summary") or {}
+    if not last and task_auto.get("processed_tasks"):
+        last = task_auto
+    lines = [
+        f"Status: <b>{'enabled' if task_auto.get('enabled') else 'disabled'}</b> | running={task_auto.get('running')} | interval={task_auto.get('interval_seconds')}s | batch={task_auto.get('batch_limit')}",
+        f"Sources: {_tg_escape(', '.join(task_auto.get('sources') or []), 120)}",
+        f"Queue: pending {task_auto.get('pending', 0)} | in_progress {task_auto.get('in_progress', 0)}",
+    ]
+    if task_auto.get("track_counts"):
+        lines.append("Tracks: " + ", ".join(f"{_tg_escape(k)}={v}" for k, v in sorted(task_auto["track_counts"].items())))
+    if task_auto.get("deferred"):
+        lines.append(f"Deferred tasks: {task_auto.get('deferred', 0)}")
+    if last.get("last_run_at"):
+        lines.append(f"Last run: {_tg_escape(last.get('finished_at') or task_auto.get('last_run_at'), 40)}")
+    processed = last.get("processed_tasks") or []
+    if processed:
+        lines.append("")
+        lines.append("<b>Recent cycle</b>")
+        for item in processed[:3]:
+            strategy = item.get("strategy") or {}
+            execution = item.get("execution") or {}
+            status = "done" if item.get("ok") else "failed"
+            lines.append(
+                f"- #{item.get('task_id')} [{status}] {_tg_escape(item.get('title') or '', 80)} "
+                f"({_tg_escape(strategy.get('work_track') or 'unknown', 40)} → {_tg_escape(execution.get('artifact_type') or item.get('artifact_type') or 'unknown', 40)})"
+            )
+    return _render_section("Task Autonomy", lines)
+
+
+def _render_evolution_status_report(evo_auto: dict) -> str:
+    last = evo_auto.get("last_summary") or {}
+    if not last and evo_auto.get("details"):
+        last = evo_auto
+    lines = [
+        f"Status: <b>{'enabled' if evo_auto.get('enabled') else 'disabled'}</b> | running={evo_auto.get('running')} | interval={evo_auto.get('interval_seconds')}s | batch={evo_auto.get('batch_limit')}",
+        f"Queue: pending {evo_auto.get('pending_evolutions', 0)} | synthesized {evo_auto.get('synthesized_evolutions', 0)} | follow-up tasks {evo_auto.get('pending_improvement_tasks', 0)}",
+    ]
+    if evo_auto.get("track_counts"):
+        lines.append("Tracks: " + ", ".join(f"{_tg_escape(k)}={v}" for k, v in sorted(evo_auto["track_counts"].items())))
+    if last.get("last_run_at"):
+        lines.append(f"Last run: {_tg_escape(last.get('finished_at') or evo_auto.get('last_run_at'), 40)}")
+    details = last.get("details") or []
+    if details:
+        lines.append("")
+        lines.append("<b>Recent synthesis</b>")
+        for item in details[:3]:
+            outcome = item.get("outcome") or ("created" if item.get("task_created") else "duplicate")
+            lines.append(
+                f"- #{item.get('evolution_id')} [{_tg_escape(item.get('change_type') or 'unknown', 20)}] {outcome} "
+                f"({_tg_escape(item.get('task_group') or 'unknown', 40)} / {_tg_escape(item.get('work_track') or 'unknown', 40)})"
+            )
+            reason = item.get("reason") or item.get("error")
+            if reason:
+                lines.append(f"  reason: {_tg_escape(reason, 180)}")
+    return _render_section("Evolution Autonomy", lines)
+
+
+def _render_memory_report() -> str:
+    counts = _memory_counts()
+    sem = semantic_projection_status() if SEMANTIC_PROJECTION_ENABLED else {}
+    lines = [
+        f"Knowledge base: {counts.get('knowledge_base', 0)}",
+        f"Mistakes: {counts.get('mistakes', 0)} | Behavioral rules: {counts.get('behavioral_rules', 0)}",
+        f"Hot reflections: {counts.get('hot_reflections', 0)} | Output reflections: {counts.get('output_reflections', 0)}",
+        f"Conversation episodes: {counts.get('conversation_episodes', 0)} | Pattern frequency: {counts.get('pattern_frequency', 0)}",
+        f"Semantic projection: {'enabled' if SEMANTIC_PROJECTION_ENABLED else 'disabled'} | last_run={sem.get('last_run_at', 'n/a')}",
+    ]
+    return _render_section("Memory", lines)
+
+
+def _render_queue_report(counts: dict, task_auto: dict, evo_auto: dict) -> str:
+    review_rows = _fetch_pending_reviews(limit=3)
+    code_auto = code_autonomy_status() if CODE_AUTONOMY_ENABLED else {}
+    integration_auto = integration_autonomy_status() if INTEGRATION_AUTONOMY_ENABLED else {}
+    lines = [
+        f"Task queue: {counts.get('task_queue_pending', 0)} pending",
+        f"Evolution queue: pending {counts.get('evolution_pending', 0)} | applied {counts.get('evolution_applied', 0)} | rejected {counts.get('evolution_rejected', 0)}",
+        f"Task autonomy backlog: {task_auto.get('pending', 0)} pending | {task_auto.get('in_progress', 0)} in progress",
+        f"Code autonomy backlog: {code_auto.get('pending_code_tasks', 0)} pending code tasks | {code_auto.get('pending_review_proposals', 0)} review proposals",
+        f"Integration autonomy backlog: {integration_auto.get('pending_integration_tasks', 0)} pending integration tasks | {integration_auto.get('pending_review_proposals', 0)} review proposals",
+        f"Evolution autonomy backlog: {evo_auto.get('pending_evolutions', counts.get('evolution_pending', 0))} pending",
+    ]
+    if review_rows:
+        lines.append("")
+        lines.append("<b>Top proposals</b>")
+        for row in review_rows:
+            lines.append(
+                f"- #{row.get('id')} [{_tg_escape(row.get('change_type') or 'unknown', 20)}] conf={float(row.get('confidence') or 0):.2f} "
+                f"{_tg_escape(row.get('change_summary') or '', 110)}"
+            )
+    return _render_section("Queues", lines)
+
+
+def _render_autonomy_overview_report(counts: dict, task_auto: dict, evo_auto: dict) -> str:
+    from core_tools import t_get_training_pipeline
+    tp = t_get_training_pipeline()
+    sem = semantic_projection_status() if SEMANTIC_PROJECTION_ENABLED else {}
+    review_rows = _fetch_pending_reviews(limit=5)
+    proposal = proposal_router_status(limit=5)
+    research = research_autonomy_status() if RESEARCH_AUTONOMY_ENABLED else {}
+    code_auto = code_autonomy_status() if CODE_AUTONOMY_ENABLED else {}
+    integration_auto = integration_autonomy_status() if INTEGRATION_AUTONOMY_ENABLED else {}
+    task_last = task_auto.get("last_summary") or {}
+    evo_last = evo_auto.get("last_summary") or {}
+    code_last = code_auto.get("last_summary") or {}
+    integration_last = integration_auto.get("last_summary") or {}
+    lines = [
+        f"Health: pipeline {'ok' if tp.get('pipeline_ok') else 'degraded'} | flags {'none' if not tp.get('health_flags') else ' | '.join(tp.get('health_flags') or [])}",
+        "",
+        "<b>Current workers</b>",
+        f"Task autonomy: {'enabled' if task_auto.get('enabled') else 'disabled'} | scope=db_only + behavioral_rule | pending {task_auto.get('pending', 0)} | in_progress {task_auto.get('in_progress', 0)}",
+        f"  Last run: {_tg_escape(task_last.get('finished_at') or task_auto.get('last_run_at') or 'n/a', 40)} | tracks: " + (
+            ", ".join(f"{_tg_escape(k)}={v}" for k, v in sorted(task_auto.get("track_counts", {}).items())) or "none"
+        ),
+        f"Research autonomy: {'enabled' if research.get('enabled') else 'disabled'} | scope=research proposals -> knowledge capture | pending {research.get('pending', 0)}",
+        f"  Last run: {_tg_escape((research.get('last_summary') or {}).get('finished_at') or research.get('last_run_at') or 'n/a', 40)} | completed {research.get('completed_tasks', 0)} | follow-up queued {research.get('follow_up_queued', 0)}",
+        f"Code autonomy: {'enabled' if code_auto.get('enabled') else 'disabled'} | scope=code_patch + new_module -> review packet | pending {code_auto.get('pending_code_tasks', 0)} | proposals {code_auto.get('pending_review_proposals', 0)}",
+        f"  Last run: {_tg_escape(code_last.get('finished_at') or code_auto.get('last_run_at') or 'n/a', 40)} | tracks: " + (
+            ", ".join(f"{_tg_escape(k)}={v}" for k, v in sorted(code_auto.get("track_counts", {}).items())) or "none"
+        ),
+        f"Integration autonomy: {'enabled' if integration_auto.get('enabled') else 'disabled'} | scope=endpoint wiring + module plumbing + cross-repo contracts -> review packet | pending {integration_auto.get('pending_integration_tasks', 0)} | proposals {integration_auto.get('pending_review_proposals', 0)}",
+        f"  Last run: {_tg_escape(integration_last.get('finished_at') or integration_auto.get('last_run_at') or 'n/a', 40)} | tracks: " + (
+            ", ".join(f"{_tg_escape(k)}={v}" for k, v in sorted(integration_auto.get("track_counts", {}).items())) or "none"
+        ),
+        f"Evolution autonomy: {'enabled' if evo_auto.get('enabled') else 'disabled'} | scope=improvement synthesis | pending {evo_auto.get('pending_evolutions', 0)} | follow-up tasks {evo_auto.get('pending_improvement_tasks', 0)}",
+        f"  Last run: {_tg_escape(evo_last.get('finished_at') or evo_auto.get('last_run_at') or 'n/a', 40)} | tracks: " + (
+            ", ".join(f"{_tg_escape(k)}={v}" for k, v in sorted(evo_auto.get("track_counts", {}).items())) or "none"
+        ),
+        f"Proposal router: {'enabled' if proposal.get('enabled') else 'disabled'} | pending {proposal.get('pending', 0)} | routes " + (
+            ", ".join(f"{_tg_escape(k)}={v}" for k, v in sorted(proposal.get("route_counts", {}).items())) or "none"
+        ),
+        f"Semantic projection: {'enabled' if SEMANTIC_PROJECTION_ENABLED else 'disabled'} | last_run {_tg_escape(sem.get('last_run_at') or 'n/a', 40)}",
+        "",
+        "<b>Worker map</b>",
+        "research_autonomy — active: validates research proposals, writes knowledge, queues follow-up work",
+        "code_autonomy — active: generates code-change packets and queues owner review",
+        "integration_autonomy — active: generates integration packets for endpoint wiring, module plumbing, and cross-repo contracts",
+        "proposal_router — active: read-only owner-only proposal queue for manual review",
+    ]
+    if review_rows:
+        lines.append("")
+        lines.append("<b>Pending proposals</b>")
+        for row in review_rows[:5]:
+            lines.append(
+                f"- #{row.get('id')} [{_tg_escape(row.get('change_type') or 'unknown', 20)}] conf={float(row.get('confidence') or 0):.2f} "
+                f"{_tg_escape(row.get('change_summary') or '', 110)}"
+            )
+    lines.append("")
+    lines.append(f"Queue backlog: task {counts.get('task_queue_pending', 0)} | evolution {counts.get('evolution_pending', 0)}")
+    return _render_section("Autonomy Overview", lines)
+
+
+def _render_health_report() -> str:
+    from core_tools import t_health
+    from core_tools import t_get_training_pipeline
+    h = t_health()
+    tp = t_get_training_pipeline()
+    comps = h.get("components", {})
+    lines = [
+        f"Supabase: {_tg_escape(comps.get('supabase', 'unknown'))}",
+        f"Groq: {_tg_escape(comps.get('groq', 'unknown'))}",
+        f"Telegram: {_tg_escape(comps.get('telegram', 'unknown'))}",
+        f"GitHub: {_tg_escape(comps.get('github', 'unknown'))}",
+        f"Pipeline: {_tg_escape((tp.get('pipeline_ok') and 'ok') or (tp.get('health_flags') and 'degraded') or 'unknown')}",
+        f"Pipeline flags: {_tg_escape(' | '.join(tp.get('health_flags') or []) or 'none')}",
+    ]
+    return _render_section("Health", lines)
+
+
+def _render_code_status_report(code_auto: dict) -> str:
+    return render_code_status_report(code_auto)
+
+
+def _render_integration_status_report(integration_auto: dict) -> str:
+    return render_integration_status_report(integration_auto)
+
+
+def _render_deployment_report() -> str:
+    manifest = _deployment_manifest()
+    lines = [
+        f"Service: {_tg_escape(manifest.get('service', 'core-agi'))}",
+        f"Commit: {_tg_escape(manifest.get('git_commit') or 'unknown', 40)}",
+        f"Runtime: port {manifest.get('runtime_mode', {}).get('port', '?')} | MCP {manifest.get('runtime_mode', {}).get('mcp_protocol_version', '?')}",
+        f"Files tracked: {len(manifest.get('files', {}))}",
+    ]
+    return _render_section("Deployment", lines)
+
+
+def _build_startup_brief(resume: str, counts: dict, orch: dict, task_auto: dict | None = None, evo_auto: dict | None = None) -> str:
     task_pending = counts.get("task_queue_pending", 0)
     if resume and resume != "No active tasks":
         task_summary = resume
@@ -148,6 +548,16 @@ def _build_startup_brief(resume: str, counts: dict, orch: dict) -> str:
     evo_pending = counts.get("evolution_pending", 0)
     evo_applied = counts.get("evolution_applied", 0)
     evo_rejected = counts.get("evolution_rejected", 0)
+    task_auto = task_auto or {}
+    evo_auto = evo_auto or {}
+    proposal = proposal_router_status(limit=3)
+    task_sources = ", ".join(task_auto.get("sources") or ["self_assigned", "improvement"])
+    evo_pending_count = evo_auto.get("pending_evolutions", evo_pending)
+    evo_synthesized = evo_auto.get("synthesized_evolutions", 0)
+    evo_task_pending = evo_auto.get("pending_improvement_tasks", 0)
+    code_auto = code_autonomy_status() if CODE_AUTONOMY_ENABLED else {}
+    integration_auto = integration_autonomy_status() if INTEGRATION_AUTONOMY_ENABLED else {}
+    sem_proj = semantic_projection_status() if SEMANTIC_PROJECTION_ENABLED else {}
     return (
         f"🧠 <b>CORE Online</b>\n"
         f"Orchestrator: <b>{orch.get('model', 'unknown')}</b> | {orch.get('layers', 'L0-L9 active')} | {orch.get('blueprint', '')}\n\n"
@@ -155,8 +565,14 @@ def _build_startup_brief(resume: str, counts: dict, orch: dict) -> str:
         f"KB: {counts.get('knowledge_base', 0)} | Mistakes: {counts.get('mistakes', 0)} | Sessions: {counts.get('sessions', 0)}\n"
         f"Task queue: {task_pending} pending | {task_summary}\n"
         f"Evolutions: pending {evo_pending} | applied {evo_applied} | rejected {evo_rejected}\n"
-        f"Autonomy: {'enabled' if AUTONOMY_ENABLED else 'disabled'} | checkpoint->verify->complete loop\n"
-        f"MCP: {len(TOOLS)} tools | Webhook: set | Loops: queue, cold, research, synthesis, diagnosis"
+        f"Task autonomy: {'enabled' if AUTONOMY_ENABLED else 'disabled'} | pending {task_auto.get('pending', 0)} | in_progress {task_auto.get('in_progress', 0)} | sources {task_sources}\n"
+        f"Research autonomy: {'enabled' if RESEARCH_AUTONOMY_ENABLED else 'disabled'} | pending {research_autonomy_status().get('pending', 0) if RESEARCH_AUTONOMY_ENABLED else 0}\n"
+        f"Code autonomy: {'enabled' if CODE_AUTONOMY_ENABLED else 'disabled'} | pending {code_auto.get('pending_code_tasks', 0)} | proposals {code_auto.get('pending_review_proposals', 0)}\n"
+        f"Integration autonomy: {'enabled' if INTEGRATION_AUTONOMY_ENABLED else 'disabled'} | pending {integration_auto.get('pending_integration_tasks', 0)} | proposals {integration_auto.get('pending_review_proposals', 0)}\n"
+        f"Evolution autonomy: {'enabled' if EVOLUTION_AUTONOMY_ENABLED else 'disabled'} | pending {evo_pending_count} | synthesized {evo_synthesized} | follow-up tasks {evo_task_pending}\n"
+        f"Proposal router: {'enabled' if proposal.get('enabled') else 'disabled'} | pending {proposal.get('pending', 0)} | routes {', '.join(f'{k}={v}' for k, v in sorted((proposal.get('route_counts') or {}).items())) or 'none'}\n"
+        f"Semantic projection: {'enabled' if SEMANTIC_PROJECTION_ENABLED else 'disabled'} | last_run {sem_proj.get('last_run_at', 'n/a')}\n"
+        f"MCP: {len(TOOLS)} tools | Webhook: set | Loops: queue, cold, research, synthesis, diagnosis, autonomy, code-autonomy, integration-autonomy, research-autonomy, evolution-autonomy, semantic-projection"
     )
 
 
@@ -307,8 +723,17 @@ def _deployment_manifest() -> dict:
         "core_orch_layer11.py",
         "core_meta_evaluator.py",
         "core_tools.py",
+        "core_reasoning_packet.py",
+        "core_work_taxonomy.py",
+        "core_code_autonomy.py",
+        "core_integration_autonomy.py",
+        "core_proposal_router.py",
+        "core_research_autonomy.py",
         "core_reflection_audit.py",
         "core_task_autonomy.py",
+        "core_evolution_autonomy.py",
+        "core_train.py",
+        "core_semantic_projection.py",
         "core_worker_critic.py",
         "core_worker_reflect.py",
         "run_reflection_audit_ddl.py",
@@ -840,10 +1265,89 @@ async def operator_autonomy_status(_auth=Depends(require_mcp_secret)):
 @app.post("/operator/autonomy/run")
 async def operator_autonomy_run(
     max_tasks: int = Query(1, ge=1, le=10),
-    source: str = Query("self_assigned"),
+    source: str = Query("self_assigned,improvement"),
     _auth=Depends(require_mcp_secret),
 ):
     return run_autonomy_cycle(max_tasks=max_tasks, source=source)
+
+
+@app.get("/operator/research-autonomy/status")
+async def operator_research_autonomy_status(_auth=Depends(require_mcp_secret)):
+    return research_autonomy_status()
+
+
+@app.post("/operator/research-autonomy/run")
+async def operator_research_autonomy_run(
+    max_tasks: int = Query(2, ge=1, le=10),
+    _auth=Depends(require_mcp_secret),
+):
+    return run_research_autonomy_cycle(max_tasks=max_tasks)
+
+
+@app.get("/operator/code-autonomy/status")
+async def operator_code_autonomy_status(_auth=Depends(require_mcp_secret)):
+    return code_autonomy_status()
+
+
+@app.post("/operator/code-autonomy/run")
+async def operator_code_autonomy_run(
+    max_tasks: int = Query(1, ge=1, le=10),
+    _auth=Depends(require_mcp_secret),
+):
+    return run_code_autonomy_cycle(max_tasks=max_tasks)
+
+
+@app.get("/operator/integration-autonomy/status")
+async def operator_integration_autonomy_status(_auth=Depends(require_mcp_secret)):
+    return integration_autonomy_status()
+
+
+@app.post("/operator/integration-autonomy/run")
+async def operator_integration_autonomy_run(
+    max_tasks: int = Query(1, ge=1, le=10),
+    _auth=Depends(require_mcp_secret),
+):
+    return run_integration_autonomy_cycle(max_tasks=max_tasks)
+
+
+@app.get("/operator/evolution-autonomy/status")
+async def operator_evolution_autonomy_status(_auth=Depends(require_mcp_secret)):
+    return evolution_autonomy_status()
+
+
+@app.post("/operator/evolution-autonomy/run")
+async def operator_evolution_autonomy_run(
+    max_evolutions: int = Query(3, ge=1, le=10),
+    _auth=Depends(require_mcp_secret),
+):
+    return run_evolution_autonomy_cycle(max_evolutions=max_evolutions)
+
+
+@app.get("/operator/proposal-router/status")
+async def operator_proposal_router_status(_auth=Depends(require_mcp_secret)):
+    # Return a slim summary (top packets only) to avoid huge responses on large backlogs.
+    return proposal_router_summary(limit=10)
+
+
+@app.post("/operator/proposal-router/run")
+async def operator_proposal_router_run(
+    limit: int = Query(5, ge=1, le=25),
+    _auth=Depends(require_mcp_secret),
+):
+    return proposal_router_summary(limit=limit)
+
+
+@app.get("/operator/semantic-projection/status")
+async def operator_semantic_projection_status(_auth=Depends(require_mcp_secret)):
+    return semantic_projection_status()
+
+
+@app.post("/operator/semantic-projection/run")
+async def operator_semantic_projection_run(
+    max_rows: int = Query(20, ge=1, le=50),
+    _auth=Depends(require_mcp_secret),
+):
+    return run_semantic_projection_cycle(max_rows=max_rows)
 
 async def get_mcp_identity(
     x_mcp_secret: Optional[str] = Header(None, alias="X-MCP-Secret"),
@@ -1233,131 +1737,212 @@ def handle_msg(msg):
     # Strip bot username suffix from commands (e.g. /status@reinvagnarbot -> /status)
     if text.startswith("/") and "@" in text:
         text = text.split("@")[0]
+    cmd, _, arg_str = text.partition(" ")
+    cmd = cmd.lower()
+    arg_str = arg_str.strip()
 
-    if text == "/start":
+    if cmd == "/start":
         counts = get_system_counts()
         resume = get_resume_task()
+        task_auto = autonomy_status() if AUTONOMY_ENABLED else {}
+        code_auto = code_autonomy_status() if CODE_AUTONOMY_ENABLED else {}
+        integration_auto = integration_autonomy_status() if INTEGRATION_AUTONOMY_ENABLED else {}
+        evo_auto = evolution_autonomy_status() if EVOLUTION_AUTONOMY_ENABLED else {}
         notify(
-            f"<b>CORE v6.0</b>\n{resume}\n"
-            f"Knowledge: {counts.get('knowledge_base',0)} | Sessions: {counts.get('sessions',0)}\n\n"
-            f"<b>Commands:</b>\n"
-            f"/status — health + system\n"
-            f"/tstatus — training pipeline detail\n"
-            f"/restart — restart CORE service (kills any stuck loop)\n"
-            f"/kill — abort active agentic loop without restart\n"
-            f"/project [list|id] — project context",
-            cid
+            _render_section(
+                "CORE Online",
+                [
+                    f"Resume: {_tg_escape(resume or 'No active tasks', 180)}",
+                    f"KB: {counts.get('knowledge_base', 0)} | Mistakes: {counts.get('mistakes', 0)} | Sessions: {counts.get('sessions', 0)}",
+                    f"Task queue: {counts.get('task_queue_pending', 0)} pending",
+                    f"Evolution queue: pending {counts.get('evolution_pending', 0)} | applied {counts.get('evolution_applied', 0)} | rejected {counts.get('evolution_rejected', 0)}",
+                    f"Task autonomy: {'enabled' if task_auto.get('enabled') else 'disabled'} | pending {task_auto.get('pending', 0)}",
+                    f"Code autonomy: {'enabled' if code_auto.get('enabled') else 'disabled'} | pending {code_auto.get('pending_code_tasks', 0)}",
+                    f"Integration autonomy: {'enabled' if integration_auto.get('enabled') else 'disabled'} | pending {integration_auto.get('pending_integration_tasks', 0)}",
+                    f"Evolution autonomy: {'enabled' if evo_auto.get('enabled') else 'disabled'} | pending {evo_auto.get('pending_evolutions', 0)}",
+                    "",
+                    "<b>Quick actions</b>",
+                    "/status, /queues, /tasks, /code, /integration, /evolutions, /review",
+                    "/memory, /autonomy, /evolution, /semantic",
+                    "/health, /deploycheck, /project, /restart, /kill",
+                ],
+            ),
+            cid,
         )
 
-    elif text == "/status":
-        from core_tools import t_health
-        h = t_health()
+    elif cmd == "/help":
+        notify(_render_command_catalog(), cid)
+
+    elif cmd == "/status":
         counts = get_system_counts()
-        resume = get_resume_task()
-        notify(
-            f"<b>Status</b>\n{resume}\n"
-            f"Supabase: {h['components'].get('supabase')} | Groq: {h['components'].get('groq')}\n"
-            f"Telegram: {h['components'].get('telegram')} | GitHub: {h['components'].get('github')}\n\n"
-            f"KB: {counts.get('knowledge_base',0)} | Sessions: {counts.get('sessions',0)} | Mistakes: {counts.get('mistakes',0)}\n"
-            f"MCP tools: {len(TOOLS)}\n\n"
-            f"Use /tstatus for training pipeline details.",
-            cid
-        )
+        task_auto = autonomy_status() if AUTONOMY_ENABLED else {}
+        code_auto = code_autonomy_status() if CODE_AUTONOMY_ENABLED else {}
+        integration_auto = integration_autonomy_status() if INTEGRATION_AUTONOMY_ENABLED else {}
+        evo_auto = evolution_autonomy_status() if EVOLUTION_AUTONOMY_ENABLED else {}
+        sem = semantic_projection_status() if SEMANTIC_PROJECTION_ENABLED else {}
+        lines = [
+            f"Runtime: {'enabled' if AUTONOMY_ENABLED else 'disabled'} task autonomy | {'enabled' if CODE_AUTONOMY_ENABLED else 'disabled'} code autonomy | {'enabled' if INTEGRATION_AUTONOMY_ENABLED else 'disabled'} integration autonomy | {'enabled' if EVOLUTION_AUTONOMY_ENABLED else 'disabled'} evolution autonomy",
+            f"Queues: task {counts.get('task_queue_pending', 0)} pending | evolution {counts.get('evolution_pending', 0)} pending",
+            f"Memory: KB {counts.get('knowledge_base', 0)} | Mistakes {counts.get('mistakes', 0)} | Sessions {counts.get('sessions', 0)}",
+            f"Workers: task {task_auto.get('pending', 0)} pending / {task_auto.get('in_progress', 0)} in progress | code {code_auto.get('pending_code_tasks', 0)} pending / {code_auto.get('pending_review_proposals', 0)} review proposals | integration {integration_auto.get('pending_integration_tasks', 0)} pending / {integration_auto.get('pending_review_proposals', 0)} review proposals | evolution {evo_auto.get('pending_evolutions', 0)} pending",
+            f"Semantic projection: {'enabled' if SEMANTIC_PROJECTION_ENABLED else 'disabled'} | last_run {_tg_escape(sem.get('last_run_at') or 'n/a', 40)}",
+        ]
+        notify(_render_section("Status", lines), cid)
 
-    elif text == "/tstatus":
-        from core_tools import t_get_training_pipeline
-        tp = t_get_training_pipeline()
-        hot = tp.get("hot", {})
-        cold = tp.get("cold", {})
-        pat = tp.get("patterns", {})
-        evo = tp.get("evolutions", {})
-        qual = tp.get("quality", {})
-        flags = tp.get("health_flags", [])
-        pipeline_ok = tp.get("pipeline_ok", False)
+    elif cmd == "/health":
+        notify(_render_health_report(), cid)
 
-        # Hot section
-        last_real = hot.get("last_real")
-        last_sim  = hot.get("last_simulation")
-        hot_line  = f"Hot: {hot.get('total','?')} total | {hot.get('unprocessed','?')} unprocessed"
-        real_line = f"  Last real: {last_real['ts']} | domain={last_real['domain']} | q={last_real['quality']}" if last_real else "  Last real: none"
-        sim_line  = f"  Simulation: {hot.get('total_simulation',0)} entries" if hot.get("simulation_ok") else "  Simulation: \u26a0\ufe0f DEAD (0 entries)"
+    elif cmd == "/queues":
+        counts = get_system_counts()
+        task_auto = autonomy_status() if AUTONOMY_ENABLED else {}
+        evo_auto = evolution_autonomy_status() if EVOLUTION_AUTONOMY_ENABLED else {}
+        notify(_render_queue_report(counts, task_auto, evo_auto), cid)
 
-        # Cold section
-        cold_ago  = f"{cold.get('last_run_mins_ago','?')}min ago" if cold.get("last_run_mins_ago") is not None else "never"
-        cold_line = f"Cold: last={cold_ago} | hots={cold.get('last_hot_count',0)} | patterns={cold.get('last_patterns_found',0)} | evos={cold.get('last_evolutions_queued',0)}"
-        thresh_line = f"  Threshold: {cold.get('threshold','?')} hots to trigger"
+    elif cmd in {"/task", "/tasks"}:
+        task_auto = autonomy_status() if AUTONOMY_ENABLED else {}
+        notify(_render_task_status_report(task_auto), cid)
 
-        # Patterns
-        top = pat.get("top")
-        pat_line  = f"Patterns: {pat.get('active_count',0)} active | {pat.get('stale_count',0)} stale"
-        top_line  = f"  Top: \"{top['key'][:60]}\" (freq={top['freq']}, {top['domain']})" if top else "  Top: none"
-
-        # Quality
-        q_avg   = qual.get("7d_avg", "?")
-        q_trend = qual.get("trend", "?")
-        trend_icon = "\u2191" if q_trend == "improving" else ("\u2193" if q_trend == "declining" else "\u2192")
-        qual_line = f"Quality 7d: avg={q_avg} {trend_icon} {q_trend} ({qual.get('sample_count',0)} samples)"
-
-        # Evolution
-        evo_line = f"Evolutions: {evo.get('pending',0)} pending | {evo.get('applied',0)} applied"
-
-        # Health
-        if flags:
-            health_line = "\u26a0\ufe0f Issues: " + " | ".join(flags)
+    elif cmd == "/research":
+        research = research_autonomy_status() if RESEARCH_AUTONOMY_ENABLED else {}
+        if arg_str.lower().startswith("run"):
+            parts = arg_str.split()
+            max_tasks = 2
+            if len(parts) > 1:
+                try:
+                    max_tasks = max(1, min(10, int(parts[1])))
+                except Exception:
+                    max_tasks = 2
+            result = run_research_autonomy_cycle(max_tasks=max_tasks)
+            notify(_render_section("Research Autonomy", [
+                f"Processed: {result.get('processed', 0)} | Completed: {result.get('completed', 0)} | Failed: {result.get('failed', 0)}",
+                f"Pending: {result.get('pending', 0)} | Follow-up queued: {result.get('follow_up_queued', 0)}",
+            ]), cid)
         else:
-            health_line = "\u2705 Pipeline healthy"
+            notify(render_research_status_report(research), cid)
 
-        notify(
-            f"<b>Training Pipeline Status</b>\n\n"
-            f"{hot_line}\n{real_line}\n{sim_line}\n\n"
-            f"{cold_line}\n{thresh_line}\n\n"
-            f"{pat_line}\n{top_line}\n\n"
-            f"{qual_line}\n"
-            f"{evo_line}\n\n"
-            f"{health_line}",
-            cid
-        )
+    elif cmd == "/code":
+        code_auto = code_autonomy_status() if CODE_AUTONOMY_ENABLED else {}
+        if arg_str.lower().startswith("run"):
+            parts = arg_str.split()
+            max_tasks = 1
+            if len(parts) > 1:
+                try:
+                    max_tasks = max(1, min(10, int(parts[1])))
+                except Exception:
+                    max_tasks = 1
+            result = run_code_autonomy_cycle(max_tasks=max_tasks)
+            notify(_render_section("Code Autonomy", [
+                f"Processed: {result.get('processed', 0)} | Proposed: {result.get('proposed', 0)} | Duplicates: {result.get('duplicates', 0)} | Deferred: {result.get('deferred', 0)} | Failures: {result.get('failures', 0)}",
+                f"Pending code tasks: {result.get('pending_now', 0)} | Pending review proposals: {result.get('pending_proposals_now', 0)}",
+            ]), cid)
+        else:
+            notify(_render_code_status_report(code_auto), cid)
 
-    elif text == "/restart":
-        # Owner-only: restart the core-agi systemd service
-        # Kills any running agentic loop immediately
-        notify("🔄 Restarting CORE service...", cid)
+    elif cmd == "/integration":
+        integration_auto = integration_autonomy_status() if INTEGRATION_AUTONOMY_ENABLED else {}
+        if arg_str.lower().startswith("run"):
+            parts = arg_str.split()
+            max_tasks = 1
+            if len(parts) > 1:
+                try:
+                    max_tasks = max(1, min(10, int(parts[1])))
+                except Exception:
+                    max_tasks = 1
+            result = run_integration_autonomy_cycle(max_tasks=max_tasks)
+            notify(_render_section("Integration Autonomy", [
+                f"Processed: {result.get('processed', 0)} | Proposed: {result.get('proposed', 0)} | Duplicates: {result.get('duplicates', 0)} | Deferred: {result.get('deferred', 0)} | Failures: {result.get('failures', 0)}",
+                f"Pending integration tasks: {result.get('pending_now', 0)} | Pending review proposals: {result.get('pending_proposals_now', 0)}",
+            ]), cid)
+        else:
+            notify(_render_integration_status_report(integration_auto), cid)
+
+    elif cmd == "/autonomy":
+        counts = get_system_counts()
+        task_auto = autonomy_status() if AUTONOMY_ENABLED else {}
+        evo_auto = evolution_autonomy_status() if EVOLUTION_AUTONOMY_ENABLED else {}
+        notify(_render_autonomy_overview_report(counts, task_auto, evo_auto), cid)
+
+    elif cmd in {"/evolution", "/evolutions"}:
+        evo_auto = evolution_autonomy_status() if EVOLUTION_AUTONOMY_ENABLED else {}
+        if arg_str.lower().startswith("run"):
+            parts = arg_str.split()
+            max_evos = 3
+            if len(parts) > 1:
+                try:
+                    max_evos = max(1, min(10, int(parts[1])))
+                except Exception:
+                    max_evos = 3
+            result = run_evolution_autonomy_cycle(max_evolutions=max_evos)
+            notify(_render_evolution_status_report(result if isinstance(result, dict) else evo_auto), cid)
+        else:
+            notify(_render_evolution_status_report(evo_auto), cid)
+
+    elif cmd in {"/review", "/proposals"}:
+        rows = _fetch_pending_reviews(limit=5)
+        note = "Read-only owner queue. Workers auto-handle safe tracks; Telegram review is for inspection only."
+        if arg_str.strip() and arg_str.strip().split()[0].lower() not in {"", "list", "status", "dashboard", "help"}:
+            note = "Read-only owner queue. Actions are disabled on Telegram; use desktop/operator flows for any manual decision."
+        notify(_render_review_dashboard(rows, summary_note=note), cid)
+
+    elif cmd == "/memory":
+        notify(_render_memory_report(), cid)
+
+    elif cmd == "/semantic":
+        sem = semantic_projection_status() if SEMANTIC_PROJECTION_ENABLED else {}
+        if arg_str.lower().startswith("run"):
+            parts = arg_str.split()
+            max_rows = 20
+            if len(parts) > 1:
+                try:
+                    max_rows = max(1, min(50, int(parts[1])))
+                except Exception:
+                    max_rows = 20
+            result = run_semantic_projection_cycle(max_rows=max_rows)
+            sem = result if isinstance(result, dict) else sem
+        lines = [
+            f"Status: {'enabled' if sem.get('enabled', SEMANTIC_PROJECTION_ENABLED) else 'disabled'} | running={sem.get('running', False)}",
+            f"Last run: {_tg_escape(sem.get('last_run_at', 'n/a'), 40)}",
+            f"Pending raw rows: {_tg_escape(sem.get('pending_rows', sem.get('pending', 'n/a')), 40)}",
+        ]
+        notify(_render_section("Semantic Projection", lines), cid)
+
+    elif cmd == "/deploycheck":
+        notify(_render_deployment_report(), cid)
+
+    elif cmd == "/restart":
+        notify(_render_section("Restart", ["Restarting CORE service...", "Any active loop will be interrupted by systemd restart."]), cid)
         import subprocess as _sp
         import time as _time
         def _do_restart():
-            _time.sleep(1)  # let the notify send first
+            _time.sleep(1)
             _sp.run(["sudo", "systemctl", "restart", "core-agi"], check=False)
         import threading as _thr
         _thr.Thread(target=_do_restart, daemon=True).start()
-        # Note: no reply after this — service will be dead momentarily
 
-    elif text == "/kill":
-        # Owner-only: kill any running agentic loop without full restart
-        # Finds the agentic loop task and marks it aborted, then notifies
-        notify("🛑 Killing active agentic loop...", cid)
+    elif cmd == "/kill":
+        notify(_render_section("Kill", ["Stopping active agentic loops and marking live sessions aborted."]), cid)
         try:
             import httpx as _hx
             from core_config import SUPABASE_URL, _sbh
-            # Mark any active agentic sessions as aborted
             _hx.patch(
                 f"{SUPABASE_URL}/rest/v1/agentic_sessions?status=eq.active",
                 headers={**_sbh(True), "Prefer": "return=minimal"},
                 json={"status": "aborted"},
                 timeout=5
             )
-            notify("✅ Loop killed (sessions marked aborted). Use /restart if CORE is stuck.", cid)
+            notify("✅ Active sessions marked aborted. Use /restart if CORE is still stuck.", cid)
         except Exception as e:
             notify(f"⚠️ Kill failed: {e}", cid)
 
-    elif text.startswith("/project"):
+    elif cmd == "/project":
         from core_tools import t_project_list, t_project_prepare
-        parts = text.split()[1:]
+        parts = arg_str.split()
         if not parts or parts[0] == "list":
             result = t_project_list()
             projects = result.get("projects", [])
             if projects:
-                lines = [f"*{p['name']}* ({p['project_id']}) — {p['status']}" for p in projects]
-                notify("*Projects:*\n" + "\n".join(lines), cid)
+                lines = [f"- {_tg_escape(p['name'], 60)} ({_tg_escape(p['project_id'], 40)}) — {_tg_escape(p['status'], 40)}" for p in projects]
+                notify(_render_section("Projects", lines), cid)
             else:
                 notify("No projects registered. Use Claude Desktop to register first.", cid)
         else:
@@ -1365,7 +1950,7 @@ def handle_msg(msg):
             result = t_project_prepare(ids)
             prepared = result.get("prepared", [])
             if prepared:
-                notify(f"Context prepared for: {', '.join(prepared)}. Open Claude Desktop to activate.", cid)
+                notify(_render_section("Project Context", [f"Prepared: {', '.join(prepared)}", "Open Claude Desktop to activate."]), cid)
             else:
                 notify(f"Could not prepare: {ids}. Check project IDs with /project list.", cid)
 
@@ -1484,6 +2069,7 @@ async def deploy_webhook(req: Request):
 @app.on_event("startup")
 def on_start():
     set_webhook()
+    set_telegram_commands(CORE_TELEGRAM_COMMANDS)
     orch = startup_v2() or {}
     # Auto-embed sync — patches sb_post to embed all semantic table inserts
     try:
@@ -1498,8 +2084,20 @@ def on_start():
     threading.Thread(target=background_researcher, daemon=True).start()
     if AUTONOMY_ENABLED:
         threading.Thread(target=autonomy_loop, daemon=True).start()
+    if CODE_AUTONOMY_ENABLED:
+        threading.Thread(target=code_autonomy_loop, daemon=True).start()
+    if INTEGRATION_AUTONOMY_ENABLED:
+        threading.Thread(target=integration_autonomy_loop, daemon=True).start()
+    if RESEARCH_AUTONOMY_ENABLED:
+        threading.Thread(target=research_autonomy_loop, daemon=True).start()
+    if EVOLUTION_AUTONOMY_ENABLED:
+        threading.Thread(target=evolution_autonomy_loop, daemon=True).start()
+    if SEMANTIC_PROJECTION_ENABLED:
+        threading.Thread(target=semantic_projection_loop, daemon=True).start()
     counts = get_system_counts()
     resume = get_resume_task()
+    task_auto = autonomy_status() if AUTONOMY_ENABLED else {}
+    evo_auto = evolution_autonomy_status() if EVOLUTION_AUTONOMY_ENABLED else {}
     # Show in_progress tasks brief
     try:
         in_progress = sb_get(
@@ -1536,7 +2134,7 @@ def on_start():
                 task_line = "No active tasks"
     except Exception as e:
         task_line = f"Tasks: unavailable ({e})"
-    brief = _build_startup_brief(resume if resume != "No active tasks" else task_line, counts, orch)
+    brief = _build_startup_brief(resume if resume != "No active tasks" else task_line, counts, orch, task_auto, evo_auto)
     notify_ok = notify(brief)
     print(f"[CORE] startup notify sent={notify_ok}")
     print(f"[CORE] v6.0 online :{PORT} - {resume}")

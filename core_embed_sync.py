@@ -20,6 +20,7 @@ How it works:
   4. Patches the embedding column on the new row
   5. All async, non-blocking — never delays the original write
 """
+import sys
 import threading
 from datetime import datetime
 
@@ -43,6 +44,9 @@ _TEXT_FN = {
     "evolution_queue": lambda r: " | ".join(
         p for p in [r.get("change_summary",""), r.get("pattern_key","")] if p
     ),
+    "conversation_episodes": lambda r: " | ".join(
+        p for p in [r.get("summary",""), r.get("chat_id",""), " ".join(r.get("topic_tags", []) if isinstance(r.get("topic_tags"), list) else [])] if p
+    ),
 }
 
 # ── ID fetch queries per table ─────────────────────────────────────────────────
@@ -54,7 +58,56 @@ _ID_QUERY = {
     "hot_reflections":   "select=id&order=id.desc&limit=1",
     "output_reflections":"select=id&order=id.desc&limit=1",
     "evolution_queue":   "select=id&order=id.desc&limit=1",
+    "conversation_episodes": "select=id&order=id.desc&limit=1",
 }
+
+_PATCH_TEXT_KEYS = {
+    "knowledge_base": {"topic", "instruction", "content", "tags", "confidence", "source", "source_type", "source_ref"},
+    "mistakes": {"domain", "context", "what_failed", "correct_approach", "root_cause", "how_to_avoid", "severity"},
+    "behavioral_rules": {"trigger", "pointer", "full_rule", "domain", "priority", "source", "confidence"},
+    "pattern_frequency": {"pattern_key", "frequency", "domain", "description", "stale", "auto_applied"},
+    "hot_reflections": {"domain", "task_summary", "reflection_text", "gaps_identified", "quality_score"},
+    "output_reflections": {"source", "gap", "gap_domain", "new_behavior", "verdict"},
+    "evolution_queue": {"change_type", "change_summary", "recommendation", "diff_content", "pattern_key", "impact", "source", "confidence"},
+    "conversation_episodes": {"chat_id", "summary", "topic_tags"},
+}
+
+_WRAPPED = {"sb_post": False, "sb_post_critical": False, "sb_upsert": False, "sb_patch": False}
+
+
+def _relevant_patch(table: str, data: dict) -> bool:
+    if table not in _PATCH_TEXT_KEYS:
+        return False
+    if not isinstance(data, dict):
+        return False
+    keys = set(data.keys())
+    if not keys:
+        return False
+    if keys.issubset({"embedding", "updated_at", "last_accessed", "processed_by_cold", "tier_applied_at"}):
+        return False
+    return bool(keys & _PATCH_TEXT_KEYS[table])
+
+
+def _parse_id_from_filters(filters: str) -> str:
+    if not filters:
+        return ""
+    for chunk in filters.split("&"):
+        chunk = chunk.strip()
+        if chunk.startswith("id=eq."):
+            return chunk.split("id=eq.", 1)[1].strip()
+        if chunk.startswith("id=in.(") and chunk.endswith(")"):
+            inside = chunk[len("id=in.("):-1]
+            return inside.split(",")[0].strip()
+    return ""
+
+
+def _rebind_module_globals(name: str, wrapper) -> None:
+    for mod in list(sys.modules.values()):
+        try:
+            if hasattr(mod, name) and getattr(mod, name) is not None:
+                setattr(mod, name, wrapper)
+        except Exception:
+            continue
 
 def _embed_new_row(table: str, row: dict) -> None:
     """
@@ -115,6 +168,30 @@ def _fire_embed_async(table: str, row: dict) -> None:
     t = threading.Thread(target=_embed_new_row, args=(table, row), daemon=True)
     t.start()
 
+
+def _fire_embed_for_id_async(table: str, row_id: str) -> None:
+    if not row_id:
+        return
+
+    def _task():
+        try:
+            from core_config import sb_get
+            row = None
+            if table == "knowledge_base":
+                rows = sb_get(table, f"select=id,domain,topic,instruction,content,source_type,source_ref&id=eq.{row_id}&limit=1", svc=True) or []
+            elif table == "conversation_episodes":
+                rows = sb_get(table, f"select=id,chat_id,summary,topic_tags&id=eq.{row_id}&limit=1", svc=True) or []
+            else:
+                rows = sb_get(table, f"select=*&id=eq.{row_id}&limit=1", svc=True) or []
+            if rows:
+                row = rows[0]
+            if row:
+                _embed_new_row(table, row)
+        except Exception as e:
+            print(f"[EMBED_SYNC] {table}:{row_id} refetch embed failed (non-fatal): {e}")
+
+    threading.Thread(target=_task, daemon=True).start()
+
 # ── Monkey-patch sb_post ───────────────────────────────────────────────────────
 
 _PATCHED = False
@@ -130,20 +207,46 @@ def install():
         return
 
     import core_config as _cc
-
-    _original_sb_post = _cc.sb_post
+    originals = {
+        "sb_post": _cc.sb_post,
+        "sb_upsert": getattr(_cc, "sb_upsert", None),
+        "sb_patch": getattr(_cc, "sb_patch", None),
+    }
 
     def sb_post_with_embed(table: str, data: dict, *args, **kwargs):
-        # Call original
-        result = _original_sb_post(table, data, *args, **kwargs)
-        # If insert succeeded and table is semantic, fire embed
+        result = originals["sb_post"](table, data, *args, **kwargs)
         if result and table in _TEXT_FN:
             _fire_embed_async(table, data)
         return result
 
+    def sb_upsert_with_embed(table: str, data: dict, on_conflict: str, *args, **kwargs):
+        result = originals["sb_upsert"](table, data, on_conflict, *args, **kwargs)
+        if result and table in _TEXT_FN:
+            _fire_embed_async(table, data)
+        return result
+
+    def sb_patch_with_embed(table: str, filters: str, data: dict, *args, **kwargs):
+        result = originals["sb_patch"](table, filters, data, *args, **kwargs)
+        if result and _relevant_patch(table, data):
+            row_id = _parse_id_from_filters(filters)
+            if row_id:
+                _fire_embed_for_id_async(table, row_id)
+        return result
+
     _cc.sb_post = sb_post_with_embed
+    if originals["sb_upsert"]:
+        _cc.sb_upsert = sb_upsert_with_embed
+    if originals["sb_patch"]:
+        _cc.sb_patch = sb_patch_with_embed
+
+    _rebind_module_globals("sb_post", sb_post_with_embed)
+    if originals["sb_upsert"]:
+        _rebind_module_globals("sb_upsert", sb_upsert_with_embed)
+    if originals["sb_patch"]:
+        _rebind_module_globals("sb_patch", sb_patch_with_embed)
+
     _PATCHED = True
-    print("[EMBED_SYNC] Installed — auto-embedding on all semantic table inserts")
+    print("[EMBED_SYNC] Installed — auto-embedding on semantic writes and semantic patches")
 
 
 def uninstall():
@@ -177,6 +280,7 @@ def install_critical():
             return result
 
         _cc.sb_post_critical = sb_post_critical_with_embed
+        _rebind_module_globals("sb_post_critical", sb_post_critical_with_embed)
         print("[EMBED_SYNC] sb_post_critical also patched")
     except Exception as e:
         print(f"[EMBED_SYNC] sb_post_critical patch failed (non-fatal): {e}")

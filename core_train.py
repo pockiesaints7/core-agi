@@ -30,6 +30,7 @@ from core_config import (
     gemini_chat, groq_chat, GROQ_MODEL,
 )
 from core_github import notify, gh_write
+from core_work_taxonomy import build_autonomy_contract
 
 # -- Schema helpers (mirrors core_tools._sel_force) ---------------------------
 def _sel_force(table: str, cols: list) -> str:
@@ -54,6 +55,14 @@ _last_research_run: float = -1.0
 _IMPROVEMENT_INTERVAL = 3600  # 60 min
 _last_public_source_run: float = -1.0
 _PUBLIC_SOURCE_INTERVAL = 21600  # 6 hours
+_last_meta_learning_run: float = -1.0
+_META_LEARNING_INTERVAL = 21600  # 6 hours
+_last_joint_training_run: float = -1.0
+_JOINT_TRAINING_INTERVAL = 21600  # 6 hours
+_JOINT_TRAINING_PLANNER_ENABLED = os.getenv("JOINT_TRAINING_PLANNER_ENABLED", "").strip().lower() in {"1", "true", "yes", "on"}
+_last_router_policy_run: float = -1.0
+_ROUTER_POLICY_INTERVAL = 21600  # 6 hours
+_ROUTER_POLICY_ENABLED = os.getenv("DYNAMIC_ROUTER_POLICY_ENABLED", "true").strip().lower() in {"1", "true", "yes", "on"}
 
 # Source confidence multipliers (Phase 3)
 _SRC_CONF = {"real": 1.0, "simulation": 0.7, "both": 1.3}
@@ -81,6 +90,190 @@ def _assign_approval_tier(confidence: float, change_type: str, src_key: str) -> 
     if confidence >= 0.70:
         return "notify"
     return "owner"
+
+
+def _hierarchical_auxiliary_loss(levels: list) -> tuple[float, dict]:
+    """Estimate divergence across ordered reasoning levels.
+
+    This is a bounded proxy for hierarchical prediction loss:
+    more token drift between adjacent levels means higher penalty.
+    """
+    def _tokens(text: str) -> set:
+        raw = str(text or "").lower().replace("\n", " ").split()
+        cleaned = []
+        for tok in raw:
+            tok = tok.strip(".,:;!?()[]{}<>\"'`|/\\")
+            if len(tok) > 2:
+                cleaned.append(tok)
+        return set(cleaned[:80])
+
+    prev = None
+    divergences = []
+    for lvl in levels:
+        cur = _tokens(lvl)
+        if not cur:
+            continue
+        if prev is not None:
+            union = prev | cur
+            if union:
+                divergence = 1.0 - (len(prev & cur) / len(union))
+                divergences.append(divergence)
+        prev = cur
+
+    if not divergences:
+        return 0.0, {"pairs": 0, "avg_divergence": 0.0, "max_divergence": 0.0}
+
+    avg_div = sum(divergences) / len(divergences)
+    max_div = max(divergences)
+    aux_loss = round(min(1.0, (avg_div * 0.7) + (max_div * 0.3)), 3)
+    return aux_loss, {
+        "pairs": len(divergences),
+        "avg_divergence": round(avg_div, 3),
+        "max_divergence": round(max_div, 3),
+    }
+
+
+def _hierarchical_reward_schedule(epoch_number: int, research_domain: str, champion_exists: bool) -> dict:
+    """Return a phase-aware reward weighting for RARL epochs.
+
+    The schedule intentionally changes emphasis over time:
+    - explore: favor stability/sample efficiency
+    - stabilize: balance all objectives
+    - exploit: favor benchmark/transfer gains
+    Domain-specific nudges make the schedule sensitive to the epoch goal.
+    """
+    phase_cycle = {
+        1: "explore",
+        2: "stabilize",
+        0: "exploit",
+    }
+    phase = phase_cycle[epoch_number % 3]
+    weights = {
+        "benchmark_score": 0.20,
+        "transfer_score": 0.20,
+        "stability_score": 0.20,
+        "sample_efficiency": 0.20,
+        "reasoning_depth": 0.20,
+    }
+    phase_focus = {
+        "explore": {"stability_score": 0.08, "sample_efficiency": 0.08, "reasoning_depth": 0.04},
+        "stabilize": {"stability_score": 0.04, "transfer_score": 0.04, "reasoning_depth": 0.04},
+        "exploit": {"benchmark_score": 0.08, "transfer_score": 0.08, "reasoning_depth": 0.04},
+    }
+    domain_focus = {
+        "memory": {"stability_score": 0.08, "sample_efficiency": 0.05},
+        "world_modeling": {"benchmark_score": 0.08, "transfer_score": 0.05},
+        "reasoning": {"reasoning_depth": 0.10, "transfer_score": 0.04},
+        "planning": {"reasoning_depth": 0.10, "benchmark_score": 0.04},
+        "sample_efficiency": {"sample_efficiency": 0.12, "stability_score": 0.04},
+        "generalization": {"transfer_score": 0.12, "reasoning_depth": 0.03},
+    }
+
+    for name, delta in phase_focus.get(phase, {}).items():
+        weights[name] = max(0.05, weights.get(name, 0.0) + delta)
+    for name, delta in domain_focus.get(research_domain, {}).items():
+        weights[name] = max(0.05, weights.get(name, 0.0) + delta)
+    if not champion_exists:
+        weights["stability_score"] += 0.05
+        weights["sample_efficiency"] += 0.05
+
+    total = sum(weights.values()) or 1.0
+    norm_weights = {k: round(v / total, 3) for k, v in weights.items()}
+    reward_focus = {
+        "explore": "reward stability and sample efficiency while avoiding overfit complexity",
+        "stabilize": "reward balanced generalization with moderate transfer and reasoning gains",
+        "exploit": "reward benchmark and transfer gains without collapsing stability",
+    }[phase]
+    return {
+        "phase": phase,
+        "reward_focus": reward_focus,
+        "weights": norm_weights,
+    }
+
+
+def _weighted_reward_score(scores: dict, schedule: dict) -> tuple[float, dict]:
+    weights = schedule.get("weights") or {}
+    reward_score = 0.0
+    contributions = {}
+    for key, weight in weights.items():
+        value = float(scores.get(key, 0.0))
+        contrib = value * float(weight)
+        contributions[key] = round(contrib, 3)
+        reward_score += contrib
+    complexity_penalty = float(scores.get("complexity_penalty", 1.0))
+    compute_cost = float(scores.get("compute_cost", 1.0))
+    inference_latency = float(scores.get("inference_latency", 1.0))
+    penalty = round((complexity_penalty * 0.12) + (compute_cost * 0.08) + (inference_latency * 0.08), 3)
+    reward_score = round(max(0.0, reward_score - penalty), 3)
+    return reward_score, {
+        "phase": schedule.get("phase", "stabilize"),
+        "weights": weights,
+        "contributions": contributions,
+        "penalty": penalty,
+        "raw": round(sum(float(scores.get(k, 0.0)) * float(v) for k, v in weights.items()), 3),
+    }
+
+
+def _build_task_embedding_curriculum(limit: int = 12) -> dict:
+    """Collect a small curriculum of recent tasks for meta-learning.
+
+    The task payload is stored as JSON in task_queue.task, so we decode it and
+    bucket tasks by work track / source for a compact training curriculum.
+    """
+    rows = sb_get(
+        "task_queue",
+        f"select=task,result,status,priority,source,updated_at&order=updated_at.desc&limit={limit}",
+        svc=True,
+    ) or []
+    curriculum = []
+    buckets: Counter = Counter()
+
+    for row in rows:
+        task_raw = row.get("task")
+        task_data = {}
+        if isinstance(task_raw, str):
+            try:
+                task_data = json.loads(task_raw)
+            except Exception:
+                task_data = {"title": task_raw}
+        elif isinstance(task_raw, dict):
+            task_data = task_raw
+        else:
+            task_data = {"title": str(task_raw)}
+
+        autonomy = task_data.get("autonomy") if isinstance(task_data.get("autonomy"), dict) else {}
+        work_track = (
+            autonomy.get("work_track")
+            or autonomy.get("task_group")
+            or autonomy.get("kind")
+            or row.get("source")
+            or "general"
+        )
+        title = (
+            task_data.get("title")
+            or task_data.get("task")
+            or task_data.get("description")
+            or str(task_raw)
+        )
+        result = row.get("result")
+        if isinstance(result, str):
+            result = result[:180]
+        elif isinstance(result, dict):
+            result = json.dumps(result)[:180]
+        curriculum.append({
+            "work_track": str(work_track)[:32],
+            "title": str(title)[:180],
+            "status": str(row.get("status") or "unknown")[:24],
+            "priority": row.get("priority"),
+            "source": str(row.get("source") or "unknown")[:24],
+            "result": result,
+        })
+        buckets[str(work_track)] += 1
+
+    return {
+        "items": curriculum[:limit],
+        "counts": dict(buckets),
+    }
 
 
 # AGI-02: Nightly self-diagnosis
@@ -462,6 +655,21 @@ def _reconcile_gaps(hots: list) -> int:
                 "source":         "real",
                 "impact":         domain,
                 "recommendation": f"Gap identified in hot_reflections (priority={priority}). Requires architectural review.",
+                "diff_content": json.dumps({
+                    "gap": gap_text,
+                    "source": gap.get("source", ""),
+                    "domain": domain,
+                    "priority": priority,
+                    "autonomy": {
+                        "kind": "kb_expand" if gap.get("source") == "kb_coverage" else "behavioral_remediation" if gap.get("source") == "stale_tasks" else "architecture_proposal",
+                        "origin": "cold_processor",
+                        "source": gap.get("source", ""),
+                        "domain": domain,
+                        "priority": priority,
+                        "expected_artifact": "task_queue",
+                        "next_worker": "evolution_autonomy",
+                    },
+                }, default=str),
             })
             if ok:
                 inserted += 1
@@ -705,6 +913,240 @@ def _run_memory_consolidation(dry_run: bool = False):
         return {"ok": False, "error": str(e)}
 
 
+def task_similarity_metric(task_a: dict, task_b: dict) -> float:
+    """Compare two task payloads with a bounded lexical Jaccard score."""
+    def _flatten(task: dict) -> str:
+        if not isinstance(task, dict):
+            return str(task or "")
+        parts = [
+            task.get("title", ""),
+            task.get("description", ""),
+        ]
+        autonomy = task.get("autonomy") if isinstance(task.get("autonomy"), dict) else {}
+        parts.extend([
+            autonomy.get("work_track", ""),
+            autonomy.get("task_group", ""),
+            autonomy.get("route", ""),
+            autonomy.get("specialized_worker", ""),
+        ])
+        return " ".join(str(p) for p in parts if p)
+
+    def _tokens(text: str) -> set:
+        toks = []
+        for tok in str(text or "").lower().split():
+            tok = tok.strip(".,:;!?()[]{}<>\"'`|/\\")
+            if len(tok) > 2:
+                toks.append(tok)
+        return set(toks[:80])
+
+    a = _tokens(_flatten(task_a))
+    b = _tokens(_flatten(task_b))
+    if not a or not b:
+        return 0.0
+    union = a | b
+    if not union:
+        return 0.0
+    return round(len(a & b) / len(union), 3)
+
+
+def novelty_assessment_module(experience: dict, reference_memory: list[dict] | None = None, limit: int = 25) -> dict:
+    """Assess novelty of an experience against recent memory/task representations.
+
+    Returns a bounded novelty score plus a routing recommendation:
+    - merge: low novelty, consolidate with existing memory
+    - preserve: high novelty, keep as distinct memory/event
+    - review: ambiguous novelty, send to owner or higher-level review
+    """
+    def _parse(item) -> dict:
+        if isinstance(item, dict):
+            return item
+        if isinstance(item, str):
+            try:
+                parsed = json.loads(item)
+                return parsed if isinstance(parsed, dict) else {"title": item}
+            except Exception:
+                return {"title": item}
+        return {"title": str(item)}
+
+    exp = _parse(experience)
+    refs = reference_memory
+    if refs is None:
+        refs = ConsolidationManager().collect(limit=max(5, min(int(limit or 25), 50)))
+    ref_tasks = [_parse(item) for item in (refs or []) if item]
+    if not ref_tasks:
+        return {
+            "ok": True,
+            "novelty_score": 1.0,
+            "max_similarity": 0.0,
+            "reference_count": 0,
+            "recommended_route": "preserve",
+            "reason": "no_reference_memory",
+        }
+
+    similarities = [task_similarity_metric(exp, ref) for ref in ref_tasks[:max(1, min(int(limit or 25), 50))]]
+    max_similarity = max(similarities) if similarities else 0.0
+    avg_similarity = sum(similarities) / len(similarities) if similarities else 0.0
+    novelty_score = round(max(0.0, min(1.0, 1.0 - max_similarity)), 3)
+    if novelty_score >= 0.75:
+        recommended_route = "preserve"
+    elif novelty_score >= 0.45:
+        recommended_route = "review"
+    else:
+        recommended_route = "merge"
+    return {
+        "ok": True,
+        "experience": exp,
+        "novelty_score": novelty_score,
+        "max_similarity": round(max_similarity, 3),
+        "avg_similarity": round(avg_similarity, 3),
+        "reference_count": len(ref_tasks),
+        "recommended_route": recommended_route,
+    }
+
+
+class ConsolidationManager:
+    """Group similar queued tasks and summarize them for review."""
+
+    def __init__(self, similarity_threshold: float = 0.62):
+        self.similarity_threshold = max(0.1, min(float(similarity_threshold), 0.95))
+
+    def collect(self, limit: int = 25) -> list:
+        rows = sb_get(
+            "task_queue",
+            f"select=task,status,source,priority,updated_at&status=in.(pending,in_progress)&order=updated_at.desc&limit={max(1, min(int(limit), 50))}",
+            svc=True,
+        ) or []
+        tasks = []
+        for row in rows:
+            task_raw = row.get("task")
+            task_data = {}
+            if isinstance(task_raw, str):
+                try:
+                    task_data = json.loads(task_raw)
+                except Exception:
+                    task_data = {"title": task_raw}
+            elif isinstance(task_raw, dict):
+                task_data = task_raw
+            else:
+                task_data = {"title": str(task_raw)}
+            task_data["_row"] = row
+            tasks.append(task_data)
+        return tasks
+
+    def cluster(self, tasks: list) -> list:
+        clusters: list[dict] = []
+        for task in tasks:
+            matched = None
+            for cluster in clusters:
+                score = task_similarity_metric(cluster["seed"], task)
+                if score >= self.similarity_threshold:
+                    matched = cluster
+                    break
+            if matched:
+                matched["tasks"].append(task)
+                matched["scores"].append(task_similarity_metric(matched["seed"], task))
+            else:
+                clusters.append({"seed": task, "tasks": [task], "scores": []})
+        return clusters
+
+    def summarize(self, clusters: list) -> dict:
+        groups = []
+        for cluster in clusters:
+            seed = cluster["seed"]
+            row = seed.get("_row") or {}
+            title = seed.get("title") or seed.get("description") or "untitled task"
+            novelty = novelty_assessment_module(seed, reference_memory=[t for t in cluster["tasks"] if t is not seed], limit=25)
+            groups.append({
+                "title": str(title)[:120],
+                "count": len(cluster["tasks"]),
+                "source": row.get("source") or seed.get("source") or "unknown",
+                "priority": row.get("priority"),
+                "similarity_threshold": self.similarity_threshold,
+                "novelty_score": novelty.get("novelty_score", 0.0),
+                "recommended_route": novelty.get("recommended_route", "merge"),
+            })
+        return {"ok": True, "cluster_count": len(groups), "groups": groups[:10]}
+
+    def run(self, limit: int = 25) -> dict:
+        tasks = self.collect(limit=limit)
+        if not tasks:
+            return {"ok": True, "cluster_count": 0, "groups": []}
+        clusters = self.cluster(tasks)
+        summary = self.summarize(clusters)
+        summary["task_count"] = len(tasks)
+        return summary
+
+
+def t_task_similarity_metric(task_a: str = "", task_b: str = "") -> dict:
+    """Compare two task JSON blobs or plain text blobs."""
+    try:
+        def _parse(v):
+            if not v:
+                return {}
+            if isinstance(v, dict):
+                return v
+            if isinstance(v, str):
+                try:
+                    return json.loads(v)
+                except Exception:
+                    return {"title": v}
+            return {"title": str(v)}
+
+        a = _parse(task_a)
+        b = _parse(task_b)
+        return {"ok": True, "similarity": task_similarity_metric(a, b)}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def t_novelty_assessment(experience: str = "", reference_memory: str = "", limit: str = "25") -> dict:
+    """Assess how novel an experience is versus recent memory/task representations."""
+    try:
+        def _parse(v):
+            if not v:
+                return {}
+            if isinstance(v, dict):
+                return v
+            if isinstance(v, str):
+                try:
+                    parsed = json.loads(v)
+                    return parsed if isinstance(parsed, dict) else {"title": v}
+                except Exception:
+                    return {"title": v}
+            return {"title": str(v)}
+
+        try:
+            lim = max(5, min(int(limit or 25), 50))
+        except Exception:
+            lim = 25
+
+        refs = []
+        if reference_memory:
+            try:
+                parsed = json.loads(reference_memory)
+                if isinstance(parsed, list):
+                    refs = [item for item in parsed if item]
+                elif isinstance(parsed, dict):
+                    refs = [parsed]
+            except Exception:
+                refs = []
+
+        exp = _parse(experience)
+        return novelty_assessment_module(exp, reference_memory=refs or None, limit=lim)
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def t_consolidation_manager(limit: str = "25", similarity_threshold: str = "0.62") -> dict:
+    """Cluster similar queued tasks and return a consolidation summary."""
+    try:
+        lim = max(1, min(int(limit or 25), 50))
+        thresh = max(0.1, min(float(similarity_threshold or 0.62), 0.95))
+        return ConsolidationManager(similarity_threshold=thresh).run(limit=lim)
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
 def _run_causal_quality_analysis():
     """AGI-03/S3: When quality trend is declining, analyze last 10 sessions causally.
     Identifies what changed (task types, domains, error rates) and writes explanation
@@ -878,6 +1320,409 @@ def _auto_evolve_behavioral_rule(pattern_key: str, domain: str, confidence: floa
         return False
 
 
+def _run_meta_learning_loop() -> dict:
+    """Periodically synthesize a meta-learning note from recent training signals.
+
+    The loop is intentionally bounded:
+    - reads recent hot reflections, mistakes, patterns, and queued evolutions
+    - generates one actionable synthesis
+    - stores it in knowledge_base(domain=meta)
+    - checkpoints the run timestamp in sessions for restart recovery
+    """
+    try:
+        recent_hots = sb_get(
+            "hot_reflections",
+            "select=domain,quality_score,task_summary,new_patterns,new_mistakes,gaps_identified,source,created_at"
+            "&order=created_at.desc&limit=10",
+            svc=True,
+        ) or []
+        recent_mistakes = sb_get(
+            "mistakes",
+            "select=domain,what_failed,severity,root_cause,how_to_avoid&order=created_at.desc&limit=10",
+            svc=True,
+        ) or []
+        recent_evos = sb_get(
+            "evolution_queue",
+            "select=change_type,change_summary,confidence,impact,recommendation,status,source"
+            "&status=in.(pending,applied,rejected)&order=created_at.desc&limit=10",
+            svc=True,
+        ) or []
+        recent_rules = sb_get(
+            "behavioral_rules",
+            "select=trigger,pointer,domain,priority,confidence,active&active=eq.true&order=created_at.desc&limit=10",
+            svc=True,
+        ) or []
+        task_curriculum = _build_task_embedding_curriculum(limit=12)
+
+        if len(recent_hots) + len(recent_mistakes) < 4:
+            return {"ok": False, "reason": "insufficient_recent_signal"}
+
+        hot_domains = Counter((r.get("domain") or "general") for r in recent_hots)
+        mistake_domains = Counter((r.get("domain") or "general") for r in recent_mistakes)
+        evo_types = Counter((r.get("change_type") or "unknown") for r in recent_evos)
+        top_hot_domain = hot_domains.most_common(1)[0][0] if hot_domains else "general"
+        top_mistake_domain = mistake_domains.most_common(1)[0][0] if mistake_domains else "general"
+
+        hot_lines = [
+            f"- [{(r.get('domain') or 'general')}] {str(r.get('task_summary') or '')[:120]}"
+            for r in recent_hots[:5]
+        ] or ["- none"]
+        mistake_lines = [
+            f"- [{(r.get('domain') or 'general')}/{(r.get('severity') or 'low')}] {str(r.get('what_failed') or '')[:120]}"
+            for r in recent_mistakes[:5]
+        ] or ["- none"]
+        evo_lines = [
+            f"- [{(r.get('change_type') or 'unknown')}] {str(r.get('change_summary') or '')[:120]}"
+            for r in recent_evos[:5]
+        ] or ["- none"]
+        rule_lines = [
+            f"- [{(r.get('domain') or 'general')}] {str(r.get('trigger') or '')} :: {str(r.get('pointer') or '')[:120]}"
+            for r in recent_rules[:5]
+        ] or ["- none"]
+        curriculum_lines = [
+            f"- [{item.get('work_track','general')}] {item.get('title','')[:120]} | status={item.get('status','?')} | result={str(item.get('result') or '')[:120]}"
+            for item in task_curriculum.get("items", [])[:8]
+        ] or ["- none"]
+
+        system = _load_prompt(
+            "meta_learning_analyst",
+            "You are CORE's meta-learning analyst. You turn recent training signals into one actionable improvement note. "
+            "Return only valid JSON."
+        )
+        _maybe_eval_prompt("meta_learning_analyst", system, 10)
+        user = (
+            "Recent CORE training signals:\n"
+            f"Hot reflections by domain: {dict(hot_domains)}\n"
+            f"Mistakes by domain: {dict(mistake_domains)}\n"
+            f"Evolution types: {dict(evo_types)}\n\n"
+            "Recent hot reflections:\n" + "\n".join(hot_lines) + "\n\n"
+            "Recent mistakes:\n" + "\n".join(mistake_lines) + "\n\n"
+            "Recent evolutions:\n" + "\n".join(evo_lines) + "\n\n"
+            "Active behavioral rules:\n" + "\n".join(rule_lines) + "\n\n"
+            "Task embedding curriculum:\n" + "\n".join(curriculum_lines) + "\n\n"
+            "Write JSON with fields:\n"
+            "meta_learning_focus, task_embedding_objective, curriculum_focus, training_signal, recommendation, expected_gain, risk, next_step\n"
+            "Keep each field concise and specific to improving CORE across tasks."
+        )
+        raw = gemini_chat(system=system, user=user, max_tokens=400, json_mode=True)
+        raw = raw.strip().lstrip("```json").lstrip("```").rstrip("```").strip()
+        try:
+            parsed = json.loads(raw)
+        except Exception:
+            parsed = {
+                "meta_learning_focus": "training-signal-consolidation",
+                "task_embedding_objective": "learn a curriculum-aware task embedding that generalizes across work tracks",
+                "curriculum_focus": "balanced recent task_queue signals",
+                "training_signal": raw[:500],
+                "recommendation": raw[:500],
+                "expected_gain": "better cross-task generalization",
+                "risk": "summary quality depends on current signals",
+                "next_step": "review and refine the training heuristic",
+            }
+
+        today = datetime.utcnow().strftime("%Y-%m-%d")
+        topic = f"meta_learning_{today}"
+        content = (
+            f"Meta-learning synthesis for {today}.\n"
+            f"Focus: {parsed.get('meta_learning_focus', 'training-signal-consolidation')}\n"
+            f"Task embedding objective: {parsed.get('task_embedding_objective', '')}\n"
+            f"Curriculum focus: {parsed.get('curriculum_focus', '')}\n"
+            f"Training signal: {parsed.get('training_signal', '')}\n"
+            f"Recommendation: {parsed.get('recommendation', '')}\n"
+            f"Expected gain: {parsed.get('expected_gain', '')}\n"
+            f"Risk: {parsed.get('risk', '')}\n"
+            f"Next step: {parsed.get('next_step', '')}\n"
+            f"Observed domains: hot={dict(hot_domains)} mistakes={dict(mistake_domains)} evolutions={dict(evo_types)}\n"
+            f"Task curriculum counts: {task_curriculum.get('counts', {})}\n"
+        )
+        ok = sb_upsert("knowledge_base", {
+            "domain": "meta",
+            "topic": topic,
+            "content": content[:4000],
+            "instruction": content[:4000],
+            "source": "meta_learning_loop",
+            "source_type": "meta_learning",
+            "source_ref": f"cold_processor:{today}",
+            "confidence": "medium",
+            "tags": ["meta", "training", "loop", "curriculum"],
+            "active": True,
+        }, on_conflict="domain,topic")
+        if ok:
+            sb_post("sessions", {
+                "summary": f"[state_update] last_meta_learning_ts: {time.time()}",
+                "actions": ["last_meta_learning_ts persisted", "task_embedding_curriculum captured"],
+                "interface": "mcp",
+            })
+            # Best-effort: update router policy for DynamicRouter from the same downstream signals.
+            try:
+                _maybe_update_dynamic_router_policy(task_curriculum, recent_mistakes)
+            except Exception as _drpe:
+                print(f"[META] router policy update non-fatal: {_drpe}")
+            print(f"[META] Learning synthesis stored: {topic}")
+            return {
+                "ok": True,
+                "topic": topic,
+                "focus": parsed.get("meta_learning_focus", ""),
+                "objective": parsed.get("task_embedding_objective", ""),
+                "gain": parsed.get("expected_gain", ""),
+            }
+        return {"ok": False, "reason": "kb_upsert_failed"}
+    except Exception as e:
+        print(f"[META] loop error (non-fatal): {e}")
+        return {"ok": False, "error": str(e)}
+
+
+def _dynamic_router_policy_from_signals(task_curriculum: dict, recent_mistakes: list[dict]) -> dict:
+    """Bounded policy synthesis for DynamicRouter.
+
+    Uses downstream signals (recent tasks + mistakes) to adjust conservative route weights.
+    Output is deterministic and safe to store in KB.
+    """
+    counts = (task_curriculum or {}).get("counts", {}) or {}
+    # Conservative default weights by work track.
+    w = {
+        "db_only": 0.34,
+        "behavioral_rule": 0.26,
+        "research": 0.14,
+        "code_patch": 0.14,
+        "integration": 0.09,
+        "proposal_only": 0.03,
+    }
+    # Mild transfer nudge: favor underrepresented track in the recent curriculum.
+    try:
+        if counts:
+            least = sorted(counts.items(), key=lambda kv: int(kv[1] or 0))[0][0]
+            if least in w:
+                w[least] += 0.05
+    except Exception:
+        pass
+    # Mistake-based penalty: if recent mistakes mention deploy/wiring/schema, downweight code+integration slightly.
+    penalty = {"code_patch": 0.0, "integration": 0.0}
+    for m in (recent_mistakes or [])[:10]:
+        text = f"{m.get('what_failed','')} {m.get('root_cause','')} {m.get('how_to_avoid','')}".lower()
+        if any(k in text for k in ("deploy", "import", "module", "syntax", "traceback")):
+            penalty["code_patch"] += 0.02
+        if any(k in text for k in ("wire", "wiring", "integration", "webhook", "port", "endpoint", "schema", "column")):
+            penalty["integration"] += 0.02
+    for k, p in penalty.items():
+        if k in w:
+            w[k] = max(0.03, w[k] - min(0.08, p))
+    total = sum(w.values()) or 1.0
+    work_track_weights = {k: round(v / total, 3) for k, v in w.items()}
+    route_weights = {
+        "task_autonomy": round(work_track_weights["db_only"] + work_track_weights["behavioral_rule"], 3),
+        "research_autonomy": round(work_track_weights["research"], 3),
+        "code_autonomy": round(work_track_weights["code_patch"], 3),
+        "integration_autonomy": round(work_track_weights["integration"], 3),
+        "proposal_router": round(work_track_weights["proposal_only"], 3),
+    }
+    return {
+        "policy_version": 1,
+        "updated_at": datetime.utcnow().isoformat() + "Z",
+        "objective": "Route actions to the safest worker that can complete them while maximizing cross-task transfer.",
+        "signals": {
+            "task_counts": counts,
+            "mistake_sample": [str(m.get("what_failed") or "")[:120] for m in (recent_mistakes or [])[:5]],
+        },
+        "work_track_weights": work_track_weights,
+        "route_weights": route_weights,
+        "notes": "Bounded heuristic policy; intended as input to DynamicRouter until a true learned policy exists.",
+    }
+
+
+def _maybe_update_dynamic_router_policy(task_curriculum: dict, recent_mistakes: list[dict]) -> dict:
+    global _last_router_policy_run
+    try:
+        now = time.time()
+        if not _ROUTER_POLICY_ENABLED:
+            return {"ok": False, "reason": "disabled"}
+        if _last_router_policy_run > 0 and (now - _last_router_policy_run) < _ROUTER_POLICY_INTERVAL:
+            return {"ok": False, "reason": "interval_not_elapsed"}
+        policy = _dynamic_router_policy_from_signals(task_curriculum, recent_mistakes)
+        topic = "dynamic_router_policy"
+        content = "Dynamic router policy (bounded).\n" + json.dumps(policy, ensure_ascii=True)[:3500]
+        ok = sb_upsert("knowledge_base", {
+            "domain": "meta",
+            "topic": topic,
+            "content": content,
+            "instruction": content,
+            "source": "dynamic_router_policy",
+            "source_type": "policy",
+            "source_ref": "meta_learning_loop",
+            "confidence": "low",
+            "tags": ["meta", "routing", "policy"],
+            "active": True,
+        }, on_conflict="domain,topic")
+        if ok:
+            _last_router_policy_run = now
+            sb_post("sessions", {
+                "summary": f"[state_update] last_router_policy_ts: {now}",
+                "actions": ["dynamic_router_policy updated"],
+                "interface": "mcp",
+            })
+        return {"ok": bool(ok), "topic": topic, "updated_at": policy.get("updated_at")}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def _router_meta_learning_objective(task_curriculum: dict, recent_mistakes: list[dict]) -> dict:
+    """Bounded router meta-learning objective for downstream task routing.
+
+    This does not train anything. It records the objective, signals, and policy
+    contract that a future learned router should optimize against.
+    """
+    counts = (task_curriculum or {}).get("counts", {}) or {}
+    focus_track = None
+    if counts:
+        try:
+            focus_track = sorted(counts.items(), key=lambda kv: int(kv[1] or 0))[0][0]
+        except Exception:
+            focus_track = None
+    policy = _dynamic_router_policy_from_signals(task_curriculum, recent_mistakes)
+    return {
+        "class": "core_tools.DynamicRouter",
+        "objective": "Map world-model outputs to the safest effective route with minimal rework.",
+        "focus_track": focus_track or "mixed",
+        "inputs": [
+            "predictions",
+            "confidences",
+            "candidate_routes",
+            "query",
+            "state_hint",
+        ],
+        "reward_signal": {
+            "positive": [
+                "downstream task completion",
+                "low rework",
+                "correct handoff",
+                "fast but safe route selection",
+            ],
+            "negative": [
+                "false confidence",
+                "wrong route",
+                "route latency",
+                "unnecessary escalation",
+            ],
+        },
+        "policy_seed": policy,
+        "notes": "Planner-only contract. This records the objective and policy seed for a later learned router.",
+    }
+
+
+def _mrc_meta_learning_objective(task_curriculum: dict, recent_mistakes: list[dict]) -> dict:
+    """Bounded meta-learning objective for the MRC (intermediate-state predictor).
+
+    The target is to predict downstream task performance from intermediate states
+    without adding a new runtime model in this patch. The planner records the
+    contract and the signals that should supervise a future MRC worker.
+    """
+    counts = (task_curriculum or {}).get("counts", {}) or {}
+    focus_track = None
+    if counts:
+        try:
+            focus_track = sorted(counts.items(), key=lambda kv: int(kv[1] or 0))[0][0]
+        except Exception:
+            focus_track = None
+    sample_items = (task_curriculum or {}).get("items", []) or []
+    intermediate_states = []
+    for item in sample_items[:8]:
+        intermediate_states.append({
+            "work_track": item.get("work_track") or "general",
+            "status": item.get("status") or "",
+            "source": item.get("source") or "",
+            "title": (item.get("title") or "")[:120],
+        })
+    mistake_signals = []
+    for m in (recent_mistakes or [])[:8]:
+        mistake_signals.append((m.get("what_failed") or m.get("root_cause") or "")[:160])
+    return {
+        "class": "core_tools.StateEvaluator",
+        "objective": "Predict downstream task performance from intermediate states.",
+        "focus_track": focus_track or "mixed",
+        "intermediate_state_schema": [
+            "work_track",
+            "status",
+            "source",
+            "title",
+            "confidence",
+            "evidence",
+            "risk",
+        ],
+        "reward_signal": {
+            "positive": [
+                "accurate downstream performance prediction",
+                "calibrated confidence",
+                "useful intermediate-state summaries",
+            ],
+            "negative": [
+                "overconfident false prediction",
+                "missed high-risk states",
+                "prediction that does not improve task outcome",
+            ],
+        },
+        "intermediate_states": intermediate_states,
+        "mistake_signals": mistake_signals,
+        "notes": "Planner-only contract for a future MRC worker; no runtime model added in this patch.",
+    }
+
+
+def _run_joint_training_planner(cycle_count: int = 0) -> dict:
+    """Bounded joint-training planner (no actual model training).
+
+    This emits a compact curriculum and module-interface guidance to KB so future
+    training components (TMRF, DAM, world model) have a stable contract.
+    """
+    try:
+        curriculum = _build_task_embedding_curriculum(limit=16)
+        counts = curriculum.get("counts", {}) or {}
+        items = curriculum.get("items", []) or []
+        # Emphasize transfer by focusing on the least-represented work_track.
+        focus_track = None
+        if counts:
+            focus_track = sorted(counts.items(), key=lambda kv: int(kv[1] or 0))[0][0]
+        focus_items = [it for it in items if (it.get("work_track") or "") == focus_track] if focus_track else items[:6]
+
+        today = datetime.utcnow().strftime("%Y-%m-%d")
+        topic = f"joint_training_plan_{today}"
+        plan = {
+            "cycle_count": int(cycle_count or 0),
+            "components": ["TMRF", "DAM", "world_model", "DynamicRouter", "MRC"],
+            "curriculum_counts": counts,
+            "transfer_focus_work_track": focus_track or "mixed",
+            "transfer_focus_items": [{
+                "work_track": (it.get("work_track") or "general"),
+                "title": (it.get("title") or "")[:160],
+                "status": it.get("status") or "",
+                "source": it.get("source") or "",
+            } for it in focus_items[:8]],
+            "meta_representation_contract": {
+                "class": "core_tools.MetaRepresentation",
+                "storage": "serialize with to_dict() and persist in sessions or knowledge_base; pass as JSON between modules",
+                "merge": "use overlay for latest state; union for sparse curriculum accumulation",
+            },
+            "router_meta_objective": _router_meta_learning_objective(curriculum, sb_get("mistakes", "select=what_failed,root_cause,how_to_avoid&order=created_at.desc&limit=8&id=gt.1", svc=True) or []),
+            "mrc_meta_objective": _mrc_meta_learning_objective(curriculum, sb_get("mistakes", "select=what_failed,root_cause,how_to_avoid&order=created_at.desc&limit=8&id=gt.1", svc=True) or []),
+            "notes": "Planner-only: this does not train models. It produces curriculum + interface guidance for later workers.",
+        }
+        content = "Joint training planner (bounded).\n" + json.dumps(plan, ensure_ascii=True)[:3500]
+        ok = sb_upsert("knowledge_base", {
+            "domain": "meta",
+            "topic": topic,
+            "content": content,
+            "instruction": content,
+            "source": "joint_training_planner",
+            "source_type": "training_plan",
+            "source_ref": f"background_researcher:cycle={int(cycle_count or 0)}",
+            "confidence": "low",
+            "tags": ["meta", "training", "joint", "curriculum"],
+            "active": True,
+        }, on_conflict="domain,topic")
+        return {"ok": bool(ok), "topic": topic, "focus_track": focus_track or "mixed", "counts": counts}
+    except Exception as e:
+        print(f"[JOINT] planner error (non-fatal): {e}")
+        return {"ok": False, "error": str(e)}
+
+
 def run_cold_processor():
     try:
         hots = sb_get("hot_reflections",
@@ -984,6 +1829,21 @@ def run_cold_processor():
                     "impact":         domain,
                     "recommendation": f"Pattern appears {total_freq}x (src={src_key}). KB content Groq-generated.",
                     "approval_tier":  _tier,
+                    "diff_content": json.dumps({
+                        "pattern_key": key,
+                        "source": src_key,
+                        "domain": domain,
+                        "autonomy": {
+                            "kind": "kb_expand",
+                            "origin": "cold_processor",
+                            "source": src_key,
+                            "domain": domain,
+                            "pattern_key": key,
+                            "task_group": "knowledge",
+                            "expected_artifact": "knowledge_base",
+                            "next_worker": "evolution_autonomy",
+                        },
+                    }, default=str),
                 })
                 if ok:
                     evolutions_queued += 1
@@ -1088,6 +1948,17 @@ def run_cold_processor():
                 print(f"[COLD] P2-06: recorded {auto_applied_count} pattern outcome baseline(s) (q_before={current_q})")
         except Exception as _p26e:
             print(f"[COLD] P2-06 outcome recording error (non-fatal): {_p26e}")
+
+        # P3-03: bounded meta-learning synthesis from the same cold batch signal.
+        try:
+            now = time.time()
+            if now - _last_meta_learning_run >= _META_LEARNING_INTERVAL:
+                meta_result = _run_meta_learning_loop()
+                if meta_result.get("ok"):
+                    _last_meta_learning_run = now
+                    print(f"[META] Cycle complete: {meta_result.get('topic', 'unknown')}")
+        except Exception as _ml_e:
+            print(f"[META] meta-learning gate error (non-fatal): {_ml_e}")
 
         print(f"[COLD] Done: processed={len(hots)} patterns={len(batch_counts)} evolutions={evolutions_queued} auto_applied={auto_applied_count}")
         return {"ok": True, "processed": len(hots), "patterns_found": len(batch_counts), "evolutions_queued": evolutions_queued, "auto_applied": auto_applied_count}
@@ -1863,6 +2734,7 @@ def _run_rarl_epoch() -> bool:
         f"  Next direction: {champion.get('next_direction','not set')[:200]}"
         if champion else "No champion yet -- establish a strong baseline."
     )
+    reward_schedule = _hierarchical_reward_schedule(epoch_number, research_domain, bool(champion))
 
     # Step 4: build prompts
     _default_rarl = (
@@ -1911,6 +2783,9 @@ def _run_rarl_epoch() -> bool:
         f"  Recent mistakes (ground your rarl_benchmark_task in one of these):\n{failure_block}\n"
         f"  RARL KB (do not repeat):\n{kb_block}\n"
         f"  {champion_block}\n\n"
+        f"Reward schedule phase: {reward_schedule['phase']}\n"
+        f"Reward focus: {reward_schedule['reward_focus']}\n"
+        f"Reward weights: {json.dumps(reward_schedule['weights'], sort_keys=True)}\n\n"
         f"Discovery Score: DS = (benchmark+transfer+stability+sample_efficiency+reasoning_depth)"
         f" / (complexity_penalty+compute_cost+inference_latency)\n"
         f"Numerators 0.0-3.0. Denominators 0.5-3.0. beats_champion=true only if DS>{ds_before:.3f}\n"
@@ -1954,8 +2829,30 @@ def _run_rarl_epoch() -> bool:
     next_direction   = parsed.get("next_direction", "")[:300]
     insight_for_core = parsed.get("insight_for_core", "")[:300]
     compressed       = parsed.get("compressed_insight", "")[:400]
-    beats_champion   = bool(parsed.get("beats_champion", False))
-    ds               = float(parsed.get("discovery_score", 0.0))
+    raw_beats_champion = bool(parsed.get("beats_champion", False))
+    raw_ds           = float(parsed.get("discovery_score", 0.0))
+    aux_loss, aux_stats = _hierarchical_auxiliary_loss([
+        hypothesis,
+        core_mechanism,
+        insight_for_core,
+        next_direction,
+        compressed,
+        pseudocode,
+    ])
+    aux_penalty      = round(min(0.5, aux_loss * 0.25), 3)
+    reward_inputs = {
+        "benchmark_score": float(parsed.get("benchmark_score", 0)),
+        "transfer_score": float(parsed.get("transfer_score", 0)),
+        "stability_score": max(0.0, float(parsed.get("stability_score", 0)) - (aux_loss * 0.4)),
+        "sample_efficiency": float(parsed.get("sample_efficiency", 0)),
+        "reasoning_depth": float(parsed.get("reasoning_depth", 0)),
+        "complexity_penalty": float(parsed.get("complexity_penalty", 1)),
+        "compute_cost": float(parsed.get("compute_cost", 1)),
+        "inference_latency": float(parsed.get("inference_latency", 1)),
+    }
+    scheduled_reward, reward_meta = _weighted_reward_score(reward_inputs, reward_schedule)
+    ds               = max(0.0, round((raw_ds * 0.55) + (scheduled_reward * 0.45) - aux_penalty, 3))
+    beats_champion   = ds > ds_before
     role             = "champion" if beats_champion else "mutant"
     duration         = int(_time.time() - _start)
 
@@ -1967,14 +2864,14 @@ def _run_rarl_epoch() -> bool:
             "arch_id": arch_id, "epoch_created": epoch_number, "role": role,
             "hypothesis": hypothesis, "core_mechanism": core_mechanism, "pseudocode": pseudocode,
             "discovery_score": ds,
-            "benchmark_score":   float(parsed.get("benchmark_score", 0)),
-            "transfer_score":    float(parsed.get("transfer_score", 0)),
-            "stability_score":   float(parsed.get("stability_score", 0)),
-            "sample_efficiency": float(parsed.get("sample_efficiency", 0)),
-            "reasoning_depth":   float(parsed.get("reasoning_depth", 0)),
-            "complexity_penalty":float(parsed.get("complexity_penalty", 1)),
-            "compute_cost":      float(parsed.get("compute_cost", 1)),
-            "inference_latency": float(parsed.get("inference_latency", 1)),
+            "benchmark_score":   reward_inputs["benchmark_score"],
+            "transfer_score":    reward_inputs["transfer_score"],
+            "stability_score":   reward_inputs["stability_score"],
+            "sample_efficiency": reward_inputs["sample_efficiency"],
+            "reasoning_depth":   reward_inputs["reasoning_depth"],
+            "complexity_penalty":reward_inputs["complexity_penalty"],
+            "compute_cost":      reward_inputs["compute_cost"],
+            "inference_latency": reward_inputs["inference_latency"],
             "failure_modes": critic_failures, "mitigation": mitigation,
             "next_direction": next_direction, "mutation_applied": mutation_applied,
             "parent_arch_id": champion["arch_id"] if champion else None,
@@ -2011,6 +2908,7 @@ def _run_rarl_epoch() -> bool:
         next_direction[:120] if next_direction else None,
         compressed[:120] if compressed else None,
         parsed.get("meta_learning_note", "")[:120] or None,
+        f"aux_loss={aux_loss:.3f}",
     ] if p]
     ok = sb_post("hot_reflections", {
         "task_summary": f"RARL Epoch {epoch_number} [{research_domain}]: {research_goal[:150]}",
@@ -2020,6 +2918,9 @@ def _run_rarl_epoch() -> bool:
         "gaps_identified": [next_direction] if next_direction else None,
         "reflection_text": (
             f"Arch: {arch_id} | DS: {ds:.3f} | Role: {role} | "
+            f"ModelBeat: {raw_beats_champion} | "
+            f"RawDS: {raw_ds:.3f} | AuxLoss: {aux_loss:.3f} | "
+            f"Phase: {reward_meta['phase']} | Reward: {scheduled_reward:.3f} | "
             f"Mutation: {mutation_applied} | Duration: {duration}s | "
             f"For CORE: {insight_for_core[:150]}"
         ),
@@ -2067,20 +2968,51 @@ def _run_rarl_epoch() -> bool:
                 "change_type": "rarl_discovery",
                 "change_summary": (
                     f"[P2] RARL Champion: {arch_id} | "
-                    f"DS: {ds_before:.2f} -> {ds:.2f} (+{ds_improvement:.2f}) | {compressed[:150]}"
+                    f"DS: {ds_before:.2f} -> {ds:.2f} (+{ds_improvement:.2f}) | "
+                    f"aux={aux_loss:.3f} phase={reward_meta['phase']} reward={scheduled_reward:.3f} | {compressed[:150]}"
                 ),
                 "confidence": round(quality, 3),
                 "pattern_key": f"rarl_epoch_{epoch_number}",
                 "diff_content": json.dumps({
                     "arch_id": arch_id, "hypothesis": hypothesis[:300],
                     "core_mechanism": core_mechanism[:300],
-                    "insight_for_core": insight_for_core[:200], "discovery_score": ds,
+                    "insight_for_core": insight_for_core[:200],
+                    "raw_discovery_score": raw_ds,
+                    "auxiliary_loss": aux_loss,
+                    "auxiliary_penalty": aux_penalty,
+                    "reward_phase": reward_meta["phase"],
+                    "reward_weights": reward_meta["weights"],
+                    "reward_contributions": reward_meta["contributions"],
+                    "scheduled_reward": scheduled_reward,
+                    "hierarchical_loss": aux_stats,
+                    "discovery_score": ds,
+                    "autonomy": build_autonomy_contract(
+                        f"RARL discovery {arch_id}",
+                        description=insight_for_core[:500],
+                        source="rarl",
+                        autonomy={
+                            "kind": "architecture_proposal",
+                            "origin": "rarl",
+                            "source": "rarl",
+                            "domain": research_domain,
+                            "artifact_domain": "code",
+                            "arch_id": arch_id,
+                            "expected_artifact": "task_queue",
+                            "route": "evolution_autonomy",
+                        },
+                        context="rarl",
+                    ),
                 }, indent=2),
                 "status": "pending",
+                "source": "rarl",
+                "impact": research_domain,
+                "recommendation": f"Review RARL discovery for {research_domain} and decide whether to promote it into tasks or tools.",
             })
             notify(
                 f"RARL New Champion\nEpoch {epoch_number} | {research_domain}\n"
                 f"Arch: {arch_id}\nDS: {ds_before:.2f} -> {ds:.2f} (+{ds_improvement:.2f})\n"
+                f"AuxLoss: {aux_loss:.3f} | Penalty: {aux_penalty:.3f}\n"
+                f"Phase: {reward_meta['phase']} | Reward: {scheduled_reward:.3f}\n"
                 f"For CORE: {insight_for_core[:150]}\nNext: {next_direction[:100]}"
             )
         except Exception as e:
@@ -2118,13 +3050,22 @@ def _run_rarl_epoch() -> bool:
                     "epoch": epoch_number,
                     "arch_id": arch_id,
                     "discovery_score": ds,
-                    "autonomy": {
-                        "kind": "architecture_proposal",
-                        "source": "rarl",
-                        "domain": "code",
-                        "verification": "evolution_queue artifact",
-                        "expected_artifact": "evolution_queue",
-                    },
+                    "autonomy": build_autonomy_contract(
+                        task_title,
+                        description=insight_for_core,
+                        source="rarl",
+                        autonomy={
+                            "kind": "architecture_proposal",
+                            "source": "rarl",
+                            "origin": "rarl",
+                            "domain": "code",
+                            "artifact_domain": "code",
+                            "verification": "evolution_queue artifact",
+                            "expected_artifact": "evolution_queue",
+                            "route": "evolution_autonomy",
+                        },
+                        context="rarl",
+                    ),
                 })
                 task_ok = sb_post("task_queue", {
                     "task":     task_payload,
@@ -2234,7 +3175,7 @@ def _load_researcher_prompt(target: str):
 
 
 def background_researcher():
-    global _last_research_run, _last_public_source_run, _last_smap_update
+    global _last_research_run, _last_public_source_run, _last_smap_update, _last_meta_learning_run, _last_joint_training_run, _last_router_policy_run
     print("[RESEARCH] background researcher started - real signal + simulation + public source mode")
     _cycle_count = 0
 
@@ -2263,6 +3204,42 @@ def background_researcher():
     except Exception as e:
         print(f"[RESEARCH] restore public_source_ts error: {e}")
         _last_public_source_run = time.time() - (_PUBLIC_SOURCE_INTERVAL + 60)
+
+    try:
+        rows = sb_get("sessions", "select=summary&summary=like.*last_meta_learning_ts*&order=created_at.desc&limit=1", svc=True)
+        if rows:
+            val = rows[0]["summary"].split("last_meta_learning_ts:")[-1].strip().split()[0]
+            _last_meta_learning_run = float(val)
+            print(f"[RESEARCH] Restored last_meta_learning_ts: {datetime.utcfromtimestamp(_last_meta_learning_run).isoformat()}")
+        else:
+            _last_meta_learning_run = time.time() - (_META_LEARNING_INTERVAL + 60)
+    except Exception as e:
+        print(f"[RESEARCH] restore meta_learning_ts error: {e}")
+        _last_meta_learning_run = time.time() - (_META_LEARNING_INTERVAL + 60)
+
+    try:
+        rows = sb_get("sessions", "select=summary&summary=like.*last_router_policy_ts*&order=created_at.desc&limit=1", svc=True)
+        if rows:
+            val = rows[0]["summary"].split("last_router_policy_ts:")[-1].strip().split()[0]
+            _last_router_policy_run = float(val)
+            print(f"[RESEARCH] Restored last_router_policy_ts: {datetime.utcfromtimestamp(_last_router_policy_run).isoformat()}")
+        else:
+            _last_router_policy_run = time.time() - (_ROUTER_POLICY_INTERVAL + 60)
+    except Exception as e:
+        print(f"[RESEARCH] restore router_policy_ts error: {e}")
+        _last_router_policy_run = time.time() - (_ROUTER_POLICY_INTERVAL + 60)
+
+    try:
+        rows = sb_get("sessions", "select=summary&summary=like.*last_joint_training_ts*&order=created_at.desc&limit=1", svc=True)
+        if rows:
+            val = rows[0]["summary"].split("last_joint_training_ts:")[-1].strip().split()[0]
+            _last_joint_training_run = float(val)
+            print(f"[RESEARCH] Restored last_joint_training_ts: {datetime.utcfromtimestamp(_last_joint_training_run).isoformat()}")
+        else:
+            _last_joint_training_run = time.time() - (_JOINT_TRAINING_INTERVAL + 60)
+    except Exception as e:
+        print(f"[RESEARCH] restore joint_training_ts error: {e}")
+        _last_joint_training_run = time.time() - (_JOINT_TRAINING_INTERVAL + 60)
 
     while True:
         try:
@@ -2304,6 +3281,14 @@ def background_researcher():
                 real_ok = _extract_real_signal()
                 time.sleep(3)
                 sim_ok = _run_rarl_epoch()
+                joint_ok = False
+                if _JOINT_TRAINING_PLANNER_ENABLED and (now - _last_joint_training_run >= _JOINT_TRAINING_INTERVAL):
+                    _last_joint_training_run = now
+                    sb_post("sessions", {"summary": f"[state_update] last_joint_training_ts: {now}", "actions": ["last_joint_training_ts persisted"], "interface": "mcp"})
+                    res = _run_joint_training_planner(cycle_count=_cycle_count)
+                    joint_ok = bool(res.get("ok"))
+                    if joint_ok:
+                        print(f"[JOINT] Planner stored: {res.get('topic')} focus={res.get('focus_track')}")
 
                 try:
                     groq_pending = sb_get(
@@ -2332,6 +3317,8 @@ def background_researcher():
                             parts.append("new patterns extracted")
                         if sim_ok:
                             parts.append("rarl epoch complete")
+                        if joint_ok:
+                            parts.append("joint training plan stored")
                         if auto_applied:
                             parts.append(f"{auto_applied} evolutions auto-applied")
                         if public_content:
@@ -3225,22 +4212,26 @@ def _run_self_diagnosis():
                     domain_match = gap["title"].split("domain:", 1)[1].strip()
                 except Exception:
                     domain_match = None
+            autonomy = build_autonomy_contract(
+                gap["title"],
+                gap["description"],
+                source="self_assigned",
+                autonomy={
+                    "kind": autonomy_kind,
+                    "origin": gap.get("source", "self_diagnosis"),
+                    "source": gap.get("source", "self_diagnosis"),
+                    "domain": domain_match or "",
+                    "artifact_domain": domain_match or "",
+                    "priority": gap["priority"],
+                },
+                context="self_diagnosis",
+            )
             task_payload = {
                 "task": json.dumps({
                     "title": gap["title"],
                     "description": gap["description"],
                     "source": "self_assigned",
-                    "autonomy": {
-                        "kind": autonomy_kind,
-                        "source": gap.get("source", ""),
-                        "domain": domain_match or "",
-                        "verification": "task_queue checkpoint + durable artifact",
-                        "expected_artifact": (
-                            "knowledge_base" if autonomy_kind == "kb_expand"
-                            else "behavioral_rules" if autonomy_kind == "behavioral_remediation"
-                            else "evolution_queue"
-                        ),
-                    },
+                    "autonomy": autonomy,
                 }),
                 "status": "pending",
                 "priority": gap["priority"],

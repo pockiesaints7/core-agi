@@ -10547,3 +10547,31 @@ TOOLS["install_package"] = {
         "EXAMPLE: install_package(package='htop', manager='apt') for system package."
     ),
 }
+
+
+def t_external_service_preflight(targets: str = "supabase,groq,telegram,github") -> dict:
+    """Run a focused pre-flight health check for external services before risky writes/deploys."""
+    try:
+        wanted = [t.strip().lower() for t in (targets or "").split(",") if t.strip()]
+        wanted = wanted or ["supabase", "groq", "telegram", "github"]
+        health = t_health()
+        components = health.get("components", {}) or {}
+        checked = {name: components.get(name, "unknown") for name in wanted}
+        blocked = [name for name, status in checked.items() if status != "ok"]
+        return {
+            "ok": not blocked,
+            "targets": wanted,
+            "checked": checked,
+            "blocked": blocked,
+            "overall": "ok" if not blocked else "degraded",
+            "health": health,
+        }
+    except Exception as e:
+        return {"ok": False, "error": str(e), "targets": [], "checked": {}, "blocked": ["preflight_error"], "overall": "degraded"}
+
+TOOLS["external_service_preflight"] = {
+    "fn": t_external_service_preflight,
+    "perm": "READ",
+    "args": ["targets"],
+    "desc": "Focused pre-flight check before risky external-service calls. targets=supabase,groq,telegram,github. Returns blocked services and full health snapshot.",
+}

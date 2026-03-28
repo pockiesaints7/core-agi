@@ -6,6 +6,7 @@ Depends on: core_config (L, GITHUB_PAT, GITHUB_REPO, TELEGRAM_TOKEN, TELEGRAM_CH
 """
 import os
 import base64
+import json
 
 import httpx
 
@@ -39,6 +40,30 @@ def notify(msg, cid=None):
 def notify_owner(msg):
     """Alias used in queue_poller and Telegram bot handler."""
     return notify(msg)
+
+
+def set_telegram_commands(commands, scope: str = "default"):
+    """Set Telegram command menu for the owner chat.
+    commands: list of {"command": "...", "description": "..."} dicts.
+    scope: reserved for future per-chat command scopes.
+    """
+    if not TELEGRAM_TOKEN:
+        print("[CORE] Telegram commands skipped: missing token")
+        return False
+    payload = {"commands": commands}
+    if scope and scope != "default":
+        payload["scope"] = scope
+    try:
+        resp = httpx.post(
+            f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/setMyCommands",
+            json=payload,
+            timeout=10,
+        )
+        print(f"[CORE] Telegram commands response: {resp.text}")
+        return resp.is_success
+    except Exception as e:
+        print(f"[CORE] Telegram commands error: {e}")
+        return False
 
 
 def set_webhook():
