@@ -6608,8 +6608,9 @@ def t_verify_before_deploy(
         # Score: 1.0 per gate passed, 0.0 per gate failed. Normalize to 0.0-1.0.
         total_gates = len(passed) + len(failed)
         score = round(len(passed) / total_gates, 2) if total_gates > 0 else 0.0
-        # Warnings reduce score by 0.05 each, floor at 0.0
-        score = max(0.0, score - 0.05 * len(warnings))
+        # Warnings reduce score gently, but should not dominate the hard gates.
+        warning_penalty = min(0.15, 0.02 * len(warnings))
+        score = max(0.0, score - warning_penalty)
         blocked = score < 0.8
 
         return {
@@ -6626,6 +6627,7 @@ def t_verify_before_deploy(
                 "assumed_state_present": bool(assumed_state),
                 "sources": sources,
                 "owner_token_provided": bool(owner_token),
+                "warning_penalty": warning_penalty,
             },
             "message": (
                 f"BLOCKED: verification_score={score} < 0.8. Fix failed gates before deploying."
