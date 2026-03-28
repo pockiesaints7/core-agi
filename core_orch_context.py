@@ -201,8 +201,24 @@ def classify_human_input(
         request_kind = "command"
         response_mode = "tool"
 
+    vague_action = _signal(lower, (
+        "make it better",
+        "improve it",
+        "fix it",
+        "change it",
+        "make better",
+        "do better",
+        "make it work",
+    ))
+    if primary_class == "act" and vague_action and not _extract_code_targets(text) and len(lower) < 60:
+        route_hint = "clarify"
+        requires_clarification = True
+
     requires_tools = primary_class in {"ask", "act", "evaluate"} or route == "command" or bool(cmd)
     requires_clarification = confidence < 0.5 and primary_class in {"ask", "act", "meta"}
+    if primary_class == "act" and vague_action and not _extract_code_targets(text) and len(lower) < 60:
+        requires_clarification = True
+        route_hint = "clarify"
 
     return {
         "top_level_class": primary_class,
@@ -845,6 +861,12 @@ def build_evidence_gate(msg) -> Dict[str, Any]:
         "Upload the missing file, repo path, URL, commit hash, or the exact details you want me to verify."
     )
 
+    explicit_clarification = bool(
+        ctx.get("clarification_needed")
+        or getattr(msg, "clarification_needed", False)
+        or decision.get("clarification_needed", False)
+    )
+
     return {
         "request_kind": request_kind,
         "intent": intent,
@@ -856,7 +878,7 @@ def build_evidence_gate(msg) -> Dict[str, Any]:
         "search_query": _safe_text(text, 220),
         "code_targets": code_targets,
         "clarification_prompt": clarification_prompt,
-        "needs_clarification_after_retrieval": retrieval_mode != "state_only" and evidence_score < 0.25,
+        "needs_clarification_after_retrieval": explicit_clarification or (retrieval_mode != "state_only" and evidence_score < 0.25),
         "public_research_needed": bool(public_plan.get("public_research_needed") or public_hits or (web_hits and request_kind not in {"status", "self_assessment"} and not code_targets)),
         "public_family": public_family,
         "public_sources": public_sources if (public_plan.get("public_research_needed") or public_hits or web_hits) else [],

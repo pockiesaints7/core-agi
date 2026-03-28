@@ -27,7 +27,7 @@ from core_config import (
     PATTERN_EVO_THRESHOLD, KNOWLEDGE_AUTO_CONFIDENCE,
     KB_MINE_BATCH_SIZE, KB_MINE_RATIO_THRESHOLD,
     sb_get, sb_post, sb_post_critical, sb_patch, sb_upsert, _sbh_count_svc,
-    gemini_chat, groq_chat, GROQ_MODEL,
+    gemini_chat, groq_chat, GROQ_MODEL, GROQ_FAST,
 )
 from core_github import notify, gh_write
 from core_work_taxonomy import build_autonomy_contract

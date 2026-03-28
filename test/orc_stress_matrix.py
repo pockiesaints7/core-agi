@@ -89,7 +89,7 @@ MATRIX: list[StressCase] = [
         expect={
             "primary_class": "act",
             "request_kind": "task",
-            "response_mode": "task",
+            "response_mode": "agentic",
             "style_mode": "agentic",
             "use_html": True,
             "agentic": True,

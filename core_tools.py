@@ -8818,6 +8818,23 @@ def _validate_tool_output_packet(tool_name: str, result: Any, success: Any = Non
         fatal = True
 
     if not isinstance(result, dict):
+        # Some read-only discovery tools return lists of rows directly.
+        # Treat these as valid evidence for the known list-returning tools
+        # rather than failing the whole pipeline.
+        if tool_name in {"search_kb"} and isinstance(result, list):
+            if not result:
+                warnings.append("empty_list_output")
+            return {
+                "ok": True,
+                "tool": tool_name or "?",
+                "shape": shape,
+                "fatal": False,
+                "blocked": False,
+                "warnings": warnings,
+                "failed_checks": failed_checks,
+                "validation_score": 1.0 if result else 0.85,
+                "summary": f"{tool_name or '?'} returned list output ({shape})",
+            }
         failed_checks.append(f"non_dict_output:{shape}")
         fatal = True
         return {
