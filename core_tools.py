@@ -1410,6 +1410,43 @@ class AdaptiveTemporalFilter:
         }
 
 
+class TemporalAttention:
+    """Bounded attention layer over temporal context sequences."""
+
+    def __init__(self, domain: str = "general", state_hint: str = "", heads: int = 2, window: int = 5):
+        self.domain = (domain or "general").strip()
+        self.state_hint = (state_hint or "").strip()
+        self.heads = max(1, min(int(heads or 2), 8))
+        self.window = max(1, min(int(window or 5), 25))
+
+    def attend(self, sequence, horizon: int | None = None) -> dict:
+        filter_result = AdaptiveTemporalFilter(domain=self.domain, state_hint=self.state_hint, window=self.window).filter_sequence(
+            sequence, horizon=horizon or self.window
+        )
+        attended = []
+        for idx, item in enumerate(filter_result.get("filtered_sequence") or []):
+            score = float(item.get("weight") or 0.0)
+            score = min(1.0, score + (0.03 * min(self.heads, 4)) + (0.01 * max(0, self.window - idx - 1)))
+            attended.append({
+                "index": item.get("index", idx),
+                "text": item.get("text", ""),
+                "attention_score": round(score, 3),
+                "weight": item.get("weight", 0.0),
+            })
+        attended.sort(key=lambda item: (item["attention_score"], item["index"]), reverse=True)
+        return {
+            "ok": True,
+            "domain": self.domain,
+            "state_hint": self.state_hint,
+            "heads": self.heads,
+            "window": self.window,
+            "attention_summary": filter_result.get("summary", ""),
+            "attention_terms": filter_result.get("dominant_terms", []),
+            "attended_sequence": attended,
+            "selected_count": len(attended),
+        }
+
+
 def _world_model_update_model(self, experience) -> dict:
     exp = WorldModel._parse_blob(experience)
     exp_text = WorldModel._textify(exp)
@@ -1468,7 +1505,8 @@ def _world_model_predict_future_states(self, current_state, actions, horizon: in
         action_list = ["observe", "assess", "proceed"]
 
     temporal = AdaptiveTemporalFilter(domain=self.domain, state_hint=self.state_hint, window=max(3, steps + 1)).filter_sequence([current_text] + action_list, horizon=max(1, steps))
-    ranked_steps = [item["text"] for item in (temporal.get("filtered_sequence") or [])]
+    attention = TemporalAttention(domain=self.domain, state_hint=self.state_hint, heads=3, window=max(3, steps + 1)).attend([current_text] + action_list, horizon=max(1, steps))
+    ranked_steps = [item["text"] for item in (attention.get("attended_sequence") or [])]
     if not ranked_steps:
         ranked_steps = action_list[:steps] or [current_text]
 
@@ -1509,6 +1547,7 @@ def _world_model_predict_future_states(self, current_state, actions, horizon: in
         "horizon": steps,
         "actions": action_list,
         "temporal_filter": temporal,
+        "temporal_attention": attention,
         "base_evaluation": base_card,
         "graph_density": graph.get("density"),
         "graph_dominant_table": graph.get("dominant_table"),
@@ -1543,6 +1582,16 @@ def t_adaptive_temporal_filter(sequence: str = "", domain: str = "general", stat
         win = max(1, min(int(window or 5), 25))
         dec = max(0.1, min(float(decay or 0.82), 0.99))
         return AdaptiveTemporalFilter(domain=domain, state_hint=state_hint, window=win, decay=dec).filter_sequence(sequence)
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def t_temporal_attention(sequence: str = "", domain: str = "general", state_hint: str = "", heads: str = "2", window: str = "5") -> dict:
+    """Bounded temporal attention layer for contextual ranking."""
+    try:
+        hd = max(1, min(int(heads or 2), 8))
+        win = max(1, min(int(window or 5), 25))
+        return TemporalAttention(domain=domain, state_hint=state_hint, heads=hd, window=win).attend(sequence, horizon=win)
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
@@ -6504,6 +6553,8 @@ TOOLS = {
                                "desc": "Build a deterministic relational graph from unified memory context. Returns nodes, edges, density, dominant table, and top retrieved context."},
     "adaptive_temporal_filter": {"fn": t_adaptive_temporal_filter, "perm": "READ", "args": ["sequence", "domain", "state_hint", "window", "decay"],
                                "desc": "Rank and smooth temporal context with bounded decay and hint-aware weighting."},
+    "temporal_attention": {"fn": t_temporal_attention, "perm": "READ", "args": ["sequence", "domain", "state_hint", "heads", "window"],
+                               "desc": "Apply bounded temporal attention over context sequences and return attended ordering."},
     "monte_carlo_tree_search": {"fn": t_monte_carlo_tree_search, "perm": "READ", "args": ["query", "domain", "limit", "tables", "per_table", "state_hint", "candidate_actions", "rollouts", "exploration_weight", "class_path"],
                                "desc": "Run a flexible Monte Carlo Tree Search bridge over CORE reasoning packets. Uses built-in fallback unless class_path points to an external MonteCarloTreeSearch class."},
     "world_model":            {"fn": t_world_model,            "perm": "WRITE",   "args": ["domain", "state_hint", "experience", "current_state", "actions", "horizon"],
