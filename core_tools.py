@@ -5738,6 +5738,24 @@ def _mcp_tool_schema(name, tool):
             "inputSchema": {"type": "object", "properties": props}}
 
 
+def _mcp_tool_result_is_failure(result) -> tuple[bool, str]:
+    """Classify MCP tool results that signal failure without raising.
+
+    Many tools return structured dicts with ok=false instead of throwing.
+    The JSON-RPC dispatcher should treat those as failures for telemetry and
+    operator visibility, even though the transport still returns a valid result.
+    """
+    if not isinstance(result, dict):
+        return False, ""
+    if result.get("ok") is False:
+        msg = result.get("error") or result.get("message") or result.get("error_code") or "tool returned ok=false"
+        return True, str(msg)[:240]
+    if result.get("error_code") or result.get("error"):
+        msg = result.get("error") or result.get("message") or result.get("error_code") or "tool returned error payload"
+        return True, str(msg)[:240]
+    return False, ""
+
+
 def handle_jsonrpc(body: dict, session_id: str = "") -> dict:
     method = body.get("method", "")
     params = body.get("params", {})
@@ -5778,9 +5796,10 @@ def handle_jsonrpc(body: dict, session_id: str = "") -> dict:
                     coerced_args[k] = v
             arg_names = {d["name"] if isinstance(d, dict) else d for d in tool["args"]} if tool["args"] else set()
             result = tool["fn"](**{k: v for k, v in coerced_args.items() if not arg_names or k in arg_names})
+            failed, failure_msg = _mcp_tool_result_is_failure(result)
             text = json.dumps(result, default=str)
             # TASK-26.B: Track success in tool_stats (fire-and-forget, non-fatal)
-            _track_tool_stat(tool_name, success=True)
+            _track_tool_stat(tool_name, success=not failed, error=failure_msg if failed else "")
             return ok({"content": [{"type": "text", "text": text}]})
         except Exception as e:
             # TASK-26.B: Track failure in tool_stats (fire-and-forget, non-fatal)
