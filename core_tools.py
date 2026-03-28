@@ -1280,6 +1280,158 @@ def t_monte_carlo_tree_search(
         return {"ok": False, "error": str(e)}
 
 
+class WorldModel:
+    """Bounded world-model interface for experience updates and forward rollouts."""
+
+    def __init__(self, domain: str = "general", state_hint: str = ""):
+        self.domain = (domain or "general").strip()
+        self.state_hint = (state_hint or "").strip()
+
+    @staticmethod
+    def _parse_blob(blob):
+        if isinstance(blob, dict):
+            return blob
+        if blob in (None, "", []):
+            return {}
+        if isinstance(blob, str):
+            raw = blob.strip()
+            if not raw:
+                return {}
+            try:
+                parsed = json.loads(raw)
+                return parsed if isinstance(parsed, dict) else {"value": parsed}
+            except Exception:
+                return {"value": raw}
+        return {"value": blob}
+
+    @staticmethod
+    def _textify(state: dict) -> str:
+        parts = []
+        for key in ("state", "current_state", "context", "summary", "value"):
+            value = state.get(key)
+            if value:
+                parts.append(f"{key}={value}")
+        if not parts:
+            parts.append(str(state)[:500])
+        return " | ".join(parts)[:1000]
+
+    def update_model(self, experience) -> dict:
+        exp = self._parse_blob(experience)
+        exp_text = self._textify(exp)
+        title = (exp.get("title") or exp.get("task") or exp.get("label") or exp.get("summary") or "world_model_experience")[:180]
+        body = json.dumps(exp, ensure_ascii=False, sort_keys=True)[:4000]
+        kb_payload = {
+            "domain": f"world_model:{self.domain}",
+            "topic": title,
+            "body": body,
+            "tags": ["world_model", "experience", self.domain],
+            "source_type": "world_model_update",
+            "source": "world_model",
+            "source_ref": f"world_model:{datetime.utcnow().isoformat()}",
+            "confidence": exp.get("confidence") or "medium",
+            "active": True,
+        }
+        kb_result = sb_post("knowledge_base", kb_payload)
+        session_result = sb_post("sessions", {
+            "summary": f"[world_model.update] {title}",
+            "actions": [f"experience captured: {exp_text[:240]}"],
+            "interface": "mcp",
+        })
+        return {
+            "ok": bool(kb_result and kb_result.get("ok", True)),
+            "title": title,
+            "domain": self.domain,
+            "kb_result": kb_result,
+            "session_result": session_result,
+            "experience_preview": exp_text[:300],
+        }
+
+    def predict_future_states(self, current_state, actions, horizon: int = 3) -> dict:
+        state = self._parse_blob(current_state)
+        current_text = self._textify(state)
+        action_list = []
+        if isinstance(actions, str):
+            raw = actions.strip()
+            if raw.startswith("["):
+                try:
+                    parsed = json.loads(raw)
+                    if isinstance(parsed, list):
+                        action_list = [str(item).strip() for item in parsed if str(item).strip()]
+                except Exception:
+                    action_list = [part.strip() for part in raw.split(",") if part.strip()]
+            else:
+                action_list = [part.strip() for part in raw.split(",") if part.strip()]
+        elif isinstance(actions, (list, tuple, set)):
+            action_list = [str(item).strip() for item in actions if str(item).strip()]
+        else:
+            action_list = [str(actions).strip()] if str(actions).strip() else []
+        try:
+            steps = max(1, min(int(horizon or 3), 8))
+        except Exception:
+            steps = 3
+        if not action_list:
+            action_list = ["observe", "assess", "proceed"]
+
+        evaluator = StateEvaluator(query=current_text, domain=self.domain, state_hint=self.state_hint)
+        base_card = evaluator.evaluate()
+        graph = DynamicRelationalGraph(query=current_text, domain=self.domain, state_hint=self.state_hint).build()
+        mcts = MonteCarloTreeSearch(
+            query=current_text,
+            domain=self.domain,
+            state_hint=self.state_hint,
+            candidate_actions=action_list,
+            rollouts=min(max(steps * len(action_list), 4), 24),
+        ).run()
+        best_action = mcts.get("best_action") or action_list[0]
+        predicted_states = []
+        rolling_state = dict(state)
+        for idx in range(steps):
+            action = best_action if idx == 0 else action_list[min(idx, len(action_list) - 1)]
+            rolling_state = {
+                **rolling_state,
+                "step": idx + 1,
+                "last_action": action,
+                "trend": "stabilize" if base_card.get("readiness_score", 0.0) >= 0.7 else "reassess",
+                "expected_effect": "improve" if base_card.get("recommendation") == "proceed" else "review",
+                "confidence": round(max(0.0, min(1.0, float(base_card.get("confidence") or 0.0) * (1.0 - (idx * 0.05)))), 3),
+            }
+            predicted_states.append({
+                "step": idx + 1,
+                "action": action,
+                "state": rolling_state,
+                "state_preview": self._textify(rolling_state)[:300],
+            })
+        return {
+            "ok": True,
+            "domain": self.domain,
+            "current_state": state,
+            "current_state_preview": current_text[:300],
+            "horizon": steps,
+            "actions": action_list,
+            "base_evaluation": base_card,
+            "graph_density": graph.get("density"),
+            "graph_dominant_table": graph.get("dominant_table"),
+            "best_action": best_action,
+            "predicted_states": predicted_states,
+        }
+
+
+def t_world_model(domain: str = "general", state_hint: str = "", experience: str = "", current_state: str = "", actions: str = "", horizon: str = "3") -> dict:
+    """Update the world model from experience or predict future states from current state."""
+    try:
+        if experience:
+            return WorldModel(domain=domain, state_hint=state_hint).update_model(experience)
+        if not current_state:
+            return {"ok": False, "error": "current_state or experience required"}
+        try:
+            hz = max(1, min(int(horizon), 8))
+        except Exception:
+            hz = 3
+        return WorldModel(domain=domain, state_hint=state_hint).predict_future_states(current_state=current_state, actions=actions, horizon=hz)
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
 class DynamicRouter:
     """Route world-model outputs using bounded policy scoring.
 
@@ -6225,6 +6377,8 @@ TOOLS = {
                                "desc": "Build a deterministic relational graph from unified memory context. Returns nodes, edges, density, dominant table, and top retrieved context."},
     "monte_carlo_tree_search": {"fn": t_monte_carlo_tree_search, "perm": "READ", "args": ["query", "domain", "limit", "tables", "per_table", "state_hint", "candidate_actions", "rollouts", "exploration_weight", "class_path"],
                                "desc": "Run a flexible Monte Carlo Tree Search bridge over CORE reasoning packets. Uses built-in fallback unless class_path points to an external MonteCarloTreeSearch class."},
+    "world_model":            {"fn": t_world_model,            "perm": "WRITE",   "args": ["domain", "state_hint", "experience", "current_state", "actions", "horizon"],
+                               "desc": "Bounded world-model interface: capture an experience into knowledge_base or predict future states from a current state and candidate actions."},
     "dynamic_router":          {"fn": t_dynamic_router,          "perm": "READ", "args": ["predictions", "confidences", "candidates", "policy_topic", "policy_domain", "policy_override", "query", "domain", "state_hint", "use_state_evaluator", "exploration_weight"],
                                "desc": "Deterministic router over world-model outputs (predictions/confidences) plus optional learned policy from KB (meta/dynamic_router_policy). Returns best candidate with component scores."},
     "meta_representation":    {"fn": t_meta_representation,    "perm": "READ",    "args": ["op", "name", "version", "features", "metadata", "a", "b", "strategy"],
@@ -10546,32 +10700,4 @@ TOOLS["install_package"] = {
         "EXAMPLE: install_package(package='httpx') for pip. "
         "EXAMPLE: install_package(package='htop', manager='apt') for system package."
     ),
-}
-
-
-def t_external_service_preflight(targets: str = "supabase,groq,telegram,github") -> dict:
-    """Run a focused pre-flight health check for external services before risky writes/deploys."""
-    try:
-        wanted = [t.strip().lower() for t in (targets or "").split(",") if t.strip()]
-        wanted = wanted or ["supabase", "groq", "telegram", "github"]
-        health = t_health()
-        components = health.get("components", {}) or {}
-        checked = {name: components.get(name, "unknown") for name in wanted}
-        blocked = [name for name, status in checked.items() if status != "ok"]
-        return {
-            "ok": not blocked,
-            "targets": wanted,
-            "checked": checked,
-            "blocked": blocked,
-            "overall": "ok" if not blocked else "degraded",
-            "health": health,
-        }
-    except Exception as e:
-        return {"ok": False, "error": str(e), "targets": [], "checked": {}, "blocked": ["preflight_error"], "overall": "degraded"}
-
-TOOLS["external_service_preflight"] = {
-    "fn": t_external_service_preflight,
-    "perm": "READ",
-    "args": ["targets"],
-    "desc": "Focused pre-flight check before risky external-service calls. targets=supabase,groq,telegram,github. Returns blocked services and full health snapshot.",
 }
