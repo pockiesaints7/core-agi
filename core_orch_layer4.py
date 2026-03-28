@@ -412,6 +412,7 @@ def _build_evidence_retrieval_plan(msg: OrchestratorMessage) -> Dict[str, Any]:
     gate = msg.evidence_gate or msg.context.get("evidence_gate") or {}
     query = (gate.get("search_query") or msg.text or "").strip()
     tools = []
+    public_sources = gate.get("public_sources") or []
 
     # Always sweep Supabase/KB first unless this is a pure state request.
     if gate.get("retrieval_mode") != "state_only":
@@ -450,6 +451,37 @@ def _build_evidence_retrieval_plan(msg: OrchestratorMessage) -> Dict[str, Any]:
                 "evidence_stage": "local_code",
                 "blocking": False,
             })
+
+    # Public research sweep for public/current/latest/research/doc queries.
+    if gate.get("public_research_needed") or gate.get("retrieval_mode", "").startswith("public_research"):
+        sources = ",".join(public_sources[:6]) or "all"
+        tools.append({
+            "step": len(tools) + 1,
+            "action": "Research public sources and enrich CORE memory",
+            "tool": "ingest_knowledge",
+            "args": {
+                "topic": query,
+                "sources": sources,
+                "max_per_source": "12",
+                "since_days": "30",
+            },
+            "expected_output": "public research summary and KB writes",
+            "evidence_stage": "public_research",
+            "blocking": False,
+        })
+        tools.append({
+            "step": len(tools) + 1,
+            "action": "Re-check CORE memory after public research",
+            "tool": "search_kb",
+            "args": {
+                "query": query,
+                "domain": msg.context.get("current_domain", "general"),
+                "limit": "5",
+            },
+            "expected_output": "KB hits after public ingestion",
+            "evidence_stage": "supabase_post_public",
+            "blocking": False,
+        })
 
     # Web sweep for anything needing public evidence.
     if gate.get("retrieval_mode") in {"supabase_then_web", "code_then_web"} or gate.get("needs_retrieval"):

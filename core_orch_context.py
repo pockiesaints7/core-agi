@@ -42,6 +42,30 @@ def _extract_code_targets(text: str) -> List[str]:
     return sorted(candidates)[:5]
 
 
+def _pick_public_sources(text: str) -> List[str]:
+    """Choose public ingestion sources that fit the request."""
+    lower = (text or "").lower()
+    sources: List[str] = []
+    if any(k in lower for k in ("paper", "arxiv", "research", "study", "scientific", "academic", "benchmark")):
+        sources.extend(["arxiv"])
+    if any(k in lower for k in ("docs", "documentation", "api", "reference", "manual", "guide", "how to", "official")):
+        sources.extend(["docs", "stackoverflow"])
+    if any(k in lower for k in ("news", "latest", "current", "today", "release", "update", "announce", "trending")):
+        sources.extend(["hackernews", "reddit", "medium"])
+    if any(k in lower for k in ("blog", "article", "tutorial", "explain", "learn", "overview")):
+        sources.extend(["medium", "stackoverflow"])
+    if any(k in lower for k in ("community", "discussion", "forum")):
+        sources.extend(["reddit", "stackoverflow"])
+    if not sources:
+        sources = ["arxiv", "docs", "medium", "reddit", "hackernews", "stackoverflow"]
+    # Preserve order while deduping.
+    out: List[str] = []
+    for src in sources:
+        if src not in out:
+            out.append(src)
+    return out[:6]
+
+
 def _count_table(table: str, where: str = "") -> int:
     try:
         url = f"{SUPABASE_URL}/rest/v1/{table}?select=id&limit=1"
@@ -320,23 +344,27 @@ def build_evidence_gate(msg) -> Dict[str, Any]:
         "latest", "current", "today", "news", "public", "internet", "web", "docs", "documentation",
         "api", "how to", "what is", "who is", "price", "weather", "search", "look up", "find"
     )
+    public_markers = (
+        "research", "paper", "arxiv", "study", "benchmark", "official", "docs", "documentation",
+        "api", "current", "latest", "news", "public", "internet", "web", "blog", "tutorial",
+        "guide", "community", "forum", "reddit", "hackernews", "stackoverflow"
+    )
 
     code_hits = _keyword_hits(text, code_markers)
     web_hits = _keyword_hits(text, web_markers)
+    public_hits = _keyword_hits(text, public_markers)
     code_targets = _extract_code_targets(text)
+    public_sources = _pick_public_sources(text)
 
-    needs_retrieval = evidence_score < 0.45
     if request_kind in {"status", "self_assessment"}:
         if code_hits >= 1 or code_targets or web_hits >= 1:
             retrieval_mode = "code_then_web" if web_hits else "code"
             preferred_tools = ["git", "search_in_file", "read_file"]
             if web_hits or evidence_score < 0.25:
                 preferred_tools.append("web_search")
-            needs_retrieval = evidence_score < 0.45
         else:
             retrieval_mode = "state_only"
             preferred_tools = []
-            needs_retrieval = False
     elif request_kind in {"owner_review", "debug"} and not (code_hits >= 1 or code_targets or web_hits >= 1):
         retrieval_mode = "supabase_then_web"
         preferred_tools = ["search_kb", "web_search"]
@@ -345,12 +373,14 @@ def build_evidence_gate(msg) -> Dict[str, Any]:
         preferred_tools = ["git", "search_in_file", "read_file"]
         if web_hits or evidence_score < 0.25:
             preferred_tools.append("web_search")
-    elif web_hits >= 1:
-        retrieval_mode = "supabase_then_web"
-        preferred_tools = ["search_kb", "web_search"]
+    elif public_hits >= 1 or web_hits >= 1:
+        retrieval_mode = "public_research_then_web" if web_hits else "public_research"
+        preferred_tools = ["search_kb", "ingest_knowledge", "web_search"]
     else:
         retrieval_mode = "supabase_then_web"
         preferred_tools = ["search_kb", "web_search"]
+
+    needs_retrieval = retrieval_mode != "state_only" and (evidence_score < 0.45 or retrieval_mode in {"code", "code_then_web", "public_research", "public_research_then_web"})
 
     # Keep the gate strict: if no local evidence and no web intent, clarification is the last resort.
     if request_kind not in {"status", "self_assessment"} and evidence_score < 0.12 and not code_targets and web_hits == 0:
@@ -373,6 +403,8 @@ def build_evidence_gate(msg) -> Dict[str, Any]:
         "code_targets": code_targets,
         "clarification_prompt": clarification_prompt,
         "needs_clarification_after_retrieval": retrieval_mode != "state_only" and evidence_score < 0.25,
+        "public_research_needed": bool(public_hits or (web_hits and request_kind not in {"status", "self_assessment"} and not code_targets)),
+        "public_sources": public_sources if (public_hits or web_hits) else [],
         "source_counts": {
             "kb_hits": kb_hits,
             "rule_hits": rule_hits,
@@ -393,6 +425,11 @@ def tool_result_has_evidence(tool_name: str, result: Any) -> bool:
         return bool(result.get("results") or result.get("matches") or result.get("rows") or result.get("items"))
     if tool_name in {"web_search"}:
         return bool(result.get("results") or result.get("items"))
+    if tool_name in {"ingest_knowledge"}:
+        return any(
+            result.get(k)
+            for k in ("records_inserted", "records_updated", "raw_count", "deduped_count", "concepts_found", "hot_reflections_injected")
+        )
     if tool_name in {"web_fetch", "summarize_url", "read_file", "gh_read_lines", "search_in_file"}:
         for key in ("content", "text", "snippet", "summary", "lines", "result"):
             val = result.get(key)

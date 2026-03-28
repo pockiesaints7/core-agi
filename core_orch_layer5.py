@@ -224,7 +224,11 @@ async def layer_5_tools(msg: OrchestratorMessage):
                 result = msg.tool_results[-1].get("result") if msg.tool_results else None
                 if tool_result_has_evidence(tool_name, result):
                     evidence_found = True
-                    if evidence_gate.get("needs_retrieval") and subtask.get("evidence_stage") in {"supabase", "local_code"}:
+                    if (
+                        evidence_gate.get("needs_retrieval")
+                        and not evidence_gate.get("public_research_needed")
+                        and subtask.get("evidence_stage") in {"supabase", "local_code"}
+                    ):
                         print(f"[L5] Evidence sufficient after {tool_name}; stopping retrieval sweep early")
                         break
             except Exception as exc:
