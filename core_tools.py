@@ -672,6 +672,7 @@ from core_tools_graph import (
 )
 from core_tools_memory import (
     StateEvaluator,
+    t_system_verification_packet,
     t_evaluate_state,
     t_state_consistency_check,
     t_state_packet,
@@ -6913,6 +6914,8 @@ TOOLS = {
                                "desc": "Canonical state continuity packet. Consolidates latest sessions row, agentic session scratchpad, checkpoint, session snapshot, and state_update history with verification metadata."},
     "state_consistency_check": {"fn": t_state_consistency_check, "perm": "READ",  "args": ["session_id", "strict"],
                                "desc": "Verify continuity across sessions, agentic_sessions, checkpoint, and state updates. Use when diagnosing drift or session collapse."},
+    "system_verification_packet": {"fn": t_system_verification_packet, "perm": "READ", "args": ["session_id", "strict", "require_checkpoint", "task_sample_limit", "changelog_limit"],
+                               "desc": "Canonical system-wide verification packet. Aggregates state, task, changelog, and continuity verification into one scorecard."},
     "code_read_packet":       {"fn": t_code_read_packet,       "perm": "READ",    "args": ["query", "files", "functions", "search_terms"],
                                "desc": "Canonical code-reading packet. Reads files, function bodies, and search hits into one structured packet for code_autonomy and owner review."},
     "tool_stats":             {"fn": t_tool_stats,             "perm": "READ",    "args": ["days"],

@@ -494,6 +494,245 @@ def t_state_consistency_check(
         return {"ok": False, "error": str(e), "session_id": session_id or "default"}
 
 
+@dataclass
+class SystemVerificationPacket:
+    session_id: str
+    state_packet: dict
+    task_verification: dict
+    changelog_verification: dict
+    counts: dict
+    verification: dict
+
+    def to_dict(self) -> dict:
+        return {
+            "session_id": self.session_id,
+            "state_packet": self.state_packet,
+            "task_verification": self.task_verification,
+            "changelog_verification": self.changelog_verification,
+            "counts": self.counts,
+            "verification": self.verification,
+        }
+
+
+def _build_system_verification_packet(
+    session_id: str = "default",
+    strict: bool = False,
+    require_checkpoint: bool = False,
+    task_sample_limit: int = 5,
+    changelog_limit: int = 5,
+) -> SystemVerificationPacket:
+    """Aggregate CORE verification surfaces into one system-wide packet."""
+    state = _build_state_packet(session_id=session_id or "default", strict=strict).to_dict()
+    state_ver = state.get("verification") or {}
+    latest_session = state.get("latest_session") or {}
+    session_snapshot = state.get("session_snapshot") or {}
+    session_continuity = state.get("session_continuity") or {}
+    counts = state.get("counts") or {}
+
+    task_counts = {
+        "task_pending": int(counts.get("task_pending") or 0),
+        "task_in_progress": int(counts.get("task_in_progress") or 0),
+        "task_done": int(counts.get("task_done") or 0),
+        "task_failed": int(counts.get("task_failed") or 0),
+    }
+    evo_counts = {
+        "evolution_pending": int(counts.get("evolution_pending") or 0),
+        "evolution_applied": int(counts.get("evolution_applied") or 0),
+        "evolution_rejected": int(counts.get("evolution_rejected") or 0),
+    }
+    task_total = sum(task_counts.values())
+    evo_total = sum(evo_counts.values())
+    task_balance = 0.0 if task_total == 0 else round((task_counts["task_done"] + task_counts["task_failed"]) / task_total, 3)
+    evo_balance = 0.0 if evo_total == 0 else round((evo_counts["evolution_applied"] + evo_counts["evolution_rejected"]) / evo_total, 3)
+
+    # Sample a few task rows and verify the most recent one if possible.
+    try:
+        task_rows = sb_get(
+            "task_queue",
+            f"select=id,task,status,result,checkpoint,priority,source,updated_at&order=updated_at.desc&limit={max(1, min(int(task_sample_limit or 5), 20))}",
+            svc=True,
+        ) or []
+    except Exception:
+        task_rows = []
+    latest_task = task_rows[0] if task_rows else {}
+    task_verification = {
+        "ok": True,
+        "latest_task_id": latest_task.get("id"),
+        "latest_task_status": latest_task.get("status"),
+        "latest_task_source": latest_task.get("source"),
+        "latest_task_has_result": bool(latest_task.get("result")),
+        "latest_task_has_checkpoint": bool(latest_task.get("checkpoint")),
+        "task_counts": task_counts,
+    }
+    if latest_task and require_checkpoint and not latest_task.get("checkpoint"):
+        task_verification["blocked"] = True
+        task_verification["warnings"] = ["latest_task_missing_checkpoint"]
+    else:
+        task_verification["blocked"] = False
+
+    # Changelog verification is kept local here to avoid facade import cycles.
+    try:
+        lim = max(1, min(int(changelog_limit or 5), 10))
+    except Exception:
+        lim = 5
+    try:
+        rows = sb_get(
+            "changelog",
+            f"select=id,version,change_type,component,title,description,before_state,after_state,triggered_by,created_at&order=created_at.desc&limit={lim}",
+            svc=True,
+        ) or []
+        normalized = []
+        missing_triggered = 0
+        missing_fields = 0
+        completeness_total = 0.0
+        for row in rows:
+            title = str(row.get("title") or row.get("description") or "").strip()
+            comp = str(row.get("component") or "general").strip()
+            ctype = str(row.get("change_type") or "unknown").strip()
+            ver = str(row.get("version") or "?").strip()
+            row_missing = []
+            for key in ("version", "change_type", "component", "title", "description", "before_state", "after_state", "triggered_by", "created_at"):
+                if not str(row.get(key) or "").strip():
+                    row_missing.append(key)
+            if row_missing:
+                missing_fields += len(row_missing)
+            if not row.get("triggered_by"):
+                missing_triggered += 1
+            completeness = round((9 - len(row_missing)) / 9, 2)
+            completeness_total += completeness
+            normalized.append({
+                **row,
+                "_display_line": f"{ver} | {ctype} | {comp} | {title or 'Untitled changelog entry'}",
+                "_missing_fields": row_missing,
+                "_row_completeness": completeness,
+            })
+        tracking_score = 0.0
+        if rows:
+            tracking_score += 0.6
+        if missing_triggered == 0:
+            tracking_score += 0.2
+        if missing_fields == 0:
+            tracking_score += 0.1
+        if len(rows) >= 2:
+            tracking_score += 0.1
+        tracking_score = max(0.0, min(1.0, round(tracking_score, 2)))
+        changelog_verification = {
+            "ok": True,
+            "tracking_state": "healthy" if rows and missing_fields == 0 and missing_triggered == 0 else ("degraded" if rows else "empty"),
+            "stalled": not rows,
+            "tracking_score": tracking_score,
+            "packet": {
+                "total_rows": len(rows),
+                "today_rows": sum(1 for row in rows if str(row.get("created_at") or "").startswith(datetime.utcnow().date().isoformat())),
+                "verified_rows": len(rows) - missing_triggered,
+                "missing_triggered_by_rows": missing_triggered,
+                "missing_fields_rows": sum(1 for row in normalized if row.get("_missing_fields")),
+                "missing_fields_total": missing_fields,
+                "row_completeness": round(completeness_total / max(1, len(normalized)), 2) if normalized else 0.0,
+                "rows": rows,
+                "normalized_rows": normalized,
+            },
+            "warnings": [f"missing_triggered_by:{row.get('id')}" for row in rows if not row.get("triggered_by")],
+            "blocked": False,
+            "message": f"CHANGELOG: {('healthy' if rows and missing_fields == 0 and missing_triggered == 0 else ('degraded' if rows else 'empty'))}",
+        }
+    except Exception as exc:
+        changelog_verification = {
+            "ok": False,
+            "error": str(exc),
+            "tracking_state": "error",
+            "tracking_score": 0.0,
+            "blocked": True,
+            "packet": {},
+            "warnings": [str(exc)],
+        }
+
+    verification_score = 1.0
+    if not state_ver.get("verified"):
+        verification_score -= 0.20
+    if state_ver.get("blocked"):
+        verification_score -= 0.10
+    if task_verification.get("blocked"):
+        verification_score -= 0.20
+    if not changelog_verification.get("ok", False):
+        verification_score -= 0.15
+    else:
+        verification_score = (verification_score + float(changelog_verification.get("tracking_score") or 0.0)) / 2.0
+    if not session_continuity.get("verified", False):
+        verification_score -= 0.10
+    verification_score = round(max(0.0, min(1.0, verification_score)), 3)
+    blocked = bool(
+        state_ver.get("blocked")
+        or task_verification.get("blocked")
+        or changelog_verification.get("blocked")
+        or verification_score < 0.75
+    )
+
+    return SystemVerificationPacket(
+        session_id=session_id or "default",
+        state_packet=state,
+        task_verification=task_verification,
+        changelog_verification=changelog_verification,
+        counts={
+            **counts,
+            "task_total": task_total,
+            "task_balance": task_balance,
+            "evolution_total": evo_total,
+            "evolution_balance": evo_balance,
+        },
+        verification={
+            "verified": verification_score >= 0.75 and not blocked,
+            "blocked": blocked,
+            "verification_score": verification_score,
+            "passed_checks": [
+                "state_verified" if state_ver.get("verified") else "state_partial",
+                "session_continuity_verified" if session_continuity.get("verified") else "session_continuity_degraded",
+                "task_verification_present",
+                "changelog_verification_present",
+            ],
+            "failed_checks": [
+                name for name, cond in [
+                    ("state_blocked", bool(state_ver.get("blocked"))),
+                    ("task_blocked", bool(task_verification.get("blocked"))),
+                    ("changelog_blocked", bool(changelog_verification.get("blocked"))),
+                ] if cond
+            ],
+            "warnings": [
+                *list(state_ver.get("warnings") or []),
+                *list(changelog_verification.get("warnings") or []),
+                *list(task_verification.get("warnings") or []),
+            ],
+            "summary": (
+                f"system_verification={'ok' if verification_score >= 0.75 and not blocked else 'degraded'} | "
+                f"state={state_ver.get('verification_score', 0.0):.2f} | "
+                f"changelog={(changelog_verification.get('tracking_score') if isinstance(changelog_verification, dict) else 0.0) or 0.0:.2f} | "
+                f"tasks={task_balance:.2f}"
+            ),
+        },
+    )
+
+
+def t_system_verification_packet(
+    session_id: str = "default",
+    strict: str = "false",
+    require_checkpoint: str = "false",
+    task_sample_limit: str = "5",
+    changelog_limit: str = "5",
+) -> dict:
+    """Canonical system-wide verification packet for CORE."""
+    try:
+        pkt = _build_system_verification_packet(
+            session_id=session_id or "default",
+            strict=str(strict).strip().lower() in ("true", "1", "yes"),
+            require_checkpoint=str(require_checkpoint).strip().lower() in ("true", "1", "yes"),
+            task_sample_limit=int(task_sample_limit or 5),
+            changelog_limit=int(changelog_limit or 5),
+        ).to_dict()
+        return {"ok": True, **pkt}
+    except Exception as e:
+        return {"ok": False, "error": str(e), "session_id": session_id or "default"}
+
+
 class StateEvaluator:
     """Evaluate an environment or system state using unified memory context."""
 
