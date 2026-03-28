@@ -937,6 +937,167 @@ def t_update_state(key="", value="", reason=""):
 
     except Exception as e:
         return {"ok": False, "error": str(e)}
+
+
+def _kb_normalize_provenance(source_type: str = "", source_ref: str = "") -> tuple[str, str]:
+    """Return canonical KB provenance fields."""
+    source_type = (source_type or "").strip().lower()
+    source_ref = (source_ref or "").strip()
+    allowed = {"manual", "ingested", "evolved", "session"}
+    alias_map = {
+        "mcp_session": "session",
+        "mcp": "session",
+        "claude_desktop": "manual",
+        "core_discovered": "evolved",
+        "cold_processor": "evolved",
+        "training_phase": "ingested",
+        "training_plan": "ingested",
+        "meta_learning": "ingested",
+    }
+    source_type = alias_map.get(source_type, source_type or "session")
+    if source_type not in allowed:
+        source_type = "session"
+    if not source_ref:
+        source_ref = "mcp_session"
+    return source_type, source_ref
+
+
+def _kb_entry_verification_packet(
+    domain: str = "",
+    topic: str = "",
+    instruction: str = "",
+    content: str = "",
+    confidence: str = "",
+    source_type: str = "",
+    source_ref: str = "",
+    require_exact_match: bool = True,
+) -> dict:
+    """Verify a KB row exists and matches the canonical write contract."""
+    try:
+        rows = sb_get(
+            "knowledge_base",
+            f"select=id,domain,topic,instruction,content,confidence,source,source_type,source_ref,active,updated_at&domain=eq.{domain}&topic=eq.{topic}&order=id.desc&limit=3",
+            svc=True,
+        ) or []
+        if not rows:
+            return {
+                "ok": True,
+                "blocked": True,
+                "verified": False,
+                "verification_score": 0.0,
+                "passed_checks": ["kb_row_missing"],
+                "failed_checks": ["kb_row_missing"],
+                "warnings": [],
+                "summary": f"{domain}/{topic}: KB row missing",
+            }
+
+        row = rows[0]
+        canon_source_type, canon_source_ref = _kb_normalize_provenance(source_type, source_ref)
+        passed = ["kb_row_found"]
+        failed = []
+        warnings = []
+
+        if (row.get("domain") or "") != domain:
+            failed.append("domain_mismatch")
+        else:
+            passed.append("domain_match")
+        if (row.get("topic") or "") != topic:
+            failed.append("topic_mismatch")
+        else:
+            passed.append("topic_match")
+
+        if instruction and (row.get("instruction") or "").strip() != instruction.strip():
+            if require_exact_match:
+                failed.append("instruction_mismatch")
+            else:
+                warnings.append("instruction_drift")
+        elif instruction:
+            passed.append("instruction_match")
+
+        if content and (row.get("content") or "").strip() != content.strip():
+            if require_exact_match:
+                failed.append("content_mismatch")
+            else:
+                warnings.append("content_drift")
+        elif content:
+            passed.append("content_match")
+
+        row_conf = str(row.get("confidence") or "")
+        if confidence and row_conf and row_conf != str(confidence):
+            warnings.append(f"confidence_mismatch:{row_conf}->{confidence}")
+        elif confidence:
+            passed.append("confidence_match")
+
+        row_source_type = (row.get("source_type") or "").strip().lower()
+        row_source_ref = (row.get("source_ref") or "").strip()
+        if row_source_type != canon_source_type:
+            failed.append("source_type_mismatch")
+        else:
+            passed.append("source_type_match")
+        if row_source_ref != canon_source_ref:
+            failed.append("source_ref_mismatch")
+        else:
+            passed.append("source_ref_match")
+
+        verified = len(failed) == 0
+        score = 1.0
+        score -= 0.35 if failed else 0.0
+        score -= 0.05 * len(warnings)
+        score = max(0.0, round(score, 2))
+        blocked = not verified or score < 0.8
+
+        return {
+            "ok": True,
+            "blocked": blocked,
+            "verified": verified,
+            "verification_score": score,
+            "passed_checks": passed,
+            "failed_checks": failed,
+            "warnings": warnings,
+            "row": {
+                "id": row.get("id"),
+                "domain": row.get("domain"),
+                "topic": row.get("topic"),
+                "source_type": row.get("source_type"),
+                "source_ref": row.get("source_ref"),
+                "confidence": row.get("confidence"),
+                "active": row.get("active"),
+                "updated_at": row.get("updated_at"),
+            },
+            "summary": (
+                f"{domain}/{topic}: {'verified' if verified else 'unverified'} "
+                f"(warnings={len(warnings)}, failed={len(failed)})"
+            ),
+        }
+    except Exception as exc:
+        return {
+            "ok": True,
+            "blocked": True,
+            "verified": False,
+            "verification_score": 0.0,
+            "passed_checks": [],
+            "failed_checks": ["kb_verification_exception"],
+            "warnings": [str(exc)],
+            "summary": f"{domain}/{topic}: KB verification error",
+        }
+
+
+def t_kb_entry_packet(domain: str = "", topic: str = "", instruction: str = "",
+                      content: str = "", confidence: str = "medium",
+                      source_type: str = "", source_ref: str = "") -> dict:
+    """Canonical verification packet for KB writes."""
+    if not domain or not topic:
+        return {"ok": False, "error": "domain and topic are required"}
+    canon_source_type, canon_source_ref = _kb_normalize_provenance(source_type, source_ref)
+    return _kb_entry_verification_packet(
+        domain=domain,
+        topic=topic,
+        instruction=instruction,
+        content=content,
+        confidence=confidence,
+        source_type=canon_source_type,
+        source_ref=canon_source_ref,
+    )
 def t_add_knowledge(domain="", topic="", instruction="", content="", tags="", confidence="medium", source_type="", source_ref=""):
     """Add knowledge entry. instruction = behavioral directive for CORE (primary). content = supporting detail. At least one required. source_type=manual|ingested|evolved|session. source_ref=URL or session_id."""
     if not instruction and not content:
@@ -944,6 +1105,23 @@ def t_add_knowledge(domain="", topic="", instruction="", content="", tags="", co
     preflight = _require_external_service_preflight("supabase", "add_knowledge")
     if preflight:
         return preflight
+    # Normalize early so duplicate handling and verification use the same canonical provenance.
+    if isinstance(tags, list):
+        tags_list = [str(t).strip() for t in tags if t]
+    elif isinstance(tags, str) and tags.strip():
+        tags_list = [t.strip() for t in tags.split(",") if t.strip()]
+    else:
+        tags_list = []
+    VALID_CONFIDENCE = {"low", "medium", "high", "proven"}
+    if str(confidence) not in VALID_CONFIDENCE:
+        try:
+            v = float(confidence)
+            confidence = "proven" if v >= 0.9 else "high" if v >= 0.7 else "medium" if v >= 0.4 else "low"
+            print(f"[SCHEMA] confidence coerced from float {v} -> '{confidence}'")
+        except (TypeError, ValueError):
+            confidence = "medium"
+            print(f"[SCHEMA] confidence invalid, defaulting to 'medium'")
+    canon_source_type, canon_source_ref = _kb_normalize_provenance(source_type, source_ref)
     # TASK-27.B: Contradiction + duplicate check before insert
     try:
         existing = sb_get("knowledge_base",
@@ -962,10 +1140,25 @@ def t_add_knowledge(domain="", topic="", instruction="", content="", tags="", co
                         "action": "blocked",
                         "existing_instruction": ex.get("instruction", "")[:200],
                         "existing_content": ex_content[:200],
-                        "message": "Instruction contradicts existing KB entry. Use kb_update to overwrite."}
+                            "message": "Instruction contradicts existing KB entry. Use kb_update to overwrite."}
             # Check 2: exact duplicate -- skip silently
             if ex_instr == new_instr and ex_content.lower() == new_content.lower():
-                return {"ok": True, "action": "skipped_duplicate", "topic": topic}
+                verification = _kb_entry_verification_packet(
+                    domain=domain,
+                    topic=topic,
+                    instruction=instruction or "",
+                    content=content or "",
+                    confidence=confidence,
+                    source_type=canon_source_type,
+                    source_ref=canon_source_ref,
+                )
+                return {
+                    "ok": True,
+                    "action": "skipped_duplicate",
+                    "topic": topic,
+                    "verified": bool(verification.get("verified")),
+                    "verification_packet": verification,
+                }
             # Check 3: content conflict (substantial differing content, no instruction change)
             if ex_content and new_content and ex_content.lower() != new_content.lower():
                 if len(ex_content) > 50 and len(new_content) > 50:
@@ -974,34 +1167,20 @@ def t_add_knowledge(domain="", topic="", instruction="", content="", tags="", co
                             "action": "blocked",
                             "existing_instruction": ex.get("instruction", "")[:200],
                             "existing_content": ex_content[:200],
-                            "message": "Content differs from existing KB entry. Use kb_update to overwrite."}
+                    "message": "Content differs from existing KB entry. Use kb_update to overwrite."}
     except Exception:
         pass  # Non-fatal -- proceed with insert if check fails
-    # Handle tags as list OR comma-string — model sometimes sends either
-    if isinstance(tags, list):
-        tags_list = [str(t).strip() for t in tags if t]
-    elif isinstance(tags, str) and tags.strip():
-        tags_list = [t.strip() for t in tags.split(",") if t.strip()]
-    else:
-        tags_list = []
-    # Normalize confidence to valid enum -- guard against float strings passed from older calls
-    VALID_CONFIDENCE = {"low", "medium", "high", "proven"}
-    if str(confidence) not in VALID_CONFIDENCE:
-        # Try to coerce float->enum
-        try:
-            v = float(confidence)
-            confidence = "proven" if v >= 0.9 else "high" if v >= 0.7 else "medium" if v >= 0.4 else "low"
-            print(f"[SCHEMA] confidence coerced from float {v} -> '{confidence}'")
-        except (TypeError, ValueError):
-            confidence = "medium"
-            print(f"[SCHEMA] confidence invalid, defaulting to 'medium'")
-    row = {"domain": domain, "topic": topic, "instruction": instruction or None,
-            "content": content or "", "confidence": confidence,
-            "tags": tags_list, "source": "mcp_session"}
-    if source_type:
-        row["source_type"] = source_type
-    if source_ref:
-        row["source_ref"] = source_ref
+    row = {
+        "domain": domain,
+        "topic": topic,
+        "instruction": instruction or None,
+        "content": content or "",
+        "confidence": confidence,
+        "tags": tags_list,
+        "source": "mcp_session",
+        "source_type": canon_source_type,
+        "source_ref": canon_source_ref,
+    }
     # Schema validation before write
     errs = _validate_write("knowledge_base", row)
     if errs:
@@ -1010,7 +1189,21 @@ def t_add_knowledge(domain="", topic="", instruction="", content="", tags="", co
         r = httpx.post(f"{SUPABASE_URL}/rest/v1/knowledge_base", headers=_sbh(True), json=row, timeout=15)
         if not r.is_success:
             return {"ok": False, "topic": topic, "error": f"Supabase {r.status_code}: {r.text[:300]}"}
-        return {"ok": True, "topic": topic}
+        verification = _kb_entry_verification_packet(
+            domain=domain,
+            topic=topic,
+            instruction=instruction or "",
+            content=content or "",
+            confidence=confidence,
+            source_type=canon_source_type,
+            source_ref=canon_source_ref,
+        )
+        return {
+            "ok": bool(verification.get("ok") and verification.get("verified") and not verification.get("blocked")),
+            "topic": topic,
+            "verified": bool(verification.get("verified")),
+            "verification_packet": verification,
+        }
     except Exception as e:
         return {"ok": False, "topic": topic, "error": str(e)}
 
@@ -4074,10 +4267,33 @@ def t_project_update_kb(project_id: str = "", topic: str = "", content: str = ""
         if not project_id or not topic or not content:
             return {"ok": False, "error": "project_id, topic, content required"}
         domain = f"project:{project_id}"
-        ok = sb_upsert("knowledge_base",
-            {"domain": domain, "topic": topic, "content": content, "confidence": confidence},
-            on_conflict="domain,topic")
-        return {"ok": bool(ok), "domain": domain, "topic": topic}
+        canon_source_type, canon_source_ref = _kb_normalize_provenance("session", f"project:{project_id}")
+        row = {
+            "domain": domain,
+            "topic": topic,
+            "content": content,
+            "confidence": confidence,
+            "source": "mcp_session",
+            "source_type": canon_source_type,
+            "source_ref": canon_source_ref,
+        }
+        ok = sb_upsert("knowledge_base", row, on_conflict="domain,topic")
+        verification = _kb_entry_verification_packet(
+            domain=domain,
+            topic=topic,
+            content=content,
+            confidence=confidence,
+            source_type=canon_source_type,
+            source_ref=canon_source_ref,
+            require_exact_match=False,
+        )
+        return {
+            "ok": bool(ok and verification.get("verified")),
+            "domain": domain,
+            "topic": topic,
+            "verified": bool(verification.get("verified")),
+            "verification_packet": verification,
+        }
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
@@ -5167,17 +5383,16 @@ def t_kb_update(domain: str, topic: str, instruction: str = "",
                 print(f"[SCHEMA] confidence coerced {v} -> '{confidence}'")
             except (TypeError, ValueError):
                 confidence = "medium"
+        canon_source_type, canon_source_ref = _kb_normalize_provenance(source_type, source_ref)
         row = {
             "domain": domain, "topic": topic,
             "instruction": instruction or None,
             "content": content or "",
             "confidence": confidence,
             "source": "mcp_session",
+            "source_type": canon_source_type,
+            "source_ref": canon_source_ref,
         }
-        if source_type:
-            row["source_type"] = source_type
-        if source_ref:
-            row["source_ref"] = source_ref
         errs = _validate_write("knowledge_base", row)
         if errs:
             return {"ok": False, "domain": domain, "topic": topic, "error": f"Schema violation: {errs}"}
@@ -5186,7 +5401,24 @@ def t_kb_update(domain: str, topic: str, instruction: str = "",
             r = httpx.post(f"{SUPABASE_URL}/rest/v1/knowledge_base?on_conflict=domain,topic", headers=h, json=row, timeout=15)
             if not r.is_success:
                 return {"ok": False, "domain": domain, "topic": topic, "action": "upserted", "error": f"Supabase {r.status_code}: {r.text[:300]}"}
-            return {"ok": True, "domain": domain, "topic": topic, "action": "upserted"}
+            verification = _kb_entry_verification_packet(
+                domain=domain,
+                topic=topic,
+                instruction=instruction or "",
+                content=content or "",
+                confidence=confidence,
+                source_type=canon_source_type,
+                source_ref=canon_source_ref,
+                require_exact_match=False,
+            )
+            return {
+                "ok": bool(verification.get("verified")),
+                "domain": domain,
+                "topic": topic,
+                "action": "upserted",
+                "verified": bool(verification.get("verified")),
+                "verification_packet": verification,
+            }
         except Exception as e:
             return {"ok": False, "domain": domain, "topic": topic, "action": "upserted", "error": str(e)}
     except Exception as e:
