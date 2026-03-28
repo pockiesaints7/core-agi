@@ -8,6 +8,7 @@ import inspect
 from typing import Any, Dict, List
 
 from orchestrator_message import OrchestratorMessage
+from core_orch_context import tool_result_has_evidence
 
 # ── TOOLS registry import ─────────────────────────────────────────────────────
 # Lazy import to avoid circular issues at module load time
@@ -202,6 +203,8 @@ async def layer_5_tools(msg: OrchestratorMessage):
 
     all_ok = True
     failed_steps = []
+    evidence_gate = msg.context.get("evidence_gate", {}) or {}
+    evidence_found = False
     for subtask in subtasks:
         ok = await _execute_subtask(subtask, msg, tools)
         if not ok:
@@ -215,6 +218,17 @@ async def layer_5_tools(msg: OrchestratorMessage):
                 break
             else:
                 print(f"[L5] Non-blocking step failed ? continuing")
+        else:
+            try:
+                tool_name = subtask.get("tool", "")
+                result = msg.tool_results[-1].get("result") if msg.tool_results else None
+                if tool_result_has_evidence(tool_name, result):
+                    evidence_found = True
+                    if evidence_gate.get("needs_retrieval") and subtask.get("evidence_stage") in {"supabase", "local_code"}:
+                        print(f"[L5] Evidence sufficient after {tool_name}; stopping retrieval sweep early")
+                        break
+            except Exception as exc:
+                print(f"[L5] Evidence gate check non-fatal: {exc}")
 
     # GAP-NEW-30: if partial failure and multi-step, attempt re-plan
     if failed_steps and not all_ok and plan.get("type") == "multi_step":
@@ -228,6 +242,21 @@ async def layer_5_tools(msg: OrchestratorMessage):
             msg.plan["subtasks"] = remaining
             msg.plan["_replanned"] = True
             print(f"[L5] Re-plan: {len(remaining)} remaining subtasks")
+
+    # If the evidence sweep found nothing useful, fall back to clarification instead of guessing.
+    if evidence_gate.get("needs_retrieval") and not evidence_found and not any(tool_result_has_evidence(r.get("tool", ""), r.get("result")) for r in msg.tool_results):
+        msg.response_mode = "clarify"
+        msg.context["response_mode"] = "clarify"
+        msg.clarification_needed = True
+        msg.context["clarification_needed"] = True
+        msg.plan = {
+            "type": "direct_response",
+            "subtasks": [],
+            "estimated_complexity": "low",
+            "direct_answer": evidence_gate.get("clarification_prompt")
+            or "I could not find enough evidence in CORE memory or the web. Send the file, repo path, URL, or more detail I should verify.",
+        }
+        print("[L5] Evidence sweep empty — switching to clarification")
 
     msg.track_layer("L5-COMPLETE")
     print(f"[L5] Execution done: {len(msg.tool_results)} results  all_ok={all_ok}")

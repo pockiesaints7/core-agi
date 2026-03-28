@@ -107,6 +107,9 @@ BEHAVIORAL RULES:
 DECISION PACKET:
 {decision_packet}
 
+EVIDENCE GATE:
+{evidence_gate}
+
 EVIDENCE SUMMARY:
 {evidence_packet}
 
@@ -130,6 +133,9 @@ RESPONSE_MODE: {response_mode}
 
 DECISION PACKET:
 {decision_packet}
+
+EVIDENCE GATE:
+{evidence_gate}
 
 EVIDENCE PACKET:
 {evidence_packet}
@@ -271,6 +277,25 @@ def _format_decision_packet(decision_packet: dict) -> str:
     ) or _trim_json(decision_packet, 1200)
 
 
+def _format_evidence_gate(evidence_gate: dict) -> str:
+    if not evidence_gate:
+        return "none"
+    keys = [
+        "state",
+        "score",
+        "needs_retrieval",
+        "retrieval_mode",
+        "preferred_tools",
+        "search_query",
+        "code_targets",
+    ]
+    return "\n".join(
+        f"- {k}: {evidence_gate.get(k)}"
+        for k in keys
+        if evidence_gate.get(k) not in (None, "", [], {})
+    ) or _trim_json(evidence_gate, 1200)
+
+
 def _format_tool_summary(tool_results: List[Dict[str, Any]]) -> str:
     if not tool_results:
         return "No tools executed."
@@ -406,6 +431,7 @@ async def layer_9_tone(msg: OrchestratorMessage):
     decision_packet = msg.decision_packet or msg.context.get("decision_packet", {})
     evidence_packet = msg.evidence_packet or msg.context.get("evidence_packet", {})
     capability_packet = msg.capability_packet or msg.context.get("capability_packet", {})
+    evidence_gate = msg.evidence_gate or msg.context.get("evidence_gate", {})
     request_kind = msg.request_kind or decision_packet.get("request_kind") or "general"
     response_mode = msg.response_mode or decision_packet.get("response_mode") or "tool"
 
@@ -448,6 +474,14 @@ async def layer_9_tone(msg: OrchestratorMessage):
                 await layer_10_output(msg)
                 return
 
+        if response_mode == "clarify" and (msg.plan or {}).get("direct_answer"):
+            msg.styled_response = (msg.plan or {}).get("direct_answer") or "I need more detail to proceed."
+            msg.track_layer("L9-CLARIFY")
+            print(f"[L9] Clarification response ready ({len(msg.styled_response)} chars)")
+            from core_orch_layer10 import layer_10_output
+            await layer_10_output(msg)
+            return
+
         # Response-mode aware direct synthesis for capability / status / review / debug
         if response_mode in ("status", "capability", "review", "debug") and not msg.tool_results:
             prompt = _CAPABILITY_TEMPLATE.format(
@@ -456,6 +490,7 @@ async def layer_9_tone(msg: OrchestratorMessage):
                 request_kind=request_kind,
                 response_mode=response_mode,
                 decision_packet=_format_decision_packet(decision_packet),
+                evidence_gate=_format_evidence_gate(evidence_gate),
                 evidence_packet=_format_evidence_packet(evidence_packet),
                 capability_packet=_format_capability_packet(capability_packet),
                 errors=errors_str,
@@ -491,6 +526,7 @@ async def layer_9_tone(msg: OrchestratorMessage):
             )
             prompt = (
                 f"{prompt}\n\nDECISION PACKET:\n{_format_decision_packet(decision_packet)}"
+                f"\n\nEVIDENCE GATE:\n{_format_evidence_gate(evidence_gate)}"
                 f"\n\nEVIDENCE PACKET:\n{_format_evidence_packet(evidence_packet)}"
             )
             # Prompt length guard
@@ -520,6 +556,7 @@ async def layer_9_tone(msg: OrchestratorMessage):
                     kb_snippets=kb_str,
                     behavioral_rules=rules_str,
                     decision_packet=_format_decision_packet(decision_packet),
+                    evidence_gate=_format_evidence_gate(evidence_gate),
                     evidence_packet=_format_evidence_packet(evidence_packet),
                 )
                 # Prompt length guard on conversational path

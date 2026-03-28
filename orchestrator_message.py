@@ -45,6 +45,7 @@ class OrchestratorMessage:
     decision_packet: Dict[str, Any] = field(default_factory=dict)    # routing + strategy
     evidence_packet: Dict[str, Any] = field(default_factory=dict)    # unified context evidence
     capability_packet: Dict[str, Any] = field(default_factory=dict)  # status/capability snapshot
+    evidence_gate: Dict[str, Any] = field(default_factory=dict)      # retrieval/clarification gate
     route_reason: str = ""                                          # why this route was chosen
     clarification_needed: bool = False
     delegation_target: str = ""                                     # agentic/worker delegation
