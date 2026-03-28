@@ -7,6 +7,7 @@ import json
 from typing import Any, Dict, List
 
 from orchestrator_message import OrchestratorMessage
+from core_orch_context import build_decision_packet
 from core_config import groq_chat, GROQ_MODEL, GROQ_FAST
 
 # Destructive action keywords requiring owner tier
@@ -427,19 +428,67 @@ async def layer_4_reason(msg: OrchestratorMessage):
         await layer_10_output(msg)
         return
 
+    # Ensure decision packet is present
+    if not msg.decision_packet:
+        try:
+            decision = build_decision_packet(msg)
+            msg.decision_packet = decision
+            msg.request_kind = decision.get("request_kind", msg.request_kind)
+            msg.response_mode = decision.get("response_mode", msg.response_mode)
+            msg.route_reason = decision.get("route_reason", msg.route_reason)
+            msg.clarification_needed = bool(decision.get("clarification_needed", False))
+            msg.context["request_kind"] = msg.request_kind
+            msg.context["response_mode"] = msg.response_mode
+            msg.context["route_reason"] = msg.route_reason
+            msg.context["clarification_needed"] = msg.clarification_needed
+            msg.context["decision_packet"] = decision
+        except Exception as exc:
+            print(f"[L4] decision_packet build failed (non-fatal): {exc}")
+
     # ── Agentic mode check ────────────────────────────────────────────────────
     # Only activate for complex requests — simple queries stay on fast path
     try:
         from core_orch_agent import is_agentic_request, run_agent_loop, AGENT_MODEL
-        if is_agentic_request(msg.text, msg.intent or ""):
+        decision = msg.decision_packet or {}
+        agentic_hint = bool(decision.get("agentic_hint", False))
+        if msg.response_mode == "agentic" or agentic_hint or is_agentic_request(msg.text, msg.intent or ""):
             model_label = AGENT_MODEL or "groq"
             print(f"[L4] AGENTIC MODE activated model={model_label} intent={msg.intent}")
             msg.track_layer("L4-AGENTIC")
+            msg.delegation_target = "agentic"
+            msg.context["delegation_target"] = "agentic"
             await run_agent_loop(msg, goal=msg.text)
             return
     except ImportError as e:
         print(f"[L4] core_orch_agent not available (non-fatal): {e}")
     # ─────────────────────────────────────────────────────────────────────────
+
+    # Clarification path (no tools)
+    if msg.clarification_needed:
+        msg.plan = {
+            "type": "direct_response",
+            "subtasks": [],
+            "estimated_complexity": "low",
+            "direct_answer": (msg.decision_packet or {}).get("clarification_prompt")
+            or "I need more detail to proceed. What exactly should I do, and what is the expected outcome?",
+        }
+        msg.track_layer("L4-CLARIFY")
+        from core_orch_layer5 import layer_5_tools
+        await layer_5_tools(msg)
+        return
+
+    # Capability/status/review paths: direct response from context
+    if msg.response_mode in ("status", "capability", "review", "debug"):
+        msg.plan = {
+            "type": "direct_response",
+            "subtasks": [],
+            "estimated_complexity": "low",
+            "direct_answer": None,
+        }
+        msg.track_layer("L4-DIRECT")
+        from core_orch_layer5 import layer_5_tools
+        await layer_5_tools(msg)
+        return
 
     # Build static plan (existing fast-path)
     plan = await _build_plan(msg)

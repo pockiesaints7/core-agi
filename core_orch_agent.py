@@ -416,6 +416,24 @@ async def run_agent_loop(msg: OrchestratorMessage, goal: str) -> None:
     model_label = AGENT_MODEL or os.getenv("OPENROUTER_MODEL", "gemini-2.5-flash")
     print(f"[AGENT] Start. goal={goal[:80]!r} model={model_label} timeout={AGENT_TIMEOUT_SEC}s")
     msg.track_layer("AGENT-START")
+    msg.agentic_metadata = {
+        "goal": goal[:400],
+        "model": model_label,
+        "started_at": time.monotonic(),
+        "request_kind": getattr(msg, "request_kind", ""),
+        "response_mode": getattr(msg, "response_mode", ""),
+        "agentic": True,
+    }
+    msg.response_mode = "agentic"
+    msg.context["response_mode"] = "agentic"
+    msg.decision_packet = dict(msg.decision_packet or {})
+    msg.decision_packet.update({
+        "response_mode": "agentic",
+        "agentic": True,
+        "route_reason": "agentic_loop",
+    })
+    msg.context["decision_packet"] = msg.decision_packet
+    msg.context["agentic_metadata"] = msg.agentic_metadata
 
     history: List[Dict] = []
     tools_summary = _get_tools_summary()

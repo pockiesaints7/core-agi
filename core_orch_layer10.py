@@ -58,11 +58,17 @@ def _format_mcp(msg: OrchestratorMessage) -> dict:
     return {
         "success": not msg.has_errors,
         "intent": msg.intent,
+        "request_kind": getattr(msg, "request_kind", ""),
+        "response_mode": getattr(msg, "response_mode", ""),
         "response": msg.styled_response or "",
         "tool_results": msg.tool_results,
         "errors": msg.errors,
         "layer_stack": msg.layer_stack,
         "evolutions_proposed": len(msg.evolutions_proposed),
+        "decision_packet": getattr(msg, "decision_packet", {}) or {},
+        "evidence_packet": getattr(msg, "evidence_packet", {}) or {},
+        "capability_packet": getattr(msg, "capability_packet", {}) or {},
+        "agentic_metadata": getattr(msg, "agentic_metadata", {}) or {},
     }
 
 

@@ -39,6 +39,17 @@ class OrchestratorMessage:
     styled_response: Optional[str] = None                           # L9 Tone
     final_output: Optional[str] = None                              # L10 Output
 
+    # Shared decision/evidence packets (cross-layer)
+    request_kind: str = ""                                          # high-level request type
+    response_mode: str = ""                                         # response strategy
+    decision_packet: Dict[str, Any] = field(default_factory=dict)    # routing + strategy
+    evidence_packet: Dict[str, Any] = field(default_factory=dict)    # unified context evidence
+    capability_packet: Dict[str, Any] = field(default_factory=dict)  # status/capability snapshot
+    route_reason: str = ""                                          # why this route was chosen
+    clarification_needed: bool = False
+    delegation_target: str = ""                                     # agentic/worker delegation
+    agentic_metadata: Dict[str, Any] = field(default_factory=dict)
+
     # Error tracking
     errors: List[Dict[str, Any]] = field(default_factory=list)
     layer_stack: List[str] = field(default_factory=list)

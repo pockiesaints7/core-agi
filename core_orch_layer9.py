@@ -92,6 +92,8 @@ _CONVO_SYSTEM = (
 _CONVO_TEMPLATE = """
 USER: {text}
 INTENT: {intent}
+REQUEST_KIND: {request_kind}
+RESPONSE_MODE: {response_mode}
 
 SESSION STATE:
 {session_state}
@@ -102,9 +104,171 @@ KB SNIPPETS (relevant knowledge):
 BEHAVIORAL RULES:
 {behavioral_rules}
 
+DECISION PACKET:
+{decision_packet}
+
+EVIDENCE SUMMARY:
+{evidence_packet}
+
 Reply as CORE. Be precise. Use session state and KB above to answer accurately.
 If asked what you know about something - search the KB snippets above and answer from them.
 If asked about current tasks/state - use the session state."""
+
+_CAPABILITY_SYSTEM = (
+    "You are CORE - an autonomous AGI system built by Vux. "
+    "You must answer with an evidence-backed operational capability summary, not raw telemetry. "
+    "Be direct, technically precise, and grounded in the packets below. "
+    "If the user asks how advanced you are, answer in terms of current capability, strengths, "
+    "recent improvements, current gaps, and what is safe to trust."
+)
+
+_CAPABILITY_TEMPLATE = """
+USER MESSAGE: {text}
+INTENT: {intent}
+REQUEST_KIND: {request_kind}
+RESPONSE_MODE: {response_mode}
+
+DECISION PACKET:
+{decision_packet}
+
+EVIDENCE PACKET:
+{evidence_packet}
+
+CAPABILITY PACKET:
+{capability_packet}
+
+ERRORS:
+{errors}
+
+BEHAVIORAL RULES:
+{behavioral_rules}
+
+KB SNIPPETS:
+{kb_snippets}
+
+Write a concise capability/status answer for the owner.
+Rules:
+1. Lead with the direct answer.
+2. Summarize current operational capability, not just raw counts.
+3. Include strengths, gaps, and whether the pipeline looks healthy.
+4. If the user asks "how advanced are you", explain what CORE can now do reliably and what still needs caution.
+5. Do not dump raw JSON. Convert the packets into a coherent narrative.
+"""
+
+
+def _trim_json(obj: object, limit: int = 2200) -> str:
+    try:
+        return json.dumps(obj, default=str)[:limit]
+    except Exception:
+        return str(obj)[:limit]
+
+
+def _format_capability_packet(capability_packet: dict) -> str:
+    if not capability_packet:
+        return "none"
+    counts = capability_packet.get("counts", {})
+    workers = capability_packet.get("workers", {})
+    lines = []
+    if counts:
+        ordered = [
+            ("task_pending", "task pending"),
+            ("task_in_progress", "task in_progress"),
+            ("task_done", "task done"),
+            ("task_failed", "task failed"),
+            ("evo_pending", "evo pending"),
+            ("evo_applied", "evo applied"),
+            ("evo_rejected", "evo rejected"),
+            ("owner_review_pending", "owner_review pending"),
+        ]
+        parts = []
+        for key, label in ordered:
+            if key in counts:
+                parts.append(f"{label}={counts.get(key)}")
+        if parts:
+            lines.append("COUNTS: " + " | ".join(parts))
+    if workers:
+        worker_bits = []
+        for name, status in workers.items():
+            if isinstance(status, dict):
+                bits = []
+                for key in ("enabled", "running", "pending", "processed", "failed", "duplicates", "applied", "rejected"):
+                    if key in status and status.get(key) is not None:
+                        bits.append(f"{key}={status.get(key)}")
+                if status.get("last_error"):
+                    bits.append(f"last_error={status.get('last_error')}")
+                if bits:
+                    worker_bits.append(f"{name}: " + ", ".join(bits[:6]))
+            else:
+                worker_bits.append(f"{name}: {status}")
+        if worker_bits:
+            lines.append("WORKERS:\n" + "\n".join(f"- {bit}" for bit in worker_bits[:8]))
+    if capability_packet.get("headline"):
+        lines.append(f"HEADLINE: {capability_packet['headline']}")
+    if capability_packet.get("strengths"):
+        strengths = capability_packet.get("strengths", [])
+        if strengths:
+            lines.append("STRENGTHS: " + "; ".join(str(s) for s in strengths[:4]))
+    if capability_packet.get("gaps"):
+        gaps = capability_packet.get("gaps", [])
+        if gaps:
+            lines.append("GAPS: " + "; ".join(str(g) for g in gaps[:4]))
+    return "\n".join(lines) if lines else _trim_json(capability_packet, 1400)
+
+
+def _format_evidence_packet(evidence_packet: dict) -> str:
+    if not evidence_packet:
+        return "none"
+    request = evidence_packet.get("request", {})
+    lines = []
+    if request:
+        lines.append(
+            "REQUEST: "
+            + ", ".join(
+                f"{k}={request.get(k)}"
+                for k in ("request_kind", "response_mode", "intent", "source", "route")
+                if request.get(k)
+            )
+        )
+    session = evidence_packet.get("session", {})
+    if session:
+        lines.append(f"SESSION: {str(session)[:700]}")
+    health = evidence_packet.get("health", {})
+    if health:
+        lines.append(f"HEALTH: {str(health)[:280]}")
+    sem = evidence_packet.get("semantic", {})
+    if sem:
+        focus = sem.get("focus", "")
+        memory_by_table = sem.get("memory_by_table", {})
+        lines.append(f"SEMANTIC: focus={focus} memory={memory_by_table}")
+    kb = evidence_packet.get("kb_snippets", [])
+    if kb:
+        lines.append(f"KB: {str(kb[:3])[:900]}")
+    rules = evidence_packet.get("behavioral_rules", [])
+    if rules:
+        lines.append(f"RULES: {str(rules[:3])[:800]}")
+    return "\n".join(lines) if lines else _trim_json(evidence_packet, 1800)
+
+
+def _format_decision_packet(decision_packet: dict) -> str:
+    if not decision_packet:
+        return "none"
+    keys = [
+        "request_kind",
+        "response_mode",
+        "route_reason",
+        "clarification_needed",
+        "agentic_hint",
+        "intent",
+        "confidence",
+        "requires_tools",
+        "domain",
+        "command",
+    ]
+    return "\n".join(
+        f"- {k}: {decision_packet.get(k)}"
+        for k in keys
+        if decision_packet.get(k) not in (None, "", [])
+    ) or _trim_json(decision_packet, 1200)
 
 
 def _format_tool_summary(tool_results: List[Dict[str, Any]]) -> str:
@@ -199,6 +363,19 @@ def _build_session_state(msg: OrchestratorMessage) -> str:
     if mistakes:
         lines.append(f"Domain mistakes loaded: {len(mistakes)}")
 
+    capability = ctx.get("capability_packet", {})
+    if capability:
+        counts = capability.get("counts", {})
+        if counts:
+            lines.append(
+                "Capability counts: "
+                + ", ".join(
+                    f"{k}={counts.get(k)}"
+                    for k in ("task_pending", "task_in_progress", "task_done", "task_failed", "evo_pending", "evo_applied", "owner_review_pending")
+                    if counts.get(k) is not None
+                )
+            )
+
     if not lines or lines == ["In-progress tasks: none"]:
         return "Session state not loaded (no session_start data in context)."
 
@@ -226,6 +403,11 @@ async def layer_9_tone(msg: OrchestratorMessage):
         f"- {(r.get('instruction') or '')[:120]}"
         for r in behavioral_rules[:5]
     ) if behavioral_rules else "none"
+    decision_packet = msg.decision_packet or msg.context.get("decision_packet", {})
+    evidence_packet = msg.evidence_packet or msg.context.get("evidence_packet", {})
+    capability_packet = msg.capability_packet or msg.context.get("capability_packet", {})
+    request_kind = msg.request_kind or decision_packet.get("request_kind") or "general"
+    response_mode = msg.response_mode or decision_packet.get("response_mode") or "tool"
 
     try:
         tool_summary = _format_tool_summary(msg.tool_results)
@@ -266,6 +448,35 @@ async def layer_9_tone(msg: OrchestratorMessage):
                 await layer_10_output(msg)
                 return
 
+        # Response-mode aware direct synthesis for capability / status / review / debug
+        if response_mode in ("status", "capability", "review", "debug") and not msg.tool_results:
+            prompt = _CAPABILITY_TEMPLATE.format(
+                text=msg.text[:400],
+                intent=msg.intent or "unknown",
+                request_kind=request_kind,
+                response_mode=response_mode,
+                decision_packet=_format_decision_packet(decision_packet),
+                evidence_packet=_format_evidence_packet(evidence_packet),
+                capability_packet=_format_capability_packet(capability_packet),
+                errors=errors_str,
+                behavioral_rules=rules_str,
+                kb_snippets=kb_str,
+            )
+            if len(prompt) > 12000:
+                prompt = prompt[:12000] + "\n[...truncated]"
+            styled = groq_chat(
+                system=_CAPABILITY_SYSTEM,
+                user=prompt,
+                model=GROQ_MODEL,
+                max_tokens=1100,
+            )
+            msg.styled_response = styled.strip()
+            msg.track_layer("L9-CAPABILITY")
+            print(f"[L9] Capability/status synthesis ready ({len(msg.styled_response)} chars)")
+            from core_orch_layer10 import layer_10_output
+            await layer_10_output(msg)
+            return
+
         if msg.tool_results or msg.has_errors:
             # Tool-driven response — inject KB + rules for context-aware answers
             prompt = _PERSONA_TEMPLATE.format(
@@ -277,6 +488,10 @@ async def layer_9_tone(msg: OrchestratorMessage):
                 tier=msg.tier,
                 behavioral_rules=rules_str,
                 kb_snippets=kb_str,
+            )
+            prompt = (
+                f"{prompt}\n\nDECISION PACKET:\n{_format_decision_packet(decision_packet)}"
+                f"\n\nEVIDENCE PACKET:\n{_format_evidence_packet(evidence_packet)}"
             )
             # Prompt length guard
             if len(prompt) > 12000:
@@ -299,9 +514,13 @@ async def layer_9_tone(msg: OrchestratorMessage):
                 prompt = _CONVO_TEMPLATE.format(
                     text=msg.text[:400],
                     intent=msg.intent or "conversation",
+                    request_kind=request_kind,
+                    response_mode=response_mode,
                     session_state=session_state,
                     kb_snippets=kb_str,
                     behavioral_rules=rules_str,
+                    decision_packet=_format_decision_packet(decision_packet),
+                    evidence_packet=_format_evidence_packet(evidence_packet),
                 )
                 # Prompt length guard on conversational path
                 if len(prompt) > 8000:
@@ -319,6 +538,19 @@ async def layer_9_tone(msg: OrchestratorMessage):
 
     except Exception as exc:
         print(f"[L9] Groq styling failed — using plain fallback: {exc}")
+        handled_capability_fallback = False
+        if response_mode in ("status", "capability", "review", "debug"):
+            summary_lines = [
+                "CORE capability summary (fallback)",
+                _format_capability_packet(capability_packet),
+            ]
+            if evidence_packet:
+                summary_lines.append("Evidence:")
+                summary_lines.append(_format_evidence_packet(evidence_packet))
+            if msg.has_errors:
+                summary_lines.append("Errors: " + _format_errors(msg.errors))
+            msg.styled_response = "\n\n".join(line for line in summary_lines if line)
+            handled_capability_fallback = True
         # Plain-text fallback: dump tool results without LLM
         if msg.tool_results:
             lines = [f"OK {r['tool']}: " + (
@@ -326,11 +558,11 @@ async def layer_9_tone(msg: OrchestratorMessage):
                 else json.dumps(r["result"], default=str)[:300]
             ) for r in msg.tool_results]
             msg.styled_response = "\n".join(lines)
-        elif msg.has_errors:
+        elif msg.has_errors and not handled_capability_fallback:
             msg.styled_response = "ERR " + " | ".join(
                 e["message"][:120] for e in msg.errors[:3]
             )
-        else:
+        elif not handled_capability_fallback:
             msg.styled_response = "Done."
 
     msg.track_layer("L9-COMPLETE")

@@ -11,6 +11,7 @@ from typing import Any, Dict, List
 from orchestrator_message import OrchestratorMessage
 
 from core_config import sb_get, GROQ_FAST, groq_chat
+from core_orch_context import build_evidence_packet, build_capability_packet
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -197,6 +198,23 @@ async def layer_2_memory(msg: OrchestratorMessage):
     msg.context["kb_snippets"] = kb_snippets
     msg.context["health"] = health
     msg.context["conversation_history"] = conv_history
+
+    # Unified evidence packet for downstream layers
+    try:
+        evidence = build_evidence_packet(msg)
+        msg.evidence_packet = evidence
+        msg.context["evidence_packet"] = evidence
+    except Exception as exc:
+        print(f"[L2] evidence_packet build failed (non-fatal): {exc}")
+
+    # Capability snapshot for status/self-assessment requests
+    try:
+        if msg.request_kind in ("status", "self_assessment", "owner_review", "debug") or msg.intent in ("system_state", "system_health", "debug_request"):
+            cap = build_capability_packet(msg)
+            msg.capability_packet = cap
+            msg.context["capability_packet"] = cap
+    except Exception as exc:
+        print(f"[L2] capability_packet build failed (non-fatal): {exc}")
 
     msg.track_layer("L2-COMPLETE")
     print(
