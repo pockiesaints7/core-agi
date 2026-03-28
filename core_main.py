@@ -551,6 +551,7 @@ def _render_deployment_report() -> str:
 
 
 def _build_startup_brief(resume: str, counts: dict, orch: dict, task_auto: dict | None = None, evo_auto: dict | None = None) -> str:
+    from core_tools import t_state_packet
     task_pending = counts.get("task_queue_pending", 0)
     task_in_progress = counts.get("task_queue_in_progress", 0)
     task_done = counts.get("task_queue_done", 0)
@@ -574,11 +575,14 @@ def _build_startup_brief(resume: str, counts: dict, orch: dict, task_auto: dict 
     code_auto = code_autonomy_status() if CODE_AUTONOMY_ENABLED else {}
     integration_auto = integration_autonomy_status() if INTEGRATION_AUTONOMY_ENABLED else {}
     sem_proj = semantic_projection_status() if SEMANTIC_PROJECTION_ENABLED else {}
+    state_packet = t_state_packet(session_id="default")
+    state_verification = state_packet.get("verification") or {}
     return (
         f"🧠 <b>CORE Online</b>\n"
         f"Orchestrator: <b>{orch.get('model', 'unknown')}</b> | {orch.get('layers', 'L0-L9 active')} | {orch.get('blueprint', '')}\n\n"
         f"<b>State</b>\n"
         f"KB: {counts.get('knowledge_base', 0)} | Mistakes: {counts.get('mistakes', 0)} | Sessions: {counts.get('sessions', 0)}\n"
+        f"State continuity: {'verified' if state_verification.get('verified') else 'degraded'} | score {state_verification.get('verification_score', 0):.2f} | warnings {len(state_verification.get('warnings') or [])}\n"
         f"Task queue: pending {task_pending} | in_progress {task_in_progress} | done {task_done} | failed {task_failed} | {task_summary}\n"
         f"Evolutions: pending {evo_pending} | applied {evo_applied} | rejected {evo_rejected}\n"
         f"Task autonomy: {'enabled' if AUTONOMY_ENABLED else 'disabled'} | pending {task_auto.get('pending', 0)} | in_progress {task_auto.get('in_progress', 0)} | sources {task_sources}\n"
@@ -739,6 +743,7 @@ def _deployment_manifest() -> dict:
         "core_orch_layer11.py",
         "core_meta_evaluator.py",
         "core_tools.py",
+        "core_tools_memory.py",
         "core_tools_governance.py",
         "core_reasoning_packet.py",
         "core_work_taxonomy.py",
@@ -753,6 +758,7 @@ def _deployment_manifest() -> dict:
         "core_semantic_projection.py",
         "core_worker_critic.py",
         "core_worker_reflect.py",
+        "core_orch_agent.py",
         "run_reflection_audit_ddl.py",
     ]
     manifest = {}
@@ -905,8 +911,8 @@ def ping():
 
 @app.get("/state")
 def state_ep():
-    from core_tools import t_state
-    return t_state()
+    from core_tools import t_state, t_state_packet
+    return {"state": t_state(), "state_packet": t_state_packet()}
 
 
 @app.get("/review")
@@ -1791,16 +1797,20 @@ def handle_msg(msg):
         notify(_render_command_catalog(), cid)
 
     elif cmd == "/status":
+        from core_tools import t_state_packet
         counts = get_system_counts()
         task_auto = autonomy_status() if AUTONOMY_ENABLED else {}
         code_auto = code_autonomy_status() if CODE_AUTONOMY_ENABLED else {}
         integration_auto = integration_autonomy_status() if INTEGRATION_AUTONOMY_ENABLED else {}
         evo_auto = evolution_autonomy_status() if EVOLUTION_AUTONOMY_ENABLED else {}
         sem = semantic_projection_status() if SEMANTIC_PROJECTION_ENABLED else {}
+        state_packet = t_state_packet(session_id="default")
+        state_verification = state_packet.get("verification") or {}
         lines = [
             f"Runtime: {'enabled' if AUTONOMY_ENABLED else 'disabled'} task autonomy | {'enabled' if CODE_AUTONOMY_ENABLED else 'disabled'} code autonomy | {'enabled' if INTEGRATION_AUTONOMY_ENABLED else 'disabled'} integration autonomy | {'enabled' if EVOLUTION_AUTONOMY_ENABLED else 'disabled'} evolution autonomy",
             f"Queues: task pending {counts.get('task_queue_pending', 0)} | in_progress {counts.get('task_queue_in_progress', 0)} | done {counts.get('task_queue_done', 0)} | failed {counts.get('task_queue_failed', 0)} | evolution pending {counts.get('evolution_pending', 0)} | applied {counts.get('evolution_applied', 0)} | rejected {counts.get('evolution_rejected', 0)}",
             f"Memory: KB {counts.get('knowledge_base', 0)} | Mistakes {counts.get('mistakes', 0)} | Sessions {counts.get('sessions', 0)}",
+            f"State continuity: {'verified' if state_verification.get('verified') else 'degraded'} | score {state_verification.get('verification_score', 0):.2f} | warnings {len(state_verification.get('warnings') or [])}",
             f"Workers: task {task_auto.get('pending', 0)} pending / {task_auto.get('in_progress', 0)} in progress | code {code_auto.get('pending_code_tasks', 0)} pending / {code_auto.get('pending_review_proposals', 0)} review proposals | integration {integration_auto.get('pending_integration_tasks', 0)} pending / {integration_auto.get('pending_review_proposals', 0)} review proposals | evolution {evo_auto.get('pending_evolutions', 0)} pending",
             f"Semantic projection: {'enabled' if SEMANTIC_PROJECTION_ENABLED else 'disabled'} | last_run {_tg_escape(sem.get('last_run_at') or 'n/a', 40)}",
         ]

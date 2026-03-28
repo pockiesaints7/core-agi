@@ -321,7 +321,7 @@ def _get_tools_summary() -> str:
     try:
         from core_tools import TOOLS
         groups = {
-            "TIME/STATE":   ["get_time", "datetime_now", "get_state", "get_system_health", "get_state_key"],
+            "TIME/STATE":   ["get_time", "datetime_now", "get_state", "get_system_health", "get_state_key", "session_snapshot", "state_packet", "state_consistency_check"],
             "KNOWLEDGE":    ["search_kb", "add_knowledge", "kb_update", "get_mistakes", "log_mistake", "get_behavioral_rules"],
             "WEB":          ["web_search", "web_fetch", "summarize_url"],
             "CODE/VM":      ["run_python", "shell", "file_list", "file_read", "file_write", "run_script", "install_package"],

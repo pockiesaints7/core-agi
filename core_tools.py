@@ -672,6 +672,8 @@ from core_tools_graph import (
 from core_tools_memory import (
     StateEvaluator,
     t_evaluate_state,
+    t_state_consistency_check,
+    t_state_packet,
     t_reasoning_packet,
     t_search_memory,
 )
@@ -6546,6 +6548,10 @@ TOOLS = {
                                "desc": "One-call session bootstrap. Returns: health, counts, resume_task (highest priority in_progress -- start here), in_progress_tasks, pending_tasks, recent_mistakes (last 10 all domains), stale_pattern_count, session_md (full SESSION.md static doc for claude.ai bootstrap), system_map. Use get_mistakes(domain=X) for domain-specific lookup before any write."},
     "session_snapshot":       {"fn": t_session_snapshot,       "perm": "READ",    "args": ["scope", "persist"],
                                "desc": "Canonical cross-session continuity snapshot. Captures health, counts, resume_task, checkpoint, quality, training, active goals, and capability context. Persisted into sessions.summary unless persist=false."},
+    "state_packet":           {"fn": t_state_packet,           "perm": "READ",    "args": ["session_id", "strict"],
+                               "desc": "Canonical state continuity packet. Consolidates latest sessions row, agentic session scratchpad, checkpoint, session snapshot, and state_update history with verification metadata."},
+    "state_consistency_check": {"fn": t_state_consistency_check, "perm": "READ",  "args": ["session_id", "strict"],
+                               "desc": "Verify continuity across sessions, agentic_sessions, checkpoint, and state updates. Use when diagnosing drift or session collapse."},
     "tool_stats":             {"fn": t_tool_stats,             "perm": "READ",    "args": ["days"],
                                "desc": "TASK-26: Per-tool success/fail rate for last N days (default 7). Returns tools sorted by fail_rate desc. fail_rate>0.2 = flagged. Use to identify flaky tools."},
     "checkpoint":             {"fn": t_checkpoint,             "perm": "WRITE",   "args": ["active_task_id", "last_action", "last_result"],
