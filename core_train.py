@@ -1077,6 +1077,87 @@ class ConsolidationManager:
         return summary
 
 
+class ActiveLearningStrategy:
+    """Pluggable selector for choosing the highest-value tasks to learn from."""
+
+    def __init__(self, strategy_name: str = "novelty_priority", budget: int = 5, similarity_threshold: float = 0.62):
+        self.strategy_name = (strategy_name or "novelty_priority").strip()
+        self.budget = max(1, min(int(budget or 5), 25))
+        self.similarity_threshold = max(0.1, min(float(similarity_threshold), 0.95))
+
+    @staticmethod
+    def _task_text(task: dict) -> str:
+        if not isinstance(task, dict):
+            return str(task or "")
+        parts = [
+            task.get("title", ""),
+            task.get("description", ""),
+            task.get("goal", ""),
+            task.get("summary", ""),
+        ]
+        return " ".join(str(part) for part in parts if part).strip()
+
+    def score_task(self, task: dict, reference_memory: list[dict] | None = None) -> dict:
+        refs = reference_memory or []
+        novelty = novelty_assessment_module(task, reference_memory=refs, limit=25)
+        text = self._task_text(task).lower()
+        priority_hint = 0.0
+        if any(term in text for term in ("critical", "urgent", "break", "fix", "error", "crash")):
+            priority_hint = 0.2
+        if any(term in text for term in ("core_tools.py", "core_train.py", "core_main.py")):
+            priority_hint = max(priority_hint, 0.15)
+        base_score = float(novelty.get("novelty_score") or 0.0)
+        if self.strategy_name == "conservative":
+            final_score = max(0.0, min(1.0, base_score * 0.7 + priority_hint))
+        elif self.strategy_name == "review_first":
+            final_score = max(0.0, min(1.0, base_score * 0.55 + priority_hint + (0.1 if novelty.get("recommended_route") == "review" else 0.0)))
+        else:
+            final_score = max(0.0, min(1.0, base_score * 0.75 + priority_hint))
+        return {
+            "task": task,
+            "novelty": novelty,
+            "score": round(final_score, 3),
+        }
+
+    def rank(self, tasks: list[dict], reference_memory: list[dict] | None = None) -> list[dict]:
+        scored = [self.score_task(task, reference_memory=reference_memory) for task in (tasks or [])]
+        scored.sort(key=lambda item: (item["score"], item["novelty"].get("novelty_score", 0.0)), reverse=True)
+        return scored
+
+    def run(self, limit: int = 25) -> dict:
+        tasks = ConsolidationManager(similarity_threshold=self.similarity_threshold).collect(limit=limit)
+        if not tasks:
+            return {"ok": True, "strategy_name": self.strategy_name, "selected_count": 0, "selected": []}
+        ranked = self.rank(tasks)
+        selected = ranked[: self.budget]
+        return {
+            "ok": True,
+            "strategy_name": self.strategy_name,
+            "budget": self.budget,
+            "similarity_threshold": self.similarity_threshold,
+            "task_count": len(tasks),
+            "selected_count": len(selected),
+            "selected": [
+                {
+                    "title": item["task"].get("title") or item["task"].get("description") or "untitled task",
+                    "score": item["score"],
+                    "recommended_route": item["novelty"].get("recommended_route", "merge"),
+                    "novelty_score": item["novelty"].get("novelty_score", 0.0),
+                    "task": item["task"],
+                }
+                for item in selected
+            ],
+            "ranked_preview": [
+                {
+                    "title": item["task"].get("title") or item["task"].get("description") or "untitled task",
+                    "score": item["score"],
+                    "recommended_route": item["novelty"].get("recommended_route", "merge"),
+                }
+                for item in ranked[:10]
+            ],
+        }
+
+
 def t_task_similarity_metric(task_a: str = "", task_b: str = "") -> dict:
     """Compare two task JSON blobs or plain text blobs."""
     try:
@@ -1095,6 +1176,17 @@ def t_task_similarity_metric(task_a: str = "", task_b: str = "") -> dict:
         a = _parse(task_a)
         b = _parse(task_b)
         return {"ok": True, "similarity": task_similarity_metric(a, b)}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def t_active_learning_strategy(strategy_name: str = "novelty_priority", budget: str = "5", limit: str = "25", similarity_threshold: str = "0.62") -> dict:
+    """Select high-value tasks for active learning using a pluggable strategy."""
+    try:
+        bud = max(1, min(int(budget or 5), 25))
+        lim = max(1, min(int(limit or 25), 50))
+        thresh = max(0.1, min(float(similarity_threshold or 0.62), 0.95))
+        return ActiveLearningStrategy(strategy_name=strategy_name, budget=bud, similarity_threshold=thresh).run(limit=lim)
     except Exception as e:
         return {"ok": False, "error": str(e)}
 

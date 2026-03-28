@@ -1319,19 +1319,16 @@ class WorldModel:
         exp = self._parse_blob(experience)
         exp_text = self._textify(exp)
         title = (exp.get("title") or exp.get("task") or exp.get("label") or exp.get("summary") or "world_model_experience")[:180]
-        body = json.dumps(exp, ensure_ascii=False, sort_keys=True)[:4000]
-        kb_payload = {
-            "domain": f"world_model:{self.domain}",
-            "topic": title,
-            "body": body,
-            "tags": ["world_model", "experience", self.domain],
-            "source_type": "world_model_update",
-            "source": "world_model",
-            "source_ref": f"world_model:{datetime.utcnow().isoformat()}",
-            "confidence": exp.get("confidence") or "medium",
-            "active": True,
-        }
-        kb_result = sb_post("knowledge_base", kb_payload)
+        content = json.dumps(exp, ensure_ascii=False, sort_keys=True)[:4000]
+        kb_result = t_kb_update(
+            domain=f"world_model:{self.domain}",
+            topic=title,
+            instruction=exp_text[:1000],
+            content=content,
+            confidence=exp.get("confidence") or "medium",
+            source_type="world_model_update",
+            source_ref=f"world_model:{datetime.utcnow().isoformat()}",
+        )
         session_result = sb_post("sessions", {
             "summary": f"[world_model.update] {title}",
             "actions": [f"experience captured: {exp_text[:240]}"],
@@ -1869,6 +1866,18 @@ def t_consolidation_manager(limit: str = "25", similarity_threshold: str = "0.62
         lim = max(1, min(int(limit or 25), 50))
         thresh = max(0.1, min(float(similarity_threshold or 0.62), 0.95))
         return _ConsolidationManager(similarity_threshold=thresh).run(limit=lim)
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def t_active_learning_strategy(strategy_name: str = "novelty_priority", budget: str = "5", limit: str = "25", similarity_threshold: str = "0.62") -> dict:
+    """Select high-value tasks for active learning using a pluggable strategy."""
+    try:
+        from core_train import ActiveLearningStrategy as _ActiveLearningStrategy
+        bud = max(1, min(int(budget or 5), 25))
+        lim = max(1, min(int(limit or 25), 50))
+        thresh = max(0.1, min(float(similarity_threshold or 0.62), 0.95))
+        return _ActiveLearningStrategy(strategy_name=strategy_name, budget=bud, similarity_threshold=thresh).run(limit=lim)
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
@@ -6389,6 +6398,8 @@ TOOLS = {
                                "desc": "Assess how novel an experience is relative to recent memory/task representations and return a routing recommendation."},
     "consolidation_manager":  {"fn": t_consolidation_manager,  "perm": "READ",    "args": ["limit", "similarity_threshold"],
                                "desc": "Cluster similar queued tasks and return a compact consolidation summary for review."},
+    "active_learning_strategy": {"fn": t_active_learning_strategy, "perm": "READ", "args": ["strategy_name", "budget", "limit", "similarity_threshold"],
+                               "desc": "Select high-value tasks for active learning using a pluggable strategy interface."},
     "get_mistakes":           {"fn": t_get_mistakes,           "perm": "READ",    "args": ["domain", "limit"],
                                "desc": "Get recorded mistakes: what_failed, correct_approach, severity, root_cause. Call before any domain operation to avoid repeating known errors. IF EMPTY or fails: fallback to sb_query(table='mistakes', filters='id=gt.1', order='created_at.desc', limit='5', select='domain,what_failed,fix,created_at') — this ALWAYS works. EXAMPLE: get_mistakes(domain='core_agi', limit='5')"},
     "read_file":              {"fn": t_read_file,              "perm": "READ",    "args": ["path", "repo", "start_line", "end_line"],
