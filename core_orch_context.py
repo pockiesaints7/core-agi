@@ -421,6 +421,7 @@ def build_response_style_packet(
     ctx = msg.context if hasattr(msg, "context") else {}
     input_profile = ctx.get("input_profile", {}) or {}
     decision = ctx.get("decision_packet", {}) or {}
+    delivery_channel = getattr(msg, "source", "telegram") or "telegram"
     request_kind = request_kind or decision.get("request_kind") or input_profile.get("request_kind") or "question"
     primary_class = primary_class or input_profile.get("primary_class") or input_profile.get("top_level_class") or ""
     explicit_agentic = bool(agentic_hint or decision.get("agentic_hint", False))
@@ -433,9 +434,10 @@ def build_response_style_packet(
     verbosity = "medium"
     structure: list[str] = ["answer_first"]
     tone = "direct"
-    use_html = True
+    use_html = delivery_channel == "telegram"
     must_include: list[str] = []
     must_avoid: list[str] = ["guessing", "filler", "hedging"]
+    channel_notes: list[str] = []
 
     if request_kind in {"status", "self_assessment"}:
         mode = "capability"
@@ -492,6 +494,31 @@ def build_response_style_packet(
         structure = ["answer_first", "context", "follow_up"]
         must_include = ["direct answer", "minimal filler"]
 
+    if delivery_channel == "telegram":
+        channel_notes = [
+            "write for a human in chat",
+            "prefer short paragraphs and bullets when useful",
+            "keep it concise but complete",
+            "use HTML only when it materially improves readability",
+            "avoid raw JSON unless explicitly requested",
+        ]
+        if mode in {"review", "interrupt"}:
+            verbosity = "short"
+    elif delivery_channel == "mcp":
+        channel_notes = [
+            "write for a machine/desktop caller",
+            "prefer explicit structure over chatty prose",
+            "include sections and exact values when relevant",
+            "avoid Telegram-style phrasing and emojis",
+            "keep the same evidence, but phrase it more formally",
+        ]
+        use_html = False
+        if mode in {"conversation", "answer"}:
+            verbosity = "medium"
+            structure = ["direct_answer", "evidence", "next_step"]
+        if mode in {"review", "debug", "task", "capability"}:
+            structure = ["summary", "evidence", "action", "risk"] if mode != "interrupt" else structure
+
     if explicit_agentic:
         mode = "agentic" if mode in {"task", "conversation", "answer"} else mode
         structure = ["answer_first", "evidence", "steps"] if mode != "review" else structure
@@ -507,6 +534,8 @@ def build_response_style_packet(
         "use_html": use_html,
         "must_include": must_include,
         "must_avoid": must_avoid,
+        "channel_notes": channel_notes,
+        "delivery_channel": delivery_channel,
         "explicit_agentic": explicit_agentic,
         "input_class": primary_class,
         "request_kind": request_kind,

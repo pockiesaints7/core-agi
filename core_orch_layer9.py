@@ -60,6 +60,7 @@ _PERSONA_SYSTEM = (
 _PERSONA_TEMPLATE = """
 USER MESSAGE: {text}
 INTENT: {intent}
+DELIVERY_CHANNEL: {delivery_channel}
 RESPONSE_STYLE: {response_style_packet}
 TOOL RESULTS:
 {tool_summary}
@@ -95,6 +96,7 @@ USER: {text}
 INTENT: {intent}
 REQUEST_KIND: {request_kind}
 RESPONSE_MODE: {response_mode}
+DELIVERY_CHANNEL: {delivery_channel}
 RESPONSE_STYLE: {response_style_packet}
 
 SESSION STATE:
@@ -132,6 +134,7 @@ USER MESSAGE: {text}
 INTENT: {intent}
 REQUEST_KIND: {request_kind}
 RESPONSE_MODE: {response_mode}
+DELIVERY_CHANNEL: {delivery_channel}
 RESPONSE_STYLE: {response_style_packet}
 
 DECISION PACKET:
@@ -295,6 +298,7 @@ def _format_response_style_packet(response_style_packet: dict) -> str:
         "lead",
         "verbosity",
         "tone",
+        "delivery_channel",
         "use_html",
         "explicit_agentic",
         "request_kind",
@@ -311,6 +315,8 @@ def _format_response_style_packet(response_style_packet: dict) -> str:
         parts.append(" - must_include: " + ", ".join(str(x) for x in response_style_packet.get("must_include", [])[:6]))
     if response_style_packet.get("must_avoid"):
         parts.append(" - must_avoid: " + ", ".join(str(x) for x in response_style_packet.get("must_avoid", [])[:6]))
+    if response_style_packet.get("channel_notes"):
+        parts.append(" - channel_notes: " + " | ".join(str(x) for x in response_style_packet.get("channel_notes", [])[:6]))
     return "\n".join(parts) or _trim_json(response_style_packet, 1200)
 
 
@@ -488,6 +494,7 @@ async def layer_9_tone(msg: OrchestratorMessage):
         or (decision_packet.get("response_style_packet") if isinstance(decision_packet, dict) else {})
         or {}
     )
+    delivery_channel = msg.source or response_style_packet.get("delivery_channel") or "telegram"
     request_kind = msg.request_kind or decision_packet.get("request_kind") or "general"
     response_mode = msg.response_mode or decision_packet.get("response_mode") or "tool"
 
@@ -545,6 +552,7 @@ async def layer_9_tone(msg: OrchestratorMessage):
                 intent=msg.intent or "unknown",
                 request_kind=request_kind,
                 response_mode=response_mode,
+                delivery_channel=delivery_channel,
                 response_style_packet=_format_response_style_packet(response_style_packet),
                 decision_packet=_format_decision_packet(decision_packet),
                 evidence_gate=_format_evidence_gate(evidence_gate),
@@ -574,6 +582,7 @@ async def layer_9_tone(msg: OrchestratorMessage):
             prompt = _PERSONA_TEMPLATE.format(
                 text=msg.text[:400],
                 intent=msg.intent or "unknown",
+                delivery_channel=delivery_channel,
                 response_style_packet=_format_response_style_packet(response_style_packet),
                 tool_summary=tool_summary,
                 errors=errors_str,
@@ -610,6 +619,7 @@ async def layer_9_tone(msg: OrchestratorMessage):
                     intent=msg.intent or "conversation",
                     request_kind=request_kind,
                     response_mode=response_mode,
+                    delivery_channel=delivery_channel,
                     response_style_packet=_format_response_style_packet(response_style_packet),
                     session_state=session_state,
                     kb_snippets=kb_str,
