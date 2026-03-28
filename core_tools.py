@@ -1507,6 +1507,180 @@ def t_causal_graph_inference(query: str = "", domain: str = "general", tables: s
         return {"ok": False, "error": str(e)}
 
 
+class MetaContextualRouter:
+    """Route a current state toward a distribution over hierarchical world-model levels."""
+
+    def __init__(
+        self,
+        current_state,
+        goal,
+        hwm_levels,
+        domain: str = "general",
+        state_hint: str = "",
+        limit: int = 10,
+    ):
+        self.current_state = current_state
+        self.goal = goal
+        self.hwm_levels = hwm_levels
+        self.domain = (domain or "general").strip()
+        self.state_hint = (state_hint or "").strip()
+        self.limit = max(1, min(int(limit or 10), 25))
+
+    @staticmethod
+    def _normalize_levels(hwm_levels) -> list[str]:
+        if hwm_levels in (None, "", []):
+            return []
+        if isinstance(hwm_levels, str):
+            raw = hwm_levels.strip()
+            if not raw:
+                return []
+            if raw.startswith("["):
+                try:
+                    parsed = json.loads(raw)
+                    if isinstance(parsed, list):
+                        return [str(item).strip() for item in parsed if str(item).strip()]
+                except Exception:
+                    try:
+                        parsed = ast.literal_eval(raw)
+                        if isinstance(parsed, (list, tuple, set)):
+                            return [str(item).strip() for item in parsed if str(item).strip()]
+                    except Exception:
+                        pass
+            return [part.strip() for part in raw.replace("\n", ",").split(",") if part.strip()]
+        if isinstance(hwm_levels, dict):
+            hwm_levels = [hwm_levels]
+        if isinstance(hwm_levels, (list, tuple, set)):
+            items = []
+            for item in hwm_levels:
+                if isinstance(item, dict):
+                    for key in ("level", "name", "label", "title", "value", "text"):
+                        value = item.get(key)
+                        if value:
+                            items.append(str(value).strip())
+                            break
+                    else:
+                        items.append(json.dumps(item, ensure_ascii=False, sort_keys=True))
+                else:
+                    text = str(item).strip()
+                    if text:
+                        items.append(text)
+            return items
+        text = str(hwm_levels).strip()
+        return [text] if text else []
+
+    @staticmethod
+    def _level_text(level) -> str:
+        if isinstance(level, dict):
+            for key in ("level", "name", "label", "title", "value", "text"):
+                value = level.get(key)
+                if value:
+                    return str(value).strip()
+            return json.dumps(level, ensure_ascii=False, sort_keys=True)
+        return str(level).strip()
+
+    def route(self) -> dict:
+        levels = self._normalize_levels(self.hwm_levels)
+        if not levels:
+            return {"ok": False, "error": "hwm_levels required"}
+
+        current_text = WorldModel._textify(WorldModel._parse_blob(self.current_state)) if self.current_state else ""
+        goal_text = WorldModel._textify(WorldModel._parse_blob(self.goal)) if isinstance(self.goal, (dict, str)) else str(self.goal or "")
+        query = " | ".join(part for part in (current_text, goal_text) if part).strip() or goal_text or current_text
+        packet = t_reasoning_packet(query=query, domain=self.domain, limit=str(min(self.limit, len(levels) + 4)), tables="")
+        evaluation = StateEvaluator(query=query, domain=self.domain, state_hint=self.state_hint).evaluate()
+
+        packet_context = " ".join([
+            str(packet.get("focus") or ""),
+            str(packet.get("context") or ""),
+            str(packet.get("summary") or ""),
+        ]).lower()
+        goal_lower = goal_text.lower()
+        current_lower = current_text.lower()
+        readiness = float(evaluation.get("readiness_score") or 0.0)
+        coherence = float(evaluation.get("coherence_score") or 0.0)
+        risk = float(evaluation.get("risk_score") or 0.0)
+        level_scores = []
+        for idx, level in enumerate(levels):
+            label = self._level_text(level)
+            lower = label.lower()
+            lexical = 0.0
+            for source in (goal_lower, current_lower, packet_context):
+                if not source:
+                    continue
+                if lower in source:
+                    lexical += 0.45
+                else:
+                    tokens = set(part for part in _re.split(r"[^a-z0-9_]+", lower) if part)
+                    source_tokens = set(part for part in _re.split(r"[^a-z0-9_]+", source) if part)
+                    lexical += min(0.2, 0.05 * len(tokens & source_tokens))
+            if any(term in lower for term in ("low", "small", "narrow", "specific")):
+                lexical += 0.03
+            if any(term in lower for term in ("high", "broad", "global", "abstract")):
+                lexical += 0.02
+            if any(term in goal_lower for term in ("stabil", "safe", "risk", "review")) and any(term in lower for term in ("safe", "stable", "review", "control")):
+                lexical += 0.12
+            if any(term in goal_lower for term in ("explore", "discover", "learn", "search")) and any(term in lower for term in ("explore", "search", "discover", "learn")):
+                lexical += 0.12
+            structural = max(0.0, 1.0 - (idx / max(1, len(levels))))
+            score = (0.45 * lexical) + (0.2 * readiness) + (0.15 * coherence) + (0.1 * max(0.0, 1.0 - risk)) + (0.1 * structural)
+            score = max(0.0, min(1.0, score))
+            level_scores.append({
+                "index": idx,
+                "level": label,
+                "score": round(score, 3),
+                "lexical_support": round(lexical, 3),
+                "readiness": round(readiness, 3),
+                "coherence": round(coherence, 3),
+                "risk": round(risk, 3),
+            })
+
+        total = sum(max(item["score"], 0.001) for item in level_scores) or 1.0
+        for item in level_scores:
+            item["probability"] = round(max(item["score"], 0.001) / total, 4)
+        level_scores.sort(key=lambda item: (item["score"], item["probability"], item["level"]), reverse=True)
+        best = level_scores[0] if level_scores else {}
+        summary = " | ".join([
+            f"goal={goal_text[:120]}",
+            f"best={best.get('level','')}",
+            f"readiness={round(readiness, 3)}",
+            f"risk={round(risk, 3)}",
+        ]).strip(" |")
+        return {
+            "ok": True,
+            "current_state": current_text[:1000],
+            "goal": goal_text[:1000],
+            "domain": self.domain,
+            "state_hint": self.state_hint,
+            "hwm_levels": levels,
+            "level_distribution": level_scores,
+            "best_level": best.get("level"),
+            "summary": summary[:500],
+            "state_evaluation": evaluation,
+            "reasoning_packet": packet,
+        }
+
+
+def t_meta_contextual_router(current_state: str = "", goal: str = "", hwm_levels: str = "", domain: str = "general", state_hint: str = "", limit: str = "10") -> dict:
+    """Route a state toward a distribution over HWM levels."""
+    try:
+        if not current_state and not goal:
+            return {"ok": False, "error": "current_state or goal required"}
+        try:
+            lim = max(1, min(int(limit), 25))
+        except Exception:
+            lim = 10
+        return MetaContextualRouter(
+            current_state=current_state,
+            goal=goal,
+            hwm_levels=hwm_levels,
+            domain=domain,
+            state_hint=state_hint,
+            limit=lim,
+        ).route()
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
 class MonteCarloTreeSearch:
     """Flexible MCTS bridge over CORE reasoning packets.
 
@@ -2122,6 +2296,13 @@ def _world_model_predict_future_states(self, current_state, actions, horizon: in
     evaluator = StateEvaluator(query=current_text, domain=self.domain, state_hint=self.state_hint)
     base_card = evaluator.evaluate()
     graph = DynamicRelationalGraph(query=current_text, domain=self.domain, state_hint=self.state_hint).build()
+    meta_router = MetaContextualRouter(
+        current_state=current_text,
+        goal=base_card.get("recommendation") or base_card.get("summary") or "proceed",
+        hwm_levels=ranked_steps,
+        domain=self.domain,
+        state_hint=self.state_hint,
+    ).route()
     mcts = MonteCarloTreeSearch(
         query=current_text,
         domain=self.domain,
@@ -2129,7 +2310,7 @@ def _world_model_predict_future_states(self, current_state, actions, horizon: in
         candidate_actions=ranked_steps,
         rollouts=min(max(steps * len(ranked_steps), 4), 24),
     ).run()
-    best_action = (causal_inference.get("best_transition") or {}).get("action") or mcts.get("best_action") or ranked_steps[0]
+    best_action = meta_router.get("best_level") or (causal_inference.get("best_transition") or {}).get("action") or mcts.get("best_action") or ranked_steps[0]
     predicted_states = []
     rolling_state = dict(state)
     for idx in range(steps):
@@ -2159,6 +2340,7 @@ def _world_model_predict_future_states(self, current_state, actions, horizon: in
         "temporal_attention": attention,
         "causal_graph": causal,
         "causal_inference": causal_inference,
+        "meta_contextual_router": meta_router,
         "base_evaluation": base_card,
         "graph_density": graph.get("density"),
         "graph_dominant_table": graph.get("dominant_table"),
@@ -7166,6 +7348,8 @@ TOOLS = {
                                "desc": "Build a lightweight causal graph from unified memory context or a provided sequence. Returns causal order, paths, beliefs, and graph density."},
     "causal_graph_inference": {"fn": t_causal_graph_inference, "perm": "READ",    "args": ["query", "domain", "tables", "limit", "per_table", "state_hint", "sequence", "candidate_actions", "horizon"],
                                "desc": "Fuse causal graph, relational graph, and state evaluation into a transition model usable by world-model planning."},
+    "meta_contextual_router": {"fn": t_meta_contextual_router, "perm": "READ",    "args": ["current_state", "goal", "hwm_levels", "domain", "state_hint", "limit"],
+                               "desc": "Route a current state toward a probability distribution over hierarchical world-model levels."},
     "adaptive_temporal_filter": {"fn": t_adaptive_temporal_filter, "perm": "READ", "args": ["sequence", "domain", "state_hint", "window", "decay"],
                                "desc": "Rank and smooth temporal context with bounded decay and hint-aware weighting."},
     "temporal_attention": {"fn": t_temporal_attention, "perm": "READ", "args": ["sequence", "domain", "state_hint", "heads", "window"],
