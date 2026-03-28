@@ -60,6 +60,7 @@ _PERSONA_SYSTEM = (
 _PERSONA_TEMPLATE = """
 USER MESSAGE: {text}
 INTENT: {intent}
+RESPONSE_STYLE: {response_style_packet}
 TOOL RESULTS:
 {tool_summary}
 ERRORS:
@@ -94,6 +95,7 @@ USER: {text}
 INTENT: {intent}
 REQUEST_KIND: {request_kind}
 RESPONSE_MODE: {response_mode}
+RESPONSE_STYLE: {response_style_packet}
 
 SESSION STATE:
 {session_state}
@@ -130,6 +132,7 @@ USER MESSAGE: {text}
 INTENT: {intent}
 REQUEST_KIND: {request_kind}
 RESPONSE_MODE: {response_mode}
+RESPONSE_STYLE: {response_style_packet}
 
 DECISION PACKET:
 {decision_packet}
@@ -281,7 +284,34 @@ def _format_decision_packet(decision_packet: dict) -> str:
         f"- {k}: {decision_packet.get(k)}"
         for k in keys
         if decision_packet.get(k) not in (None, "", [])
-    ) or _trim_json(decision_packet, 1200)
+) or _trim_json(decision_packet, 1200)
+
+
+def _format_response_style_packet(response_style_packet: dict) -> str:
+    if not response_style_packet:
+        return "none"
+    keys = [
+        "mode",
+        "lead",
+        "verbosity",
+        "tone",
+        "use_html",
+        "explicit_agentic",
+        "request_kind",
+        "input_class",
+    ]
+    parts = []
+    for key in keys:
+        value = response_style_packet.get(key)
+        if value not in (None, "", [], {}):
+            parts.append(f"- {key}: {value}")
+    if response_style_packet.get("structure"):
+        parts.append(" - structure: " + ", ".join(str(x) for x in response_style_packet.get("structure", [])[:8]))
+    if response_style_packet.get("must_include"):
+        parts.append(" - must_include: " + ", ".join(str(x) for x in response_style_packet.get("must_include", [])[:6]))
+    if response_style_packet.get("must_avoid"):
+        parts.append(" - must_avoid: " + ", ".join(str(x) for x in response_style_packet.get("must_avoid", [])[:6]))
+    return "\n".join(parts) or _trim_json(response_style_packet, 1200)
 
 
 def _format_evidence_gate(evidence_gate: dict) -> str:
@@ -452,6 +482,12 @@ async def layer_9_tone(msg: OrchestratorMessage):
     evidence_packet = msg.evidence_packet or msg.context.get("evidence_packet", {})
     capability_packet = msg.capability_packet or msg.context.get("capability_packet", {})
     evidence_gate = msg.evidence_gate or msg.context.get("evidence_gate", {})
+    response_style_packet = (
+        msg.response_style_packet
+        or msg.context.get("response_style_packet", {})
+        or (decision_packet.get("response_style_packet") if isinstance(decision_packet, dict) else {})
+        or {}
+    )
     request_kind = msg.request_kind or decision_packet.get("request_kind") or "general"
     response_mode = msg.response_mode or decision_packet.get("response_mode") or "tool"
 
@@ -509,6 +545,7 @@ async def layer_9_tone(msg: OrchestratorMessage):
                 intent=msg.intent or "unknown",
                 request_kind=request_kind,
                 response_mode=response_mode,
+                response_style_packet=_format_response_style_packet(response_style_packet),
                 decision_packet=_format_decision_packet(decision_packet),
                 evidence_gate=_format_evidence_gate(evidence_gate),
                 evidence_packet=_format_evidence_packet(evidence_packet),
@@ -537,6 +574,7 @@ async def layer_9_tone(msg: OrchestratorMessage):
             prompt = _PERSONA_TEMPLATE.format(
                 text=msg.text[:400],
                 intent=msg.intent or "unknown",
+                response_style_packet=_format_response_style_packet(response_style_packet),
                 tool_summary=tool_summary,
                 errors=errors_str,
                 domain=msg.context.get("current_domain", "general"),
@@ -572,6 +610,7 @@ async def layer_9_tone(msg: OrchestratorMessage):
                     intent=msg.intent or "conversation",
                     request_kind=request_kind,
                     response_mode=response_mode,
+                    response_style_packet=_format_response_style_packet(response_style_packet),
                     session_state=session_state,
                     kb_snippets=kb_str,
                     behavioral_rules=rules_str,

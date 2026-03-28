@@ -402,6 +402,114 @@ def build_decision_packet(msg) -> Dict[str, Any]:
         "command": cmd,
         "input_profile": input_profile,
         "primary_class": primary_class,
+        "response_style_packet": build_response_style_packet(
+            msg,
+            request_kind=request_kind,
+            primary_class=primary_class,
+            agentic_hint=agentic_hint,
+        ),
+    }
+
+
+def build_response_style_packet(
+    msg,
+    request_kind: str = "",
+    primary_class: str = "",
+    agentic_hint: bool = False,
+) -> Dict[str, Any]:
+    """Turn structured human input into output-shaping instructions for L9/L10."""
+    ctx = msg.context if hasattr(msg, "context") else {}
+    input_profile = ctx.get("input_profile", {}) or {}
+    decision = ctx.get("decision_packet", {}) or {}
+    request_kind = request_kind or decision.get("request_kind") or input_profile.get("request_kind") or "question"
+    primary_class = primary_class or input_profile.get("primary_class") or input_profile.get("top_level_class") or ""
+    explicit_agentic = bool(agentic_hint or decision.get("agentic_hint", False))
+    if primary_class not in {"interrupt", "correct", "constrain", "inform"}:
+        if not explicit_agentic and request_kind in {"task", "owner_review", "command"}:
+            explicit_agentic = bool(input_profile.get("multi_label", False) and input_profile.get("actionability") == "actionable")
+
+    mode = "answer"
+    lead = "direct_answer"
+    verbosity = "medium"
+    structure: list[str] = ["answer_first"]
+    tone = "direct"
+    use_html = True
+    must_include: list[str] = []
+    must_avoid: list[str] = ["guessing", "filler", "hedging"]
+
+    if request_kind in {"status", "self_assessment"}:
+        mode = "capability"
+        lead = "capability_summary"
+        verbosity = "medium"
+        structure = ["direct_answer", "strengths", "gaps", "confidence"]
+        must_include = ["current capability", "strengths", "gaps", "what is safe to trust"]
+    elif request_kind in {"debug"} or primary_class == "correct":
+        mode = "debug"
+        lead = "root_cause"
+        verbosity = "medium"
+        structure = ["root_cause", "evidence", "fix_path"]
+        must_include = ["what failed", "why", "fix path", "evidence"]
+    elif request_kind in {"owner_review"} or primary_class == "evaluate":
+        mode = "review"
+        lead = "verdict"
+        verbosity = "short"
+        structure = ["verdict", "reason", "next_action"]
+        must_include = ["verdict first", "short reasons", "next step"]
+    elif request_kind in {"task"} or primary_class == "act":
+        mode = "task"
+        lead = "action_summary"
+        verbosity = "medium"
+        structure = ["what_was_done", "what_next", "blockers", "verification"]
+        must_include = ["what was done", "verification", "blockers"]
+    elif primary_class == "interrupt":
+        mode = "interrupt"
+        lead = "acknowledge_stop"
+        verbosity = "short"
+        structure = ["acknowledge", "stop_state", "next_step"]
+        must_include = ["acknowledge the stop", "state current status"]
+    elif primary_class == "approve":
+        mode = "approval"
+        lead = "acknowledge_approval"
+        verbosity = "short"
+        structure = ["acknowledge", "apply_next"]
+        must_include = ["acknowledge approval", "next step"]
+    elif primary_class == "constrain":
+        mode = "constraints"
+        lead = "constraints_summary"
+        verbosity = "short"
+        structure = ["constraints", "impact", "next_action"]
+        must_include = ["respect constraints", "restated constraints"]
+    elif primary_class == "inform":
+        mode = "inform"
+        lead = "store_and_ack"
+        verbosity = "short"
+        structure = ["acknowledge", "store", "impact"]
+        must_include = ["acknowledge", "what changes"]
+    elif request_kind in {"conversation"}:
+        mode = "conversation"
+        lead = "answer_first"
+        verbosity = "medium"
+        structure = ["answer_first", "context", "follow_up"]
+        must_include = ["direct answer", "minimal filler"]
+
+    if explicit_agentic:
+        mode = "agentic" if mode in {"task", "conversation", "answer"} else mode
+        structure = ["answer_first", "evidence", "steps"] if mode != "review" else structure
+        if verbosity == "short":
+            verbosity = "medium"
+
+    return {
+        "mode": mode,
+        "lead": lead,
+        "verbosity": verbosity,
+        "structure": structure,
+        "tone": tone,
+        "use_html": use_html,
+        "must_include": must_include,
+        "must_avoid": must_avoid,
+        "explicit_agentic": explicit_agentic,
+        "input_class": primary_class,
+        "request_kind": request_kind,
     }
 
 

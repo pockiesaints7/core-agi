@@ -565,10 +565,12 @@ async def layer_4_reason(msg: OrchestratorMessage):
             msg.response_mode = decision.get("response_mode", msg.response_mode)
             msg.route_reason = decision.get("route_reason", msg.route_reason)
             msg.clarification_needed = bool(decision.get("clarification_needed", False))
+            msg.response_style_packet = decision.get("response_style_packet", msg.response_style_packet)
             msg.context["request_kind"] = msg.request_kind
             msg.context["response_mode"] = msg.response_mode
             msg.context["route_reason"] = msg.route_reason
             msg.context["clarification_needed"] = msg.clarification_needed
+            msg.context["response_style_packet"] = msg.response_style_packet
             msg.context["decision_packet"] = decision
         except Exception as exc:
             print(f"[L4] decision_packet build failed (non-fatal): {exc}")
