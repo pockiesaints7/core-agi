@@ -739,6 +739,7 @@ def _deployment_manifest() -> dict:
         "core_orch_layer11.py",
         "core_meta_evaluator.py",
         "core_tools.py",
+        "core_tools_governance.py",
         "core_reasoning_packet.py",
         "core_work_taxonomy.py",
         "core_code_autonomy.py",

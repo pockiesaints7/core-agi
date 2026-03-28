@@ -691,6 +691,10 @@ from core_tools_world_model import (
     t_temporal_hierarchical_world_model,
     t_world_model,
 )
+from core_tools_governance import (
+    ToolRelianceAdvisor,
+    t_tool_reliance_assessor,
+)
 class MetaRepresentation:
     """Serializable meta representation for passing structured state between modules.
 
@@ -5566,6 +5570,8 @@ TOOLS = {
                                "desc": "Unified semantic memory search across knowledge_base plus the native semantic tables. Use this when CORE needs one reasoning context for planning, self-correction, ambiguity resolution, or decomposition."},
     "reasoning_packet":       {"fn": t_reasoning_packet,       "perm": "READ",    "args": ["query", "domain", "limit", "tables", "per_table"],
                                "desc": "Build the canonical reasoning packet (query+focus+context+top_hits) that agentic tools should consume. Deterministic, no writes."},
+    "tool_reliance_assessor": {"fn": t_tool_reliance_assessor, "perm": "READ",    "args": ["query", "domain", "tables", "limit", "per_table", "state_hint", "planned_action"],
+                               "desc": "Assess whether CORE should stay memory-first or use more tools. Returns strategy, tool_budget, and recommended tools."},
     "evaluate_state":         {"fn": t_evaluate_state,         "perm": "READ",    "args": ["query", "domain", "tables", "limit", "per_table", "state_hint"],
                                "desc": "Evaluate an environment or system state from unified memory context. Returns readiness, risk, coherence, evidence counts, and a proceed/defer recommendation."},
     "dynamic_relational_graph": {"fn": t_dynamic_relational_graph, "perm": "READ", "args": ["query", "domain", "limit", "tables", "per_table", "state_hint"],
@@ -7026,6 +7032,7 @@ def t_reason_chain(action: str = "", domain: str = "general"):
             grouped.setdefault(h.get("table") or "unknown", []).append(h)
         mistakes = grouped.get("mistakes") or []
         kb = grouped.get("knowledge_base") or []
+        tool_policy = ToolRelianceAdvisor.assess_packet(packet, planned_action=action, state_hint="")
         return {
             "ok": True,
             "action": action,
@@ -7035,6 +7042,9 @@ def t_reason_chain(action: str = "", domain: str = "general"):
             "recent_mistakes": [{"what_failed": m.get("title"), "details": m.get("body")} for m in mistakes[:5]],
             "relevant_kb": [{"topic": k.get("title"), "content": k.get("body")} for k in kb[:5]],
             "context": packet.get("context", ""),
+            "tool_strategy": tool_policy.get("tool_strategy", "tool_required"),
+            "tool_budget": tool_policy.get("tool_budget", 2),
+            "tool_reliance": tool_policy,
             "instruction": "Claude: using this context, generate the causal chain, failure_modes, confidence (0.0-1.0), and proceed_recommended for the planned action."
         }
     except Exception as e:
@@ -7045,7 +7055,7 @@ TOOLS["reason_chain"] = {"fn": t_reason_chain, "perm": "READ",
         {"name": "action", "type": "string", "description": "The planned action to reason about"},
         {"name": "domain", "type": "string", "description": "Domain context (e.g. deployment, supabase, code) default: general"}
     ],
-    "desc": "AGI-11: Causal reasoning chain before any non-trivial action. Returns chain, failure_modes, confidence, proceed_recommended. Call before every write/deploy/multi-step execution."}
+    "desc": "AGI-11: Causal reasoning chain before any non-trivial action. Returns chain, failure_modes, confidence, proceed_recommended, and tool_strategy. Call before every write/deploy/multi-step execution."}
 
 
 def t_action_gate(action: str = "", owner_token: str = ""):
@@ -7165,6 +7175,7 @@ def t_mid_task_correct(anomaly: str = "", last_action: str = "", last_result: st
         )
         packet = pkt.get("packet") or {}
         similar = [h for h in (packet.get("top_hits") or []) if (h.get("table") in ("mistakes", "hot_reflections", "output_reflections", "knowledge_base"))]
+        tool_policy = ToolRelianceAdvisor.assess_packet(packet, planned_action=anomaly, state_hint=task_state)
         return {
             "ok": True,
             "anomaly": anomaly,
@@ -7174,6 +7185,9 @@ def t_mid_task_correct(anomaly: str = "", last_action: str = "", last_result: st
             "packet_focus": packet.get("focus", ""),
             "memory_by_table": packet.get("memory_by_table", {}),
             "context": packet.get("context", ""),
+            "tool_strategy": tool_policy.get("tool_strategy", "tool_required"),
+            "tool_budget": tool_policy.get("tool_budget", 2),
+            "tool_reliance": tool_policy,
             "similar_past_mistakes": [{"semantic_table": m.get("table"), "title": m.get("title"), "details": m.get("body")} for m in similar],
             "instruction": "Claude: using this context, diagnose root_cause, what_went_wrong, plan_adjustment, corrected_next_step, and whether to abort."
         }
@@ -7213,6 +7227,7 @@ def t_decompose_task(goal: str = "", domain: str = "general"):
             grouped.setdefault(h.get("table") or "unknown", []).append(h)
         kb = grouped.get("knowledge_base") or []
         mistakes = grouped.get("mistakes") or []
+        tool_policy = ToolRelianceAdvisor.assess_packet(packet, planned_action=goal, state_hint="")
         return {
             "ok": True,
             "goal": goal,
@@ -7220,6 +7235,9 @@ def t_decompose_task(goal: str = "", domain: str = "general"):
             "packet_focus": packet.get("focus", ""),
             "memory_by_table": packet.get("memory_by_table", {}),
             "context": packet.get("context", ""),
+            "tool_strategy": tool_policy.get("tool_strategy", "tool_required"),
+            "tool_budget": tool_policy.get("tool_budget", 2),
+            "tool_reliance": tool_policy,
             "domain_kb": [{"topic": k.get("title"), "content": k.get("body")} for k in kb],
             "domain_mistakes": [{"what_failed": m.get("title"), "details": m.get("body")} for m in mistakes],
             "instruction": "Claude: using this context, decompose the goal into subtasks with id, title, description, depends_on, effort_estimate. Return execution_order, parallel_candidates, total_effort, critical_path."
@@ -7256,12 +7274,16 @@ def t_resolve_ambiguity(instruction: str = ""):
             grouped.setdefault(h.get("table") or "unknown", []).append(h)
         rules = grouped.get("behavioral_rules") or []
         kb = grouped.get("knowledge_base") or []
+        tool_policy = ToolRelianceAdvisor.assess_packet(packet, planned_action=instruction, state_hint="")
         return {
             "ok": True,
             "instruction": instruction,
             "packet_focus": packet.get("focus", ""),
             "memory_by_table": packet.get("memory_by_table", {}),
             "context": packet.get("context", ""),
+            "tool_strategy": tool_policy.get("tool_strategy", "tool_required"),
+            "tool_budget": tool_policy.get("tool_budget", 2),
+            "tool_reliance": tool_policy,
             "relevant_rules": [{"trigger": r.get("title"), "full_rule": r.get("body")} for r in rules],
             "relevant_kb": [{"topic": k.get("title"), "content": k.get("body")} for k in kb],
             "instruction_to_claude": "Claude: identify ambiguities in the instruction, list interpretations, pick lowest-risk one. Return ambiguities[], safe_to_proceed, interpretation_chosen, confidence, needs_owner_clarification, clarification_question."

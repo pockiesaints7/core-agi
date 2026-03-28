@@ -18,6 +18,7 @@ TOOL_FAMILY_MODULES = {
     "proposal_router": "core_proposal_router.py",
     "semantic_projection": "core_semantic_projection.py",
     "evolution_autonomy": "core_evolution_autonomy.py",
+    "governance": "core_tools_governance.py",
 }
 
 
