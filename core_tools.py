@@ -6512,12 +6512,23 @@ TOOLS["task_health"] = {"fn": t_task_health, "perm": "READ", "args": [],
 
 # -- TASK-6: Mandatory Verification Gate System --------------------------------
 
-def t_verify_before_deploy(operation: str = "", target_file: str = "", context: str = "") -> dict:
+def t_verify_before_deploy(
+    operation: str = "",
+    target_file: str = "",
+    context: str = "",
+    assumed_state: str = "",
+    sources: str = "supabase",
+    action_type: str = "deploy",
+    owner_token: str = "",
+) -> dict:
     """TASK-6.1: Pre-deploy verification enforcer.
-    Checks 3 gates before any deploy: (a) validate_syntax, (b) gh_read_lines called on target, (c) predict_failure.
-    operation: description of what is about to be deployed (e.g. 'patch t_session_end in core_tools.py').
-    target_file: the file being patched (e.g. 'core_tools.py').
-    context: optional extra context for predict_failure.
+    Checks multiple gates before any deploy/write:
+      (a) validate_syntax
+      (b) target file specified
+      (c) predict_failure
+      (d) trust calibration
+      (e) action reversibility gate
+      (f) optional external-state verification if assumed_state is provided
     Returns: verification_score 0.0-1.0, passed_gates list, failed_gates list, blocked (True if score < 0.8).
     HARD RULE: Never deploy without calling this first. Score < 0.8 = do not proceed."""
     try:
@@ -6559,6 +6570,41 @@ def t_verify_before_deploy(operation: str = "", target_file: str = "", context: 
             # predict_failure failure is non-blocking
             passed.append(f"predict_failure_unavailable({e})")
 
+        # Gate D: trust calibration
+        try:
+            trust = t_trust_map(action_type or "deploy")
+            if trust.get("ok") and trust.get("verification_required") is False:
+                passed.append(f"trust_map_{trust.get('action_type', action_type or 'deploy')}_low_risk")
+            elif trust.get("ok"):
+                passed.append(f"trust_map_{trust.get('action_type', action_type or 'deploy')}_{trust.get('risk_level', 'unknown')}")
+            else:
+                failed.append(f"trust_map: {trust.get('error', 'failed')}")
+        except Exception as e:
+            failed.append(f"trust_map: exception({e})")
+
+        # Gate E: action reversibility gate
+        try:
+            act = t_action_gate(action=operation or target_file or context or action_type, owner_token=owner_token)
+            if act.get("blocked"):
+                failed.append(f"action_gate: blocked({act.get('classification', 'unknown')})")
+            else:
+                passed.append(f"action_gate:{act.get('classification', 'unknown')}")
+        except Exception as e:
+            failed.append(f"action_gate: exception({e})")
+
+        # Gate F: optional live state verification
+        if assumed_state:
+            try:
+                ext = t_verify_external_state(assumed_state=assumed_state, sources=sources)
+                drifted = int(ext.get("drifted_count") or 0)
+                if drifted > 0:
+                    failed.append(f"verify_external_state: drifted({drifted})")
+                    warnings.append(f"external_state_drift({drifted})")
+                else:
+                    passed.append("verify_external_state_clean")
+            except Exception as e:
+                failed.append(f"verify_external_state: exception({e})")
+
         # Score: 1.0 per gate passed, 0.0 per gate failed. Normalize to 0.0-1.0.
         total_gates = len(passed) + len(failed)
         score = round(len(passed) / total_gates, 2) if total_gates > 0 else 0.0
@@ -6573,6 +6619,14 @@ def t_verify_before_deploy(operation: str = "", target_file: str = "", context: 
             "failed_gates": failed,
             "warnings": warnings,
             "blocked": blocked,
+            "verification_packet": {
+                "operation": operation,
+                "target_file": target_file,
+                "action_type": action_type,
+                "assumed_state_present": bool(assumed_state),
+                "sources": sources,
+                "owner_token_provided": bool(owner_token),
+            },
             "message": (
                 f"BLOCKED: verification_score={score} < 0.8. Fix failed gates before deploying."
                 if blocked else
@@ -6590,8 +6644,12 @@ TOOLS["verify_before_deploy"] = {
         {"name": "operation", "type": "string", "description": "What is being deployed"},
         {"name": "target_file", "type": "string", "description": "File being patched (e.g. core_tools.py)"},
         {"name": "context", "type": "string", "description": "Optional extra context for failure prediction"},
+        {"name": "assumed_state", "type": "string", "description": "Optional JSON string of assumed live state to verify before deploying"},
+        {"name": "sources", "type": "string", "description": "Comma-separated verification sources (supabase|github|railway)"},
+        {"name": "action_type", "type": "string", "description": "Verification trust type (default deploy)"},
+        {"name": "owner_token", "type": "string", "description": "Literal OWNER_CONFIRMED for irreversible actions"},
     ],
-    "desc": "TASK-6.1: Pre-deploy verification enforcer. Call BEFORE any patch_file or gh_search_replace. Checks: validate_syntax, target_file named, predict_failure. Returns verification_score 0.0-1.0. blocked=True if score < 0.8 -- do not deploy. HARD RULE: never deploy without calling this first.",
+    "desc": "TASK-6.1: Pre-deploy verification enforcer. Call BEFORE any patch_file or gh_search_replace. Checks: validate_syntax, target_file named, predict_failure, trust map, action gate, and optional live-state verification. Returns verification_score 0.0-1.0. blocked=True if score < 0.8 -- do not deploy. HARD RULE: never deploy without calling this first.",
 }
 
 
@@ -7835,6 +7893,104 @@ TOOLS["verify_external_state"] = {"fn": t_verify_external_state, "perm": "READ",
         {"name": "sources", "type": "string", "description": "Comma-separated sources to verify against: supabase|github|railway (default: supabase)"}
     ],
     "desc": "AGI-13: External state verification. Checks assumed state against live sources before committing actions that depend on it. Returns drifted keys. Call before actions depending on earlier state."}
+
+
+def t_verification_packet(
+    operation: str = "",
+    target_file: str = "",
+    context: str = "",
+    assumed_state: str = "",
+    sources: str = "supabase",
+    action_type: str = "deploy",
+    owner_token: str = "",
+) -> dict:
+    """Aggregate the existing verification surfaces into one canonical packet.
+
+    This is the higher-level verification mechanism for CORE actions that need
+    deploy safety, reversibility checks, and optional live-state validation.
+    """
+    try:
+        deploy_check = t_verify_before_deploy(
+            operation=operation,
+            target_file=target_file,
+            context=context,
+            assumed_state=assumed_state,
+            sources=sources,
+            action_type=action_type,
+            owner_token=owner_token,
+        )
+        trust_check = t_trust_map(action_type or "deploy")
+        action_check = t_action_gate(action=operation or target_file or context or action_type, owner_token=owner_token)
+        state_check = None
+        if assumed_state:
+            state_check = t_verify_external_state(assumed_state=assumed_state, sources=sources)
+
+        combined_checks = {
+            "deploy": deploy_check,
+            "trust": trust_check,
+            "action": action_check,
+        }
+        if state_check is not None:
+            combined_checks["state"] = state_check
+
+        failed = []
+        warnings = []
+        for name, check in combined_checks.items():
+            if not isinstance(check, dict):
+                continue
+            if check.get("blocked") is True:
+                failed.append(name)
+            if check.get("error"):
+                failed.append(name)
+            if name == "state" and int(check.get("drifted_count") or 0) > 0:
+                failed.append("state_drift")
+            for warn in check.get("warnings", []) or []:
+                warnings.append(f"{name}:{warn}")
+
+        score = float(deploy_check.get("verification_score") or 0.0)
+        if state_check is not None and int(state_check.get("drifted_count") or 0) > 0:
+            score = max(0.0, score - 0.15)
+        if action_check.get("blocked"):
+            score = max(0.0, score - 0.25)
+        if trust_check.get("verification_required"):
+            score = min(1.0, score + 0.05)
+        score = max(0.0, min(1.0, round(score, 2) - 0.03 * len(warnings)))
+        blocked = bool(failed) or score < 0.8
+
+        return {
+            "ok": True,
+            "verification_score": score,
+            "blocked": blocked,
+            "failed_checks": sorted(set(failed)),
+            "warnings": warnings,
+            "deploy_check": deploy_check,
+            "trust_check": trust_check,
+            "action_check": action_check,
+            "state_check": state_check,
+            "message": (
+                f"BLOCKED: verification_score={score} with failed_checks={sorted(set(failed))}"
+                if blocked else
+                f"CLEAR: verification_score={score}. Proceed with caution."
+            ),
+        }
+    except Exception as e:
+        return {"ok": False, "error": str(e), "blocked": True}
+
+
+TOOLS["verification_packet"] = {
+    "fn": t_verification_packet,
+    "perm": "READ",
+    "args": [
+        {"name": "operation", "type": "string", "description": "What is about to happen"},
+        {"name": "target_file", "type": "string", "description": "File being touched, if any"},
+        {"name": "context", "type": "string", "description": "Optional extra context"},
+        {"name": "assumed_state", "type": "string", "description": "Optional JSON string of assumed live state"},
+        {"name": "sources", "type": "string", "description": "Comma-separated verification sources"},
+        {"name": "action_type", "type": "string", "description": "Trust type: read|reversible_write|deploy|irreversible|schema_change|groq_call"},
+        {"name": "owner_token", "type": "string", "description": "Literal OWNER_CONFIRMED for irreversible actions"},
+    ],
+    "desc": "Canonical verification packet that combines deploy verification, trust calibration, reversibility gating, and optional live-state checks into one decision surface.",
+}
 
 
 # --- AGI-14: Safety & Resilience Layer ---------------------------------------
