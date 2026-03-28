@@ -4710,7 +4710,7 @@ def t_task_add(title: str = "", description: str = "", priority: str = "5",
         title_q = _urlquote(title.strip(), safe="")
         existing = sb_get(
             "task_queue",
-            f"select=id,status,task&status=in.(pending,in_progress)&task->>title=eq.{title_q}&limit=5",
+            f"select=id,status,task&status=in.(pending,in_progress)&task=ilike.*{title_q}*&limit=5",
             svc=True
         ) or []
         for row in existing:
