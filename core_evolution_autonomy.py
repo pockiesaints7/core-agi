@@ -374,7 +374,7 @@ def process_evolution_row(row: dict) -> dict:
 
     if _task_exists(evolution_id, title):
         sb_patch("evolution_queue", f"id=eq.{evolution_id}", {
-            "status": "synthesized",
+            "status": "duplicate",
             "updated_at": _utcnow(),
         })
         return {
@@ -493,6 +493,7 @@ def run_evolution_autonomy_cycle(max_evolutions: int = AUTONOMY_BATCH_LIMIT) -> 
                 failures += 1
                 skipped += 1
         pending_remaining = _count_rows("evolution_queue", "select=id&status=eq.pending")
+        duplicate_remaining = _count_rows("evolution_queue", "select=id&status=eq.duplicate")
         task_pending = _count_rows("task_queue", "select=id&status=eq.pending&source=eq.improvement")
         summary = {
             "started_at": started_at,
@@ -503,6 +504,7 @@ def run_evolution_autonomy_cycle(max_evolutions: int = AUTONOMY_BATCH_LIMIT) -> 
             "failures": failures,
             "skipped": skipped,
             "pending_remaining": pending_remaining,
+            "duplicate_remaining": duplicate_remaining,
             "pending_improvement_tasks": task_pending,
             "track_counts": track_counts,
             "details": details,
@@ -549,6 +551,7 @@ def evolution_autonomy_loop() -> None:
 def evolution_autonomy_status() -> dict:
     pending = _count_rows("evolution_queue", "select=id&status=eq.pending")
     synthesized = _count_rows("evolution_queue", "select=id&status=eq.synthesized")
+    duplicates = _count_rows("evolution_queue", "select=id&status=eq.duplicate")
     task_pending = _count_rows("task_queue", "select=id&status=eq.pending&source=eq.improvement")
     return {
         "ok": True,
@@ -562,6 +565,7 @@ def evolution_autonomy_status() -> dict:
         "last_error": _state["last_error"],
         "pending_evolutions": pending,
         "synthesized_evolutions": synthesized,
+        "duplicate_evolutions": duplicates,
         "pending_improvement_tasks": task_pending,
         "track_counts": _state["last_summary"].get("track_counts", {}),
         "last_summary": _state["last_summary"],

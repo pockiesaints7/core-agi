@@ -385,7 +385,7 @@ def _render_evolution_status_report(evo_auto: dict) -> str:
     monitor = evo_auto.get("backlog_monitor") or last.get("backlog_monitor") or {}
     lines = [
         f"Status: <b>{'enabled' if evo_auto.get('enabled') else 'disabled'}</b> | running={evo_auto.get('running')} | interval={evo_auto.get('interval_seconds')}s | batch={evo_auto.get('batch_limit')}",
-        f"Queue: pending {evo_auto.get('pending_evolutions', 0)} | synthesized {evo_auto.get('synthesized_evolutions', 0)} | follow-up tasks {evo_auto.get('pending_improvement_tasks', 0)}",
+        f"Queue: pending {evo_auto.get('pending_evolutions', 0)} | synthesized {evo_auto.get('synthesized_evolutions', 0)} | duplicates {evo_auto.get('duplicate_evolutions', 0)} | follow-up tasks {evo_auto.get('pending_improvement_tasks', 0)}",
     ]
     if evo_auto.get("track_counts"):
         lines.append("Tracks: " + ", ".join(f"{_tg_escape(k)}={v}" for k, v in sorted(evo_auto["track_counts"].items())))
@@ -484,7 +484,7 @@ def _render_autonomy_overview_report(counts: dict, task_auto: dict, evo_auto: di
         f"  Last run: {_tg_escape(integration_last.get('finished_at') or integration_auto.get('last_run_at') or 'n/a', 40)} | tracks: " + (
             ", ".join(f"{_tg_escape(k)}={v}" for k, v in sorted(integration_auto.get("track_counts", {}).items())) or "none"
         ),
-        f"Evolution autonomy: {'enabled' if evo_auto.get('enabled') else 'disabled'} | scope=improvement synthesis | pending {evo_auto.get('pending_evolutions', 0)} | follow-up tasks {evo_auto.get('pending_improvement_tasks', 0)}",
+        f"Evolution autonomy: {'enabled' if evo_auto.get('enabled') else 'disabled'} | scope=improvement synthesis | pending {evo_auto.get('pending_evolutions', 0)} | synthesized {evo_auto.get('synthesized_evolutions', 0)} | duplicates {evo_auto.get('duplicate_evolutions', 0)} | follow-up tasks {evo_auto.get('pending_improvement_tasks', 0)}",
         f"  Last run: {_tg_escape(evo_last.get('finished_at') or evo_auto.get('last_run_at') or 'n/a', 40)} | tracks: " + (
             ", ".join(f"{_tg_escape(k)}={v}" for k, v in sorted(evo_auto.get("track_counts", {}).items())) or "none"
         ),
@@ -565,6 +565,7 @@ def _build_startup_brief(resume: str, counts: dict, orch: dict, task_auto: dict 
     task_sources = ", ".join(task_auto.get("sources") or ["self_assigned", "improvement"])
     evo_pending_count = evo_auto.get("pending_evolutions", evo_pending)
     evo_synthesized = evo_auto.get("synthesized_evolutions", 0)
+    evo_duplicates = evo_auto.get("duplicate_evolutions", 0)
     evo_task_pending = evo_auto.get("pending_improvement_tasks", 0)
     code_auto = code_autonomy_status() if CODE_AUTONOMY_ENABLED else {}
     integration_auto = integration_autonomy_status() if INTEGRATION_AUTONOMY_ENABLED else {}
@@ -580,7 +581,7 @@ def _build_startup_brief(resume: str, counts: dict, orch: dict, task_auto: dict 
         f"Research autonomy: {'enabled' if RESEARCH_AUTONOMY_ENABLED else 'disabled'} | pending {research_autonomy_status().get('pending', 0) if RESEARCH_AUTONOMY_ENABLED else 0}\n"
         f"Code autonomy: {'enabled' if CODE_AUTONOMY_ENABLED else 'disabled'} | pending {code_auto.get('pending_code_tasks', 0)} | proposals {code_auto.get('pending_review_proposals', 0)}\n"
         f"Integration autonomy: {'enabled' if INTEGRATION_AUTONOMY_ENABLED else 'disabled'} | pending {integration_auto.get('pending_integration_tasks', 0)} | proposals {integration_auto.get('pending_review_proposals', 0)}\n"
-        f"Evolution autonomy: {'enabled' if EVOLUTION_AUTONOMY_ENABLED else 'disabled'} | pending {evo_pending_count} | synthesized {evo_synthesized} | follow-up tasks {evo_task_pending}\n"
+        f"Evolution autonomy: {'enabled' if EVOLUTION_AUTONOMY_ENABLED else 'disabled'} | pending {evo_pending_count} | synthesized {evo_synthesized} | duplicates {evo_duplicates} | follow-up tasks {evo_task_pending}\n"
         f"Proposal router: {'enabled' if proposal.get('enabled') else 'disabled'} | pending {proposal.get('pending', 0)} | routes {', '.join(f'{k}={v}' for k, v in sorted((proposal.get('route_counts') or {}).items())) or 'none'}\n"
         f"Semantic projection: {'enabled' if SEMANTIC_PROJECTION_ENABLED else 'disabled'} | last_run {sem_proj.get('last_run_at', 'n/a')}\n"
         f"MCP: {len(TOOLS)} tools | Webhook: set | Loops: queue, cold, research, synthesis, diagnosis, autonomy, code-autonomy, integration-autonomy, research-autonomy, evolution-autonomy, semantic-projection"
@@ -1770,7 +1771,7 @@ def handle_msg(msg):
                     f"Task autonomy: {'enabled' if task_auto.get('enabled') else 'disabled'} | pending {task_auto.get('pending', 0)}",
                     f"Code autonomy: {'enabled' if code_auto.get('enabled') else 'disabled'} | pending {code_auto.get('pending_code_tasks', 0)}",
                     f"Integration autonomy: {'enabled' if integration_auto.get('enabled') else 'disabled'} | pending {integration_auto.get('pending_integration_tasks', 0)}",
-                    f"Evolution autonomy: {'enabled' if evo_auto.get('enabled') else 'disabled'} | pending {evo_auto.get('pending_evolutions', 0)}",
+                    f"Evolution autonomy: {'enabled' if evo_auto.get('enabled') else 'disabled'} | pending {evo_auto.get('pending_evolutions', 0)} | duplicates {evo_auto.get('duplicate_evolutions', 0)}",
                     "",
                     "<b>Quick actions</b>",
                     "/status, /queues, /tasks, /code, /integration, /evolutions, /review",
