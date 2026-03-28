@@ -16,6 +16,7 @@ import re as _re
 import subprocess
 import time
 from collections import Counter
+from dataclasses import dataclass, asdict
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -4286,6 +4287,139 @@ def t_changelog_source_packet(limit: int = 5) -> dict:
     return _changelog_source_packet(limit=limit)
 
 
+@dataclass
+class ChangelogPacket:
+    latest_version: str = ""
+    latest_component: str = ""
+    latest_change_type: str = ""
+    latest_title: str = ""
+    latest_created_at: str = ""
+    total_rows: int = 0
+    today_rows: int = 0
+    verified_rows: int = 0
+    missing_triggered_by_rows: int = 0
+    tracking_state: str = "unknown"
+    stalled: bool = False
+    tracking_score: float = 0.0
+    passed_checks: list[str] | None = None
+    failed_checks: list[str] | None = None
+    warnings: list[str] | None = None
+    summary: str = ""
+    rows: list[dict] | None = None
+    source_packet: dict | None = None
+
+    def to_dict(self) -> dict:
+        data = asdict(self)
+        data["passed_checks"] = list(self.passed_checks or [])
+        data["failed_checks"] = list(self.failed_checks or [])
+        data["warnings"] = list(self.warnings or [])
+        data["rows"] = list(self.rows or [])
+        return data
+
+
+def build_changelog_packet(limit: int = 10) -> dict:
+    try:
+        lim = max(1, min(int(limit or 10), 25))
+    except Exception:
+        lim = 10
+
+    try:
+        rows = sb_get(
+            "changelog",
+            f"select=id,version,change_type,component,title,description,before_state,after_state,triggered_by,created_at&order=created_at.desc&limit={lim}",
+            svc=True,
+        ) or []
+        today = datetime.utcnow().date().isoformat()
+        today_rows = [r for r in rows if str(r.get("created_at") or "").startswith(today)]
+        verified_rows = 0
+        missing_triggered_by_rows = 0
+        latest = rows[0] if rows else {}
+        passed = ["changelog_rows_loaded"]
+        failed = []
+        warnings = []
+        for row in rows:
+            if row.get("triggered_by"):
+                verified_rows += 1
+            else:
+                missing_triggered_by_rows += 1
+                warnings.append(f"missing_triggered_by:{row.get('id')}")
+        if rows:
+            passed.append("latest_row_present")
+            if latest.get("triggered_by"):
+                passed.append("latest_triggered_by_present")
+            else:
+                warnings.append("latest_missing_triggered_by")
+        else:
+            failed.append("changelog_rows_missing")
+
+        if len(rows) < 2:
+            warnings.append("sample_low")
+
+        tracking_state = "healthy" if rows and missing_triggered_by_rows == 0 else ("degraded" if rows else "empty")
+        stalled = not rows
+        score = 0.0
+        if rows:
+            score += 0.6
+        if missing_triggered_by_rows == 0:
+            score += 0.2
+        if today_rows:
+            score += 0.1
+        if len(rows) >= 2:
+            score += 0.1
+        score = max(0.0, min(1.0, round(score, 2)))
+
+        packet = ChangelogPacket(
+            latest_version=str(latest.get("version") or ""),
+            latest_component=str(latest.get("component") or ""),
+            latest_change_type=str(latest.get("change_type") or ""),
+            latest_title=str(latest.get("title") or ""),
+            latest_created_at=str(latest.get("created_at") or ""),
+            total_rows=len(rows),
+            today_rows=len(today_rows),
+            verified_rows=verified_rows,
+            missing_triggered_by_rows=missing_triggered_by_rows,
+            tracking_state=tracking_state,
+            stalled=stalled,
+            tracking_score=score,
+            passed_checks=passed,
+            failed_checks=failed,
+            warnings=warnings,
+            summary=(
+                f"CHANGELOG: {tracking_state}"
+                f" | rows {len(rows)}"
+                f" | today {len(today_rows)}"
+                f" | missing_triggered_by {missing_triggered_by_rows}"
+            ),
+            rows=rows,
+            source_packet=_changelog_source_packet(limit=lim),
+        )
+        return {
+            "ok": True,
+            "tracking_state": tracking_state,
+            "stalled": stalled,
+            "tracking_score": score,
+            "packet": packet.to_dict(),
+            "rows": rows,
+            "source_packet": packet.source_packet,
+            "message": packet.summary,
+        }
+    except Exception as exc:
+        return {
+            "ok": False,
+            "tracking_state": "error",
+            "stalled": True,
+            "tracking_score": 0.0,
+            "error": str(exc),
+            "failed_checks": ["changelog_packet_error"],
+            "warnings": [str(exc)],
+            "message": f"changelog packet error: {exc}",
+        }
+
+
+def t_changelog_tracking_packet(limit: int = 10) -> dict:
+    return build_changelog_packet(limit=limit)
+
+
 def t_bulk_apply(executor_override: str = "claude_desktop", dry_run: bool = False):
     """Apply all pending evolution_queue items."""
     if isinstance(dry_run, str):
@@ -6532,6 +6666,8 @@ TOOLS = {
                                "desc": "Log a completed change to the changelog table + Telegram notify. Call after every deploy. before/after describe what changed. change_type=bugfix|feature|config|refactor. Returns a verification packet."},
     "changelog_verification_packet": {"fn": t_changelog_verification_packet, "perm": "READ", "args": ["version", "component", "summary", "before", "after", "change_type"],
                                "desc": "Verify a changelog row exists and matches the canonical write contract."},
+    "changelog_tracking_packet": {"fn": t_changelog_tracking_packet, "perm": "READ", "args": ["limit"],
+                               "desc": "Canonical changelog tracking packet. Summarizes latest changelog rows, today rows, missing triggered_by fields, and source evidence."},
     "changelog_source_packet": {"fn": t_changelog_source_packet, "perm": "READ", "args": ["limit"],
                                "desc": "Return supporting source evidence for changelog context from sessions, hot_reflections, mistakes, and knowledge_base."},
     "bulk_apply":             {"fn": t_bulk_apply,             "perm": "WRITE",   "args": ["executor_override", "dry_run"],
