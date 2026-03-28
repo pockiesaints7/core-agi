@@ -324,7 +324,7 @@ def _get_tools_summary() -> str:
             "TIME/STATE":   ["get_time", "datetime_now", "get_state", "get_system_health", "get_state_key", "session_snapshot", "state_packet", "state_consistency_check"],
             "KNOWLEDGE":    ["search_kb", "add_knowledge", "kb_update", "get_mistakes", "log_mistake", "get_behavioral_rules"],
             "WEB":          ["web_search", "web_fetch", "summarize_url"],
-            "CODE/VM":      ["run_python", "shell", "file_list", "file_read", "file_write", "run_script", "install_package"],
+            "CODE/VM":      ["run_python", "shell", "file_list", "file_read", "file_write", "run_script", "install_package", "code_read_packet"],
             "GITHUB":       ["read_file", "write_file", "gh_read_lines", "gh_search_replace", "multi_patch", "smart_patch"],
             "DATABASE":     ["sb_query", "sb_insert", "sb_patch", "sb_upsert", "sb_delete", "get_table_schema"],
             "TASKS/GOALS":  ["task_add", "task_update", "checkpoint", "get_active_goals", "set_goal", "update_goal_progress"],

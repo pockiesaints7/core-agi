@@ -698,6 +698,10 @@ from core_tools_governance import (
     ToolRelianceAdvisor,
     t_tool_reliance_assessor,
 )
+from core_tools_code_reader import (
+    build_code_reading_packet,
+    t_code_read_packet,
+)
 class MetaRepresentation:
     """Serializable meta representation for passing structured state between modules.
 
@@ -6552,6 +6556,8 @@ TOOLS = {
                                "desc": "Canonical state continuity packet. Consolidates latest sessions row, agentic session scratchpad, checkpoint, session snapshot, and state_update history with verification metadata."},
     "state_consistency_check": {"fn": t_state_consistency_check, "perm": "READ",  "args": ["session_id", "strict"],
                                "desc": "Verify continuity across sessions, agentic_sessions, checkpoint, and state updates. Use when diagnosing drift or session collapse."},
+    "code_read_packet":       {"fn": t_code_read_packet,       "perm": "READ",    "args": ["query", "files", "functions", "search_terms"],
+                               "desc": "Canonical code-reading packet. Reads files, function bodies, and search hits into one structured packet for code_autonomy and owner review."},
     "tool_stats":             {"fn": t_tool_stats,             "perm": "READ",    "args": ["days"],
                                "desc": "TASK-26: Per-tool success/fail rate for last N days (default 7). Returns tools sorted by fail_rate desc. fail_rate>0.2 = flagged. Use to identify flaky tools."},
     "checkpoint":             {"fn": t_checkpoint,             "perm": "WRITE",   "args": ["active_task_id", "last_action", "last_result"],
