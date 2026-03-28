@@ -493,10 +493,12 @@ def _synthesize_code_packet(task: dict, strategy: dict, memory_packet: dict, fil
     title = _safe_text(task.get("title") or "", 200)
     description = _safe_text(task.get("description") or "", 1200)
     work_track = _safe_text(strategy.get("work_track") or "code_patch", 40)
+    needs_clarification = _needs_clarification(task)
     prompt = {
         "task_title": title,
         "task_description": description,
         "work_track": work_track,
+        "needs_clarification": needs_clarification,
         "task_group": _safe_text(strategy.get("task_group") or "code", 40),
         "domain": _safe_text(strategy.get("domain") or strategy.get("artifact_domain") or "code", 80),
         "expected_artifact": _safe_text(strategy.get("expected_artifact") or "evolution_queue", 80),
@@ -527,6 +529,17 @@ def _synthesize_code_packet(task: dict, strategy: dict, memory_packet: dict, fil
         result.setdefault("verification", ["proposal exists in evolution_queue"])
         result.setdefault("rollback", ["Reject the proposal row and restore prior state."])
         result.setdefault("files", [])
+        if needs_clarification:
+            result["decision"] = "request clarification"
+            result["owner_review"] = "Required before implementation."
+            result.setdefault("change_type", "proposal_only")
+            result.setdefault("work_track", "proposal_only")
+            result.setdefault("clarifying_questions", [
+                "Which file or module should be changed?",
+                "What exact behavior should change after the patch?",
+                "What tests or acceptance criteria should pass?",
+            ])
+            result.setdefault("verification", ["owner confirms implementation scope and acceptance criteria"])
         return _merge_file_contexts(result, file_contexts, work_track)
     except Exception:
         return _merge_file_contexts(_fallback_code_packet(task, strategy, memory_packet, file_contexts), file_contexts, work_track)
@@ -539,6 +552,28 @@ def _proposal_exists(task_id: str) -> dict:
         svc=True,
     ) or []
     return rows[0] if rows else {}
+
+
+def _needs_clarification(task: dict) -> bool:
+    title = _safe_text(task.get("title") or "", 220).lower()
+    description = _safe_text(task.get("description") or "", 1200).lower()
+    combined = f"{title} {description}"
+    vague_markers = [
+        "too vague",
+        "need more information",
+        "request further information",
+        "unclear",
+        "not enough context",
+        "clarify",
+        "owner review",
+    ]
+    if any(marker in combined for marker in vague_markers):
+        return True
+    has_anchor = any(token in combined for token in [
+        "core_tools.py", "core_train.py", "core_main.py", "core_",
+        ".py", "line", "anchor", "file", "module", "function",
+    ])
+    return not has_anchor or len(combined.strip()) < 80
 
 
 def _init_agentic_session(task_id: str, claim_id: str, title: str, strategy: dict) -> None:
