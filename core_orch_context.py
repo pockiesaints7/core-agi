@@ -449,7 +449,7 @@ def build_decision_packet(msg) -> Dict[str, Any]:
 
     if explicit_agentic and request_kind in {"question", "conversation", "general_query", "command"} and primary_class in {"act", "ask", "evaluate", "meta"}:
         request_kind = "task"
-        response_mode = "task"
+        response_mode = "agentic"
         clarification_needed = False
         clarification_prompt = ""
 
