@@ -37,6 +37,7 @@ from core_tools import (
     t_agent_state_set,
     t_agent_step_done,
     t_add_behavioral_rule,
+    t_task_error_packet,
 )
 
 AUTONOMY_ENABLED = os.getenv("CORE_AUTONOMY_ENABLED", "true").strip().lower() not in {
@@ -573,12 +574,21 @@ def process_task_row(task_row: dict) -> dict:
         "updated_at": _utcnow(),
     }
     if not _patch_task(task_id, claim_patch):
-        _notify_task_event("failed", task_id, title, claim_id, strategy, detail="failed_to_claim")
+        failure = t_task_error_packet(
+            task_id=task_id,
+            error="failed_to_claim",
+            phase="claim",
+            summary="Failed to claim task row",
+            retryable="true",
+            next_step="owner_review",
+        )
+        _notify_task_event("failed", task_id, title, claim_id, strategy, detail=json.dumps(failure, default=str))
         return {
             "ok": False,
             "task_id": task_id,
             "title": title,
             "error": "failed_to_claim",
+            "error_packet": failure,
         }
 
     _state["last_claimed_task_id"] = task_id
@@ -628,14 +638,17 @@ def process_task_row(task_row: dict) -> dict:
             "summary": "Failed to persist canonical reflection event",
         }
         _task_checkpoint(task_id, claim_id, "claimed", title, strategy, fail, "owner_review", fail["summary"])
-        _notify_task_event("failed", task_id, title, claim_id, strategy, detail=json.dumps(fail, default=str))
-        _patch_task(task_id, {
-            "status": "failed",
-            "error": fail["summary"],
-            "result": json.dumps(fail, default=str)[:4000],
-            "updated_at": _utcnow(),
-        })
-        return fail
+        failure = t_task_error_packet(
+            task_id=task_id,
+            error=fail["summary"],
+            phase="reflection_ingress",
+            summary=fail["summary"],
+            retryable="false",
+            next_step="owner_review",
+            checkpoint=fail,
+        )
+        _notify_task_event("failed", task_id, title, claim_id, strategy, detail=json.dumps(failure, default=str))
+        return {**fail, "error_packet": failure}
 
     event_id = ingress["event_id"]
     note_reflection_stage(event_id, "critic", source="core_autonomy", status="done", payload={
@@ -763,12 +776,14 @@ def run_autonomy_cycle(max_tasks: int = AUTONOMY_BATCH_LIMIT, source: str = AUTO
                 errors.append({"task_id": row.get("id"), "error": str(e)})
                 try:
                     task_id = str(row.get("id") or "")
-                    _patch_task(task_id, {
-                        "status": "failed",
-                        "error": _safe_text(str(e), 500),
-                        "result": json.dumps({"error": str(e)}, default=str),
-                        "updated_at": _utcnow(),
-                    })
+                    t_task_error_packet(
+                        task_id=task_id,
+                        error=str(e),
+                        phase="cycle",
+                        summary="Unhandled task autonomy exception",
+                        retryable="false",
+                        next_step="owner_review",
+                    )
                 except Exception:
                     pass
         summary = {

@@ -746,6 +746,7 @@ def _deployment_manifest() -> dict:
         "core_tools_code_reader.py",
         "core_tools_memory.py",
         "core_tools_governance.py",
+        "core_tools_task.py",
         "core_reasoning_packet.py",
         "core_work_taxonomy.py",
         "core_code_autonomy.py",
