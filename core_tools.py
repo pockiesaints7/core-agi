@@ -786,6 +786,35 @@ from core_repo_map import (
     t_repo_map_sync,
 )
 from core_public_evidence import t_public_evidence_packet
+def t_owner_review_cluster_packet(limit: int = 5, persist: str = "true") -> dict:
+    """Canonical owner-review cluster packet, exposed through core_tools for agentic routing."""
+    from core_proposal_router import owner_review_cluster_packet as _owner_review_cluster_packet
+
+    persist_bool = str(persist).strip().lower() not in {"0", "false", "no", "off", ""}
+    return _owner_review_cluster_packet(limit=int(limit or 5), persist=persist_bool)
+
+
+def t_owner_review_cluster_close(
+    cluster_id: str = "",
+    cluster_key: str = "",
+    outcome: str = "applied",
+    reason: str = "",
+    reviewed_by: str = "owner",
+    dry_run: str = "false",
+) -> dict:
+    """Batch-close an owner-review cluster through the router, exposed via the core tool registry."""
+    from core_proposal_router import owner_review_cluster_close as _owner_review_cluster_close
+
+    dry_run_bool = str(dry_run).strip().lower() in {"1", "true", "yes", "on"}
+    return _owner_review_cluster_close(
+        cluster_id=cluster_id,
+        cluster_key=cluster_key,
+        outcome=outcome,
+        reason=reason,
+        reviewed_by=reviewed_by,
+        dry_run=dry_run_bool,
+    )
+
 from core_tools_task import (
     TaskPacket,
     build_task_error_packet,
@@ -7010,6 +7039,10 @@ TOOLS = {
                                "desc": "Build a dependency graph packet from the CORE repository map."},
     "public_evidence_packet": {"fn": t_public_evidence_packet, "perm": "READ",    "args": ["query", "domain", "request_kind", "code_targets"],
                                "desc": "Classify the public evidence family for a query. Returns family, sources, and retrieval hints."},
+    "owner_review_cluster_packet": {"fn": t_owner_review_cluster_packet, "perm": "READ", "args": ["limit", "persist"],
+                               "desc": "Canonical owner-review cluster packet. Use this to inspect one batchable owner-only cluster before deciding whether to apply or reject it."},
+    "owner_review_cluster_close": {"fn": t_owner_review_cluster_close, "perm": "WRITE", "args": ["cluster_id", "cluster_key", "outcome", "reason", "reviewed_by", "dry_run"],
+                               "desc": "Batch-close one owner-review cluster by cluster_id or cluster_key after verification. outcome=applied|rejected. Do not guess cluster membership; inspect the cluster packet first."},
     "tool_stats":             {"fn": t_tool_stats,             "perm": "READ",    "args": ["days"],
                                "desc": "TASK-26: Per-tool success/fail rate for last N days (default 7). Returns tools sorted by fail_rate desc. fail_rate>0.2 = flagged. Use to identify flaky tools."},
     "checkpoint":             {"fn": t_checkpoint,             "perm": "WRITE",   "args": ["active_task_id", "last_action", "last_result"],

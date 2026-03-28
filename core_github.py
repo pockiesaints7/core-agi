@@ -9,6 +9,7 @@ import base64
 import json
 
 import httpx
+import html
 
 from dotenv import load_dotenv
 load_dotenv()  # loads ~/core-agi/.env automatically
@@ -20,15 +21,36 @@ from core_config import (
 )
 
 # -- Telegram ------------------------------------------------------------------
+def _telegram_send(msg: str, cid=None, parse_mode: str | None = "HTML"):
+    payload = {
+        "chat_id": cid or TELEGRAM_CHAT,
+        "text": msg[:4000],
+    }
+    if parse_mode:
+        payload["parse_mode"] = parse_mode
+    return httpx.post(
+        f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
+        data=payload,
+        timeout=10,
+    )
+
+
 def notify(msg, cid=None):
     if not L.tg(): return False
     try:
-        r = httpx.post(
-            f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
-            data={"chat_id": cid or TELEGRAM_CHAT, "text": msg[:4000], "parse_mode": "HTML"},
-            timeout=10,
-        )
+        text = str(msg)
+        r = _telegram_send(text, cid=cid, parse_mode="HTML")
         if not r.is_success:
+            # Retry without parse_mode so malformed HTML or raw angle brackets
+            # do not fail delivery for an otherwise valid message.
+            if r.status_code == 400 and "parse entities" in r.text.lower():
+                print(f"[TG] HTML parse failed; retrying plain text: {r.text[:100]}")
+                r2 = _telegram_send(text, cid=cid, parse_mode=None)
+                if r2.is_success:
+                    print("[TG] plain-text fallback succeeded")
+                    return True
+                print(f"[TG] fallback failed: {r2.status_code} {r2.text[:100]}")
+                return False
             print(f"[TG] failed: {r.status_code} {r.text[:100]}")
             return False
         return True

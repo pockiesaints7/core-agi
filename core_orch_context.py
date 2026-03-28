@@ -316,12 +316,24 @@ def classify_request_kind(
 
     if cmd in {"/health", "/status", "/state"} or any(k in t for k in ("health", "status", "system state", "system health")):
         return "status"
+    if any(k in t for k in (
+        "verify the current git commit",
+        "verify git commit",
+        "git status",
+        "cleanliness of",
+        "synced with github",
+        "synced with git",
+        "current git commit",
+        "current commit",
+    )):
+        return "status"
     if any(k in t for k in ("how advanced", "capability", "capabilities", "what can you do", "strengths", "weaknesses", "limitations")):
         return "self_assessment"
     if cmd in {"/review"} or any(k in t for k in (
         "review queue", "owner review", "proposal queue", "owner only",
         "owner queue", "batch close", "cluster close", "close cluster",
-        "review cluster", "manual queue", "proposal review",
+        "review cluster", "cluster packet", "owner-review cluster",
+        "manual queue", "proposal review",
     )):
         return "owner_review"
     if any(k in t for k in ("debug", "bug", "error", "broken", "crash", "stack trace")):
@@ -837,6 +849,17 @@ def build_evidence_gate(msg) -> Dict[str, Any]:
         "api", "current", "latest", "news", "public", "internet", "web", "blog", "tutorial",
         "guide", "community", "forum", "reddit", "hackernews", "stackoverflow"
     )
+    cluster_markers = (
+        "owner-review cluster",
+        "owner review cluster",
+        "cluster packet",
+        "batch-close cluster",
+        "batch close cluster",
+        "cluster close",
+        "cluster_id",
+        "cluster_key",
+        "cluster member",
+    )
 
     lower_text = (text or "").lower()
     code_hits = _keyword_hits(text, tuple(kw for kw in code_markers if kw != "code"))
@@ -856,6 +879,9 @@ def build_evidence_gate(msg) -> Dict[str, Any]:
     public_sources = list(public_plan.get("public_sources") or _pick_public_sources(text))
     public_family = public_plan.get("public_family") or "public_general"
     repo_map_needed = bool(code_hits or code_targets or request_kind in {"debug", "owner_review"})
+    cluster_query = any(marker in lower_text for marker in cluster_markers) or (
+        "cluster" in lower_text and ("owner" in lower_text or "review" in lower_text)
+    )
 
     if request_kind in {"status", "self_assessment"}:
         if code_hits >= 1 or code_targets or web_hits >= 1:
@@ -874,12 +900,17 @@ def build_evidence_gate(msg) -> Dict[str, Any]:
     elif request_kind in {"owner_review", "debug"}:
         retrieval_mode = "supabase_then_web"
         preferred_tools = ["repo_map_status", "repo_component_packet", "search_kb", "web_search"]
+        if cluster_query:
+            preferred_tools = ["owner_review_cluster_packet", "owner_review_cluster_close"] + preferred_tools
     elif public_hits >= 1 or web_hits >= 1:
         retrieval_mode = "public_research_then_web" if web_hits else "public_research"
         preferred_tools = ["search_kb", "ingest_knowledge", "web_search"]
     else:
         retrieval_mode = "supabase_then_web"
         preferred_tools = ["search_kb", "web_search"]
+
+    if cluster_query and "owner_review_cluster_packet" not in preferred_tools:
+        preferred_tools = ["owner_review_cluster_packet", "owner_review_cluster_close"] + preferred_tools
 
     needs_retrieval = retrieval_mode != "state_only" and (evidence_score < 0.45 or retrieval_mode in {"code", "code_then_web", "public_research", "public_research_then_web"})
 

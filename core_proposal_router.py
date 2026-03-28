@@ -956,6 +956,7 @@ def owner_review_cluster_packet(limit: int = 5, persist: str = "true") -> dict:
             owner_rows.append(row)
     cluster_packet = _owner_review_cluster_packet(owner_rows, persist=persist_bool)
     clusters = cluster_packet.get("clusters") or []
+    recommended_cluster = next((c for c in clusters if bool(c.get("close_ready"))), clusters[0] if clusters else {})
     theme_counts = Counter(pkt["theme"] for pkt in clusters)
     target_counts = Counter(pkt["target_module"] for pkt in clusters)
     return {
@@ -966,6 +967,22 @@ def owner_review_cluster_packet(limit: int = 5, persist: str = "true") -> dict:
         "cluster_member_count": cluster_packet.get("member_count", 0),
         "cluster_close_ready_count": sum(1 for c in clusters if bool(c.get("close_ready"))),
         "cluster_close_ready_rows": sum(int(c.get("close_eligible_members") or 0) for c in clusters),
+        "recommended_cluster_id": recommended_cluster.get("cluster_id"),
+        "recommended_cluster_key": recommended_cluster.get("cluster_key"),
+        "recommended_cluster_count": recommended_cluster.get("count"),
+        "recommended_cluster_close_ready": bool(recommended_cluster.get("close_ready")),
+        "recommended_action": (
+            f"batch_close cluster_id={recommended_cluster.get('cluster_id')} "
+            f"cluster_key={recommended_cluster.get('cluster_key')}"
+            if recommended_cluster.get("cluster_id") and recommended_cluster.get("close_ready")
+            else "inspect_only"
+        ),
+        "close_instruction": (
+            f"Use owner_review_cluster_close(cluster_id='{recommended_cluster.get('cluster_id')}', outcome='applied') "
+            f"after verification"
+            if recommended_cluster.get("cluster_id") and recommended_cluster.get("close_ready")
+            else ""
+        ),
         "theme_counts": dict(sorted(theme_counts.items())),
         "target_counts": dict(sorted(target_counts.items())),
         "clusters": clusters[:lim],
@@ -975,6 +992,8 @@ def owner_review_cluster_packet(limit: int = 5, persist: str = "true") -> dict:
             f"owner_review_clusters={cluster_packet.get('cluster_count', 0)} | "
             f"members={cluster_packet.get('member_count', 0)} | "
             f"close_ready_groups={sum(1 for c in clusters if bool(c.get('close_ready')))} | "
+            f"recommended={recommended_cluster.get('cluster_id') or 'none'} | "
+            f"action={('batch_close ' + str(recommended_cluster.get('cluster_id'))) if recommended_cluster.get('cluster_id') and recommended_cluster.get('close_ready') else 'inspect_only'} | "
             f"themes={', '.join(f'{k}={v}' for k, v in sorted(theme_counts.items())) or 'none'}"
         ),
     }

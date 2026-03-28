@@ -463,6 +463,7 @@ async def run_agent_loop(msg: OrchestratorMessage, goal: str) -> None:
     step = 0
     force_conclude = False  # set True when any budget is critical
     discovery_steps = 0
+    verification_goal = any(k in goal.lower() for k in ("git", "commit", "clean", "synced", "status", "verify"))
 
     # Token tracking: use real prompt_tokens from API response each step.
     # No hardcoded model limits — the API tells us the truth.
@@ -573,6 +574,16 @@ async def run_agent_loop(msg: OrchestratorMessage, goal: str) -> None:
         except Exception as e:
             consecutive_errors += 1
             print(f"[AGENT] step={step} LLM/parse error ({consecutive_errors}/{AGENT_ERROR_THRESHOLD}): {e}")
+            if verification_goal and any(h.get("tool") == "shell" for h in history if h.get("type") == "action"):
+                force_conclude = True
+                history.append({
+                    "type": "thought_only",
+                    "thought": (
+                        "Parse error during a verification goal after shell evidence was collected. "
+                        "Conclude now from the deterministic shell results instead of exploring further."
+                    ),
+                    "step": step,
+                })
             if consecutive_errors >= AGENT_ERROR_THRESHOLD:
                 msg.styled_response = (
                     f"⚠️ CORE agent halted after {step} steps ({elapsed:.0f}s): "

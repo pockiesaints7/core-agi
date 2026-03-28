@@ -127,9 +127,14 @@ async def _send_followup(text: str, chat_id: int) -> None:
     import asyncio, requests
     await asyncio.sleep(0.3)
     try:
-        token = os.getenv("TELEGRAM_TOKEN", "")
-        requests.post(f"https://api.telegram.org/bot{token}/sendMessage",
-            json={"chat_id": chat_id, "text": text, "parse_mode": "HTML"}, timeout=10)
+        token = (os.getenv("TELEGRAM_BOT_TOKEN") or os.getenv("TELEGRAM_TOKEN") or "").strip()
+        if not token:
+            return
+        requests.post(
+            f"https://api.telegram.org/bot{token}/sendMessage",
+            json={"chat_id": chat_id, "text": text},
+            timeout=10,
+        )
     except Exception as exc:
         print(f"[L10] follow-up send failed: {exc}")
 
