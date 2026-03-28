@@ -2363,6 +2363,86 @@ def _safe_recent_changelog_context(limit: int = 5) -> dict:
         return {"available": False, "rows": [], "text": "Unavailable.", "error": str(exc)}
 
 
+def _collect_background_research_context() -> dict:
+    """Collect and verify recent research inputs with proactive fallbacks."""
+    result = {
+        "ok": True,
+        "since_ts": "",
+        "fallback_used": False,
+        "sessions": [],
+        "mistakes": [],
+        "changelog": _safe_recent_changelog_context(limit=5),
+        "verification": {
+            "anchor_source": "",
+            "sessions_count": 0,
+            "mistakes_count": 0,
+            "changelog_available": False,
+            "changelog_error": "",
+            "data_ready": False,
+            "note": "",
+        },
+    }
+    try:
+        state_rows = sb_get("sessions", "select=summary&summary=like.*last_real_signal_ts:*&order=created_at.desc&limit=1", svc=True)
+        if state_rows and state_rows[0].get("summary"):
+            raw = state_rows[0]["summary"].split("last_real_signal_ts:")[-1].strip().split()[0]
+            since_ts = raw.replace("Z", "").split("+")[0]
+            result["verification"]["anchor_source"] = "last_real_signal_ts"
+            print(f"[RESEARCH/REAL] Using last_real_signal_ts: {since_ts}")
+        else:
+            since_ts = (datetime.utcnow() - timedelta(days=1)).isoformat()
+            result["verification"]["anchor_source"] = "soft_boot_1d"
+            result["fallback_used"] = True
+            print(f"[RESEARCH/REAL] No state key found, soft-boot to yesterday: {since_ts}")
+        result["since_ts"] = since_ts
+
+        sessions = sb_get("sessions",
+            f"select={_sel_force('sessions', ['summary','actions','interface'])}&created_at=gte.{since_ts}&order=created_at.desc&limit=20",
+            svc=True) or []
+        mistakes = sb_get("mistakes",
+            f"select={_sel_force('mistakes', ['domain','what_failed','root_cause','how_to_avoid'])}&created_at=gte.{since_ts}&order=id.desc&limit=20",
+            svc=True) or []
+
+        if not sessions and not mistakes:
+            since_ts = (datetime.utcnow() - timedelta(days=7)).isoformat()
+            result["fallback_used"] = True
+            result["since_ts"] = since_ts
+            result["verification"]["anchor_source"] = "soft_boot_7d"
+            print(f"[RESEARCH/REAL] No new data since anchor -- falling back to 7d window: {since_ts}")
+            sessions = sb_get("sessions",
+                f"select=summary,actions,interface&created_at=gte.{since_ts}&order=created_at.desc&limit=20",
+                svc=True) or []
+            mistakes = sb_get("mistakes",
+                f"select={_sel_force('mistakes', ['domain','what_failed','root_cause','how_to_avoid'])}&created_at=gte.{since_ts}&order=id.desc&limit=20",
+                svc=True) or []
+
+        result["sessions"] = sessions
+        result["mistakes"] = mistakes
+        result["verification"]["sessions_count"] = len(sessions)
+        result["verification"]["mistakes_count"] = len(mistakes)
+        result["verification"]["changelog_available"] = bool(result["changelog"].get("available"))
+        result["verification"]["changelog_error"] = result["changelog"].get("error") or ""
+
+        if not sessions and not mistakes:
+            result["verification"]["data_ready"] = False
+            result["verification"]["note"] = "No sessions or mistakes available even after fallback."
+            result["ok"] = False
+            return result
+
+        result["verification"]["data_ready"] = True
+        notes = []
+        if result["fallback_used"]:
+            notes.append("fallback_used=true")
+        if not result["verification"]["changelog_available"]:
+            notes.append("changelog_unavailable")
+        result["verification"]["note"] = ", ".join(notes) if notes else "verified"
+        return result
+    except Exception as exc:
+        result["ok"] = False
+        result["verification"]["note"] = str(exc)
+        return result
+
+
 def _run_joint_training_planner(cycle_count: int = 0) -> dict:
     """Bounded joint-training planner (no actual model training).
 
@@ -4022,7 +4102,8 @@ def background_researcher():
                     else:
                         print("[RESEARCH] Public sources returned empty - skipping")
 
-                real_ok = _extract_real_signal()
+                research_ctx = _collect_background_research_context()
+                real_ok = bool(research_ctx.get("ok"))
                 time.sleep(3)
                 causal_discovery_ok = False
                 if now - _last_causal_discovery_run >= _CAUSAL_DISCOVERY_INTERVAL:
@@ -4100,7 +4181,18 @@ def background_researcher():
                             parts.append(f"{auto_applied} evolutions auto-applied")
                         if public_content:
                             parts.append("public sources ingested")
+                        verification_note = (research_ctx.get("verification", {}) or {}).get("note")
+                        if verification_note:
+                            parts.append(f"data verification: {verification_note}")
                         notify(f"[CORE] Researcher cycle #{_cycle_count}\n" + " | ".join(parts))
+                        try:
+                            sb_post("sessions", {
+                                "summary": f"[state_update] research_data_verification: {json.dumps(research_ctx.get('verification', {}), default=str)[:350]}",
+                                "actions": ["research_data_verification persisted"],
+                                "interface": "mcp",
+                            })
+                        except Exception as _rvp:
+                            print(f"[RESEARCH] verification state persist error: {_rvp}")
                         # L11: evaluate research output (non-blocking)
                         try:
                             from core_orch_layer11 import fire_background_research
