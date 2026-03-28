@@ -56,6 +56,10 @@ def get_system_counts():
         "task_queue",
         "hot_reflections",
         "evolution_queue",
+        "repo_components",
+        "repo_component_chunks",
+        "repo_component_edges",
+        "repo_scan_runs",
         "reflection_events",
         "reflection_event_stages",
     ]:
@@ -96,7 +100,8 @@ _SB_SCHEMA = {
     # --- PROTECTED: no deletes allowed ---
     "_protected": {
         "sessions", "mistakes", "hot_reflections", "cold_reflections",
-        "pattern_frequency", "changelog", "evolution_queue"
+        "pattern_frequency", "changelog", "evolution_queue",
+        "repo_components", "repo_component_chunks", "repo_component_edges", "repo_scan_runs"
     },
     # --- TABLE DEFINITIONS ---
     "tables": {
@@ -365,6 +370,69 @@ _SB_SCHEMA = {
                 "REQUIRES: CREATE TABLE conversation_episodes + vector(768) column + ivfflat index. "
                 "Populated by _compress_history when conversation exceeds HISTORY_COMPRESS_AT turns."
             ),
+        },
+        "repo_components": {
+            "pk": "id", "pk_type": "bigserial",
+            "columns": {
+                "id": "bigint", "repo": "text", "path": "text", "file_name": "text", "file_ext": "text",
+                "language": "text", "item_type": "text", "runtime_role": "text", "summary": "text",
+                "purpose_summary": "text", "symbols": "jsonb", "imports": "jsonb", "links": "jsonb",
+                "file_hash": "text", "content_hash": "text", "line_count": "integer", "char_count": "integer",
+                "chunk_count": "integer", "edge_count": "integer", "status": "text", "active": "boolean",
+                "embedding": "vector", "last_scanned_at": "timestamptz", "created_at": "timestamptz",
+                "updated_at": "timestamptz"
+            },
+            "required": ["repo", "path"],
+            "enums": {},
+            "fat_columns": ["summary", "purpose_summary", "symbols", "imports", "links"],
+            "safe_select": "id,repo,path,file_name,file_ext,language,item_type,runtime_role,summary,active,created_at,updated_at",
+            "on_conflict": "path",
+            "notes": "Semantic repo map component registry. Auto-sync source of truth for file meaning and wiring."
+        },
+        "repo_component_chunks": {
+            "pk": "id", "pk_type": "bigserial",
+            "columns": {
+                "id": "bigint", "repo": "text", "component_path": "text", "chunk_index": "integer",
+                "chunk_type": "text", "start_line": "integer", "end_line": "integer", "summary": "text",
+                "content": "text", "chunk_hash": "text", "token_estimate": "integer", "active": "boolean",
+                "embedding": "vector", "last_scanned_at": "timestamptz", "created_at": "timestamptz",
+                "updated_at": "timestamptz"
+            },
+            "required": ["repo", "component_path", "chunk_index"],
+            "enums": {},
+            "fat_columns": ["summary", "content"],
+            "safe_select": "id,repo,component_path,chunk_index,chunk_type,start_line,end_line,summary,active,created_at,updated_at",
+            "on_conflict": "component_path,chunk_index",
+            "notes": "Semantic repo map chunks for retrieval."
+        },
+        "repo_component_edges": {
+            "pk": "id", "pk_type": "bigserial",
+            "columns": {
+                "id": "bigint", "repo": "text", "source_path": "text", "target_path": "text",
+                "relation": "text", "source_symbol": "text", "target_symbol": "text",
+                "evidence": "text", "weight": "float8", "active": "boolean", "embedding": "vector",
+                "last_scanned_at": "timestamptz", "created_at": "timestamptz", "updated_at": "timestamptz"
+            },
+            "required": ["repo", "source_path", "target_path", "relation"],
+            "enums": {},
+            "fat_columns": ["evidence"],
+            "safe_select": "id,repo,source_path,target_path,relation,weight,active,created_at,updated_at",
+            "on_conflict": "source_path,target_path,relation,source_symbol,target_symbol",
+            "notes": "Semantic repo map dependency edges."
+        },
+        "repo_scan_runs": {
+            "pk": "id", "pk_type": "bigserial",
+            "columns": {
+                "id": "bigint", "repo": "text", "root_path": "text", "trigger": "text", "status": "text",
+                "files_total": "integer", "files_changed": "integer", "components_upserted": "integer",
+                "chunks_upserted": "integer", "edges_upserted": "integer", "duration_sec": "float8",
+                "summary": "text", "error": "text", "payload": "jsonb", "created_at": "timestamptz"
+            },
+            "required": ["repo", "root_path", "trigger", "status"],
+            "enums": {"status": ["ok", "partial", "error"]},
+            "fat_columns": ["summary", "error", "payload"],
+            "safe_select": "id,repo,trigger,status,files_total,files_changed,created_at",
+            "notes": "Semantic repo map scan ledger."
         },
     }
 }
@@ -704,6 +772,20 @@ from core_tools_code_reader import (
     build_code_reading_packet,
     t_code_read_packet,
 )
+from core_repo_map import (
+    apply_repo_map_schema,
+    build_repo_component_packet,
+    build_repo_graph_packet,
+    render_repo_map_status_report,
+    repo_map_loop,
+    repo_map_status,
+    run_repo_map_cycle,
+    t_repo_component_packet,
+    t_repo_graph_packet,
+    t_repo_map_status,
+    t_repo_map_sync,
+)
+from core_public_evidence import t_public_evidence_packet
 from core_tools_task import (
     TaskPacket,
     build_task_error_packet,
@@ -6918,6 +7000,16 @@ TOOLS = {
                                "desc": "Canonical system-wide verification packet. Aggregates state, task, changelog, and continuity verification into one scorecard."},
     "code_read_packet":       {"fn": t_code_read_packet,       "perm": "READ",    "args": ["query", "files", "functions", "search_terms"],
                                "desc": "Canonical code-reading packet. Reads files, function bodies, and search hits into one structured packet for code_autonomy and owner review."},
+    "repo_map_status":        {"fn": t_repo_map_status,        "perm": "READ",    "args": ["scope", "limit"],
+                               "desc": "Canonical repository semantic map status. Returns repo component/chunk/edge counts and the latest scan run."},
+    "repo_map_sync":          {"fn": t_repo_map_sync,          "perm": "EXECUTE", "args": ["trigger", "root_path"],
+                               "desc": "Sync the CORE semantic repository map into Supabase. Scans files, chunks, and wiring edges."},
+    "repo_component_packet":  {"fn": t_repo_component_packet,  "perm": "READ",    "args": ["path", "query", "limit"],
+                               "desc": "Build a semantic packet for a file/component or repo query from the CORE repository map."},
+    "repo_graph_packet":      {"fn": t_repo_graph_packet,      "perm": "READ",    "args": ["path", "query", "depth", "limit"],
+                               "desc": "Build a dependency graph packet from the CORE repository map."},
+    "public_evidence_packet": {"fn": t_public_evidence_packet, "perm": "READ",    "args": ["query", "domain", "request_kind", "code_targets"],
+                               "desc": "Classify the public evidence family for a query. Returns family, sources, and retrieval hints."},
     "tool_stats":             {"fn": t_tool_stats,             "perm": "READ",    "args": ["days"],
                                "desc": "TASK-26: Per-tool success/fail rate for last N days (default 7). Returns tools sorted by fail_rate desc. fail_rate>0.2 = flagged. Use to identify flaky tools."},
     "checkpoint":             {"fn": t_checkpoint,             "perm": "WRITE",   "args": ["active_task_id", "last_action", "last_result"],

@@ -117,6 +117,9 @@ class CausalGraph:
             "conversation_episodes": "episode",
             "sessions": "session",
             "pattern_frequency": "pattern",
+            "repo_components": "module",
+            "repo_component_chunks": "chunk",
+            "repo_component_edges": "edge",
         }.get(table, "memory")
 
     @staticmethod

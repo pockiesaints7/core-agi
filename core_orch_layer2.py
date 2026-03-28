@@ -11,7 +11,7 @@ from typing import Any, Dict, List
 from orchestrator_message import OrchestratorMessage
 
 from core_config import sb_get, GROQ_FAST, groq_chat
-from core_orch_context import build_evidence_packet, build_capability_packet
+from core_orch_context import build_evidence_packet, build_capability_packet, build_evidence_gate
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -215,6 +215,13 @@ async def layer_2_memory(msg: OrchestratorMessage):
             msg.context["capability_packet"] = cap
     except Exception as exc:
         print(f"[L2] capability_packet build failed (non-fatal): {exc}")
+
+    try:
+        gate = build_evidence_gate(msg)
+        msg.evidence_gate = gate
+        msg.context["evidence_gate"] = gate
+    except Exception as exc:
+        print(f"[L2] evidence_gate build failed (non-fatal): {exc}")
 
     msg.track_layer("L2-COMPLETE")
     print(

@@ -84,6 +84,12 @@ from core_semantic_projection import (
     semantic_projection_status,
     run_semantic_projection_cycle,
 )
+from core_repo_map import (
+    repo_map_loop,
+    repo_map_status,
+    render_repo_map_status_report,
+    run_repo_map_cycle,
+)
 from core_work_taxonomy import build_autonomy_contract
 
 # ── Orchestrator v2 ───────────────────────────────────────────────────────────
@@ -106,6 +112,7 @@ CORE_TELEGRAM_COMMANDS = [
     {"command": "autonomy", "description": "Overall autonomy overview"},
     {"command": "evolution", "description": "Evolution worker details or run"},
     {"command": "semantic", "description": "Semantic projection status or run"},
+    {"command": "repo", "description": "Repository semantic map status or sync"},
     {"command": "deploycheck", "description": "Running commit and file hashes"},
     {"command": "project", "description": "Project context tools"},
     {"command": "restart", "description": "Restart CORE service"},
@@ -199,6 +206,17 @@ def get_system_counts():
             counts[f"evolution_{evo_status}"] = int(cr.split("/")[-1]) if "/" in cr else 0
         except:
             counts[f"evolution_{evo_status}"] = -1
+    for table in ("repo_components", "repo_component_chunks", "repo_component_edges", "repo_scan_runs"):
+        try:
+            extra = "&active=eq.true" if table != "repo_scan_runs" else ""
+            r = httpx.get(
+                f"{SUPABASE_URL}/rest/v1/{table}?select=id&limit=1{extra}",
+                headers=_sbh_count_svc(), timeout=10
+            )
+            cr = r.headers.get("content-range", "*/0")
+            counts[table] = int(cr.split("/")[-1]) if "/" in cr else 0
+        except:
+            counts[table] = -1
     return counts
 
 
@@ -233,7 +251,7 @@ def _render_command_catalog() -> str:
             grouped["Overview"].append(item)
         elif item["command"] in {"status", "health", "queues"}:
             grouped["Monitoring"].append(item)
-        elif item["command"] in {"tasks", "research", "code", "integration", "evolutions", "autonomy", "evolution", "semantic"}:
+        elif item["command"] in {"tasks", "research", "code", "integration", "evolutions", "autonomy", "evolution", "semantic", "repo"}:
             grouped["Workers"].append(item)
         elif item["command"] in {"review"}:
             grouped["Review"].append(item)
@@ -495,6 +513,8 @@ def _render_queue_report(counts: dict, task_auto: dict, evo_auto: dict) -> str:
     lines = [
         f"Task queue: pending {counts.get('task_queue_pending', 0)} | in_progress {counts.get('task_queue_in_progress', 0)} | done {counts.get('task_queue_done', 0)} | failed {counts.get('task_queue_failed', 0)}",
         f"Evolution queue: pending {counts.get('evolution_pending', 0)} | applied {counts.get('evolution_applied', 0)} | rejected {counts.get('evolution_rejected', 0)}",
+        f"Repo map: components {counts.get('repo_components', 0)} | chunks {counts.get('repo_component_chunks', 0)} | edges {counts.get('repo_component_edges', 0)} | scans {counts.get('repo_scan_runs', 0)}",
+        f"Repo map: components {counts.get('repo_components', 0)} | chunks {counts.get('repo_component_chunks', 0)} | edges {counts.get('repo_component_edges', 0)} | scans {counts.get('repo_scan_runs', 0)}",
         f"Task autonomy backlog: {task_auto.get('pending', 0)} pending | {task_auto.get('in_progress', 0)} in progress",
         f"Code autonomy backlog: {code_auto.get('pending_code_tasks', 0)} pending code tasks | {code_auto.get('pending_review_proposals', 0)} review proposals",
         f"Integration autonomy backlog: {integration_auto.get('pending_integration_tasks', 0)} pending integration tasks | {integration_auto.get('pending_review_proposals', 0)} review proposals",
@@ -547,6 +567,7 @@ def _render_autonomy_overview_report(counts: dict, task_auto: dict, evo_auto: di
         f"  Last run: {_tg_escape(evo_last.get('finished_at') or evo_auto.get('last_run_at') or 'n/a', 40)} | tracks: " + (
             ", ".join(f"{_tg_escape(k)}={v}" for k, v in sorted(evo_auto.get("track_counts", {}).items())) or "none"
         ),
+        f"Repo map: {'enabled' if repo_map_status().get('enabled') else 'disabled'} | components {counts.get('repo_components', 0)} | chunks {counts.get('repo_component_chunks', 0)} | edges {counts.get('repo_component_edges', 0)} | scans {counts.get('repo_scan_runs', 0)}",
         f"Proposal router: {'enabled' if proposal.get('enabled') else 'disabled'} | pending {proposal.get('pending', 0)} | routes " + (
             ", ".join(f"{_tg_escape(k)}={v}" for k, v in sorted(proposal.get("route_counts", {}).items())) or "none"
         ),
@@ -607,6 +628,11 @@ def _render_deployment_report() -> str:
     return _render_section("Deployment", lines)
 
 
+def _render_repo_report() -> str:
+    status = repo_map_status()
+    return render_repo_map_status_report(status)
+
+
 def _build_startup_brief(resume: str, counts: dict, orch: dict, task_auto: dict | None = None, evo_auto: dict | None = None) -> str:
     from core_tools import t_state_packet
     task_pending = counts.get("task_queue_pending", 0)
@@ -639,6 +665,7 @@ def _build_startup_brief(resume: str, counts: dict, orch: dict, task_auto: dict 
         f"Orchestrator: <b>{orch.get('model', 'unknown')}</b> | {orch.get('layers', 'L0-L9 active')} | {orch.get('blueprint', '')}\n\n"
         f"<b>State</b>\n"
         f"KB: {counts.get('knowledge_base', 0)} | Mistakes: {counts.get('mistakes', 0)} | Sessions: {counts.get('sessions', 0)}\n"
+        f"Repo map: components {counts.get('repo_components', 0)} | chunks {counts.get('repo_component_chunks', 0)} | edges {counts.get('repo_component_edges', 0)} | scans {counts.get('repo_scan_runs', 0)}\n"
         f"State continuity: {'verified' if state_verification.get('verified') else 'degraded'} | score {state_verification.get('verification_score', 0):.2f} | warnings {len(state_verification.get('warnings') or [])}\n"
         f"Task queue: pending {task_pending} | in_progress {task_in_progress} | done {task_done} | failed {task_failed} | {task_summary}\n"
         f"Evolutions: pending {evo_pending} | applied {evo_applied} | rejected {evo_rejected}\n"
@@ -649,7 +676,7 @@ def _build_startup_brief(resume: str, counts: dict, orch: dict, task_auto: dict 
         f"Evolution autonomy: {'enabled' if EVOLUTION_AUTONOMY_ENABLED else 'disabled'} | pending {evo_pending_count} | synthesized {evo_synthesized} | follow-up tasks {evo_task_pending}\n"
         f"Proposal router: {'enabled' if proposal.get('enabled') else 'disabled'} | pending {proposal.get('pending', 0)} | routes {', '.join(f'{k}={v}' for k, v in sorted((proposal.get('route_counts') or {}).items())) or 'none'}\n"
         f"Semantic projection: {'enabled' if SEMANTIC_PROJECTION_ENABLED else 'disabled'} | last_run {sem_proj.get('last_run_at', 'n/a')}\n"
-        f"MCP: {len(TOOLS)} tools | Webhook: set | Loops: queue, cold, research, synthesis, diagnosis, autonomy, code-autonomy, integration-autonomy, research-autonomy, evolution-autonomy, semantic-projection"
+        f"MCP: {len(TOOLS)} tools | Webhook: set | Loops: queue, cold, research, synthesis, diagnosis, autonomy, code-autonomy, integration-autonomy, research-autonomy, evolution-autonomy, semantic-projection, repo-map"
     )
 
 
@@ -1863,6 +1890,7 @@ def handle_msg(msg):
                 [
                     f"Resume: {_tg_escape(resume or 'No active tasks', 180)}",
                     f"KB: {counts.get('knowledge_base', 0)} | Mistakes: {counts.get('mistakes', 0)} | Sessions: {counts.get('sessions', 0)}",
+                    f"Repo map: components {counts.get('repo_components', 0)} | chunks {counts.get('repo_component_chunks', 0)} | edges {counts.get('repo_component_edges', 0)} | scans {counts.get('repo_scan_runs', 0)}",
                     f"Task queue: pending {counts.get('task_queue_pending', 0)} | in_progress {counts.get('task_queue_in_progress', 0)} | done {counts.get('task_queue_done', 0)} | failed {counts.get('task_queue_failed', 0)}",
                     f"Evolution queue: pending {counts.get('evolution_pending', 0)} | applied {counts.get('evolution_applied', 0)} | rejected {counts.get('evolution_rejected', 0)}",
                     f"Task autonomy: {'enabled' if task_auto.get('enabled') else 'disabled'} | pending {task_auto.get('pending', 0)}",
@@ -1872,7 +1900,7 @@ def handle_msg(msg):
                     "",
                     "<b>Quick actions</b>",
                     "/status, /queues, /tasks, /code, /integration, /evolutions, /review",
-                    "/memory, /autonomy, /evolution, /semantic",
+                    "/memory, /autonomy, /evolution, /semantic, /repo",
                     "/health, /deploycheck, /project, /restart, /kill",
                 ],
             ),
@@ -1895,7 +1923,7 @@ def handle_msg(msg):
         lines = [
             f"Runtime: {'enabled' if AUTONOMY_ENABLED else 'disabled'} task autonomy | {'enabled' if CODE_AUTONOMY_ENABLED else 'disabled'} code autonomy | {'enabled' if INTEGRATION_AUTONOMY_ENABLED else 'disabled'} integration autonomy | {'enabled' if EVOLUTION_AUTONOMY_ENABLED else 'disabled'} evolution autonomy",
             f"Queues: task pending {counts.get('task_queue_pending', 0)} | in_progress {counts.get('task_queue_in_progress', 0)} | done {counts.get('task_queue_done', 0)} | failed {counts.get('task_queue_failed', 0)} | evolution pending {counts.get('evolution_pending', 0)} | applied {counts.get('evolution_applied', 0)} | rejected {counts.get('evolution_rejected', 0)}",
-            f"Memory: KB {counts.get('knowledge_base', 0)} | Mistakes {counts.get('mistakes', 0)} | Sessions {counts.get('sessions', 0)}",
+            f"Memory: KB {counts.get('knowledge_base', 0)} | Mistakes {counts.get('mistakes', 0)} | Sessions {counts.get('sessions', 0)} | Repo map {counts.get('repo_components', 0)} comps / {counts.get('repo_component_chunks', 0)} chunks / {counts.get('repo_component_edges', 0)} edges",
             f"State continuity: {'verified' if state_verification.get('verified') else 'degraded'} | score {state_verification.get('verification_score', 0):.2f} | warnings {len(state_verification.get('warnings') or [])}",
             f"Workers: task {task_auto.get('pending', 0)} pending / {task_auto.get('in_progress', 0)} in progress | code {code_auto.get('pending_code_tasks', 0)} pending / {code_auto.get('pending_review_proposals', 0)} review proposals | integration {integration_auto.get('pending_integration_tasks', 0)} pending / {integration_auto.get('pending_review_proposals', 0)} review proposals | evolution {evo_auto.get('pending_evolutions', 0)} pending",
             f"Semantic projection: {'enabled' if SEMANTIC_PROJECTION_ENABLED else 'disabled'} | last_run {_tg_escape(sem.get('last_run_at') or 'n/a', 40)}",
@@ -2012,12 +2040,44 @@ def handle_msg(msg):
                     max_rows = 20
             result = run_semantic_projection_cycle(max_rows=max_rows)
             sem = result if isinstance(result, dict) else sem
-        lines = [
+            lines = [
             f"Status: {'enabled' if sem.get('enabled', SEMANTIC_PROJECTION_ENABLED) else 'disabled'} | running={sem.get('running', False)}",
             f"Last run: {_tg_escape(sem.get('last_run_at', 'n/a'), 40)}",
             f"Pending raw rows: {_tg_escape(sem.get('pending_rows', sem.get('pending', 'n/a')), 40)}",
         ]
         notify(_render_section("Semantic Projection", lines), cid)
+
+    elif cmd == "/repo":
+        parts = arg_str.split()
+        if not parts or parts[0].lower() in {"status", "view", "dashboard"}:
+            notify(_render_repo_report(), cid)
+        elif parts[0].lower() in {"sync", "run"}:
+            result = run_repo_map_cycle(trigger="telegram")
+            lines = [
+                f"Sync: {'ok' if result.get('ok') else 'failed'}",
+                f"Files total: {result.get('summary', {}).get('files_total', 0)} | changed: {result.get('summary', {}).get('files_changed', 0)}",
+                f"Components: {result.get('summary', {}).get('components_upserted', 0)} | chunks: {result.get('summary', {}).get('chunks_upserted', 0)} | edges: {result.get('summary', {}).get('edges_upserted', 0)}",
+                f"Removed: {result.get('summary', {}).get('removed', 0)} | duration_sec: {result.get('duration_sec', 0)}",
+            ]
+            if result.get("error"):
+                lines.append(f"Error: {_tg_escape(result.get('error'), 220)}")
+            notify(_render_section("Repo Map", lines), cid)
+        else:
+            query = " ".join(parts[1:]).strip()
+            if not query:
+                notify(_render_repo_report(), cid)
+            else:
+                from core_repo_map import build_repo_component_packet, build_repo_graph_packet
+                packet = build_repo_component_packet(query=query, limit=10)
+                graph = build_repo_graph_packet(query=query, depth=2, limit=10)
+                lines = [
+                    f"Query: {_tg_escape(query, 180)}",
+                    f"Components: {len(packet.get('components', []) or [])} | Chunks: {len(packet.get('chunks', []) or [])} | Edges: {len(packet.get('edges', []) or [])}",
+                    f"Graph nodes: {graph.get('count_nodes', 0)} | edges: {graph.get('count_edges', 0)}",
+                ]
+                if packet.get("summary"):
+                    lines.append(f"Summary: {_tg_escape(packet.get('summary'), 260)}")
+                notify(_render_section("Repo Packet", lines), cid)
 
     elif cmd == "/deploycheck":
         notify(_render_deployment_report(), cid)
@@ -2195,6 +2255,7 @@ def on_start():
     threading.Thread(target=cold_processor_loop, daemon=True).start()
     # self_sync_check disabled -- CORE_SELF.md is tombstoned, superseded by system_map
     threading.Thread(target=background_researcher, daemon=True).start()
+    threading.Thread(target=repo_map_loop, daemon=True).start()
     if AUTONOMY_ENABLED:
         threading.Thread(target=autonomy_loop, daemon=True).start()
     if CODE_AUTONOMY_ENABLED:

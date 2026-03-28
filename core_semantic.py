@@ -15,6 +15,9 @@ Tables covered:
   output_reflections — L11 meta evaluator dedup
   evolution_queue    — evo dedup before inserting
   conversation_episodes — episode memory + session retrieval
+  repo_components    — semantic repository map
+  repo_component_chunks — semantic repo chunks for retrieval
+  repo_component_edges — semantic repo wiring graph
 """
 import hashlib
 import time
@@ -84,6 +87,42 @@ def _episode_text(r):
         parts.extend(tags)
     return " | ".join(p for p in parts if p)
 
+def _repo_component_text(r):
+    parts = [
+        r.get("path",""),
+        r.get("runtime_role",""),
+        r.get("language",""),
+        r.get("summary",""),
+        r.get("purpose_summary",""),
+    ]
+    symbols = r.get("symbols") or {}
+    if isinstance(symbols, dict):
+        parts.extend(symbols.get("functions") or [])
+        parts.extend(symbols.get("classes") or [])
+        parts.extend(symbols.get("headings") or [])
+        parts.extend(symbols.get("keys") or [])
+    parts.extend(r.get("imports") or [])
+    parts.extend(r.get("links") or [])
+    return " | ".join(str(p) for p in parts if p)
+
+def _repo_chunk_text(r):
+    return " | ".join(p for p in [
+        r.get("component_path",""),
+        f"chunk:{r.get('chunk_index','')}",
+        r.get("summary",""),
+        r.get("content",""),
+    ] if p)
+
+def _repo_edge_text(r):
+    return " | ".join(p for p in [
+        r.get("source_path",""),
+        r.get("target_path",""),
+        r.get("relation",""),
+        r.get("source_symbol",""),
+        r.get("target_symbol",""),
+        r.get("evidence",""),
+    ] if p)
+
 SEMANTIC_TABLES = {
     "knowledge_base": {
         "text_fn":   _kb_text,
@@ -131,6 +170,24 @@ SEMANTIC_TABLES = {
         "text_fn":   _episode_text,
         "rpc":       "match_conversation_episodes",
         "select":    "id,chat_id,summary,topic_tags,embedding",
+        "threshold": 0.20,
+    },
+    "repo_components": {
+        "text_fn":   _repo_component_text,
+        "rpc":       "match_repo_components",
+        "select":    "id,repo,path,file_name,file_ext,language,item_type,runtime_role,summary,purpose_summary,symbols,imports,links,file_hash,content_hash",
+        "threshold": 0.20,
+    },
+    "repo_component_chunks": {
+        "text_fn":   _repo_chunk_text,
+        "rpc":       "match_repo_component_chunks",
+        "select":    "id,repo,component_path,chunk_index,chunk_type,start_line,end_line,summary,content,chunk_hash",
+        "threshold": 0.20,
+    },
+    "repo_component_edges": {
+        "text_fn":   _repo_edge_text,
+        "rpc":       "match_repo_component_edges",
+        "select":    "id,repo,source_path,target_path,relation,source_symbol,target_symbol,evidence,weight",
         "threshold": 0.20,
     },
 }
@@ -248,6 +305,9 @@ def _ilike_fallback(table: str, query: str, limit: int, filters: str = "") -> li
         "output_reflections":["gap","new_behavior"],
         "evolution_queue":   ["change_summary","pattern_key"],
         "conversation_episodes": ["summary","chat_id"],
+        "repo_components":   ["path","summary","purpose_summary","file_name","runtime_role"],
+        "repo_component_chunks": ["component_path","summary","content"],
+        "repo_component_edges": ["source_path","target_path","relation","evidence"],
     }.get(table, ["content"])
     or_clause = ",".join(f"{c}.ilike.*{kw}*" for c in text_cols)
     qs = f"select={cfg['select']}&or=({or_clause})&limit={limit}{filters}"
@@ -331,7 +391,7 @@ def backfill_all(batch_size: int = 20) -> dict:
     results = {}
     for table in ["mistakes","behavioral_rules","pattern_frequency",
                   "hot_reflections","output_reflections","evolution_queue",
-                  "conversation_episodes"]:
+                  "conversation_episodes","repo_components","repo_component_chunks","repo_component_edges"]:
         print(f"[SEMANTIC] backfilling {table}...")
         results[table] = backfill_table(table, batch_size)
         time.sleep(1)

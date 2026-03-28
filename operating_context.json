@@ -144,6 +144,123 @@
         "interrupted": false
       }
     },
+    "repo_components": {
+      "pk": "id",
+      "pk_type": "int8_serial",
+      "required": ["repo", "path"],
+      "columns": {
+        "id": "bigint",
+        "repo": "text",
+        "path": "text",
+        "file_name": "text",
+        "file_ext": "text",
+        "language": "text",
+        "item_type": "text",
+        "runtime_role": "text",
+        "summary": "text",
+        "purpose_summary": "text",
+        "symbols": "jsonb",
+        "imports": "jsonb",
+        "links": "jsonb",
+        "file_hash": "text",
+        "content_hash": "text",
+        "line_count": "integer",
+        "char_count": "integer",
+        "chunk_count": "integer",
+        "edge_count": "integer",
+        "status": "text",
+        "active": "boolean",
+        "embedding": "vector",
+        "last_scanned_at": "timestamptz",
+        "created_at": "timestamptz",
+        "updated_at": "timestamptz"
+      },
+      "defaults": {
+        "repo": "core-agi",
+        "active": true,
+        "status": "active"
+      }
+    },
+    "repo_component_chunks": {
+      "pk": "id",
+      "pk_type": "int8_serial",
+      "required": ["repo", "component_path", "chunk_index"],
+      "columns": {
+        "id": "bigint",
+        "repo": "text",
+        "component_path": "text",
+        "chunk_index": "integer",
+        "chunk_type": "text",
+        "start_line": "integer",
+        "end_line": "integer",
+        "summary": "text",
+        "content": "text",
+        "chunk_hash": "text",
+        "token_estimate": "integer",
+        "active": "boolean",
+        "embedding": "vector",
+        "last_scanned_at": "timestamptz",
+        "created_at": "timestamptz",
+        "updated_at": "timestamptz"
+      },
+      "defaults": {
+        "repo": "core-agi",
+        "active": true
+      }
+    },
+    "repo_component_edges": {
+      "pk": "id",
+      "pk_type": "int8_serial",
+      "required": ["repo", "source_path", "target_path", "relation"],
+      "columns": {
+        "id": "bigint",
+        "repo": "text",
+        "source_path": "text",
+        "target_path": "text",
+        "relation": "text",
+        "source_symbol": "text",
+        "target_symbol": "text",
+        "evidence": "text",
+        "weight": "float8",
+        "active": "boolean",
+        "embedding": "vector",
+        "last_scanned_at": "timestamptz",
+        "created_at": "timestamptz",
+        "updated_at": "timestamptz"
+      },
+      "defaults": {
+        "repo": "core-agi",
+        "active": true,
+        "weight": 0.5
+      }
+    },
+    "repo_scan_runs": {
+      "pk": "id",
+      "pk_type": "int8_serial",
+      "required": ["repo", "root_path", "trigger", "status"],
+      "columns": {
+        "id": "bigint",
+        "repo": "text",
+        "root_path": "text",
+        "trigger": "text",
+        "status": "text",
+        "files_total": "integer",
+        "files_changed": "integer",
+        "components_upserted": "integer",
+        "chunks_upserted": "integer",
+        "edges_upserted": "integer",
+        "duration_sec": "float8",
+        "summary": "text",
+        "error": "text",
+        "payload": "jsonb",
+        "created_at": "timestamptz"
+      },
+      "defaults": {
+        "repo": "core-agi",
+        "status": "ok",
+        "trigger": "manual"
+      }
+    },
     "task_queue": {
       "pk": "id",
       "pk_type": "uuid",
@@ -301,7 +418,7 @@
         "promoted_to": "text",
         "promotion_threshold": "integer"
       }
-    }
+    },
     "agentic_sessions": {
       "pk": "id",
       "pk_type": "uuid",

@@ -19,6 +19,8 @@ TOOL_FAMILY_MODULES = {
     "semantic_projection": "core_semantic_projection.py",
     "evolution_autonomy": "core_evolution_autonomy.py",
     "governance": "core_tools_governance.py",
+    "repo_map": "core_repo_map.py",
+    "public_evidence": "core_public_evidence.py",
 }
 
 

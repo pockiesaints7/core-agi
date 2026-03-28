@@ -23,6 +23,9 @@ _DEFAULT_TABLES = [
     "output_reflections",
     "evolution_queue",
     "conversation_episodes",
+    "repo_components",
+    "repo_component_chunks",
+    "repo_component_edges",
 ]
 
 
@@ -91,6 +94,40 @@ def _normalize_hit(table: str, row: dict) -> dict:
     elif table == "conversation_episodes":
         title = _safe_text(row.get("chat_id"), 80) or f"episode:{rid}"
         body = _safe_text(row.get("summary"), 800)
+    elif table == "repo_components":
+        title = _safe_text(row.get("path") or row.get("file_name"), 160) or f"repo:{rid}"
+        body = " | ".join(
+            p for p in [
+                _safe_text(row.get("runtime_role"), 120),
+                _safe_text(row.get("summary"), 500),
+                _safe_text(row.get("purpose_summary"), 500),
+                _safe_text(row.get("language"), 40),
+            ]
+            if p
+        )[:800]
+    elif table == "repo_component_chunks":
+        title = _safe_text(row.get("component_path"), 120) or f"chunk:{rid}"
+        body = " | ".join(
+            p for p in [
+                _safe_text(row.get("chunk_type"), 80),
+                _safe_text(row.get("summary"), 300),
+                _safe_text(row.get("content"), 500),
+            ]
+            if p
+        )[:800]
+    elif table == "repo_component_edges":
+        src = _safe_text(row.get("source_path"), 80)
+        tgt = _safe_text(row.get("target_path"), 80)
+        title = f"{src} -> {tgt}"[:160] or f"edge:{rid}"
+        body = " | ".join(
+            p for p in [
+                _safe_text(row.get("relation"), 80),
+                _safe_text(row.get("source_symbol"), 80),
+                _safe_text(row.get("target_symbol"), 80),
+                _safe_text(row.get("evidence"), 300),
+            ]
+            if p
+        )[:800]
     else:
         title = _safe_text(rid, 160) or table
         body = _safe_text(row, 800)
@@ -117,6 +154,9 @@ def _focus_from_grouped(grouped: dict[str, list[dict]]) -> str:
         parts.append(f"top_rule: {rules[0]['title'][:80]}")
     if kb:
         parts.append(f"top_kb: {kb[0]['title'][:80]}")
+    repo = grouped.get("repo_components") or []
+    if repo:
+        parts.append(f"top_repo: {repo[0]['title'][:80]}")
     if not parts:
         return "no_memory_hits"
     return " | ".join(parts)[:220]
@@ -129,6 +169,9 @@ def _context_from_grouped(grouped: dict[str, list[dict]], per_table: int = 2) ->
         "behavioral_rules",
         "mistakes",
         "knowledge_base",
+        "repo_components",
+        "repo_component_chunks",
+        "repo_component_edges",
         "output_reflections",
         "hot_reflections",
         "pattern_frequency",

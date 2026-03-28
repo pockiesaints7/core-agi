@@ -44,7 +44,7 @@ AGENTIC_TRIGGERS = frozenset([
 # ── System prompt ─────────────────────────────────────────────────────────────
 _AGENT_SYSTEM = (
     "You are CORE — an autonomous AGI system on an Oracle Cloud Ubuntu VM. "
-    "You have 171+ tools: web_search, web_fetch, run_python, shell, file_list, "
+    "You have 171+ tools: web_search, web_fetch, ingest_knowledge, run_python, shell, file_list, "
     "file_read, file_write, search_kb, add_knowledge, calc, weather, get_time, "
     "get_state, get_system_health, task_add, notify_owner, sb_query, sb_insert, "
     "deploy_status, railway_logs_live, get_mistakes, list_evolutions, and more.\n\n"
@@ -60,6 +60,7 @@ _AGENT_SYSTEM = (
     "5. CONVERGENCE — once you have gathered enough data to answer the goal, return type=done IMMEDIATELY. Do not keep collecting more data.\n"
     "6. DONE threshold: if you have attempted every distinct subtask in the goal at least once, return type=done with a full synthesis of everything collected.\n"
     "7. If a tool fails once, try ONE alternative approach. If that also fails, skip it and note it in the answer.\n"
+    "8. EVIDENCE GATE — before answering, prefer the strongest evidence available in this order: Supabase memory, current state, repo-map/code tools, direct local repo/code reads, public-source research via ingest_knowledge and related public fetchers, then web search/fetch. Combine sources when that makes the evidence stronger. Do not guess when evidence is sparse. If you cannot ground the answer after retrieval, return type=stuck or ask for the missing file/path/URL/commit.\n"
     "\nSUPABASE TOOL USAGE (exact param names):\n"
     "  sb_query(table, filters='col=eq.val', order='col.desc', select='col1,col2', limit=10)\n"
     "  sb_insert(table, data={'col': 'val'})\n"
@@ -67,7 +68,7 @@ _AGENT_SYSTEM = (
     "  sb_upsert(table, data={'col': 'val'}, on_conflict='col')\n"
     "  add_knowledge(domain, topic, content, confidence='high')\n"
     "  log_mistake(domain, what_failed, correct_approach, severity='low')\n"
-    "  Known tables: knowledge_base, task_queue, mistakes, sessions, behavioral_rules, evolution_queue\n"
+    "  Known tables: knowledge_base, task_queue, mistakes, sessions, behavioral_rules, evolution_queue, repo_components, repo_component_chunks, repo_component_edges\n"
     "  filters use PostgREST syntax: 'status=eq.pending', 'id=gt.1', 'domain=eq.code'\n"
     "  CRITICAL: multiple filters MUST use & separator: 'domain=eq.test&topic=eq.foo' NOT comma.\n"
     "  NEVER use comma in filters: 'domain=eq.test,topic=eq.foo' is WRONG and returns 0 rows.\n"
@@ -366,6 +367,10 @@ def _build_prompt(
     state_str = _j.dumps(effective_state, default=str)
     parts.append(f"PERSISTENT STATE (use these values — do NOT re-query for data already here):")
     parts.append(state_str)
+    gate = effective_state.get("evidence_gate") or {}
+    parts.append("EVIDENCE GATE (follow this before guessing):")
+    parts.append(_j.dumps(gate, default=str))
+    parts.append("If the gate says evidence is sparse, search Supabase first, then the repo map/local code state, then public-source research, then web. If still sparse, stop and ask for clarification or upload.")
     sid = effective_state.get("session_id", "default")
     parts.append(f"YOUR SESSION_ID IS: {sid!r} — use this exact value for all agent_* tool calls.")
     parts.append("")
@@ -424,6 +429,9 @@ async def run_agent_loop(msg: OrchestratorMessage, goal: str) -> None:
         "response_mode": getattr(msg, "response_mode", ""),
         "agentic": True,
     }
+    msg.context["agentic_metadata"] = msg.agentic_metadata
+    if msg.context.get("evidence_gate"):
+        msg.context["evidence_gate"] = msg.context.get("evidence_gate", {})
     msg.response_mode = "agentic"
     msg.context["response_mode"] = "agentic"
     msg.decision_packet = dict(msg.decision_packet or {})
@@ -464,6 +472,8 @@ async def run_agent_loop(msg: OrchestratorMessage, goal: str) -> None:
             _sr = _sg(session_id=_agent_session_id)
             loaded = _sr.get("state", {}) if _sr.get("ok") else {}
             _agent_state.update(loaded)
+        if msg.context.get("evidence_gate"):
+            _agent_state.setdefault("evidence_gate", msg.context.get("evidence_gate", {}))
     except Exception as _se:
         print(f"[AGENT] state load error (non-fatal): {_se}")
 

@@ -7,7 +7,7 @@ import json
 from typing import Any, Dict, List
 
 from orchestrator_message import OrchestratorMessage
-from core_orch_context import build_decision_packet
+from core_orch_context import build_decision_packet, build_evidence_gate, tool_result_has_evidence
 from core_config import groq_chat, GROQ_MODEL, GROQ_FAST
 
 # Destructive action keywords requiring owner tier
@@ -408,6 +408,134 @@ async def _build_plan(msg: OrchestratorMessage) -> Dict[str, Any]:
         }
 
 
+def _build_evidence_retrieval_plan(msg: OrchestratorMessage) -> Dict[str, Any]:
+    gate = msg.evidence_gate or msg.context.get("evidence_gate") or {}
+    query = (gate.get("search_query") or msg.text or "").strip()
+    tools = []
+    public_sources = gate.get("public_sources") or []
+
+    # Always sweep Supabase/KB first unless this is a pure state request.
+    if gate.get("retrieval_mode") != "state_only":
+        tools.append({
+            "step": len(tools) + 1,
+            "action": "Search CORE memory for evidence",
+            "tool": "search_kb",
+            "args": {
+                "query": query,
+                "domain": msg.context.get("current_domain", "general"),
+                "limit": "5",
+            },
+            "expected_output": "relevant KB hits",
+            "evidence_stage": "supabase",
+            "blocking": False,
+        })
+
+    # Repo map probe when the user is clearly asking about code/repo status.
+    if gate.get("repo_map_needed") or gate.get("code_targets") or gate.get("retrieval_mode") == "code":
+        repo_query = query or msg.text or ""
+        repo_path = (gate.get("code_targets") or [None])[0] or ""
+        tools.append({
+            "step": len(tools) + 1,
+            "action": "Load repository semantic map status",
+            "tool": "repo_map_status",
+            "args": {"scope": "summary", "limit": "10"},
+            "expected_output": "repo map counts and latest scan",
+            "evidence_stage": "repo_map",
+            "blocking": False,
+        })
+        tools.append({
+            "step": len(tools) + 1,
+            "action": "Read repository component packet",
+            "tool": "repo_component_packet",
+            "args": {"path": repo_path, "query": repo_query, "limit": "10"},
+            "expected_output": "repo component packet",
+            "evidence_stage": "repo_map",
+            "blocking": False,
+        })
+        tools.append({
+            "step": len(tools) + 1,
+            "action": "Build repository dependency graph",
+            "tool": "repo_graph_packet",
+            "args": {"path": repo_path, "query": repo_query, "depth": "2", "limit": "10"},
+            "expected_output": "repo graph packet",
+            "evidence_stage": "repo_map",
+            "blocking": False,
+        })
+        tools.append({
+            "step": len(tools) + 1,
+            "action": "Check repo status before answering",
+            "tool": "git",
+            "args": {"repo_path": "/home/ubuntu/core-agi", "operation": "status"},
+            "expected_output": "git status output",
+            "evidence_stage": "local_code",
+            "blocking": False,
+        })
+        for target in (gate.get("code_targets") or [])[:2]:
+            tools.append({
+                "step": len(tools) + 1,
+                "action": f"Read code artifact {target}",
+                "tool": "read_file",
+                "args": {"path": target, "repo": "core-agi"},
+                "expected_output": "file content",
+                "evidence_stage": "local_code",
+                "blocking": False,
+            })
+
+    # Public research sweep for public/current/latest/research/doc queries.
+    if gate.get("public_research_needed") or gate.get("retrieval_mode", "").startswith("public_research"):
+        sources = ",".join(public_sources[:6]) or "all"
+        tools.append({
+            "step": len(tools) + 1,
+            "action": "Research public sources and enrich CORE memory",
+            "tool": "ingest_knowledge",
+            "args": {
+                "topic": query,
+                "sources": sources,
+                "max_per_source": "12",
+                "since_days": "30",
+            },
+            "expected_output": "public research summary and KB writes",
+            "evidence_stage": "public_research",
+            "blocking": False,
+        })
+        tools.append({
+            "step": len(tools) + 1,
+            "action": "Re-check CORE memory after public research",
+            "tool": "search_kb",
+            "args": {
+                "query": query,
+                "domain": msg.context.get("current_domain", "general"),
+                "limit": "5",
+            },
+            "expected_output": "KB hits after public ingestion",
+            "evidence_stage": "supabase_post_public",
+            "blocking": False,
+        })
+
+    # Web sweep for anything needing public evidence.
+    if gate.get("retrieval_mode") in {"supabase_then_web", "code_then_web"} or gate.get("needs_retrieval"):
+        tools.append({
+            "step": len(tools) + 1,
+            "action": "Search the web for external evidence",
+            "tool": "web_search",
+            "args": {"query": query, "max_results": "5"},
+            "expected_output": "web search results",
+            "evidence_stage": "web",
+            "blocking": False,
+        })
+
+    return {
+        "type": "multi_step" if len(tools) > 1 else "tool_execution",
+        "subtasks": tools,
+        "estimated_complexity": "medium" if len(tools) > 1 else "low",
+        "requires_confirmation": False,
+        "stop_on_failure": False,
+        "evidence_gate": gate,
+        "direct_answer": None,
+        "retrieval": True,
+    }
+
+
 # ── Main layer ────────────────────────────────────────────────────────────────
 async def layer_4_reason(msg: OrchestratorMessage):
     """
@@ -445,6 +573,14 @@ async def layer_4_reason(msg: OrchestratorMessage):
         except Exception as exc:
             print(f"[L4] decision_packet build failed (non-fatal): {exc}")
 
+    if not msg.evidence_gate:
+        try:
+            gate = build_evidence_gate(msg)
+            msg.evidence_gate = gate
+            msg.context["evidence_gate"] = gate
+        except Exception as exc:
+            print(f"[L4] evidence_gate build failed (non-fatal): {exc}")
+
     # ── Agentic mode check ────────────────────────────────────────────────────
     # Only activate for complex requests — simple queries stay on fast path
     try:
@@ -477,8 +613,10 @@ async def layer_4_reason(msg: OrchestratorMessage):
         await layer_5_tools(msg)
         return
 
-    # Capability/status/review paths: direct response from context
-    if msg.response_mode in ("status", "capability", "review", "debug"):
+    gate = msg.evidence_gate or msg.context.get("evidence_gate", {})
+
+    # Capability/status/review/debug paths can still retrieve evidence if the gate says so.
+    if msg.response_mode in ("status", "capability", "review", "debug") and not gate.get("needs_retrieval"):
         msg.plan = {
             "type": "direct_response",
             "subtasks": [],
@@ -486,6 +624,20 @@ async def layer_4_reason(msg: OrchestratorMessage):
             "direct_answer": None,
         }
         msg.track_layer("L4-DIRECT")
+        from core_orch_layer5 import layer_5_tools
+        await layer_5_tools(msg)
+        return
+
+    # Evidence gate: if Supabase is sparse, do a bounded evidence sweep before answering.
+    if gate.get("needs_retrieval"):
+        msg.plan = _build_evidence_retrieval_plan(msg)
+        msg.context["execution_plan"] = msg.plan
+        msg.context["evidence_gate"] = gate
+        msg.track_layer("L4-EVIDENCE")
+        print(
+            f"[L4] Evidence sweep enabled: mode={gate.get('retrieval_mode')} "
+            f"score={gate.get('score')} tools={len(msg.plan.get('subtasks', []))}"
+        )
         from core_orch_layer5 import layer_5_tools
         await layer_5_tools(msg)
         return
