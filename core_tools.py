@@ -2353,6 +2353,196 @@ WorldModel.update_model = _world_model_update_model
 WorldModel.predict_future_states = _world_model_predict_future_states
 
 
+class HierarchicalSearchController:
+    """Coordinate world-model rollouts with bounded multi-level search."""
+
+    def __init__(
+        self,
+        current_state,
+        goal,
+        hwm_levels,
+        domain: str = "general",
+        state_hint: str = "",
+        horizon: int = 3,
+        candidate_actions=None,
+        rollouts: int = 12,
+        exploration_weight: float = 1.2,
+    ):
+        self.current_state = current_state
+        self.goal = goal
+        self.hwm_levels = hwm_levels
+        self.domain = (domain or "general").strip()
+        self.state_hint = (state_hint or "").strip()
+        self.horizon = max(1, min(int(horizon or 3), 8))
+        self.candidate_actions = candidate_actions
+        self.rollouts = max(1, min(int(rollouts or 12), 32))
+        try:
+            self.exploration_weight = max(0.1, min(float(exploration_weight or 1.2), 4.0))
+        except Exception:
+            self.exploration_weight = 1.2
+
+    @staticmethod
+    def _normalize_items(items) -> list[str]:
+        if items in (None, "", []):
+            return []
+        if isinstance(items, str):
+            raw = items.strip()
+            if not raw:
+                return []
+            if raw.startswith("["):
+                try:
+                    parsed = json.loads(raw)
+                    if isinstance(parsed, list):
+                        return [str(item).strip() for item in parsed if str(item).strip()]
+                except Exception:
+                    try:
+                        parsed = ast.literal_eval(raw)
+                        if isinstance(parsed, (list, tuple, set)):
+                            return [str(item).strip() for item in parsed if str(item).strip()]
+                    except Exception:
+                        pass
+            return [part.strip() for part in raw.replace("\n", ",").split(",") if part.strip()]
+        if isinstance(items, dict):
+            items = [items]
+        if isinstance(items, (list, tuple, set)):
+            out = []
+            for item in items:
+                if isinstance(item, dict):
+                    for key in ("level", "name", "label", "title", "value", "text", "action"):
+                        value = item.get(key)
+                        if value:
+                            out.append(str(value).strip())
+                            break
+                    else:
+                        out.append(json.dumps(item, ensure_ascii=False, sort_keys=True))
+                else:
+                    text = str(item).strip()
+                    if text:
+                        out.append(text)
+            return out
+        text = str(items).strip()
+        return [text] if text else []
+
+    def run(self) -> dict:
+        current_state_obj = WorldModel._parse_blob(self.current_state)
+        current_state_text = WorldModel._textify(current_state_obj)
+        goal_text = WorldModel._textify(WorldModel._parse_blob(self.goal)) if isinstance(self.goal, (dict, str)) else str(self.goal or "")
+        levels = self._normalize_items(self.hwm_levels) or ["low", "medium", "high"]
+        actions = self._normalize_items(self.candidate_actions)
+        if not actions:
+            actions = levels[:]
+        wm = WorldModel(domain=self.domain, state_hint=self.state_hint).predict_future_states(
+            current_state=current_state_obj,
+            actions=actions,
+            horizon=self.horizon,
+        )
+        packet = t_reasoning_packet(query=f"{current_state_text} | {goal_text}".strip(" |"), domain=self.domain, limit=str(min(16, max(8, len(actions) + 4))))
+        evaluator = StateEvaluator(query=f"{current_state_text} | {goal_text}".strip(" |"), domain=self.domain, state_hint=self.state_hint)
+        state_eval = evaluator.evaluate()
+        mcts = MonteCarloTreeSearch(
+            query=f"{current_state_text} | {goal_text}".strip(" |"),
+            domain=self.domain,
+            state_hint=self.state_hint,
+            candidate_actions=actions,
+            rollouts=self.rollouts,
+            exploration_weight=self.exploration_weight,
+        ).run()
+
+        wm_best = wm.get("best_action") or ""
+        mcts_best = mcts.get("best_action") or ""
+        eval_readiness = float(state_eval.get("readiness_score") or 0.0)
+        eval_risk = float(state_eval.get("risk_score") or 0.0)
+        level_distribution = []
+        for idx, level in enumerate(levels):
+            lower = level.lower()
+            score = 0.1 + (0.2 * (len(levels) - idx) / max(1, len(levels)))
+            if lower in goal_text.lower():
+                score += 0.25
+            if lower in wm_best.lower() or lower in mcts_best.lower():
+                score += 0.25
+            if any(term in lower for term in ("low", "narrow", "specific")) and eval_readiness < 0.6:
+                score += 0.08
+            if any(term in lower for term in ("high", "broad", "abstract")) and eval_readiness >= 0.6:
+                score += 0.08
+            if any(term in goal_text.lower() for term in ("safe", "stabil", "review")) and any(term in lower for term in ("safe", "stable", "review")):
+                score += 0.12
+            score = max(0.0, min(1.0, score))
+            level_distribution.append({
+                "index": idx,
+                "level": level,
+                "score": round(score, 3),
+                "readiness": round(eval_readiness, 3),
+                "risk": round(eval_risk, 3),
+                "matches_world_model": bool(wm_best and lower in wm_best.lower()),
+                "matches_mcts": bool(mcts_best and lower in mcts_best.lower()),
+            })
+        total = sum(max(item["score"], 0.001) for item in level_distribution) or 1.0
+        for item in level_distribution:
+            item["probability"] = round(max(item["score"], 0.001) / total, 4)
+        level_distribution.sort(key=lambda item: (item["score"], item["probability"], item["level"]), reverse=True)
+        best_level = level_distribution[0]["level"] if level_distribution else None
+        plan = {
+            "best_level": best_level,
+            "best_action": wm_best or mcts_best or (actions[0] if actions else None),
+            "world_model_best_action": wm_best,
+            "mcts_best_action": mcts_best,
+            "state_recommendation": state_eval.get("recommendation"),
+        }
+        summary = " | ".join([
+            f"goal={goal_text[:120]}",
+            f"best_level={best_level or ''}",
+            f"best_action={plan['best_action'] or ''}",
+        ]).strip(" |")
+        return {
+            "ok": True,
+            "domain": self.domain,
+            "state_hint": self.state_hint,
+            "current_state": current_state_text[:1000],
+            "goal": goal_text[:1000],
+            "hwm_levels": levels,
+            "level_distribution": level_distribution,
+            "best_level": best_level,
+            "plan": plan,
+            "summary": summary[:500],
+            "world_model": wm,
+            "state_evaluation": state_eval,
+            "reasoning_packet": packet,
+            "mcts": mcts,
+        }
+
+
+def t_hierarchical_search_controller(current_state: str = "", goal: str = "", hwm_levels: str = "", domain: str = "general", state_hint: str = "", horizon: str = "3", candidate_actions: str = "", rollouts: str = "12", exploration_weight: str = "1.2") -> dict:
+    """Manage multi-level MCTS with world-model prediction and state evaluation."""
+    try:
+        if not current_state and not goal:
+            return {"ok": False, "error": "current_state or goal required"}
+        try:
+            hz = max(1, min(int(horizon), 8))
+        except Exception:
+            hz = 3
+        try:
+            ro = max(1, min(int(rollouts), 32))
+        except Exception:
+            ro = 12
+        try:
+            ew = max(0.1, min(float(exploration_weight), 4.0))
+        except Exception:
+            ew = 1.2
+        return HierarchicalSearchController(
+            current_state=current_state,
+            goal=goal,
+            hwm_levels=hwm_levels,
+            domain=domain,
+            state_hint=state_hint,
+            horizon=hz,
+            candidate_actions=candidate_actions,
+            rollouts=ro,
+            exploration_weight=ew,
+        ).run()
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
 def t_world_model(domain: str = "general", state_hint: str = "", experience: str = "", current_state: str = "", actions: str = "", horizon: str = "3") -> dict:
     """Update the world model from experience or predict future states from current state."""
     try:
@@ -7356,6 +7546,8 @@ TOOLS = {
                                "desc": "Apply bounded temporal attention over context sequences and return attended ordering."},
     "monte_carlo_tree_search": {"fn": t_monte_carlo_tree_search, "perm": "READ", "args": ["query", "domain", "limit", "tables", "per_table", "state_hint", "candidate_actions", "rollouts", "exploration_weight", "class_path"],
                                "desc": "Run a flexible Monte Carlo Tree Search bridge over CORE reasoning packets. Uses built-in fallback unless class_path points to an external MonteCarloTreeSearch class."},
+    "hierarchical_search_controller": {"fn": t_hierarchical_search_controller, "perm": "READ", "args": ["current_state", "goal", "hwm_levels", "domain", "state_hint", "horizon", "candidate_actions", "rollouts", "exploration_weight"],
+                               "desc": "Manage multi-level MCTS with WorldModel prediction and state evaluation. Returns a level distribution and bounded plan."},
     "world_model":            {"fn": t_world_model,            "perm": "WRITE",   "args": ["domain", "state_hint", "experience", "current_state", "actions", "horizon"],
                                "desc": "Bounded world-model interface: capture an experience into knowledge_base or predict future states from a current state and candidate actions."},
     "dynamic_router":          {"fn": t_dynamic_router,          "perm": "READ", "args": ["predictions", "confidences", "candidates", "policy_topic", "policy_domain", "policy_override", "query", "domain", "state_hint", "use_state_evaluator", "exploration_weight"],
