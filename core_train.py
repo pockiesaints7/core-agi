@@ -2341,6 +2341,28 @@ def _world_model_fusion_meta_learning_objective(
     }
 
 
+def _safe_recent_changelog_context(limit: int = 5) -> dict:
+    """Return recent changelog text plus availability metadata.
+
+    The background researcher should never fail just because the changelog table
+    is missing, unavailable, or temporarily unreadable. Instead we surface a
+    structured status and keep the rest of the recent training context intact.
+    """
+    try:
+        rows = sb_get(
+            "changelog",
+            f"select=summary,category&order=id.desc&limit={max(1, int(limit))}",
+            svc=True,
+        )
+        text = "\n".join(
+            f"  [{r.get('category','?')}] {r.get('summary','')[:120]}"
+            for r in rows
+        ) if rows else "None yet."
+        return {"available": True, "rows": rows or [], "text": text, "error": ""}
+    except Exception as exc:
+        return {"available": False, "rows": [], "text": "Unavailable.", "error": str(exc)}
+
+
 def _run_joint_training_planner(cycle_count: int = 0) -> dict:
     """Bounded joint-training planner (no actual model training).
 
@@ -3124,15 +3146,9 @@ def _extract_real_signal() -> bool:
         except Exception:
             kb_total = 0
 
-        try:
-            changelog_rows = sb_get("changelog",
-                "select=summary,category&order=id.desc&limit=5", svc=True)
-            changelog_text = "\n".join(
-                f"  [{r.get('category','?')}] {r.get('summary','')[:120]}"
-                for r in changelog_rows
-            ) if changelog_rows else "None yet."
-        except Exception:
-            changelog_text = "Unavailable."
+        changelog_ctx = _safe_recent_changelog_context(limit=5)
+        changelog_text = changelog_ctx["text"]
+        changelog_status = "available" if changelog_ctx["available"] else "unavailable"
 
         sessions_text = "\n".join([
             f"- [{r.get('interface','?')}] {r.get('summary','')[:200]}"
@@ -3157,6 +3173,7 @@ Output ONLY valid JSON, no preamble."""
         system = _load_researcher_prompt("background_researcher") or _default_researcher_system
 
         user = (f"KB total entries: {kb_total}\n"
+                f"Recent changelog status: {changelog_status}\n"
                 f"Recent changelog:\n{changelog_text}\n\n"
                 f"RECENT SESSIONS (since last processed, {len(sessions)} entries):\n{sessions_text}\n\n"
                 f"RECENT MISTAKES (since last processed, {len(mistakes)} entries):\n{mistakes_text}\n\n"
