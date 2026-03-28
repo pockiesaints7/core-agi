@@ -2512,6 +2512,40 @@ def t_session_start() -> dict:
         except Exception as _cme:
             print(f"[SESSION] capability_model load failed (non-fatal): {_cme}")
 
+        previous_snapshot = _latest_session_snapshot_raw()
+        session_snapshot = {
+            "scope": "session_start",
+            "generated_at": datetime.utcnow().isoformat(),
+            "health": health.get("overall", "unknown"),
+            "counts": state.get("counts", {}),
+            "last_session_ts": state.get("last_session_ts", ""),
+            "resume_task": {
+                "id": resume_task_obj.get("id"),
+                "status": resume_task_obj.get("status"),
+                "priority": resume_task_obj.get("priority"),
+            } if isinstance(resume_task_obj, dict) else None,
+            "resume_checkpoint": _get_resume_checkpoint(resume_task_obj),
+            "quality_alert": quality_alert,
+            "training_pipeline_ok": training.get("pipeline_ok"),
+            "training_health_flags": training.get("health_flags", []),
+            "active_goals": [
+                {
+                    "goal": g.get("goal"),
+                    "domain": g.get("domain"),
+                    "status": g.get("status"),
+                    "progress": g.get("progress"),
+                }
+                for g in (active_goals or [])[:10]
+            ],
+            "owner_profile": owner_profile_data[:5],
+            "weak_capability_domains": weak_capability_domains[:10],
+            "system_map_drift": drift,
+        }
+        try:
+            _persist_session_snapshot(session_snapshot, scope="session_start")
+        except Exception as _sp:
+            print(f"[SESSION] snapshot persist failed (non-fatal): {_sp}")
+
         return {
             "ok": True,
             "health": health.get("overall", "unknown"),
@@ -2543,6 +2577,9 @@ def t_session_start() -> dict:
             "active_goals": active_goals,              # P2-03: cross-session goal continuity
             "owner_profile": owner_profile_data,          # P3-02: Vux behavioral model
             "weak_capability_domains": weak_capability_domains,  # P3-07: domains below 0.60 reliability
+            "session_snapshot": session_snapshot,
+            "previous_session_snapshot": previous_snapshot.get("snapshot"),
+            "previous_session_snapshot_created_at": previous_snapshot.get("created_at"),
         }
     except Exception as e:
         return {"ok": False, "error": str(e)}
@@ -2592,6 +2629,17 @@ def t_checkpoint(active_task_id: str = "", last_action: str = "", last_result: s
         })
         if not ok:
             return {"ok": False, "error_code": "patch_failed", "message": "Failed to write checkpoint", "retry_hint": True, "domain": "supabase"}
+        try:
+            _persist_session_snapshot({
+                "scope": "checkpoint",
+                "generated_at": checkpoint_data["ts"],
+                "session_id": session_id,
+                "checkpoint": checkpoint_data,
+                "last_action": checkpoint_data["last_action"],
+                "last_result": checkpoint_data["last_result"],
+            }, scope="checkpoint")
+        except Exception:
+            pass
         return {"ok": True, "session_id": session_id, "checkpoint": checkpoint_data}
     except Exception as e:
         return {"ok": False, "error_code": "exception", "message": str(e), "retry_hint": True, "domain": "supabase"}
@@ -4688,6 +4736,104 @@ def t_get_state_key(key: str) -> dict:
         return {"ok": False, "error": str(e)}
 
 
+def _latest_session_snapshot_raw() -> dict:
+    """Return the most recent session snapshot payload stored in sessions.summary."""
+    try:
+        rows = sb_get(
+            "sessions",
+            "select=summary,created_at&summary=like.*%5Bstate_update%5D+session_snapshot:*&order=created_at.desc&limit=1",
+            svc=True,
+        ) or []
+        if not rows:
+            return {"ok": False, "found": False, "snapshot": None, "created_at": None}
+        raw = rows[0].get("summary", "") or ""
+        prefix = "[state_update] session_snapshot: "
+        payload = raw[len(prefix):].strip() if raw.startswith(prefix) else raw
+        try:
+            snapshot = json.loads(payload)
+        except Exception:
+            snapshot = {"raw": payload}
+        return {
+            "ok": True,
+            "found": True,
+            "snapshot": snapshot,
+            "created_at": rows[0].get("created_at"),
+        }
+    except Exception as e:
+        return {"ok": False, "error": str(e), "found": False, "snapshot": None}
+
+
+def _persist_session_snapshot(snapshot: dict, scope: str = "boot") -> dict:
+    """Persist a compact snapshot into sessions.summary for cross-session continuity."""
+    try:
+        blob = json.dumps(snapshot or {}, default=str)
+        payload = {
+            "summary": f"[state_update] session_snapshot: {blob[:1200]}",
+            "actions": [f"session_snapshot persisted ({scope})"],
+            "interface": "mcp",
+        }
+        ok = sb_post("sessions", payload)
+        return {"ok": bool(ok), "scope": scope, "bytes": len(blob), "stored": bool(ok)}
+    except Exception as e:
+        return {"ok": False, "scope": scope, "error": str(e), "stored": False}
+
+
+def t_session_snapshot(scope: str = "boot", persist: str = "true") -> dict:
+    """Build a canonical session continuity snapshot, and optionally persist it."""
+    try:
+        state = t_state()
+        health = t_health()
+        training = t_get_training_pipeline()
+        quality_alert = t_get_quality_alert()
+        resume_task = state.get("resume_task") or {}
+        resume_checkpoint = state.get("resume_checkpoint")
+        snapshot = {
+            "scope": scope or "boot",
+            "generated_at": datetime.utcnow().isoformat(),
+            "health": health.get("overall", "unknown"),
+            "counts": state.get("counts", {}),
+            "last_session_ts": state.get("last_session_ts", ""),
+            "resume_task": {
+                "id": resume_task.get("id"),
+                "status": resume_task.get("status"),
+                "priority": resume_task.get("priority"),
+            } if isinstance(resume_task, dict) else None,
+            "resume_checkpoint": resume_checkpoint,
+            "quality_alert": quality_alert,
+            "training": {
+                "pipeline_ok": training.get("pipeline_ok"),
+                "health_flags": training.get("health_flags", []),
+                "quality": training.get("quality", {}),
+            },
+            "active_goals": [
+                {
+                    "goal": g.get("goal"),
+                    "domain": g.get("domain"),
+                    "status": g.get("status"),
+                    "progress": g.get("progress"),
+                }
+                for g in (state.get("active_goals") or [])[:10]
+            ],
+            "owner_profile": (state.get("owner_profile") or [])[:5],
+            "weak_capability_domains": state.get("weak_capability_domains", [])[:10],
+            "system_map_drift": state.get("system_map_drift", {}),
+        }
+        persisted = None
+        if str(persist).strip().lower() not in ("false", "0", "no"):
+            persisted = _persist_session_snapshot(snapshot, scope=scope or "boot")
+        previous = _latest_session_snapshot_raw()
+        return {
+            "ok": True,
+            "snapshot": snapshot,
+            "persisted": persisted,
+            "previous_snapshot": previous.get("snapshot"),
+            "previous_snapshot_created_at": previous.get("created_at"),
+        }
+    except Exception as e:
+        return {"ok": False, "error": str(e), "scope": scope}
+
+
+
 def t_task_update(task_id: str = "", status: str = "", result: str = "") -> dict:
     """Update a task_queue row status. task_id = UUID or TASK-N string. status = pending/in_progress/done/failed."""
     valid = {"pending", "in_progress", "done", "failed"}
@@ -5701,6 +5847,8 @@ TOOLS = {
     "system_map_scan":        {"fn": t_system_map_scan, "perm": "READ", "args": ["trigger"], "desc": "Scan system_map table. trigger=session_start|session_end|manual"},
     "session_start":          {"fn": t_session_start,          "perm": "READ",    "args": [],
                                "desc": "One-call session bootstrap. Returns: health, counts, resume_task (highest priority in_progress -- start here), in_progress_tasks, pending_tasks, recent_mistakes (last 10 all domains), stale_pattern_count, session_md (full SESSION.md static doc for claude.ai bootstrap), system_map. Use get_mistakes(domain=X) for domain-specific lookup before any write."},
+    "session_snapshot":       {"fn": t_session_snapshot,       "perm": "READ",    "args": ["scope", "persist"],
+                               "desc": "Canonical cross-session continuity snapshot. Captures health, counts, resume_task, checkpoint, quality, training, active goals, and capability context. Persisted into sessions.summary unless persist=false."},
     "tool_stats":             {"fn": t_tool_stats,             "perm": "READ",    "args": ["days"],
                                "desc": "TASK-26: Per-tool success/fail rate for last N days (default 7). Returns tools sorted by fail_rate desc. fail_rate>0.2 = flagged. Use to identify flaky tools."},
     "checkpoint":             {"fn": t_checkpoint,             "perm": "WRITE",   "args": ["active_task_id", "last_action", "last_result"],
