@@ -9,6 +9,7 @@ Import chain:
 NOTE: This IS the live implementation. Entry point = core_main.py (Procfile confirmed).
 core.py has been deleted â€” it was legacy monolith."""
 import base64
+import ast
 import difflib
 import json
 import os
@@ -987,7 +988,12 @@ class CausalGraph:
                     if isinstance(parsed, list):
                         return [str(item).strip() for item in parsed if str(item).strip()]
                 except Exception:
-                    pass
+                    try:
+                        parsed = ast.literal_eval(raw)
+                        if isinstance(parsed, (list, tuple, set)):
+                            return [str(item).strip() for item in parsed if str(item).strip()]
+                    except Exception:
+                        pass
             return [part.strip() for part in raw.replace("\n", ",").split(",") if part.strip()]
         if isinstance(sequence, dict):
             sequence = [sequence]
@@ -1272,6 +1278,230 @@ def t_causal_graph(query: str = "", domain: str = "general", tables: str = "", l
             per_table=pt,
             state_hint=state_hint,
             sequence=sequence or None,
+        ).build()
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+class CausalGraphInference:
+    """Fuse causal, relational, and state-evaluation signals into a transition model."""
+
+    def __init__(
+        self,
+        query: str,
+        domain: str = "general",
+        tables: list | None = None,
+        limit: int = 10,
+        per_table: int = 2,
+        state_hint: str = "",
+        sequence=None,
+        candidate_actions=None,
+        horizon: int = 3,
+    ):
+        self.query = (query or "").strip()
+        self.domain = (domain or "general").strip()
+        self.tables = tables
+        self.limit = max(1, min(int(limit or 10), 50))
+        self.per_table = max(1, min(int(per_table or 2), 5))
+        self.state_hint = (state_hint or "").strip()
+        self.sequence = sequence
+        self.candidate_actions = candidate_actions
+        self.horizon = max(1, min(int(horizon or 3), 8))
+
+    @staticmethod
+    def _normalize_actions(actions) -> list[str]:
+        if actions in (None, "", []):
+            return []
+        if isinstance(actions, str):
+            raw = actions.strip()
+            if not raw:
+                return []
+            if raw.startswith("["):
+                try:
+                    parsed = json.loads(raw)
+                    if isinstance(parsed, list):
+                        return [str(item).strip() for item in parsed if str(item).strip()]
+                except Exception:
+                    try:
+                        parsed = ast.literal_eval(raw)
+                        if isinstance(parsed, (list, tuple, set)):
+                            return [str(item).strip() for item in parsed if str(item).strip()]
+                    except Exception:
+                        pass
+            return [part.strip() for part in raw.replace("\n", ",").split(",") if part.strip()]
+        if isinstance(actions, dict):
+            actions = [actions]
+        if isinstance(actions, (list, tuple, set)):
+            items = []
+            for item in actions:
+                if isinstance(item, dict):
+                    parts = []
+                    for key in ("state", "current_state", "context", "summary", "value", "action", "title", "description"):
+                        value = item.get(key)
+                        if value:
+                            parts.append(str(value))
+                    text = " | ".join(parts).strip() or json.dumps(item, ensure_ascii=False, sort_keys=True)
+                else:
+                    text = str(item).strip()
+                if text:
+                    items.append(text[:1000])
+            return items
+        text = str(actions).strip()
+        return [text] if text else []
+
+    @staticmethod
+    def _text(item) -> str:
+        if isinstance(item, dict):
+            for key in ("text", "title", "action", "summary", "label"):
+                value = item.get(key)
+                if value:
+                    return str(value).strip()
+        return str(item).strip()
+
+    def build(self) -> dict:
+        sequence = CausalGraph._normalize_sequence(self.sequence)
+        if not sequence and self.query:
+            sequence = [self.query]
+        actions = self._normalize_actions(self.candidate_actions)
+        if not actions and len(sequence) > 1:
+            actions = [item for item in sequence[1:] if item]
+        if not actions:
+            actions = ["observe", "assess", "proceed"]
+
+        causal = CausalGraph(
+            query=self.query,
+            domain=self.domain,
+            tables=self.tables,
+            limit=self.limit,
+            per_table=self.per_table,
+            state_hint=self.state_hint,
+            sequence=sequence or None,
+        ).build(sequence=sequence or None)
+        relational = DynamicRelationalGraph(
+            query=self.query,
+            domain=self.domain,
+            tables=self.tables,
+            limit=self.limit,
+            per_table=self.per_table,
+            state_hint=self.state_hint,
+        ).build()
+        evaluator = StateEvaluator(query=self.query, domain=self.domain, state_hint=self.state_hint)
+        evaluation = evaluator.evaluate() if hasattr(evaluator, "evaluate") else {"ok": False}
+
+        readiness = float(evaluation.get("readiness_score") or 0.0)
+        coherence = float(evaluation.get("coherence_score") or 0.0)
+        risk = float(evaluation.get("risk_score") or 0.0)
+        recommendation = evaluation.get("recommendation") or "defer"
+        dominant_table = relational.get("dominant_table")
+        density = float(relational.get("density") or causal.get("density") or 0.0)
+
+        causal_order = causal.get("causal_order") or []
+        causal_rank = {}
+        causal_support = {}
+        total_order = max(1, len(causal_order))
+        for idx, item in enumerate(causal_order):
+            text = self._text(item)
+            if not text:
+                continue
+            causal_rank[text] = idx
+            causal_support[text] = max(0.0, 1.0 - (idx / total_order))
+
+        ranked_transitions = []
+        for idx, action in enumerate(actions):
+            action_text = self._text(action)
+            if not action_text:
+                continue
+            lower = action_text.lower()
+            causal_score = causal_support.get(action_text, 0.0)
+            if not causal_score:
+                for key, value in causal_support.items():
+                    if key.lower() in lower or lower in key.lower():
+                        causal_score = max(causal_score, value)
+            relational_score = min(0.35, density + (0.15 if dominant_table and dominant_table in lower else 0.0))
+            if any(term in lower for term in ("observe", "inspect", "audit")):
+                relational_score = min(0.35, relational_score + 0.05)
+            combined = (
+                (0.45 * causal_score)
+                + (0.25 * readiness)
+                + (0.15 * coherence)
+                + (0.15 * max(0.0, 1.0 - risk))
+                + (0.05 * relational_score)
+            )
+            combined = max(0.0, min(1.0, combined))
+            rationale_bits = [
+                f"causal={round(causal_score, 3)}",
+                f"relational={round(relational_score, 3)}",
+                f"readiness={round(readiness, 3)}",
+                f"risk={round(risk, 3)}",
+            ]
+            if recommendation:
+                rationale_bits.append(f"recommendation={recommendation}")
+            ranked_transitions.append({
+                "index": idx,
+                "action": action_text,
+                "score": round(combined, 3),
+                "causal_support": round(causal_score, 3),
+                "relational_support": round(relational_score, 3),
+                "readiness": round(readiness, 3),
+                "coherence": round(coherence, 3),
+                "risk": round(risk, 3),
+                "rationale": "; ".join(rationale_bits),
+            })
+
+        ranked_transitions.sort(key=lambda item: (item["score"], item["causal_support"], item["relational_support"], item["action"]), reverse=True)
+        best_transition = ranked_transitions[0] if ranked_transitions else {}
+        transition_summary = " | ".join([
+            causal.get("causal_summary", "")[:120],
+            relational.get("summary", "")[:120],
+            str(recommendation)[:60],
+        ]).strip(" |")
+        return {
+            "ok": True,
+            "query": self.query,
+            "domain": self.domain,
+            "state_hint": self.state_hint,
+            "horizon": self.horizon,
+            "causal_graph": causal,
+            "relational_graph": relational,
+            "state_evaluation": evaluation,
+            "candidate_actions": actions,
+            "ranked_transitions": ranked_transitions,
+            "best_transition": best_transition,
+            "best_action": best_transition.get("action"),
+            "graph_density": round(density, 3),
+            "dominant_table": dominant_table,
+            "summary": transition_summary[:500],
+        }
+
+
+def t_causal_graph_inference(query: str = "", domain: str = "general", tables: str = "", limit: str = "10", per_table: str = "2", state_hint: str = "", sequence: str = "", candidate_actions: str = "", horizon: str = "3") -> dict:
+    """Integrate causal graph inference with relational graph and state evaluation."""
+    try:
+        if not query:
+            return {"ok": False, "error": "query required"}
+        try:
+            lim = max(1, min(int(limit), 50))
+        except Exception:
+            lim = 10
+        try:
+            pt = max(1, min(int(per_table), 5))
+        except Exception:
+            pt = 2
+        try:
+            hz = max(1, min(int(horizon), 8))
+        except Exception:
+            hz = 3
+        table_list = [t.strip() for t in tables.split(",") if t.strip()] if tables else None
+        return CausalGraphInference(
+            query=query,
+            domain=domain,
+            tables=table_list,
+            limit=lim,
+            per_table=pt,
+            state_hint=state_hint,
+            sequence=sequence or None,
+            candidate_actions=candidate_actions or None,
+            horizon=hz,
         ).build()
     except Exception as e:
         return {"ok": False, "error": str(e)}
@@ -1781,6 +2011,19 @@ def _world_model_update_model(self, experience) -> dict:
     title = (exp.get("title") or exp.get("task") or exp.get("label") or exp.get("summary") or "world_model_experience")[:180]
     temporal = AdaptiveTemporalFilter(domain=self.domain, state_hint=self.state_hint, window=5).filter_sequence([exp_text], horizon=1)
     causal = CausalGraph(domain=self.domain, state_hint=self.state_hint, query=exp_text).build(sequence=[exp_text])
+    causal_inference = CausalGraphInference(
+        query=exp_text,
+        domain=self.domain,
+        state_hint=self.state_hint,
+        sequence=[exp_text],
+        candidate_actions=[
+            exp.get("action"),
+            exp.get("next_action"),
+            exp.get("transition"),
+            exp.get("step"),
+        ],
+        horizon=3,
+    ).build()
     content = json.dumps(exp, ensure_ascii=False, sort_keys=True)[:4000]
     kb_result = t_kb_update(
         domain=f"world_model:{self.domain}",
@@ -1797,6 +2040,7 @@ def _world_model_update_model(self, experience) -> dict:
             f"experience captured: {exp_text[:240]}",
             f"temporal filter: {temporal.get('summary','')[:240]}",
             f"causal graph: {causal.get('causal_summary','')[:240]}",
+            f"causal inference: {causal_inference.get('summary','')[:240]}",
         ],
         "interface": "mcp",
     })
@@ -1808,6 +2052,7 @@ def _world_model_update_model(self, experience) -> dict:
         "session_result": session_result,
         "temporal_filter": temporal,
         "causal_graph": causal,
+        "causal_inference": causal_inference,
         "experience_preview": exp_text[:300],
     }
 
@@ -1841,26 +2086,36 @@ def _world_model_predict_future_states(self, current_state, actions, horizon: in
     temporal = AdaptiveTemporalFilter(domain=self.domain, state_hint=self.state_hint, window=max(3, steps + 1)).filter_sequence([current_text] + action_list, horizon=max(1, steps))
     attention = TemporalAttention(domain=self.domain, state_hint=self.state_hint, heads=3, window=max(3, steps + 1)).attend([current_text] + action_list, horizon=max(1, steps))
     causal = CausalGraph(domain=self.domain, state_hint=self.state_hint, query=current_text).build(sequence=[current_text] + action_list)
-    action_scores = {}
-    for item in (attention.get("attended_sequence") or []):
-        text = (item.get("text") or "").strip()
-        if text and text in action_list:
-            action_scores.setdefault(text, {"text": text, "attention_score": 0.0, "causal_score": 0.0})
-            action_scores[text]["attention_score"] = max(action_scores[text]["attention_score"], float(item.get("attention_score") or 0.0))
-    for item in (causal.get("causal_order") or []):
-        text = (item.get("text") or "").strip()
-        if text and text in action_list:
-            action_scores.setdefault(text, {"text": text, "attention_score": 0.0, "causal_score": 0.0})
-            action_scores[text]["causal_score"] = max(action_scores[text]["causal_score"], float(item.get("belief") or 0.0))
-    if not action_scores:
-        for action in action_list:
-            action_scores[action] = {"text": action, "attention_score": 0.0, "causal_score": 0.0}
-    merged_actions = []
-    for data in action_scores.values():
-        data["combined_score"] = round((data["attention_score"] * 0.6) + (data["causal_score"] * 0.4), 3)
-        merged_actions.append(data)
-    merged_actions.sort(key=lambda item: (item["combined_score"], item["attention_score"], item["causal_score"], item["text"]), reverse=True)
-    ranked_steps = [item["text"] for item in merged_actions if item.get("text")]
+    causal_inference = CausalGraphInference(
+        query=current_text,
+        domain=self.domain,
+        state_hint=self.state_hint,
+        sequence=[current_text] + action_list,
+        candidate_actions=action_list,
+        horizon=steps,
+    ).build()
+    ranked_steps = [item["action"] for item in (causal_inference.get("ranked_transitions") or []) if item.get("action")]
+    if not ranked_steps:
+        action_scores = {}
+        for item in (attention.get("attended_sequence") or []):
+            text = (item.get("text") or "").strip()
+            if text and text in action_list:
+                action_scores.setdefault(text, {"text": text, "attention_score": 0.0, "causal_score": 0.0})
+                action_scores[text]["attention_score"] = max(action_scores[text]["attention_score"], float(item.get("attention_score") or 0.0))
+        for item in (causal.get("causal_order") or []):
+            text = (item.get("text") or "").strip()
+            if text and text in action_list:
+                action_scores.setdefault(text, {"text": text, "attention_score": 0.0, "causal_score": 0.0})
+                action_scores[text]["causal_score"] = max(action_scores[text]["causal_score"], float(item.get("belief") or 0.0))
+        if not action_scores:
+            for action in action_list:
+                action_scores[action] = {"text": action, "attention_score": 0.0, "causal_score": 0.0}
+        merged_actions = []
+        for data in action_scores.values():
+            data["combined_score"] = round((data["attention_score"] * 0.6) + (data["causal_score"] * 0.4), 3)
+            merged_actions.append(data)
+        merged_actions.sort(key=lambda item: (item["combined_score"], item["attention_score"], item["causal_score"], item["text"]), reverse=True)
+        ranked_steps = [item["text"] for item in merged_actions if item.get("text")]
     if not ranked_steps:
         ranked_steps = action_list[:steps] or [current_text]
 
@@ -1874,7 +2129,7 @@ def _world_model_predict_future_states(self, current_state, actions, horizon: in
         candidate_actions=ranked_steps,
         rollouts=min(max(steps * len(ranked_steps), 4), 24),
     ).run()
-    best_action = mcts.get("best_action") or ranked_steps[0]
+    best_action = (causal_inference.get("best_transition") or {}).get("action") or mcts.get("best_action") or ranked_steps[0]
     predicted_states = []
     rolling_state = dict(state)
     for idx in range(steps):
@@ -1903,6 +2158,7 @@ def _world_model_predict_future_states(self, current_state, actions, horizon: in
         "temporal_filter": temporal,
         "temporal_attention": attention,
         "causal_graph": causal,
+        "causal_inference": causal_inference,
         "base_evaluation": base_card,
         "graph_density": graph.get("density"),
         "graph_dominant_table": graph.get("dominant_table"),
@@ -6908,6 +7164,8 @@ TOOLS = {
                                "desc": "Build a deterministic relational graph from unified memory context. Returns nodes, edges, density, dominant table, and top retrieved context."},
     "causal_graph":           {"fn": t_causal_graph,           "perm": "READ",    "args": ["query", "domain", "tables", "limit", "per_table", "state_hint", "sequence"],
                                "desc": "Build a lightweight causal graph from unified memory context or a provided sequence. Returns causal order, paths, beliefs, and graph density."},
+    "causal_graph_inference": {"fn": t_causal_graph_inference, "perm": "READ",    "args": ["query", "domain", "tables", "limit", "per_table", "state_hint", "sequence", "candidate_actions", "horizon"],
+                               "desc": "Fuse causal graph, relational graph, and state evaluation into a transition model usable by world-model planning."},
     "adaptive_temporal_filter": {"fn": t_adaptive_temporal_filter, "perm": "READ", "args": ["sequence", "domain", "state_hint", "window", "decay"],
                                "desc": "Rank and smooth temporal context with bounded decay and hint-aware weighting."},
     "temporal_attention": {"fn": t_temporal_attention, "perm": "READ", "args": ["sequence", "domain", "state_hint", "heads", "window"],
