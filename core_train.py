@@ -2351,6 +2351,66 @@ def _safe_recent_changelog_context(limit: int = 5) -> dict:
     limit = max(1, int(limit))
     canonical_cols = "version,change_type,component,title,description,before_state,after_state,triggered_by,created_at"
     legacy_cols = "summary,category"
+
+    def _normalize_rows(rows: list[dict], schema: str) -> tuple[list[dict], dict]:
+        normalized: list[dict] = []
+        missing_fields_rows = 0
+        missing_fields_total = 0
+        completeness_total = 0.0
+        for row in rows or []:
+            canonical = {
+                "version": str(row.get("version") or "").strip(),
+                "change_type": str(row.get("change_type") or "").strip(),
+                "component": str(row.get("component") or "").strip(),
+                "title": str(row.get("title") or "").strip(),
+                "description": str(row.get("description") or "").strip(),
+                "before_state": str(row.get("before_state") or "").strip(),
+                "after_state": str(row.get("after_state") or "").strip(),
+                "triggered_by": str(row.get("triggered_by") or "").strip(),
+                "created_at": str(row.get("created_at") or "").strip(),
+            }
+            legacy_summary = str(row.get("summary") or "").strip()
+            legacy_category = str(row.get("category") or "").strip()
+            missing_fields = [name for name, value in canonical.items() if not value]
+            if not canonical["title"]:
+                canonical["title"] = legacy_summary or "Untitled changelog entry"
+            if not canonical["description"]:
+                canonical["description"] = legacy_summary or "No description provided."
+            if not canonical["change_type"]:
+                canonical["change_type"] = legacy_category or "unknown"
+            if not canonical["component"]:
+                canonical["component"] = "general"
+            if not canonical["version"]:
+                canonical["version"] = "?"
+            display_bits = [
+                canonical["version"],
+                canonical["change_type"],
+                canonical["component"],
+                canonical["title"],
+            ]
+            display_line = " | ".join(bit for bit in display_bits if bit and bit != "?")
+            if not display_line:
+                display_line = canonical["description"] or legacy_summary or "Untitled changelog entry"
+            completeness = round((len(canonical) - len(missing_fields)) / max(1, len(canonical)), 2)
+            completeness_total += completeness
+            if missing_fields:
+                missing_fields_rows += 1
+                missing_fields_total += len(missing_fields)
+            normalized.append({
+                **row,
+                "_schema": schema,
+                "_missing_fields": missing_fields,
+                "_row_completeness": completeness,
+                "_display_line": display_line,
+            })
+        stats = {
+            "missing_fields_rows": missing_fields_rows,
+            "missing_fields_total": missing_fields_total,
+            "row_completeness": round(completeness_total / max(1, len(normalized)), 2) if normalized else 0.0,
+            "normalized_rows": normalized,
+        }
+        return normalized, stats
+
     try:
         rows = sb_get(
             "changelog",
@@ -2368,22 +2428,32 @@ def _safe_recent_changelog_context(limit: int = 5) -> dict:
                 "text": "Unavailable.",
                 "sources": ["sessions", "hot_reflections", "mistakes", "knowledge_base"],
                 "error": str(source_exc),
-            }
+                }
+        normalized_rows, stats = _normalize_rows(rows or [], "canonical")
         if not rows:
             text = "None yet."
         else:
             text = "\n".join(
-                "  [{ver}|{ctype}] {component} — {title}".format(
+                "  [{ver}|{ctype}] {component} — {title}{missing}".format(
                     ver=(r.get("version") or "?"),
                     ctype=(r.get("change_type") or "?"),
                     component=(r.get("component") or "general"),
-                    title=(r.get("title") or r.get("description") or "")[:160],
+                    title=(r.get("_display_line") or r.get("title") or r.get("description") or "")[:160],
+                    missing=(
+                        f" [missing: {','.join(r.get('_missing_fields') or [])}]"
+                        if r.get("_missing_fields")
+                        else ""
+                    ),
                 )
-                for r in rows
+                for r in normalized_rows
             )
         return {
             "available": True,
             "rows": rows or [],
+            "normalized_rows": normalized_rows,
+            "missing_fields_rows": stats["missing_fields_rows"],
+            "missing_fields_total": stats["missing_fields_total"],
+            "row_completeness": stats["row_completeness"],
             "text": text,
             "error": "",
             "schema": "canonical",
@@ -2408,13 +2478,26 @@ def _safe_recent_changelog_context(limit: int = 5) -> dict:
                     "sources": ["sessions", "hot_reflections", "mistakes", "knowledge_base"],
                     "error": str(source_exc),
                 }
+            normalized_rows, stats = _normalize_rows(rows or [], "legacy")
             text = "\n".join(
-                f"  [{r.get('category','?')}] {r.get('summary','')[:120]}"
-                for r in rows
+                "  [{ctype}] {summary}{missing}".format(
+                    ctype=(r.get("change_type") or r.get("category") or "?"),
+                    summary=(r.get("_display_line") or r.get("summary") or "")[:160],
+                    missing=(
+                        f" [missing: {','.join(r.get('_missing_fields') or [])}]"
+                        if r.get("_missing_fields")
+                        else ""
+                    ),
+                )
+                for r in normalized_rows
             ) if rows else "None yet."
             return {
                 "available": True,
                 "rows": rows or [],
+                "normalized_rows": normalized_rows,
+                "missing_fields_rows": stats["missing_fields_rows"],
+                "missing_fields_total": stats["missing_fields_total"],
+                "row_completeness": stats["row_completeness"],
                 "text": text,
                 "error": "",
                 "schema": "legacy",
@@ -2444,6 +2527,10 @@ def _safe_recent_changelog_context(limit: int = 5) -> dict:
             return {
                 "available": False,
                 "rows": [],
+                "normalized_rows": [],
+                "missing_fields_rows": 0,
+                "missing_fields_total": 0,
+                "row_completeness": 0.0,
                 "text": "Unavailable.",
                 "error": str(legacy_exc),
                 "schema": "unavailable",

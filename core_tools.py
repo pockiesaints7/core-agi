@@ -4287,6 +4287,57 @@ def t_changelog_source_packet(limit: int = 5) -> dict:
     return _changelog_source_packet(limit=limit)
 
 
+def _normalize_changelog_row(row: dict) -> dict:
+    """Normalize canonical and legacy changelog rows into one safe shape."""
+    row = row or {}
+    canonical = {
+        "version": str(row.get("version") or "").strip(),
+        "change_type": str(row.get("change_type") or "").strip(),
+        "component": str(row.get("component") or "").strip(),
+        "title": str(row.get("title") or "").strip(),
+        "description": str(row.get("description") or "").strip(),
+        "before_state": str(row.get("before_state") or "").strip(),
+        "after_state": str(row.get("after_state") or "").strip(),
+        "triggered_by": str(row.get("triggered_by") or "").strip(),
+        "created_at": str(row.get("created_at") or "").strip(),
+    }
+    legacy = {
+        "summary": str(row.get("summary") or "").strip(),
+        "category": str(row.get("category") or "").strip(),
+    }
+    missing_fields = [name for name, value in canonical.items() if not value]
+    # Fill display fields from legacy columns when canonical data is absent.
+    if not canonical["title"]:
+        canonical["title"] = legacy["summary"] or "Untitled changelog entry"
+    if not canonical["description"]:
+        canonical["description"] = legacy["summary"] or "No description provided."
+    if not canonical["change_type"]:
+        canonical["change_type"] = legacy["category"] or "unknown"
+    if not canonical["component"]:
+        canonical["component"] = "general"
+    if not canonical["version"]:
+        canonical["version"] = "?"
+    display_bits = [
+        canonical["version"],
+        canonical["change_type"],
+        canonical["component"],
+        canonical["title"],
+    ]
+    display_line = " | ".join(bit for bit in display_bits if bit and bit != "?")
+    if not display_line:
+        display_line = canonical["description"] or legacy["summary"] or "Untitled changelog entry"
+    completeness = round((len(canonical) - len(missing_fields)) / max(1, len(canonical)), 2)
+    normalized = dict(row)
+    normalized.update({
+        "_missing_fields": missing_fields,
+        "_row_completeness": completeness,
+        "_display_line": display_line,
+        "_legacy_summary": legacy["summary"],
+        "_legacy_category": legacy["category"],
+    })
+    return normalized
+
+
 @dataclass
 class ChangelogPacket:
     latest_version: str = ""
@@ -4298,6 +4349,9 @@ class ChangelogPacket:
     today_rows: int = 0
     verified_rows: int = 0
     missing_triggered_by_rows: int = 0
+    missing_fields_rows: int = 0
+    missing_fields_total: int = 0
+    row_completeness: float = 0.0
     tracking_state: str = "unknown"
     stalled: bool = False
     tracking_score: float = 0.0
@@ -4306,6 +4360,7 @@ class ChangelogPacket:
     warnings: list[str] | None = None
     summary: str = ""
     rows: list[dict] | None = None
+    normalized_rows: list[dict] | None = None
     source_packet: dict | None = None
 
     def to_dict(self) -> dict:
@@ -4314,6 +4369,7 @@ class ChangelogPacket:
         data["failed_checks"] = list(self.failed_checks or [])
         data["warnings"] = list(self.warnings or [])
         data["rows"] = list(self.rows or [])
+        data["normalized_rows"] = list(self.normalized_rows or [])
         return data
 
 
@@ -4331,13 +4387,23 @@ def build_changelog_packet(limit: int = 10) -> dict:
         ) or []
         today = datetime.utcnow().date().isoformat()
         today_rows = [r for r in rows if str(r.get("created_at") or "").startswith(today)]
+        normalized_rows = [_normalize_changelog_row(r) for r in rows]
         verified_rows = 0
         missing_triggered_by_rows = 0
-        latest = rows[0] if rows else {}
+        missing_fields_rows = 0
+        missing_fields_total = 0
+        total_completeness = 0.0
+        latest = normalized_rows[0] if normalized_rows else {}
         passed = ["changelog_rows_loaded"]
         failed = []
         warnings = []
-        for row in rows:
+        for row in normalized_rows:
+            missing_fields = row.get("_missing_fields") or []
+            if missing_fields:
+                missing_fields_rows += 1
+                missing_fields_total += len(missing_fields)
+                warnings.append(f"missing_fields:{row.get('id')}")
+            total_completeness += float(row.get("_row_completeness") or 0.0)
             if row.get("triggered_by"):
                 verified_rows += 1
             else:
@@ -4355,13 +4421,16 @@ def build_changelog_packet(limit: int = 10) -> dict:
         if len(rows) < 2:
             warnings.append("sample_low")
 
-        tracking_state = "healthy" if rows and missing_triggered_by_rows == 0 else ("degraded" if rows else "empty")
+        avg_completeness = round(total_completeness / max(1, len(normalized_rows)), 2) if normalized_rows else 0.0
+        tracking_state = "healthy" if rows and missing_triggered_by_rows == 0 and missing_fields_total == 0 else ("degraded" if rows else "empty")
         stalled = not rows
         score = 0.0
         if rows:
             score += 0.6
         if missing_triggered_by_rows == 0:
             score += 0.2
+        if missing_fields_total == 0:
+            score += 0.1
         if today_rows:
             score += 0.1
         if len(rows) >= 2:
@@ -4378,6 +4447,9 @@ def build_changelog_packet(limit: int = 10) -> dict:
             today_rows=len(today_rows),
             verified_rows=verified_rows,
             missing_triggered_by_rows=missing_triggered_by_rows,
+            missing_fields_rows=missing_fields_rows,
+            missing_fields_total=missing_fields_total,
+            row_completeness=avg_completeness,
             tracking_state=tracking_state,
             stalled=stalled,
             tracking_score=score,
@@ -4389,8 +4461,11 @@ def build_changelog_packet(limit: int = 10) -> dict:
                 f" | rows {len(rows)}"
                 f" | today {len(today_rows)}"
                 f" | missing_triggered_by {missing_triggered_by_rows}"
+                f" | missing_fields {missing_fields_total}"
+                f" | completeness {avg_completeness:.2f}"
             ),
             rows=rows,
+            normalized_rows=normalized_rows,
             source_packet=_changelog_source_packet(limit=lim),
         )
         return {
@@ -4400,6 +4475,7 @@ def build_changelog_packet(limit: int = 10) -> dict:
             "tracking_score": score,
             "packet": packet.to_dict(),
             "rows": rows,
+            "normalized_rows": normalized_rows,
             "source_packet": packet.source_packet,
             "message": packet.summary,
         }
