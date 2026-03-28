@@ -949,6 +949,334 @@ def t_dynamic_relational_graph(query: str = "", domain: str = "general", tables:
         return {"ok": False, "error": str(e)}
 
 
+class CausalGraph:
+    """Build a lightweight causal graph from unified reasoning packets and sequences."""
+
+    def __init__(
+        self,
+        query: str,
+        domain: str = "general",
+        tables: list | None = None,
+        limit: int = 10,
+        per_table: int = 2,
+        state_hint: str = "",
+        sequence=None,
+    ):
+        self.query = (query or "").strip()
+        self.domain = (domain or "general").strip()
+        self.tables = tables
+        self.limit = max(1, min(int(limit or 10), 50))
+        self.per_table = max(1, min(int(per_table or 2), 5))
+        self.state_hint = (state_hint or "").strip()
+        self.sequence = sequence
+        self.nodes = {}
+        self.edges = []
+        self._beliefs = {}
+
+    @staticmethod
+    def _normalize_sequence(sequence) -> list[str]:
+        if sequence in (None, "", []):
+            return []
+        if isinstance(sequence, str):
+            raw = sequence.strip()
+            if not raw:
+                return []
+            if raw.startswith("["):
+                try:
+                    parsed = json.loads(raw)
+                    if isinstance(parsed, list):
+                        return [str(item).strip() for item in parsed if str(item).strip()]
+                except Exception:
+                    pass
+            return [part.strip() for part in raw.replace("\n", ",").split(",") if part.strip()]
+        if isinstance(sequence, dict):
+            sequence = [sequence]
+        if isinstance(sequence, (list, tuple, set)):
+            items = []
+            for item in sequence:
+                if isinstance(item, dict):
+                    parts = []
+                    for key in ("state", "current_state", "context", "summary", "value", "action", "title", "description"):
+                        value = item.get(key)
+                        if value:
+                            parts.append(str(value))
+                    text = " | ".join(parts).strip() or json.dumps(item, ensure_ascii=False, sort_keys=True)
+                else:
+                    text = str(item).strip()
+                if text:
+                    items.append(text[:1000])
+            return items
+        text = str(sequence).strip()
+        return [text] if text else []
+
+    @staticmethod
+    def _node_id(table: str, raw_id, title: str) -> str:
+        safe_title = _re.sub(r"[^a-z0-9]+", "-", (title or "item").lower()).strip("-")[:24]
+        return f"{table}:{raw_id}:{safe_title or 'node'}"
+
+    @staticmethod
+    def _node_type(table: str) -> str:
+        return {
+            "knowledge_base": "memory",
+            "behavioral_rules": "rule",
+            "mistakes": "mistake",
+            "hot_reflections": "reflection",
+            "output_reflections": "reflection",
+            "evolution_queue": "evolution",
+            "conversation_episodes": "episode",
+            "sessions": "session",
+            "pattern_frequency": "pattern",
+        }.get(table, "memory")
+
+    @staticmethod
+    def _token_set(text: str) -> set[str]:
+        tokens = []
+        for part in _re.split(r"[^A-Za-z0-9_]+", (text or "").lower()):
+            part = part.strip()
+            if len(part) >= 3:
+                tokens.append(part)
+        return set(tokens)
+
+    def add_edge(self, source: str, target: str, weight: float = 0.5, relation: str = "causes") -> None:
+        if not source or not target or source == target:
+            return
+        w = max(0.05, min(float(weight or 0.5), 1.0))
+        self.edges.append({
+            "source": source,
+            "target": target,
+            "relation": relation,
+            "weight": round(w, 3),
+        })
+
+    def get_children(self, node_id: str) -> list[dict]:
+        children = [e for e in self.edges if e.get("source") == node_id]
+        children.sort(key=lambda item: (float(item.get("weight") or 0.0), item.get("target", "")), reverse=True)
+        return children
+
+    def propagate_belief(self, start: str, belief: float = 1.0, decay: float = 0.82, max_depth: int = 3) -> dict:
+        decay = max(0.1, min(float(decay or 0.82), 0.99))
+        max_depth = max(1, min(int(max_depth or 3), 6))
+        beliefs = {start: round(max(0.0, min(1.0, belief)), 3)}
+        frontier = [(start, belief, 0)]
+        while frontier:
+            node, current_belief, depth = frontier.pop(0)
+            if depth >= max_depth:
+                continue
+            for edge in self.get_children(node):
+                child = edge.get("target")
+                weight = float(edge.get("weight") or 0.0)
+                next_belief = round(max(0.0, min(1.0, current_belief * weight * decay)), 3)
+                if next_belief <= 0:
+                    continue
+                if next_belief > beliefs.get(child, 0.0):
+                    beliefs[child] = next_belief
+                    frontier.append((child, next_belief, depth + 1))
+        self._beliefs = beliefs
+        return beliefs
+
+    def find_causal_path(self, start: str, target: str, max_depth: int = 6) -> list[str]:
+        max_depth = max(1, min(int(max_depth or 6), 10))
+        queue = [(start, [start])]
+        seen = {start}
+        while queue:
+            node, path = queue.pop(0)
+            if node == target:
+                return path
+            if len(path) >= max_depth:
+                continue
+            for edge in self.get_children(node):
+                child = edge.get("target")
+                if child in seen:
+                    continue
+                seen.add(child)
+                queue.append((child, path + [child]))
+        return []
+
+    def _score_edge(self, source_text: str, target_text: str, base_score: float = 0.5) -> float:
+        source_tokens = self._token_set(source_text)
+        target_tokens = self._token_set(target_text)
+        overlap = len(source_tokens & target_tokens)
+        score = float(base_score or 0.5)
+        if overlap:
+            score += min(0.25, 0.05 * overlap)
+        target_lower = (target_text or "").lower()
+        if any(term in target_lower for term in ("cause", "causal", "because", "dependency", "impact", "risk", "failure", "integration")):
+            score += 0.1
+        if any(term in target_lower for term in ("critical", "urgent", "error", "blocked", "conflict")):
+            score += 0.05
+        return max(0.05, min(score, 1.0))
+
+    def build(self, sequence=None) -> dict:
+        from core_reasoning_packet import build_reasoning_packet
+
+        sequence_items = self._normalize_sequence(sequence if sequence is not None else self.sequence)
+        packet = build_reasoning_packet(
+            self.query,
+            domain=self.domain,
+            tables=self.tables,
+            limit=self.limit,
+            per_table=self.per_table,
+        )
+        pkt = packet.get("packet") or {}
+        hits = pkt.get("top_hits") or []
+        by_table = pkt.get("memory_by_table") or {}
+
+        nodes = [{
+            "id": "query",
+            "label": self.query[:120],
+            "type": "query",
+            "table": "query",
+            "score": 1.0,
+        }]
+        edges = []
+        seen = {"query"}
+        ordering = []
+
+        for idx, hit in enumerate(hits):
+            table = hit.get("table") or "unknown"
+            raw = hit.get("raw") or {}
+            raw_id = raw.get("id") or hit.get("id") or hit.get("topic") or hit.get("title") or "0"
+            title = hit.get("title") or hit.get("body") or str(raw_id)
+            node_id = self._node_id(table, raw_id, title)
+            if node_id in seen:
+                continue
+            seen.add(node_id)
+            score = round(float(hit.get("score") or hit.get("semantic_score") or 0.0), 3)
+            node = {
+                "id": node_id,
+                "label": str(title)[:120],
+                "type": self._node_type(table),
+                "table": table,
+                "score": score,
+                "raw_id": raw_id,
+            }
+            nodes.append(node)
+            ordering.append(node_id)
+            edges.append({
+                "source": "query",
+                "target": node_id,
+                "relation": "retrieved_from",
+                "weight": round(self._score_edge(self.query, node["label"], max(0.15, score)), 3),
+            })
+            if idx > 0:
+                prev = ordering[idx - 1]
+                prev_node = next((n for n in nodes if n.get("id") == prev), None)
+                prev_text = prev_node.get("label", "") if prev_node else self.query
+                edges.append({
+                    "source": prev,
+                    "target": node_id,
+                    "relation": "causal_sequence",
+                    "weight": round(self._score_edge(prev_text, node["label"], 0.35), 3),
+                })
+
+        if sequence_items:
+            seq_nodes = []
+            for idx, text in enumerate(sequence_items[: max(2, min(12, self.limit + 2))]):
+                node_id = f"seq:{idx}:{_re.sub(r'[^a-z0-9]+', '-', text.lower()).strip('-')[:18] or 'node'}"
+                if node_id in seen:
+                    continue
+                seen.add(node_id)
+                node = {
+                    "id": node_id,
+                    "label": text[:120],
+                    "type": "sequence",
+                    "table": "sequence",
+                    "score": round(max(0.15, 1.0 - (idx * 0.08)), 3),
+                    "raw_id": idx,
+                }
+                nodes.append(node)
+                seq_nodes.append(node_id)
+                edges.append({
+                    "source": "query",
+                    "target": node_id,
+                    "relation": "sequence_anchor",
+                    "weight": round(self._score_edge(self.query, text, 0.45), 3),
+                })
+            for left, right in zip(seq_nodes, seq_nodes[1:]):
+                left_node = next((n for n in nodes if n.get("id") == left), None)
+                right_node = next((n for n in nodes if n.get("id") == right), None)
+                left_text = left_node.get("label", "") if left_node else ""
+                right_text = right_node.get("label", "") if right_node else ""
+                edges.append({
+                    "source": left,
+                    "target": right,
+                    "relation": "sequence_flow",
+                    "weight": round(self._score_edge(left_text, right_text, 0.42), 3),
+                })
+
+        self.nodes = {node["id"]: node for node in nodes}
+        self.edges = edges
+        beliefs = self.propagate_belief("query", belief=1.0, decay=0.84, max_depth=4)
+        causal_order = sorted(
+            [
+                {
+                    "id": node["id"],
+                    "text": node["label"],
+                    "table": node.get("table"),
+                    "belief": round(float(beliefs.get(node["id"], node.get("score", 0.0))), 3),
+                }
+                for node in nodes
+                if node["id"] != "query"
+            ],
+            key=lambda item: (item["belief"], item["text"]),
+            reverse=True,
+        )
+        causal_summary = " | ".join(item["text"][:120] for item in causal_order[:3])
+        dominant_cause = causal_order[0]["table"] if causal_order else None
+        causal_paths = {}
+        for item in causal_order[:5]:
+            causal_paths[item["id"]] = self.find_causal_path("query", item["id"], max_depth=6)
+
+        graph = {
+            "ok": True,
+            "query": self.query,
+            "domain": self.domain,
+            "context": pkt.get("context", ""),
+            "focus": pkt.get("focus", ""),
+            "memory_by_table": by_table,
+            "state_hint": self.state_hint,
+            "node_count": len(nodes),
+            "edge_count": len(edges),
+            "nodes": nodes,
+            "edges": edges,
+            "beliefs": beliefs,
+            "causal_order": causal_order,
+            "causal_summary": causal_summary,
+            "causal_paths": causal_paths,
+            "dominant_cause": dominant_cause,
+        }
+        graph["density"] = round(len(edges) / max(1, len(nodes)), 3)
+        graph["dominant_table"] = max(by_table.items(), key=lambda kv: int(kv[1] or 0))[0] if by_table else None
+        return graph
+
+
+def t_causal_graph(query: str = "", domain: str = "general", tables: str = "", limit: str = "10", per_table: str = "2", state_hint: str = "", sequence: str = "") -> dict:
+    """Build a causal graph from unified memory context or a provided sequence."""
+    try:
+        if not query:
+            return {"ok": False, "error": "query required"}
+        try:
+            lim = max(1, min(int(limit), 50))
+        except Exception:
+            lim = 10
+        try:
+            pt = max(1, min(int(per_table), 5))
+        except Exception:
+            pt = 2
+        table_list = [t.strip() for t in tables.split(",") if t.strip()] if tables else None
+        return CausalGraph(
+            query=query,
+            domain=domain,
+            tables=table_list,
+            limit=lim,
+            per_table=pt,
+            state_hint=state_hint,
+            sequence=sequence or None,
+        ).build()
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
 class MonteCarloTreeSearch:
     """Flexible MCTS bridge over CORE reasoning packets.
 
@@ -1452,6 +1780,7 @@ def _world_model_update_model(self, experience) -> dict:
     exp_text = WorldModel._textify(exp)
     title = (exp.get("title") or exp.get("task") or exp.get("label") or exp.get("summary") or "world_model_experience")[:180]
     temporal = AdaptiveTemporalFilter(domain=self.domain, state_hint=self.state_hint, window=5).filter_sequence([exp_text], horizon=1)
+    causal = CausalGraph(domain=self.domain, state_hint=self.state_hint, query=exp_text).build(sequence=[exp_text])
     content = json.dumps(exp, ensure_ascii=False, sort_keys=True)[:4000]
     kb_result = t_kb_update(
         domain=f"world_model:{self.domain}",
@@ -1464,7 +1793,11 @@ def _world_model_update_model(self, experience) -> dict:
     )
     session_result = sb_post("sessions", {
         "summary": f"[world_model.update] {title}",
-        "actions": [f"experience captured: {exp_text[:240]}", f"temporal filter: {temporal.get('summary','')[:240]}"],
+        "actions": [
+            f"experience captured: {exp_text[:240]}",
+            f"temporal filter: {temporal.get('summary','')[:240]}",
+            f"causal graph: {causal.get('causal_summary','')[:240]}",
+        ],
         "interface": "mcp",
     })
     return {
@@ -1474,6 +1807,7 @@ def _world_model_update_model(self, experience) -> dict:
         "kb_result": kb_result,
         "session_result": session_result,
         "temporal_filter": temporal,
+        "causal_graph": causal,
         "experience_preview": exp_text[:300],
     }
 
@@ -1506,7 +1840,27 @@ def _world_model_predict_future_states(self, current_state, actions, horizon: in
 
     temporal = AdaptiveTemporalFilter(domain=self.domain, state_hint=self.state_hint, window=max(3, steps + 1)).filter_sequence([current_text] + action_list, horizon=max(1, steps))
     attention = TemporalAttention(domain=self.domain, state_hint=self.state_hint, heads=3, window=max(3, steps + 1)).attend([current_text] + action_list, horizon=max(1, steps))
-    ranked_steps = [item["text"] for item in (attention.get("attended_sequence") or [])]
+    causal = CausalGraph(domain=self.domain, state_hint=self.state_hint, query=current_text).build(sequence=[current_text] + action_list)
+    action_scores = {}
+    for item in (attention.get("attended_sequence") or []):
+        text = (item.get("text") or "").strip()
+        if text and text in action_list:
+            action_scores.setdefault(text, {"text": text, "attention_score": 0.0, "causal_score": 0.0})
+            action_scores[text]["attention_score"] = max(action_scores[text]["attention_score"], float(item.get("attention_score") or 0.0))
+    for item in (causal.get("causal_order") or []):
+        text = (item.get("text") or "").strip()
+        if text and text in action_list:
+            action_scores.setdefault(text, {"text": text, "attention_score": 0.0, "causal_score": 0.0})
+            action_scores[text]["causal_score"] = max(action_scores[text]["causal_score"], float(item.get("belief") or 0.0))
+    if not action_scores:
+        for action in action_list:
+            action_scores[action] = {"text": action, "attention_score": 0.0, "causal_score": 0.0}
+    merged_actions = []
+    for data in action_scores.values():
+        data["combined_score"] = round((data["attention_score"] * 0.6) + (data["causal_score"] * 0.4), 3)
+        merged_actions.append(data)
+    merged_actions.sort(key=lambda item: (item["combined_score"], item["attention_score"], item["causal_score"], item["text"]), reverse=True)
+    ranked_steps = [item["text"] for item in merged_actions if item.get("text")]
     if not ranked_steps:
         ranked_steps = action_list[:steps] or [current_text]
 
@@ -1548,6 +1902,7 @@ def _world_model_predict_future_states(self, current_state, actions, horizon: in
         "actions": action_list,
         "temporal_filter": temporal,
         "temporal_attention": attention,
+        "causal_graph": causal,
         "base_evaluation": base_card,
         "graph_density": graph.get("density"),
         "graph_dominant_table": graph.get("dominant_table"),
@@ -6551,6 +6906,8 @@ TOOLS = {
                                "desc": "Evaluate an environment or system state from unified memory context. Returns readiness, risk, coherence, evidence counts, and a proceed/defer recommendation."},
     "dynamic_relational_graph": {"fn": t_dynamic_relational_graph, "perm": "READ", "args": ["query", "domain", "limit", "tables", "per_table", "state_hint"],
                                "desc": "Build a deterministic relational graph from unified memory context. Returns nodes, edges, density, dominant table, and top retrieved context."},
+    "causal_graph":           {"fn": t_causal_graph,           "perm": "READ",    "args": ["query", "domain", "tables", "limit", "per_table", "state_hint", "sequence"],
+                               "desc": "Build a lightweight causal graph from unified memory context or a provided sequence. Returns causal order, paths, beliefs, and graph density."},
     "adaptive_temporal_filter": {"fn": t_adaptive_temporal_filter, "perm": "READ", "args": ["sequence", "domain", "state_hint", "window", "decay"],
                                "desc": "Rank and smooth temporal context with bounded decay and hint-aware weighting."},
     "temporal_attention": {"fn": t_temporal_attention, "perm": "READ", "args": ["sequence", "domain", "state_hint", "heads", "window"],
