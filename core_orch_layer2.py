@@ -10,7 +10,7 @@ from typing import Any, Dict, List
 
 from orchestrator_message import OrchestratorMessage
 
-from core_config import sb_get, GROQ_FAST, groq_chat
+from core_config import sb_get
 from core_orch_context import build_evidence_packet, build_capability_packet, build_evidence_gate
 
 

@@ -23,7 +23,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from core_config import GROQ_FAST, groq_chat, sb_get, sb_patch, sb_post
+from core_config import GROQ_MODEL, groq_chat, sb_get, sb_patch, sb_post
 from core_github import notify
 from core_reflection_audit import finalize_reflection_event, note_reflection_stage, register_reflection_event
 from core_tools import t_agent_session_init, t_agent_state_set, t_agent_step_done, t_reasoning_packet
@@ -483,7 +483,7 @@ def _synthesize_integration_packet(task: dict, strategy: dict, memory_packet: di
     )
     user = f"PLAN INPUT:\n{json.dumps(prompt, default=str, indent=2)}\n\nReturn JSON only."
     try:
-        raw = groq_chat(system=system, user=user, model=GROQ_FAST, max_tokens=1200)
+        raw = groq_chat(system=system, user=user, model=GROQ_MODEL, max_tokens=1200)
         raw = raw.strip().lstrip("```json").lstrip("```").rstrip("```").strip()
         result = json.loads(raw)
         if not isinstance(result, dict):

@@ -9,7 +9,7 @@ from typing import Any, Dict
 
 from orchestrator_message import OrchestratorMessage
 from core_orch_context import build_decision_packet
-from core_config import groq_chat, GROQ_FAST, GROQ_MODEL, gemini_chat
+from core_config import gemini_chat
 
 # Slash-commands that always map to specific intents without Groq
 _COMMAND_INTENT_MAP = {

@@ -38,7 +38,7 @@ import json
 from typing import Any, Dict, List
 
 from orchestrator_message import OrchestratorMessage
-from core_config import groq_chat, GROQ_FAST, GROQ_MODEL
+from core_config import groq_chat, GROQ_MODEL
 
 _PERSONA_SYSTEM = (
     "You are CORE - an autonomous AGI orchestration system built by Vux, running on an Oracle Cloud Ubuntu VM. "
@@ -634,7 +634,7 @@ async def layer_9_tone(msg: OrchestratorMessage):
                 styled = groq_chat(
                     system=_CONVO_SYSTEM,
                     user=prompt,
-                    model=GROQ_FAST,
+                    model=GROQ_MODEL,
                     max_tokens=800,
                 )
 

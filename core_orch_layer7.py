@@ -8,7 +8,7 @@ import json
 from typing import Any, Dict
 
 from orchestrator_message import OrchestratorMessage
-from core_config import groq_chat, GROQ_FAST, sb_post_critical
+from core_config import groq_chat, GROQ_MODEL, sb_post_critical
 
 _REFINE_SYSTEM = (
     "You are CORE AGI's self-improvement engine. "
@@ -123,7 +123,7 @@ async def layer_7_refine(msg: OrchestratorMessage):
         raw = groq_chat(
             system=_REFINE_SYSTEM,
             user=prompt,
-            model=GROQ_FAST,
+            model=GROQ_MODEL,
             max_tokens=300,
         )
         analysis = json.loads(raw.strip().lstrip("```json").rstrip("```").strip())

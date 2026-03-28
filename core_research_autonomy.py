@@ -21,7 +21,7 @@ from collections import Counter
 from datetime import datetime
 from typing import Any
 
-from core_config import GROQ_MODEL, GROQ_FAST, groq_chat, sb_get, sb_patch, sb_post
+from core_config import GROQ_MODEL, groq_chat, sb_get, sb_patch, sb_post
 from core_github import notify
 from core_tools import t_add_knowledge, t_reasoning_packet, t_agent_session_init, t_agent_state_set, t_agent_step_done
 from core_work_taxonomy import build_autonomy_contract

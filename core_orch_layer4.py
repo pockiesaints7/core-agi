@@ -8,7 +8,7 @@ from typing import Any, Dict, List
 
 from orchestrator_message import OrchestratorMessage
 from core_orch_context import build_decision_packet, build_evidence_gate, tool_result_has_evidence
-from core_config import groq_chat, GROQ_MODEL, GROQ_FAST
+from core_config import groq_chat, GROQ_MODEL
 
 # Destructive action keywords requiring owner tier
 _DESTRUCTIVE_KW = frozenset([

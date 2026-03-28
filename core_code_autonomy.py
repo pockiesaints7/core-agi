@@ -18,7 +18,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from core_config import GROQ_FAST, groq_chat, sb_get, sb_patch, sb_post
+from core_config import GROQ_MODEL, groq_chat, sb_get, sb_patch, sb_post
 from core_github import notify
 from core_reflection_audit import (
     finalize_reflection_event,
@@ -520,7 +520,7 @@ def _synthesize_code_packet(task: dict, strategy: dict, memory_packet: dict, fil
         "Return JSON only. If the task is too vague, produce a proposal-only plan that asks for owner review."
     )
     try:
-        raw = groq_chat(system=system, user=user, model=GROQ_FAST, max_tokens=1100)
+        raw = groq_chat(system=system, user=user, model=GROQ_MODEL, max_tokens=1100)
         raw = raw.strip().lstrip("```json").lstrip("```").rstrip("```").strip()
         result = json.loads(raw)
         if not isinstance(result, dict):

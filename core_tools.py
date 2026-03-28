@@ -3683,27 +3683,42 @@ def extract_signals(task: str) -> dict:
 def t_ask(question: str, domain: str = ""):
     if not question: return {"ok": False, "error": "question required"}
     from core_reasoning_packet import build_reasoning_packet
+    from core_config import GROQ_MODEL, GROQ_FAST
     pkt = build_reasoning_packet(question, domain=domain, limit=10, per_table=2)
     packet = pkt.get("packet") or {}
     kb_context = packet.get("context", "")
-    system = ("You are CORE, a personal AGI assistant with accumulated knowledge from many sessions. "
-              "Answer using the knowledge base context provided. Be specific and actionable.")
+    runtime_facts = {
+        "orchestrator_model_policy": {
+            "intent_and_structure": "Gemini 2.5 Flash",
+            "planning_and_final_synthesis": "Groq " + str(GROQ_MODEL),
+            "fallback": "Gemini 2.5 Flash",
+            "fast_lane": str(GROQ_FAST),
+        },
+        "source_of_truth": "Current code/runtime facts override stale KB memory when they conflict.",
+        "live_model_split": "Structured extraction/classification uses Gemini; prose synthesis and tool-answering use Groq unless Groq fails.",
+    }
+    system = (
+        "You are CORE, a personal AGI assistant with accumulated knowledge from many sessions. "
+        "You must answer from the most current evidence available. If runtime facts conflict with memory, runtime facts win. "
+        "Be specific and actionable."
+    )
     user = f"Question: {question}\n\n"
+    user += "CURRENT_RUNTIME_FACTS:\n" + json.dumps(runtime_facts, indent=2, ensure_ascii=False) + "\n\n"
     if kb_context: user += f"Relevant knowledge:\n{kb_context}\n\n"
     if packet.get("focus"): user += f"Focus:\n{packet.get('focus')}\n\n"
-    user += "Answer:"
+    user += "Answer using runtime facts first, then relevant knowledge, and explicitly say if something is only inferred."
     kb_hit_count = int((packet.get("memory_by_table") or {}).get("knowledge_base") or 0)
     memory_hits = int(packet.get("hit_count") or 0)
     try:
-        answer = gemini_chat(system, user, max_tokens=512)
-        return {"ok": True, "answer": answer, "kb_hits": kb_hit_count, "memory_hits": memory_hits, "memory_by_table": packet.get("memory_by_table", {}), "packet_focus": packet.get("focus", ""), "model": "gemini-2.5-flash-lite", "question": question}
+        answer = groq_chat(system, user, model=GROQ_MODEL, max_tokens=512)
+        return {"ok": True, "answer": answer, "kb_hits": kb_hit_count, "memory_hits": memory_hits, "memory_by_table": packet.get("memory_by_table", {}), "packet_focus": packet.get("focus", ""), "model": GROQ_MODEL, "question": question}
     except Exception:
-        # I.1: Groq fallback -- if Gemini is down, ask() must not fail entirely
+        # I.1: Gemini fallback -- if Groq is down, ask() must not fail entirely
         try:
-            answer = groq_chat(system, user, max_tokens=512)
-            return {"ok": True, "answer": answer, "kb_hits": kb_hit_count, "memory_hits": memory_hits, "memory_by_table": packet.get("memory_by_table", {}), "packet_focus": packet.get("focus", ""), "model": "groq_fallback", "question": question}
+            answer = gemini_chat(system, user, max_tokens=512)
+            return {"ok": True, "answer": answer, "kb_hits": kb_hit_count, "memory_hits": memory_hits, "memory_by_table": packet.get("memory_by_table", {}), "packet_focus": packet.get("focus", ""), "model": "gemini_fallback", "question": question}
         except Exception as e2:
-            return {"ok": False, "error": str(e2), "note": "both Gemini and Groq fallback failed"}
+            return {"ok": False, "error": str(e2), "note": "both Groq and Gemini fallback failed"}
 
 
 
@@ -3909,7 +3924,7 @@ Output ONLY valid JSON array, no preamble."""
             user = (f"KB batch ({len(kb_batch)} entries, domains: {', '.join(domains_in_batch)}):\n\n"
                     f"{batch_text}\n\nWhat gaps does CORE need to address?")
             try:
-                raw = groq_chat(system, user, model=GROQ_FAST, max_tokens=600)
+                raw = groq_chat(system, user, model=GROQ_MODEL, max_tokens=700)
                 raw = raw.strip()
                 if raw.startswith("```"): raw = raw.split("```")[1]
                 if raw.startswith("json"): raw = raw[4:]
@@ -6973,7 +6988,7 @@ TOOLS = {
     "write_file":             {"fn": t_write_file,             "perm": "EXECUTE", "args": ["path", "content", "message", "repo"],
                                "desc": "Write NEW file to GitHub repo â€” FULL OVERWRITE. BLOCKED for core_main.py and core_tools.py. Use patch_file or gh_search_replace for surgical edits on existing files. Only use for brand new files."},
     "ask":                    {"fn": t_ask,                    "perm": "READ",    "args": ["question", "domain"],
-                               "desc": "Ask CORE anything â€” searches KB + mistakes for context, then answers via Groq. Use for domain questions, SOPs, architectural decisions. Uses GROQ_FAST for simple questions, GROQ_MODEL for complex ones."},
+                               "desc": "Ask CORE anything â€” searches KB + mistakes for context, then answers via Groq. Use for domain questions, SOPs, architectural decisions. Uses GROQ_MODEL for primary answers, with Gemini fallback."},
     "stats":                  {"fn": t_stats,                  "perm": "READ",    "args": [],
                                "desc": "Analytics dashboard: domain distribution, top patterns, mistake frequency, evolution queue counts by status, last cold processor run. Use at session start to orient or session end to summarize."},
     "search_mistakes":        {"fn": t_search_mistakes,        "perm": "READ",    "args": ["query", "domain", "limit"],
