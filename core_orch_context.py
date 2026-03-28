@@ -388,6 +388,12 @@ def build_decision_packet(msg) -> Dict[str, Any]:
         if not agentic_hint and len(msg.text or "") > 240 and primary_class in {"act", "evaluate", "ask"}:
             agentic_hint = True
 
+    if explicit_agentic and request_kind in {"question", "conversation", "general_query", "command"} and primary_class in {"act", "ask", "evaluate", "meta"}:
+        request_kind = "task"
+        response_mode = "task"
+        clarification_needed = False
+        clarification_prompt = ""
+
     return {
         "request_kind": request_kind,
         "response_mode": response_mode,
@@ -785,7 +791,12 @@ def build_evidence_gate(msg) -> Dict[str, Any]:
         "guide", "community", "forum", "reddit", "hackernews", "stackoverflow"
     )
 
-    code_hits = _keyword_hits(text, code_markers)
+    lower_text = (text or "").lower()
+    code_hits = _keyword_hits(text, tuple(kw for kw in code_markers if kw != "code"))
+    if re.search(r"\bcode\b", lower_text) and "codex" not in lower_text:
+        code_hits += 1
+    if "codebase" in lower_text:
+        code_hits += 1
     web_hits = _keyword_hits(text, web_markers)
     public_hits = _keyword_hits(text, public_markers)
     code_targets = _extract_code_targets(text)
@@ -808,14 +819,14 @@ def build_evidence_gate(msg) -> Dict[str, Any]:
         else:
             retrieval_mode = "state_only"
             preferred_tools = []
-    elif request_kind in {"owner_review", "debug"} and not (code_hits >= 1 or code_targets or web_hits >= 1):
-        retrieval_mode = "supabase_then_web"
-        preferred_tools = ["repo_map_status", "repo_component_packet", "search_kb", "web_search"]
-    elif code_hits >= 2 or code_targets:
-        retrieval_mode = "code_then_web" if web_hits else "code"
+    elif code_hits >= 1 or code_targets:
+        retrieval_mode = "code"
         preferred_tools = ["repo_map_status", "repo_component_packet", "repo_graph_packet", "git", "search_in_file", "read_file"]
         if web_hits or evidence_score < 0.25:
             preferred_tools.append("web_search")
+    elif request_kind in {"owner_review", "debug"}:
+        retrieval_mode = "supabase_then_web"
+        preferred_tools = ["repo_map_status", "repo_component_packet", "search_kb", "web_search"]
     elif public_hits >= 1 or web_hits >= 1:
         retrieval_mode = "public_research_then_web" if web_hits else "public_research"
         preferred_tools = ["search_kb", "ingest_knowledge", "web_search"]
