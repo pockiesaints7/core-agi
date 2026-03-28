@@ -12,8 +12,11 @@ from __future__ import annotations
 
 import html
 import json
+import hashlib
+import re as _re
 import threading
 from collections import Counter
+from collections import defaultdict
 from datetime import datetime
 from typing import Any
 
@@ -39,6 +42,15 @@ _AUTO_ROUTE_TRACKS = {
 
 _OWNER_ONLY_TRACKS = {"code_patch", "new_module", "integration", "proposal_only"}
 _OWNER_ONLY_TIERS = {"owner_only", "owner_review"}
+_CLUSTER_THEMES = (
+    ("changelog", ("changelog", "change log", "release note")),
+    ("session", ("session", "state continuity", "state_update", "checkpoint", "resume")),
+    ("knowledge", ("kb", "knowledge base", "knowledge_base", "knowledge")),
+    ("verification", ("verification", "verify", "validation", "validator")),
+    ("task", ("task", "queue", "tracking")),
+    ("tool", ("tool", "mcp", "api", "helper", "packet")),
+    ("research", ("research", "signal", "source", "evidence")),
+)
 
 
 def _utcnow() -> str:
@@ -53,6 +65,190 @@ def _safe_text(value: Any, limit: int = 240) -> str:
 
 def _escape(value: Any, limit: int = 240) -> str:
     return html.escape(_safe_text(value, limit), quote=False)
+
+
+def _extract_text_blob(row: dict, strategy: dict | None = None) -> str:
+    parts = [
+        _safe_text(row.get("change_type") or "", 80),
+        _safe_text(row.get("change_summary") or "", 500),
+        _safe_text(row.get("recommendation") or "", 500),
+        _safe_text(row.get("pattern_key") or "", 200),
+    ]
+    diff_content = row.get("diff_content")
+    if diff_content:
+        if isinstance(diff_content, str):
+            parts.append(diff_content[:1000])
+        else:
+            parts.append(json.dumps(diff_content, default=str)[:1000])
+    if strategy:
+        parts.extend([
+            _safe_text(strategy.get("work_track") or "", 80),
+            _safe_text(strategy.get("route_worker") or "", 80),
+            _safe_text(strategy.get("task_group") or "", 80),
+        ])
+    return " | ".join(p for p in parts if p)
+
+
+def _extract_target_module(row: dict, strategy: dict | None = None) -> str:
+    text = _extract_text_blob(row, strategy).lower()
+    matches = _re.findall(r"(core_[a-z0-9_]+\.py)", text)
+    if matches:
+        return matches[0]
+    if "changelog" in text:
+        return "changelog"
+    if "session" in text or "state_update" in text or "checkpoint" in text:
+        return "session_state"
+    if "knowledge" in text or "kb" in text:
+        return "knowledge_base"
+    if "task" in text or "queue" in text:
+        return "task_queue"
+    if "tool" in text or "mcp" in text:
+        return "core_tools"
+    if "train" in text or "learning" in text or "rarl" in text or "meta" in text:
+        return "core_train"
+    return "general"
+
+
+def _extract_theme_bucket(row: dict, strategy: dict | None = None) -> str:
+    text = _extract_text_blob(row, strategy).lower()
+    for theme, needles in _CLUSTER_THEMES:
+        if any(n in text for n in needles):
+            return theme
+    if "code" in text:
+        return "code"
+    if "integration" in text:
+        return "integration"
+    return "general"
+
+
+def _owner_review_cluster_key(row: dict, strategy: dict | None = None) -> str:
+    strategy = strategy or _row_strategy(row)
+    work_track = strategy.get("work_track") or "proposal_only"
+    module = _extract_target_module(row, strategy)
+    theme = _extract_theme_bucket(row, strategy)
+    route_worker = strategy.get("route_worker") or "proposal_router"
+    return f"{work_track}|{route_worker}|{module}|{theme}"
+
+
+def _owner_review_cluster_packet(rows: list[dict], persist: bool = True) -> dict:
+    """Cluster owner-only rows into semantic review packets and optionally persist them."""
+    clusters: dict[str, dict] = {}
+    for row in rows or []:
+        strat = _row_strategy(row)
+        if not _is_owner_only(row, strat):
+            continue
+        key = _owner_review_cluster_key(row, strat)
+        cluster = clusters.setdefault(key, {
+            "cluster_key": key,
+            "work_track": strat.get("work_track") or "proposal_only",
+            "route_worker": strat.get("route_worker") or "proposal_router",
+            "task_group": strat.get("task_group") or "architecture",
+            "target_module": _extract_target_module(row, strat),
+            "theme": _extract_theme_bucket(row, strat),
+            "review_scope": "owner_only",
+            "owner_only": True,
+            "member_ids": [],
+            "summaries": [],
+            "confidence_values": [],
+            "recommendations": [],
+            "created_at_values": [],
+            "source_values": [],
+        })
+        cluster["member_ids"].append(int(row.get("id") or 0))
+        cluster["summaries"].append(_safe_text(row.get("change_summary") or "", 500))
+        try:
+            cluster["confidence_values"].append(float(row.get("confidence") or 0))
+        except Exception:
+            pass
+        cluster["recommendations"].append(_safe_text(row.get("recommendation") or "", 500))
+        cluster["created_at_values"].append(_safe_text(row.get("created_at") or "", 80))
+        cluster["source_values"].append(_safe_text(row.get("source") or "", 40))
+
+    packets = []
+    for key, cluster in sorted(clusters.items(), key=lambda kv: (kv[1]["target_module"], kv[1]["theme"], kv[0])):
+        members = sorted(set(m for m in cluster["member_ids"] if m))
+        if not members:
+            continue
+        anchor_id = members[0]
+        latest_id = members[-1]
+        mean_conf = round(sum(cluster["confidence_values"]) / max(1, len(cluster["confidence_values"])), 2)
+        sample_summaries = []
+        for summary in cluster["summaries"]:
+            summary = summary.strip()
+            if summary and summary not in sample_summaries:
+                sample_summaries.append(summary)
+            if len(sample_summaries) >= 5:
+                break
+        packet = {
+            "cluster_key": key,
+            "cluster_id": hashlib.sha1(key.encode("utf-8")).hexdigest()[:12],
+            "count": len(members),
+            "anchor_id": anchor_id,
+            "latest_id": latest_id,
+            "member_ids": members,
+            "work_track": cluster["work_track"],
+            "route_worker": cluster["route_worker"],
+            "task_group": cluster["task_group"],
+            "target_module": cluster["target_module"],
+            "theme": cluster["theme"],
+            "review_scope": cluster["review_scope"],
+            "owner_only": cluster["owner_only"],
+            "mean_confidence": mean_conf,
+            "sample_summaries": sample_summaries,
+            "member_summary": sample_summaries[0] if sample_summaries else "",
+            "shared_verification": (
+                "code proposal queued for owner review"
+                if cluster["work_track"] in {"code_patch", "new_module", "integration", "proposal_only"}
+                else "owner review cluster"
+            ),
+            "shared_artifact": "evolution_queue",
+            "shared_route": cluster["route_worker"],
+        }
+        packets.append(packet)
+
+    packets.sort(key=lambda p: (-int(p.get("count") or 0), int(p.get("anchor_id") or 0), p.get("cluster_key") or ""))
+    persisted = []
+    persist_errors = []
+    if persist:
+        try:
+            from core_tools import t_kb_update
+        except Exception as exc:
+            t_kb_update = None  # type: ignore
+            persist_errors.append(str(exc))
+        if t_kb_update:
+            for pkt in packets:
+                topic = f"cluster:{pkt['cluster_id']}"
+                content = json.dumps(pkt, default=str)
+                instruction = (
+                    "Use this owner-review cluster packet as the canonical batch summary. "
+                    "Do not route worker lanes from this packet."
+                )
+                try:
+                    res = t_kb_update(
+                        domain="owner_review_cluster",
+                        topic=topic,
+                        instruction=instruction,
+                        content=content,
+                        confidence="high",
+                        source_type="evolved",
+                        source_ref=f"owner_review_cluster:{pkt['cluster_key']}",
+                    )
+                    persisted.append({
+                        "cluster_key": pkt["cluster_key"],
+                        "topic": topic,
+                        "ok": bool(res.get("ok")),
+                        "verified": bool(res.get("verified")),
+                    })
+                except Exception as exc:
+                    persist_errors.append(f"{pkt['cluster_key']}: {exc}")
+    return {
+        "ok": True,
+        "clusters": packets,
+        "cluster_count": len(packets),
+        "member_count": sum(int(pkt.get("count") or 0) for pkt in packets),
+        "persisted": persisted,
+        "persist_errors": persist_errors,
+    }
 
 
 def _count_rows(table: str, qs: str) -> int:
@@ -307,10 +503,13 @@ def proposal_router_status(limit: int = 5) -> dict:
             if not _is_owner_only(row, strat):
                 continue
             packets.append(_review_packet(row))
+        cluster_packet = _owner_review_cluster_packet(rows, persist=True)
         track_counts = Counter(pkt["work_track"] for pkt in packets)
         route_counts = Counter(pkt["route_worker"] for pkt in packets)
         group_counts = Counter(pkt["task_group"] for pkt in packets)
+        cluster_theme_counts = Counter(pkt["theme"] for pkt in (cluster_packet.get("clusters") or []))
         top_packets = packets[:max(1, min(limit, 25))]
+        top_clusters = (cluster_packet.get("clusters") or [])[:max(1, min(limit, 10))]
         status = {
             "enabled": True,
             "running": False,
@@ -320,8 +519,15 @@ def proposal_router_status(limit: int = 5) -> dict:
             "track_counts": dict(sorted(track_counts.items())),
             "route_counts": dict(sorted(route_counts.items())),
             "task_group_counts": dict(sorted(group_counts.items())),
+            "cluster_count": cluster_packet.get("cluster_count", 0),
+            "cluster_member_count": cluster_packet.get("member_count", 0),
+            "cluster_theme_counts": dict(sorted(cluster_theme_counts.items())),
             "review_packets": packets,
             "top_packets": top_packets,
+            "owner_review_clusters": cluster_packet.get("clusters", []),
+            "top_clusters": top_clusters,
+            "cluster_persisted": cluster_packet.get("persisted", []),
+            "cluster_persist_errors": cluster_packet.get("persist_errors", []),
             "auto_routed_counts": auto.get("auto_route_counts", {}),
             "auto_routed": auto.get("auto_routed", []),
             "auto_route_errors": auto.get("auto_errors", []),
@@ -342,8 +548,15 @@ def proposal_router_status(limit: int = 5) -> dict:
             "track_counts": {},
             "route_counts": {},
             "task_group_counts": {},
+            "cluster_count": 0,
+            "cluster_member_count": 0,
+            "cluster_theme_counts": {},
             "review_packets": [],
             "top_packets": [],
+            "owner_review_clusters": [],
+            "top_clusters": [],
+            "cluster_persisted": [],
+            "cluster_persist_errors": [],
             "auto_routed_counts": {},
             "auto_routed": [],
             "auto_route_errors": [],
@@ -361,6 +574,9 @@ def render_proposal_router_dashboard(status: dict | None = None, summary_note: s
         f"Pending proposals (owner_only): {status.get('pending_owner_only', 0)}",
         f"Tracks: " + (", ".join(f"{_escape(k)}={v}" for k, v in sorted((status.get('track_counts') or {}).items())) or "none"),
         f"Routes: " + (", ".join(f"{_escape(k)}={v}" for k, v in sorted((status.get('route_counts') or {}).items())) or "none"),
+        f"Owner-review clusters: {status.get('cluster_count', 0)} groups / {status.get('cluster_member_count', 0)} rows",
+        f"Cluster themes: " + (", ".join(f"{_escape(k)}={v}" for k, v in sorted((status.get('cluster_theme_counts') or {}).items())) or "none"),
+        "Cluster packets are mirrored into knowledge_base as domain=owner_review_cluster.",
         f"Auto-routed: " + (", ".join(f"{_escape(k)}={v}" for k, v in sorted((status.get('auto_routed_counts') or {}).items())) or "none"),
         "",
         "<b>Review (read-only)</b>",
@@ -382,6 +598,19 @@ def render_proposal_router_dashboard(status: dict | None = None, summary_note: s
                 f"  track={_escape(pkt.get('work_track') or 'proposal_only', 40)} | "
                 f"route={_escape(pkt.get('route_worker') or 'proposal_router', 40)} | "
                 f"group={_escape(pkt.get('task_group') or 'architecture', 40)}"
+            )
+    clusters = status.get("top_clusters") or []
+    if clusters:
+        lines.append("<b>Owner-review clusters</b>")
+        for cluster in clusters[:5]:
+            lines.append(
+                f"- cluster {cluster.get('cluster_id')} | count={int(cluster.get('count') or 0)} | "
+                f"module={_escape(cluster.get('target_module') or 'general', 30)} | theme={_escape(cluster.get('theme') or 'general', 30)}"
+            )
+            members = ", ".join(f"#{mid}" for mid in (cluster.get("member_ids") or [])[:6])
+            lines.append(
+                f"  anchor=#{cluster.get('anchor_id')} | route={_escape(cluster.get('route_worker') or 'proposal_router', 30)} | "
+                f"members={members}"
             )
     else:
         lines.append("No pending proposals right now.")
@@ -498,11 +727,51 @@ def proposal_router_summary(limit: int = 5) -> dict:
         "track_counts": status.get("track_counts", {}),
         "route_counts": status.get("route_counts", {}),
         "task_group_counts": status.get("task_group_counts", {}),
+        "cluster_count": status.get("cluster_count", 0),
+        "cluster_member_count": status.get("cluster_member_count", 0),
+        "cluster_theme_counts": status.get("cluster_theme_counts", {}),
         "auto_routed_counts": status.get("auto_routed_counts", {}),
         "review_packets": top_packets,
+        "owner_review_clusters": (status.get("top_clusters", []) or []),
         "dashboard": render_proposal_router_dashboard(status),
         "last_run_at": status.get("last_run_at", ""),
         "error": status.get("error", ""),
+    }
+
+
+def owner_review_cluster_packet(limit: int = 5, persist: str = "true") -> dict:
+    """Return clustered owner-only review packets and optionally persist them to KB."""
+    try:
+        lim = max(1, min(int(limit or 5), 50))
+    except Exception:
+        lim = 5
+    persist_bool = str(persist).strip().lower() not in {"false", "0", "no"}
+    rows = _fetch_pending_reviews(limit=5000)
+    owner_rows = []
+    for row in rows:
+        strat = _row_strategy(row)
+        if _is_owner_only(row, strat):
+            owner_rows.append(row)
+    cluster_packet = _owner_review_cluster_packet(owner_rows, persist=persist_bool)
+    clusters = cluster_packet.get("clusters") or []
+    theme_counts = Counter(pkt["theme"] for pkt in clusters)
+    target_counts = Counter(pkt["target_module"] for pkt in clusters)
+    return {
+        "ok": True,
+        "limit": lim,
+        "owner_pending": len(owner_rows),
+        "cluster_count": cluster_packet.get("cluster_count", 0),
+        "cluster_member_count": cluster_packet.get("member_count", 0),
+        "theme_counts": dict(sorted(theme_counts.items())),
+        "target_counts": dict(sorted(target_counts.items())),
+        "clusters": clusters[:lim],
+        "persisted": cluster_packet.get("persisted", []),
+        "persist_errors": cluster_packet.get("persist_errors", []),
+        "summary": (
+            f"owner_review_clusters={cluster_packet.get('cluster_count', 0)} | "
+            f"members={cluster_packet.get('member_count', 0)} | "
+            f"themes={', '.join(f'{k}={v}' for k, v in sorted(theme_counts.items())) or 'none'}"
+        ),
     }
 
 
@@ -518,6 +787,15 @@ def register_tools() -> None:
             "desc": "Return the proposal router dashboard, queue depth, and routing recommendations.",
             "args": [
                 {"name": "limit", "type": "string", "description": "Maximum proposal packets to include (default 5)."},
+            ],
+        }
+    if "owner_review_cluster_packet" not in TOOLS:
+        TOOLS["owner_review_cluster_packet"] = {
+            "fn": lambda limit="5", persist="true": owner_review_cluster_packet(limit=int(limit or 5), persist=persist),
+            "desc": "Return clustered owner-only proposal packets and optionally persist semantic cluster packets to KB.",
+            "args": [
+                {"name": "limit", "type": "string", "description": "Maximum clusters to return (default 5)."},
+                {"name": "persist", "type": "string", "description": "Whether to persist cluster packets to KB (default true)."},
             ],
         }
 
