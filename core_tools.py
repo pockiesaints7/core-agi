@@ -1315,102 +1315,210 @@ class WorldModel:
             parts.append(str(state)[:500])
         return " | ".join(parts)[:1000]
 
-    def update_model(self, experience) -> dict:
-        exp = self._parse_blob(experience)
-        exp_text = self._textify(exp)
-        title = (exp.get("title") or exp.get("task") or exp.get("label") or exp.get("summary") or "world_model_experience")[:180]
-        content = json.dumps(exp, ensure_ascii=False, sort_keys=True)[:4000]
-        kb_result = t_kb_update(
-            domain=f"world_model:{self.domain}",
-            topic=title,
-            instruction=exp_text[:1000],
-            content=content,
-            confidence=exp.get("confidence") or "medium",
-            source_type="world_model_update",
-            source_ref=f"world_model:{datetime.utcnow().isoformat()}",
-        )
-        session_result = sb_post("sessions", {
-            "summary": f"[world_model.update] {title}",
-            "actions": [f"experience captured: {exp_text[:240]}"],
-            "interface": "mcp",
-        })
-        return {
-            "ok": bool(kb_result and kb_result.get("ok", True)),
-            "title": title,
-            "domain": self.domain,
-            "kb_result": kb_result,
-            "session_result": session_result,
-            "experience_preview": exp_text[:300],
-        }
+class AdaptiveTemporalFilter:
+    """Bounded temporal filter for smoothing recent context and ranking sequences."""
 
-    def predict_future_states(self, current_state, actions, horizon: int = 3) -> dict:
-        state = self._parse_blob(current_state)
-        current_text = self._textify(state)
-        action_list = []
-        if isinstance(actions, str):
-            raw = actions.strip()
-            if raw.startswith("["):
-                try:
-                    parsed = json.loads(raw)
-                    if isinstance(parsed, list):
-                        action_list = [str(item).strip() for item in parsed if str(item).strip()]
-                except Exception:
-                    action_list = [part.strip() for part in raw.split(",") if part.strip()]
+    def __init__(self, domain: str = "general", state_hint: str = "", window: int = 5, decay: float = 0.82):
+        self.domain = (domain or "general").strip()
+        self.state_hint = (state_hint or "").strip()
+        self.window = max(1, min(int(window or 5), 25))
+        self.decay = max(0.1, min(float(decay or 0.82), 0.99))
+
+    @staticmethod
+    def _normalize_items(sequence) -> list[str]:
+        if sequence in (None, "", []):
+            return []
+        if isinstance(sequence, str):
+            raw = sequence.strip()
+            if not raw:
+                return []
+            try:
+                parsed = json.loads(raw)
+                sequence = parsed if isinstance(parsed, (list, tuple, set)) else [parsed]
+            except Exception:
+                sequence = [part.strip() for part in raw.split("\n") if part.strip()]
+        if isinstance(sequence, dict):
+            sequence = [sequence]
+        if not isinstance(sequence, (list, tuple, set)):
+            sequence = [sequence]
+        items = []
+        for item in sequence:
+            if isinstance(item, dict):
+                parts = []
+                for key in ("state", "current_state", "context", "summary", "value", "action", "title", "description"):
+                    value = item.get(key)
+                    if value:
+                        parts.append(str(value))
+                text = " | ".join(parts).strip() or json.dumps(item, ensure_ascii=False, sort_keys=True)
             else:
-                action_list = [part.strip() for part in raw.split(",") if part.strip()]
-        elif isinstance(actions, (list, tuple, set)):
-            action_list = [str(item).strip() for item in actions if str(item).strip()]
-        else:
-            action_list = [str(actions).strip()] if str(actions).strip() else []
-        try:
-            steps = max(1, min(int(horizon or 3), 8))
-        except Exception:
-            steps = 3
-        if not action_list:
-            action_list = ["observe", "assess", "proceed"]
+                text = str(item).strip()
+            if text:
+                items.append(text[:1000])
+        return items
 
-        evaluator = StateEvaluator(query=current_text, domain=self.domain, state_hint=self.state_hint)
-        base_card = evaluator.evaluate()
-        graph = DynamicRelationalGraph(query=current_text, domain=self.domain, state_hint=self.state_hint).build()
-        mcts = MonteCarloTreeSearch(
-            query=current_text,
-            domain=self.domain,
-            state_hint=self.state_hint,
-            candidate_actions=action_list,
-            rollouts=min(max(steps * len(action_list), 4), 24),
-        ).run()
-        best_action = mcts.get("best_action") or action_list[0]
-        predicted_states = []
-        rolling_state = dict(state)
-        for idx in range(steps):
-            action = best_action if idx == 0 else action_list[min(idx, len(action_list) - 1)]
-            rolling_state = {
-                **rolling_state,
-                "step": idx + 1,
-                "last_action": action,
-                "trend": "stabilize" if base_card.get("readiness_score", 0.0) >= 0.7 else "reassess",
-                "expected_effect": "improve" if base_card.get("recommendation") == "proceed" else "review",
-                "confidence": round(max(0.0, min(1.0, float(base_card.get("confidence") or 0.0) * (1.0 - (idx * 0.05)))), 3),
+    @staticmethod
+    def _token_set(text: str) -> set[str]:
+        tokens = []
+        for part in _re.split(r"[^A-Za-z0-9_]+", text.lower()):
+            part = part.strip()
+            if len(part) >= 3:
+                tokens.append(part)
+        return set(tokens)
+
+    def filter_sequence(self, sequence, horizon: int | None = None) -> dict:
+        items = self._normalize_items(sequence)
+        if not items:
+            return {
+                "ok": True,
+                "domain": self.domain,
+                "state_hint": self.state_hint,
+                "window": self.window,
+                "decay": self.decay,
+                "input_count": 0,
+                "selected_count": 0,
+                "filtered_sequence": [],
+                "summary": "",
+                "dominant_terms": [],
             }
-            predicted_states.append({
-                "step": idx + 1,
-                "action": action,
-                "state": rolling_state,
-                "state_preview": self._textify(rolling_state)[:300],
-            })
+        limit = max(1, min(int(horizon or self.window), self.window))
+        hint_tokens = self._token_set(f"{self.domain} {self.state_hint}")
+        total = len(items)
+        ranked = []
+        for idx, text in enumerate(items):
+            weight = self.decay ** max(0, total - idx - 1)
+            text_tokens = self._token_set(text)
+            overlap = len(text_tokens & hint_tokens)
+            if overlap:
+                weight = min(1.0, weight + min(0.25, 0.05 * overlap))
+            if any(term in text.lower() for term in ("critical", "urgent", "error", "failure", "crash", "risk")):
+                weight = min(1.0, weight + 0.1)
+            ranked.append({"index": idx, "text": text, "weight": round(weight, 3)})
+        ranked.sort(key=lambda item: (item["weight"], item["index"]), reverse=True)
+        selected = ranked[:limit]
+        summary = " | ".join(item["text"][:120] for item in selected[:3])
         return {
             "ok": True,
             "domain": self.domain,
-            "current_state": state,
-            "current_state_preview": current_text[:300],
-            "horizon": steps,
-            "actions": action_list,
-            "base_evaluation": base_card,
-            "graph_density": graph.get("density"),
-            "graph_dominant_table": graph.get("dominant_table"),
-            "best_action": best_action,
-            "predicted_states": predicted_states,
+            "state_hint": self.state_hint,
+            "window": self.window,
+            "decay": self.decay,
+            "input_count": total,
+            "selected_count": len(selected),
+            "filtered_sequence": selected,
+            "summary": summary[:500],
+            "dominant_terms": sorted(hint_tokens)[:8],
         }
+
+
+def _world_model_update_model(self, experience) -> dict:
+    exp = WorldModel._parse_blob(experience)
+    exp_text = WorldModel._textify(exp)
+    title = (exp.get("title") or exp.get("task") or exp.get("label") or exp.get("summary") or "world_model_experience")[:180]
+    temporal = AdaptiveTemporalFilter(domain=self.domain, state_hint=self.state_hint, window=5).filter_sequence([exp_text], horizon=1)
+    content = json.dumps(exp, ensure_ascii=False, sort_keys=True)[:4000]
+    kb_result = t_kb_update(
+        domain=f"world_model:{self.domain}",
+        topic=title,
+        instruction=exp_text[:1000],
+        content=content,
+        confidence=exp.get("confidence") or "medium",
+        source_type="world_model_update",
+        source_ref=f"world_model:{datetime.utcnow().isoformat()}",
+    )
+    session_result = sb_post("sessions", {
+        "summary": f"[world_model.update] {title}",
+        "actions": [f"experience captured: {exp_text[:240]}", f"temporal filter: {temporal.get('summary','')[:240]}"],
+        "interface": "mcp",
+    })
+    return {
+        "ok": bool(kb_result and kb_result.get("ok", True)),
+        "title": title,
+        "domain": self.domain,
+        "kb_result": kb_result,
+        "session_result": session_result,
+        "temporal_filter": temporal,
+        "experience_preview": exp_text[:300],
+    }
+
+
+def _world_model_predict_future_states(self, current_state, actions, horizon: int = 3) -> dict:
+    state = WorldModel._parse_blob(current_state)
+    current_text = WorldModel._textify(state)
+    action_list = []
+    if isinstance(actions, str):
+        raw = actions.strip()
+        if raw.startswith("["):
+            try:
+                parsed = json.loads(raw)
+                if isinstance(parsed, list):
+                    action_list = [str(item).strip() for item in parsed if str(item).strip()]
+            except Exception:
+                action_list = [part.strip() for part in raw.split(",") if part.strip()]
+        else:
+            action_list = [part.strip() for part in raw.split(",") if part.strip()]
+    elif isinstance(actions, (list, tuple, set)):
+        action_list = [str(item).strip() for item in actions if str(item).strip()]
+    else:
+        action_list = [str(actions).strip()] if str(actions).strip() else []
+    try:
+        steps = max(1, min(int(horizon or 3), 8))
+    except Exception:
+        steps = 3
+    if not action_list:
+        action_list = ["observe", "assess", "proceed"]
+
+    temporal = AdaptiveTemporalFilter(domain=self.domain, state_hint=self.state_hint, window=max(3, steps + 1)).filter_sequence([current_text] + action_list, horizon=max(1, steps))
+    ranked_steps = [item["text"] for item in (temporal.get("filtered_sequence") or [])]
+    if not ranked_steps:
+        ranked_steps = action_list[:steps] or [current_text]
+
+    evaluator = StateEvaluator(query=current_text, domain=self.domain, state_hint=self.state_hint)
+    base_card = evaluator.evaluate()
+    graph = DynamicRelationalGraph(query=current_text, domain=self.domain, state_hint=self.state_hint).build()
+    mcts = MonteCarloTreeSearch(
+        query=current_text,
+        domain=self.domain,
+        state_hint=self.state_hint,
+        candidate_actions=ranked_steps,
+        rollouts=min(max(steps * len(ranked_steps), 4), 24),
+    ).run()
+    best_action = mcts.get("best_action") or ranked_steps[0]
+    predicted_states = []
+    rolling_state = dict(state)
+    for idx in range(steps):
+        action = best_action if idx == 0 else ranked_steps[min(idx, len(ranked_steps) - 1)]
+        rolling_state = {
+            **rolling_state,
+            "step": idx + 1,
+            "last_action": action,
+            "trend": "stabilize" if base_card.get("readiness_score", 0.0) >= 0.7 else "reassess",
+            "expected_effect": "improve" if base_card.get("recommendation") == "proceed" else "review",
+            "confidence": round(max(0.0, min(1.0, float(base_card.get("confidence") or 0.0) * (1.0 - (idx * 0.05)))), 3),
+        }
+        predicted_states.append({
+            "step": idx + 1,
+            "action": action,
+            "state": rolling_state,
+            "state_preview": WorldModel._textify(rolling_state)[:300],
+        })
+    return {
+        "ok": True,
+        "domain": self.domain,
+        "current_state": state,
+        "current_state_preview": current_text[:300],
+        "horizon": steps,
+        "actions": action_list,
+        "temporal_filter": temporal,
+        "base_evaluation": base_card,
+        "graph_density": graph.get("density"),
+        "graph_dominant_table": graph.get("dominant_table"),
+        "best_action": best_action,
+        "predicted_states": predicted_states,
+    }
+
+
+WorldModel.update_model = _world_model_update_model
+WorldModel.predict_future_states = _world_model_predict_future_states
 
 
 def t_world_model(domain: str = "general", state_hint: str = "", experience: str = "", current_state: str = "", actions: str = "", horizon: str = "3") -> dict:
@@ -1425,6 +1533,16 @@ def t_world_model(domain: str = "general", state_hint: str = "", experience: str
         except Exception:
             hz = 3
         return WorldModel(domain=domain, state_hint=state_hint).predict_future_states(current_state=current_state, actions=actions, horizon=hz)
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def t_adaptive_temporal_filter(sequence: str = "", domain: str = "general", state_hint: str = "", window: str = "5", decay: str = "0.82") -> dict:
+    """Bounded temporal filter for smoothing recent context and ranking sequences."""
+    try:
+        win = max(1, min(int(window or 5), 25))
+        dec = max(0.1, min(float(decay or 0.82), 0.99))
+        return AdaptiveTemporalFilter(domain=domain, state_hint=state_hint, window=win, decay=dec).filter_sequence(sequence)
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
@@ -6384,6 +6502,8 @@ TOOLS = {
                                "desc": "Evaluate an environment or system state from unified memory context. Returns readiness, risk, coherence, evidence counts, and a proceed/defer recommendation."},
     "dynamic_relational_graph": {"fn": t_dynamic_relational_graph, "perm": "READ", "args": ["query", "domain", "limit", "tables", "per_table", "state_hint"],
                                "desc": "Build a deterministic relational graph from unified memory context. Returns nodes, edges, density, dominant table, and top retrieved context."},
+    "adaptive_temporal_filter": {"fn": t_adaptive_temporal_filter, "perm": "READ", "args": ["sequence", "domain", "state_hint", "window", "decay"],
+                               "desc": "Rank and smooth temporal context with bounded decay and hint-aware weighting."},
     "monte_carlo_tree_search": {"fn": t_monte_carlo_tree_search, "perm": "READ", "args": ["query", "domain", "limit", "tables", "per_table", "state_hint", "candidate_actions", "rollouts", "exploration_weight", "class_path"],
                                "desc": "Run a flexible Monte Carlo Tree Search bridge over CORE reasoning packets. Uses built-in fallback unless class_path points to an external MonteCarloTreeSearch class."},
     "world_model":            {"fn": t_world_model,            "perm": "WRITE",   "args": ["domain", "state_hint", "experience", "current_state", "actions", "horizon"],
