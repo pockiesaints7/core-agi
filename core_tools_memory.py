@@ -238,6 +238,91 @@ def _latest_session_snapshot_raw() -> dict:
         return {"ok": False, "error": str(e), "found": False, "snapshot": None}
 
 
+def _compare_session_continuity(
+    latest_session: dict,
+    agentic_row: dict,
+    checkpoint_row: dict,
+    snapshot_row: dict,
+    state_updates: dict,
+) -> dict:
+    """Compare the latest continuity surfaces and surface drift explicitly."""
+    latest_session = latest_session if isinstance(latest_session, dict) else {}
+    agentic_row = agentic_row if isinstance(agentic_row, dict) else {}
+    checkpoint_row = checkpoint_row if isinstance(checkpoint_row, dict) else {}
+    snapshot_row = snapshot_row if isinstance(snapshot_row, dict) else {}
+    state_updates = state_updates if isinstance(state_updates, dict) else {}
+
+    drift = []
+    passed = []
+    warnings = []
+
+    resume_task = snapshot_row.get("resume_task") if isinstance(snapshot_row.get("resume_task"), dict) else {}
+    latest_resume_task = _safe_dict(latest_session.get("resume_task"))
+    checkpoint = _safe_dict(snapshot_row.get("checkpoint") or checkpoint_row)
+
+    if latest_session:
+        passed.append("latest_session_present")
+    else:
+        drift.append("latest_session_missing")
+
+    if agentic_row:
+        passed.append("agentic_session_present")
+    else:
+        warnings.append("agentic_session_missing")
+
+    if checkpoint:
+        passed.append("checkpoint_present")
+    else:
+        warnings.append("checkpoint_missing")
+
+    if snapshot_row:
+        passed.append("session_snapshot_present")
+    else:
+        warnings.append("session_snapshot_missing")
+
+    if latest_resume_task and resume_task:
+        if str(latest_resume_task.get("id") or "") != str(resume_task.get("id") or ""):
+            drift.append("resume_task_id_changed")
+        else:
+            passed.append("resume_task_consistent")
+    elif latest_resume_task or resume_task:
+        warnings.append("resume_task_partial")
+
+    latest_count = latest_session.get("counts") if isinstance(latest_session.get("counts"), dict) else {}
+    snapshot_count = snapshot_row.get("counts") if isinstance(snapshot_row.get("counts"), dict) else {}
+    if latest_count and snapshot_count:
+        if latest_count != snapshot_count:
+            drift.append("counts_differ")
+        else:
+            passed.append("counts_consistent")
+
+    state_update_keys = sorted((state_updates or {}).keys())
+    if state_update_keys:
+        passed.append("state_updates_present")
+    else:
+        warnings.append("state_updates_missing")
+
+    verification_score = 1.0
+    if drift:
+        verification_score -= min(0.45, 0.15 * len(drift))
+    if warnings:
+        verification_score -= min(0.3, 0.05 * len(warnings))
+    verification_score = round(max(0.0, verification_score), 3)
+    blocked = bool(drift and verification_score < 0.7)
+    return {
+        "verified": verification_score >= 0.7,
+        "blocked": blocked,
+        "verification_score": verification_score,
+        "passed_checks": passed,
+        "failed_checks": drift,
+        "warnings": warnings,
+        "summary": (
+            f"continuity={'ok' if verification_score >= 0.7 else 'degraded'} | "
+            f"drift={len(drift)} | warnings={len(warnings)} | state_updates={len(state_update_keys)}"
+        ),
+    }
+
+
 @dataclass
 class StatePacket:
     session_id: str
@@ -245,6 +330,7 @@ class StatePacket:
     agentic_session: dict
     checkpoint: dict
     session_snapshot: dict
+    session_continuity: dict
     state_updates: dict
     state_update_rows: list
     counts: dict
@@ -257,6 +343,7 @@ class StatePacket:
             "agentic_session": self.agentic_session,
             "checkpoint": self.checkpoint,
             "session_snapshot": self.session_snapshot,
+            "session_continuity": self.session_continuity,
             "state_updates": self.state_updates,
             "state_update_rows": self.state_update_rows,
             "counts": self.counts,
@@ -279,6 +366,15 @@ def _build_state_packet(session_id: str = "default", strict: bool = False) -> St
     checkpoint = _latest_checkpoint()
     checkpoint_row = checkpoint.get("checkpoint") or {}
     state_updates = _collect_state_updates(limit=20)
+    snapshot = _latest_session_snapshot_raw()
+    snapshot_row = _safe_dict(snapshot.get("snapshot"))
+    session_continuity = _compare_session_continuity(
+        latest_session=latest_session,
+        agentic_row=agentic_row,
+        checkpoint_row=checkpoint_row,
+        snapshot_row=snapshot_row,
+        state_updates=state_updates.get("latest", {}),
+    )
 
     counts = {
         "sessions": _count_rows("sessions"),
@@ -347,7 +443,8 @@ def _build_state_packet(session_id: str = "default", strict: bool = False) -> St
         latest_session=latest_session,
         agentic_session=agentic_row,
         checkpoint=checkpoint_row,
-        session_snapshot=_safe_dict(_latest_session_snapshot_raw().get("snapshot")),
+        session_snapshot=snapshot_row,
+        session_continuity=session_continuity,
         state_updates=state_updates.get("latest", {}),
         state_update_rows=state_updates.get("rows", []),
         counts=counts,
@@ -390,6 +487,7 @@ def t_state_consistency_check(
             "failed_checks": verification.get("failed_checks", []),
             "warnings": verification.get("warnings", []),
             "summary": verification.get("summary", ""),
+            "session_continuity": packet.get("session_continuity") or {},
             "state_packet": packet,
         }
     except Exception as e:
