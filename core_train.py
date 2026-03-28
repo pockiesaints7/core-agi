@@ -2422,19 +2422,35 @@ def _safe_recent_changelog_context(limit: int = 5) -> dict:
                 "source_context": source_context,
             }
         except Exception as legacy_exc:
-            return {
-                "available": False,
-                "rows": [],
-                "text": "Unavailable.",
-                "error": str(legacy_exc),
-                "source_context": {
+            try:
+                from core_tools import t_changelog_source_packet
+                source_context = t_changelog_source_packet(limit=limit)
+            except Exception as source_exc:
+                source_context = {
                     "available": False,
                     "counts": {"sessions": 0, "hot_reflections": 0, "mistakes": 0, "knowledge_base": 0},
                     "rows": {"sessions": [], "hot_reflections": [], "mistakes": [], "knowledge_base": []},
                     "text": "Unavailable.",
                     "sources": ["sessions", "hot_reflections", "mistakes", "knowledge_base"],
-                    "error": str(legacy_exc),
+                    "error": str(source_exc),
+                    "verified": False,
+                    "blocked": True,
+                    "verification_score": 0.0,
+                    "passed_checks": [],
+                    "failed_checks": ["source_packet_error"],
+                    "warnings": [str(source_exc)],
+                    "summary": f"source packet error: {source_exc}",
+                }
+            return {
+                "available": False,
+                "rows": [],
+                "text": "Unavailable.",
+                "error": str(legacy_exc),
+                "schema": "unavailable",
+                "source_context": {
+                    **source_context,
                 },
+                "fallback_error": str(exc),
             }
 
 
