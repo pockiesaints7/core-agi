@@ -606,7 +606,7 @@ def _ingest_to_hot_reflection(topic: str, source_type: str, concept_clusters: li
                 _maybe_eval_prompt("knowledge_ingest_synthesizer", _sys_ingest, 20)
                 raw = groq_chat(
                     system=_sys_ingest,
-                    user=prompt, model=GROQ_FAST, max_tokens=400,
+                    user=prompt, model=GROQ_MODEL, max_tokens=500,
                 )
                 parsed = json.loads(raw.strip().lstrip("```json").rstrip("```").strip())
                 new_patterns = [p for p in parsed.get("patterns", []) if isinstance(p, str) and len(p) > 5][:4]
@@ -810,7 +810,7 @@ def _groq_kb_content(pattern_key: str, domain: str, frequency: int, src_key: str
         )
         _sys_kb = _load_prompt("kb_content_writer", "You are CORE's knowledge synthesis engine. Write clear actionable KB content.")
         _maybe_eval_prompt("kb_content_writer", _sys_kb, 30)
-        content = gemini_chat(system=_sys_kb, user=prompt, max_tokens=350)
+        content = groq_chat(system=_sys_kb, user=prompt, model=GROQ_MODEL, max_tokens=350)
         content = content.strip()
         if len(content) > 30:
             return content

@@ -21,7 +21,7 @@ from collections import Counter
 from datetime import datetime
 from typing import Any
 
-from core_config import GROQ_FAST, groq_chat, sb_get, sb_patch, sb_post
+from core_config import GROQ_MODEL, GROQ_FAST, groq_chat, sb_get, sb_patch, sb_post
 from core_github import notify
 from core_tools import t_add_knowledge, t_reasoning_packet, t_agent_session_init, t_agent_state_set, t_agent_step_done
 from core_work_taxonomy import build_autonomy_contract
@@ -194,8 +194,8 @@ def _synthesize_research(task: dict, strategy: dict, memory_packet: dict) -> dic
         raw = groq_chat(
             system="You are a precise research planner. Return JSON only.",
             user=prompt,
-            model=GROQ_FAST,
-            max_tokens=700,
+            model=GROQ_MODEL,
+            max_tokens=900,
         )
         raw = raw.strip().lstrip("```json").lstrip("```").rstrip("```").strip()
         result = json.loads(raw)
