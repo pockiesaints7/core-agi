@@ -5248,28 +5248,87 @@ def t_tool_stats(days: str = "7") -> dict:
         rows = sb_get("tool_stats",
             f"select=tool_name,date,call_count,success_count,fail_count,last_error&date=gte.{cutoff}&order=date.desc&limit=500",
             svc=True) or []
-        # Aggregate per tool
-        agg = {}
-        for r in rows:
-            name = r["tool_name"]
-            if name not in agg:
-                agg[name] = {"tool_name": name, "calls": 0, "successes": 0, "failures": 0, "last_error": None}
-            agg[name]["calls"] += r.get("call_count", 0)
-            agg[name]["successes"] += r.get("success_count", 0)
-            agg[name]["failures"] += r.get("fail_count", 0)
-            if r.get("last_error") and not agg[name]["last_error"]:
-                agg[name]["last_error"] = r["last_error"]
-        results = []
-        flagged = []
-        for name, d in agg.items():
-            rate = round(d["failures"] / d["calls"], 3) if d["calls"] > 0 else 0.0
-            entry = {**d, "fail_rate": rate, "health": "ok" if rate <= 0.2 else "flagged"}
-            results.append(entry)
-            if rate > 0.2:
-                flagged.append(name)
-        results.sort(key=lambda x: x["fail_rate"], reverse=True)
+        summary = _summarize_tool_stats_rows(rows)
+        results = summary["tools"]
+        flagged = [r["tool_name"] for r in results if r["fail_rate"] > 0.2]
         return {"ok": True, "days": n, "tools_tracked": len(results),
-                "flagged": flagged, "results": results}
+                "flagged": flagged, "results": results, "summary": summary["summary"]}
+    except Exception as e:
+        return {"ok": False, "error_code": "exception", "message": str(e), "retry_hint": True, "domain": "supabase"}
+
+
+def _summarize_tool_stats_rows(rows: list) -> dict:
+    """Aggregate raw tool_stats rows into fleet and per-tool metrics."""
+    agg = {}
+    for r in rows or []:
+        name = str(r.get("tool_name") or "").strip() or "unknown"
+        if name not in agg:
+            agg[name] = {
+                "tool_name": name,
+                "calls": 0,
+                "successes": 0,
+                "failures": 0,
+                "last_error": None,
+            }
+        agg[name]["calls"] += int(r.get("call_count") or 0)
+        agg[name]["successes"] += int(r.get("success_count") or 0)
+        agg[name]["failures"] += int(r.get("fail_count") or 0)
+        if r.get("last_error") and not agg[name]["last_error"]:
+            agg[name]["last_error"] = r["last_error"]
+
+    tools = []
+    fleet_calls = 0
+    fleet_successes = 0
+    fleet_failures = 0
+    for d in agg.values():
+        rate = round(d["failures"] / d["calls"], 3) if d["calls"] > 0 else 0.0
+        tools.append({**d, "fail_rate": rate, "health": "ok" if rate <= 0.2 else "flagged"})
+        fleet_calls += d["calls"]
+        fleet_successes += d["successes"]
+        fleet_failures += d["failures"]
+    tools.sort(key=lambda x: (x["fail_rate"], x["failures"], x["calls"]), reverse=True)
+    fleet_rate = round(fleet_failures / fleet_calls, 3) if fleet_calls > 0 else 0.0
+    return {
+        "summary": {
+            "tool_count": len(tools),
+            "fleet_calls": fleet_calls,
+            "fleet_successes": fleet_successes,
+            "fleet_failures": fleet_failures,
+            "fleet_fail_rate": fleet_rate,
+            "healthy_tools": sum(1 for t in tools if t["health"] == "ok"),
+            "flagged_tools": sum(1 for t in tools if t["health"] != "ok"),
+        },
+        "tools": tools,
+    }
+
+
+def t_tool_metrics_summary(days: str = "7", limit: str = "10") -> dict:
+    """Centralized tool metrics summary over tool_stats.
+
+    Returns fleet totals, health bands, and the top failing tools so CORE can
+    reason about the whole tool surface from one canonical report.
+    """
+    try:
+        n = max(1, int(days) if days else 7)
+        lim = max(1, int(limit) if limit else 10)
+        from datetime import date, timedelta
+        cutoff = (date.today() - timedelta(days=n)).isoformat()
+        rows = sb_get(
+            "tool_stats",
+            f"select=tool_name,date,call_count,success_count,fail_count,last_error&date=gte.{cutoff}&order=date.desc&limit=1000",
+            svc=True,
+        ) or []
+        summary = _summarize_tool_stats_rows(rows)
+        tools = summary["tools"]
+        return {
+            "ok": True,
+            "days": n,
+            "summary": summary["summary"],
+            "top_failing": tools[:lim],
+            "bottom_failing": tools[-lim:] if tools else [],
+            "flagged": [t["tool_name"] for t in tools if t["health"] != "ok"],
+            "fleet_health": "degraded" if summary["summary"]["fleet_fail_rate"] > 0.2 else "healthy",
+        }
     except Exception as e:
         return {"ok": False, "error_code": "exception", "message": str(e), "retry_hint": True, "domain": "supabase"}
   
@@ -5539,6 +5598,8 @@ TOOLS = {
                                "desc": "Assess how novel an experience is relative to recent memory/task representations and return a routing recommendation."},
     "consolidation_manager":  {"fn": t_consolidation_manager,  "perm": "READ",    "args": ["limit", "similarity_threshold"],
                                "desc": "Cluster similar queued tasks and return a compact consolidation summary for review."},
+    "tool_metrics_summary":   {"fn": t_tool_metrics_summary,   "perm": "READ",    "args": ["days", "limit"],
+                               "desc": "Centralized tool fleet metrics over tool_stats. Returns fleet totals, health bands, and top failing tools."},
     "active_learning_strategy": {"fn": t_active_learning_strategy, "perm": "READ", "args": ["strategy_name", "budget", "limit", "similarity_threshold"],
                                "desc": "Select high-value tasks for active learning using a pluggable strategy interface."},
     "get_mistakes":           {"fn": t_get_mistakes,           "perm": "READ",    "args": ["domain", "limit"],
@@ -8254,6 +8315,7 @@ def t_tool_health_scan(force: str = "false") -> dict:
             "&order=fail_rate.desc",
             svc=True) or []
         stats_by_name = {r["tool_name"]: r for r in stats_rows}
+        fleet_summary = _summarize_tool_stats_rows(stats_rows)["summary"]
 
         all_tool_names = sorted(TOOLS.keys())
         results = []
@@ -8348,6 +8410,10 @@ def t_tool_health_scan(force: str = "false") -> dict:
         # Notify owner if attention needed
         if broken_tools or degraded_tools:
             parts = ["[HEALTH SCAN] Tool Health Report"]
+            parts.append(
+                f"Fleet: calls {fleet_summary['fleet_calls']} | fail_rate {fleet_summary['fleet_fail_rate']:.2f} | "
+                f"healthy {fleet_summary['healthy_tools']} | flagged {fleet_summary['flagged_tools']}"
+            )
             if broken_tools:
                 parts.append(f"BROKEN ({len(broken_tools)}): {', '.join(broken_tools[:8])}")
             if degraded_tools:
@@ -8365,6 +8431,7 @@ def t_tool_health_scan(force: str = "false") -> dict:
             "untested_count": len(untested_tools),
             "healthy_count": len(healthy_tools),
             "proposals_queued": proposals_queued,
+            "fleet_summary": fleet_summary,
             "summary": (
                 f"{len(broken_tools)} broken, {len(degraded_tools)} degraded, "
                 f"{len(untested_tools)} untested, {len(healthy_tools)} healthy "
