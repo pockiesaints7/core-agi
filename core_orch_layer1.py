@@ -217,10 +217,14 @@ async def _parse_telegram(update: Dict[str, Any]) -> OrchestratorMessage:
     # Initial request profile (intent unknown yet)
     try:
         profile = initial_request_profile(msg)
+        msg.input_profile = profile.get("input_profile", {})
+        msg.speech_act_packet = profile.get("speech_act_packet", {})
         msg.request_kind = profile.get("request_kind", "")
         msg.response_mode = profile.get("response_mode", "")
         msg.route_reason = profile.get("route_reason", "")
         msg.clarification_needed = bool(profile.get("clarification_needed", False))
+        msg.context["input_profile"] = msg.input_profile
+        msg.context["speech_act_packet"] = msg.speech_act_packet
         msg.context["request_profile"] = profile
         msg.context["request_kind"] = msg.request_kind
         msg.context["response_mode"] = msg.response_mode
@@ -251,10 +255,14 @@ async def _parse_mcp(request: Dict[str, Any]) -> OrchestratorMessage:
     # Initial request profile for MCP
     try:
         profile = initial_request_profile(msg)
+        msg.input_profile = profile.get("input_profile", {})
+        msg.speech_act_packet = profile.get("speech_act_packet", {})
         msg.request_kind = profile.get("request_kind", "")
         msg.response_mode = profile.get("response_mode", "")
         msg.route_reason = profile.get("route_reason", "")
         msg.clarification_needed = bool(profile.get("clarification_needed", False))
+        msg.context["input_profile"] = msg.input_profile
+        msg.context["speech_act_packet"] = msg.speech_act_packet
         msg.context["request_profile"] = profile
         msg.context["request_kind"] = msg.request_kind
         msg.context["response_mode"] = msg.response_mode
@@ -279,10 +287,14 @@ async def _parse_system(event: Dict[str, Any]) -> OrchestratorMessage:
 
     try:
         profile = initial_request_profile(msg)
+        msg.input_profile = profile.get("input_profile", {})
+        msg.speech_act_packet = profile.get("speech_act_packet", {})
         msg.request_kind = profile.get("request_kind", "")
         msg.response_mode = profile.get("response_mode", "")
         msg.route_reason = profile.get("route_reason", "")
         msg.clarification_needed = bool(profile.get("clarification_needed", False))
+        msg.context["input_profile"] = msg.input_profile
+        msg.context["speech_act_packet"] = msg.speech_act_packet
         msg.context["request_profile"] = profile
         msg.context["request_kind"] = msg.request_kind
         msg.context["response_mode"] = msg.response_mode

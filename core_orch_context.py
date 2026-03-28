@@ -43,6 +43,190 @@ def _extract_code_targets(text: str) -> List[str]:
     return sorted(candidates)[:5]
 
 
+def _signal(text: str, phrases: Iterable[str]) -> bool:
+    lower = (text or "").lower()
+    return any(p in lower for p in phrases)
+
+
+def classify_human_input(
+    text: str,
+    command: str = "",
+    message_type: str = "message",
+    route: str = "conversation",
+    attachments: list | None = None,
+) -> Dict[str, Any]:
+    """Build a structured human-input packet before intent classification."""
+    text = text or ""
+    lower = text.lower().strip()
+    cmd = (command or "").lower().strip()
+    attachments = attachments or []
+
+    signals: list[str] = []
+    classes: list[str] = []
+    score_map: dict[str, int] = {
+        "interrupt": 0,
+        "correct": 0,
+        "approve": 0,
+        "constrain": 0,
+        "meta": 0,
+        "act": 0,
+        "evaluate": 0,
+        "inform": 0,
+        "ask": 0,
+    }
+
+    def bump(cls: str, amount: int = 1, signal: str = "") -> None:
+        score_map[cls] = score_map.get(cls, 0) + amount
+        if signal:
+            signals.append(signal)
+
+    # Interrupt / cancel / pause
+    if _signal(lower, ("stop", "pause", "hold on", "abort", "cancel", "wait", "don't continue", "do not continue", "pause here")) or cmd in {"/stop", "/pause", "/abort"}:
+        bump("interrupt", 4, "interrupt")
+        classes.append("interrupt")
+
+    # Corrections / fixes
+    if _signal(lower, ("no,", "no ", "wrong", "that's wrong", "not correct", "actually", "i meant", "what i meant", "correction", "fix this", "you said", "you used the wrong")):
+        bump("correct", 4, "correction")
+        classes.append("correct")
+
+    # Approval / consent
+    if _signal(lower, ("approved", "proceed", "go ahead", "yes", "correct", "looks good", "sounds good", "greenlight")):
+        bump("approve", 3, "approval")
+        classes.append("approve")
+
+    # Constraints / policy
+    if _signal(lower, ("only ", "must ", "must not", "don't ", "do not ", "never ", "without ", "keep ", "limit ", "strictly", "no need")):
+        bump("constrain", 3, "constraint")
+        classes.append("constrain")
+
+    # Meta / orchestration guidance
+    if _signal(lower, ("plan", "strategy", "architecture", "how should", "what should", "route", "layer", "intent", "schema", "matrix", "classify", "pipeline")):
+        bump("meta", 2, "meta")
+        classes.append("meta")
+
+    # Active instructions / tasks
+    if route == "command" or cmd:
+        bump("act", 3, "command")
+        classes.append("act")
+    if _signal(lower, (
+        "do ", "make ", "build ", "create ", "update ", "fix ", "change ", "add ", "remove ",
+        "implement ", "proceed", "run ", "restart", "sync", "close ", "push ", "pull ", "test ",
+        "verify ",
+    )):
+        bump("act", 2, "instruction")
+        classes.append("act")
+    if _signal(lower, ("step by step", "investigate", "research", "analyze", "inspect", "diagnose", "trace", "break down", "deep dive", "keep going", "until")):
+        bump("act", 2, "analysis_instruction")
+        classes.append("act")
+
+    # Evaluation / review
+    if _signal(lower, ("review", "judge", "evaluate", "compare", "rank", "triage", "approve", "reject", "batch close", "cluster close")):
+        bump("evaluate", 2, "evaluation")
+        classes.append("evaluate")
+
+    # Informational / status updates
+    if _signal(lower, ("i did", "i added", "i changed", "i fixed", "here is", "this is", "fyi", "for your info", "update:", "status:", "result:")):
+        bump("inform", 2, "status_update")
+        classes.append("inform")
+
+    # Questions / asks
+    if "?" in text or _signal(lower, ("what", "how", "why", "when", "where", "who", "which", "can you", "could you", "would you", "please")):
+        bump("ask", 3, "question")
+        classes.append("ask")
+
+    # Attachments usually imply a task or clarification
+    if attachments:
+        bump("act", 1, "attachment")
+        if any(a.get("type") == "document" for a in attachments if isinstance(a, dict)):
+            bump("ask", 1, "document")
+
+    # Short acknowledgements lean conversational unless command/ask already present.
+    if len(lower) <= 20 and _signal(lower, ("ok", "okay", "thanks", "thank you", "got it", "nice", "cool", "yes", "no")):
+        bump("inform", 1, "ack")
+
+    if not classes:
+        classes = ["ask"] if ("?" in text or _signal(lower, ("what", "how", "why", "when", "where", "who", "which"))) else ["inform"]
+
+    ordered = sorted(score_map.items(), key=lambda kv: (kv[1], kv[0]), reverse=True)
+    primary_class = ordered[0][0] if ordered and ordered[0][1] > 0 else classes[0]
+    secondary_classes = [cls for cls in classes if cls != primary_class]
+    multi_label = len(set(classes)) > 1
+    confidence = min(1.0, 0.42 + (score_map.get(primary_class, 0) * 0.12) + (0.08 if multi_label else 0.0))
+
+    route_hint = "clarify"
+    if primary_class in {"interrupt"}:
+        route_hint = "stop"
+    elif primary_class in {"act", "approve", "constrain", "meta"}:
+        route_hint = "execute"
+    elif primary_class in {"evaluate"}:
+        route_hint = "review"
+    elif primary_class in {"ask"}:
+        route_hint = "answer"
+    elif primary_class in {"correct", "inform"}:
+        route_hint = "store"
+
+    request_kind = classify_request_kind(text, command=command, message_type=message_type, route=route, intent=None)
+    response_mode = {
+        "status": "status",
+        "self_assessment": "capability",
+        "owner_review": "review",
+        "debug": "debug",
+        "task": "task",
+        "conversation": "conversation",
+    }.get(request_kind, "tool")
+
+    if primary_class == "interrupt" and request_kind in {"question", "conversation", "general_query"}:
+        request_kind = "command"
+        response_mode = "conversation"
+    elif primary_class == "correct" and request_kind in {"question", "conversation", "general_query"}:
+        request_kind = "debug"
+        response_mode = "debug"
+    elif primary_class == "evaluate" and request_kind in {"question", "conversation", "general_query"}:
+        request_kind = "owner_review"
+        response_mode = "review"
+    elif primary_class == "approve" and request_kind in {"question", "conversation", "general_query"}:
+        request_kind = "command"
+        response_mode = "conversation"
+    elif primary_class == "constrain" and request_kind in {"question", "conversation", "general_query"}:
+        request_kind = "command"
+        response_mode = "tool"
+    elif primary_class == "meta" and request_kind in {"question", "conversation", "general_query"}:
+        request_kind = "command"
+        response_mode = "tool"
+    elif primary_class == "inform" and request_kind in {"question", "general_query"}:
+        request_kind = "conversation"
+        response_mode = "conversation"
+    elif primary_class == "act" and request_kind in {"question", "conversation"} and route == "command":
+        request_kind = "command"
+        response_mode = "tool"
+
+    requires_tools = primary_class in {"ask", "act", "evaluate"} or route == "command" or bool(cmd)
+    requires_clarification = confidence < 0.5 and primary_class in {"ask", "act", "meta"}
+
+    return {
+        "top_level_class": primary_class,
+        "primary_class": primary_class,
+        "secondary_classes": secondary_classes[:5],
+        "speech_acts": list(dict.fromkeys(classes))[:8],
+        "multi_label": multi_label,
+        "confidence": round(confidence, 3),
+        "route_hint": route_hint,
+        "request_kind": request_kind,
+        "response_mode": response_mode,
+        "requires_tools": requires_tools,
+        "requires_clarification": requires_clarification,
+        "urgency": "high" if _signal(lower, ("now", "immediately", "urgent", "asap", "right now")) or primary_class == "interrupt" else "normal",
+        "actionability": "actionable" if primary_class in {"act", "approve", "interrupt"} else "informational" if primary_class in {"inform"} else "mixed" if multi_label else "contextual",
+        "constraints": [c for c in ("only", "must", "don't", "do not", "never", "without", "keep") if c in lower],
+        "signals": list(dict.fromkeys(signals))[:12],
+        "attachments_present": bool(attachments),
+        "message_type": message_type,
+        "route": route,
+        "command": command,
+    }
+
+
 def _pick_public_sources(text: str) -> List[str]:
     """Choose public ingestion sources that fit the request."""
     lower = (text or "").lower()
@@ -113,37 +297,42 @@ def classify_request_kind(
 
 def initial_request_profile(msg) -> Dict[str, Any]:
     cmd = msg.context.get("command", "") if hasattr(msg, "context") else ""
-    request_kind = classify_request_kind(
+    input_profile = classify_human_input(
         msg.text,
         command=cmd,
         message_type=msg.message_type,
         route=msg.route,
-        intent=None,
+        attachments=getattr(msg, "attachments", []),
     )
-    response_mode = {
-        "status": "status",
-        "self_assessment": "capability",
-        "owner_review": "review",
-        "debug": "debug",
-        "task": "task",
-        "conversation": "conversation",
-    }.get(request_kind, "tool")
-
     return {
-        "request_kind": request_kind,
-        "response_mode": response_mode,
+        "request_kind": input_profile.get("request_kind", "question"),
+        "response_mode": input_profile.get("response_mode", "tool"),
         "route_reason": "initial_profile",
-        "clarification_needed": False,
+        "clarification_needed": bool(input_profile.get("requires_clarification", False)),
+        "input_profile": input_profile,
+        "speech_act_packet": {
+            "top_level_class": input_profile.get("top_level_class", "ask"),
+            "primary_class": input_profile.get("primary_class", "ask"),
+            "secondary_classes": input_profile.get("secondary_classes", []),
+            "speech_acts": input_profile.get("speech_acts", []),
+            "multi_label": input_profile.get("multi_label", False),
+            "confidence": input_profile.get("confidence", 0.0),
+            "route_hint": input_profile.get("route_hint", "clarify"),
+            "urgency": input_profile.get("urgency", "normal"),
+            "actionability": input_profile.get("actionability", "contextual"),
+        },
     }
 
 
 def build_decision_packet(msg) -> Dict[str, Any]:
     classification = msg.context.get("intent_classification", {}) if hasattr(msg, "context") else {}
+    input_profile = msg.context.get("input_profile", {}) if hasattr(msg, "context") else {}
     intent = classification.get("intent") or msg.intent or "general_query"
     confidence = float(classification.get("confidence", 0.0) or 0.0)
     cmd = msg.context.get("command", "") if hasattr(msg, "context") else ""
+    primary_class = input_profile.get("primary_class") or input_profile.get("top_level_class") or ""
 
-    request_kind = classify_request_kind(
+    request_kind = input_profile.get("request_kind") or classify_request_kind(
         msg.text,
         command=cmd,
         message_type=msg.message_type,
@@ -160,18 +349,43 @@ def build_decision_packet(msg) -> Dict[str, Any]:
         "conversation": "conversation",
     }.get(request_kind, "tool")
 
-    clarification_needed = False
+    explicit_agentic = any(
+        trigger in (msg.text or "").lower()
+        for trigger in (
+            "step by step",
+            "keep going",
+            "until",
+            "comprehensive",
+            "full analysis",
+            "iterate",
+            "repeat until",
+            "scan all",
+            "work until",
+            "multi-step",
+            "multi step",
+            "deep dive",
+            "investigate",
+            "research",
+        )
+    )
+
+    clarification_needed = bool(input_profile.get("requires_clarification", False)) and not explicit_agentic
     clarification_prompt = ""
-    if intent in ("task_execution", "general_query") and confidence < 0.45:
+    if clarification_needed:
+        clarification_prompt = "I need a bit more detail to proceed. Give me the exact target, file, URL, commit, or outcome."
+    elif request_kind in {"question", "conversation", "general_query"} and confidence < 0.45 and not explicit_agentic:
         clarification_needed = True
         clarification_prompt = "I need a bit more detail. What exactly should I do, and what is the expected outcome?"
 
+    hard_non_agentic = {"interrupt", "correct", "constrain", "inform"}
     agentic_hint = False
-    if request_kind in ("task", "owner_review"):
+    if primary_class not in hard_non_agentic and (request_kind in ("task", "owner_review") or explicit_agentic):
         lower = (msg.text or "").lower()
-        if any(k in lower for k in ("step by step", "keep going", "until", "comprehensive", "full analysis", "iterate", "repeat until")):
+        if explicit_agentic:
             agentic_hint = True
-        if len(msg.text or "") > 200:
+        if not agentic_hint and bool(input_profile.get("multi_label", False)) and input_profile.get("actionability") == "actionable":
+            agentic_hint = len(msg.text or "") > 160
+        if not agentic_hint and len(msg.text or "") > 240 and primary_class in {"act", "evaluate", "ask"}:
             agentic_hint = True
 
     return {
@@ -186,7 +400,67 @@ def build_decision_packet(msg) -> Dict[str, Any]:
         "requires_tools": bool(classification.get("requires_tools", False)),
         "domain": classification.get("domain") or msg.context.get("current_domain", "general"),
         "command": cmd,
+        "input_profile": input_profile,
+        "primary_class": primary_class,
     }
+
+
+def should_use_agentic_mode(msg) -> bool:
+    """Hard gate for agentic escalation based on structured input."""
+    decision = msg.context.get("decision_packet", {}) if hasattr(msg, "context") else {}
+    input_profile = msg.context.get("input_profile", {}) if hasattr(msg, "context") else {}
+    primary_class = input_profile.get("primary_class") or input_profile.get("top_level_class") or ""
+    request_kind = decision.get("request_kind") or input_profile.get("request_kind") or classify_request_kind(
+        msg.text,
+        command=(msg.context.get("command", "") if hasattr(msg, "context") else ""),
+        message_type=getattr(msg, "message_type", "message"),
+        route=getattr(msg, "route", "conversation"),
+        intent=getattr(msg, "intent", None),
+    )
+
+    # Pure control / correction / acknowledgment inputs should not escalate.
+    if primary_class in {"interrupt", "correct", "constrain", "inform"}:
+        return False
+    if input_profile.get("route_hint") == "stop":
+        return False
+
+    text = (msg.text or "").lower()
+    explicit_agentic = any(
+        trigger in text
+        for trigger in (
+            "step by step",
+            "keep going",
+            "until",
+            "comprehensive",
+            "full analysis",
+            "iterate",
+            "repeat until",
+            "scan all",
+            "work until",
+            "multi-step",
+            "multi step",
+            "deep dive",
+            "investigate",
+            "research",
+        )
+    )
+
+    if explicit_agentic and primary_class not in {"interrupt", "correct", "constrain", "inform"}:
+        return True
+
+    if request_kind in {"status", "self_assessment", "debug", "conversation"}:
+        return False
+
+    if request_kind in {"task", "owner_review", "command"}:
+        if explicit_agentic:
+            return True
+        if bool(decision.get("agentic_hint", False)):
+            return True
+        if bool(input_profile.get("multi_label", False)) and input_profile.get("actionability") == "actionable":
+            return len(msg.text or "") > 180
+        return False
+
+    return explicit_agentic and bool(decision.get("agentic_hint", False))
 
 
 # ── Evidence / capability packets ────────────────────────────────────────────
@@ -201,6 +475,8 @@ def build_evidence_packet(msg) -> Dict[str, Any]:
             "source": msg.source,
             "message_type": msg.message_type,
             "route": msg.route,
+            "input_profile": ctx.get("input_profile", {}),
+            "speech_act_packet": ctx.get("speech_act_packet", {}),
         },
         "domain": ctx.get("current_domain", "general"),
         "session": ctx.get("session", {}),

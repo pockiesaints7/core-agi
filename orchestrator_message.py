@@ -40,6 +40,8 @@ class OrchestratorMessage:
     final_output: Optional[str] = None                              # L10 Output
 
     # Shared decision/evidence packets (cross-layer)
+    input_profile: Dict[str, Any] = field(default_factory=dict)      # L1 human-input packet
+    speech_act_packet: Dict[str, Any] = field(default_factory=dict) # L1 speech-act packet
     request_kind: str = ""                                          # high-level request type
     response_mode: str = ""                                         # response strategy
     decision_packet: Dict[str, Any] = field(default_factory=dict)    # routing + strategy

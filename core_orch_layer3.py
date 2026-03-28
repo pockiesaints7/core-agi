@@ -4,6 +4,7 @@ Uses gemini chat to classify user intent.
 No mocks.
 """
 import json
+import re
 from typing import Any, Dict
 
 from orchestrator_message import OrchestratorMessage
@@ -117,6 +118,7 @@ _CLASSIFY_SYSTEM = (
 
 _CLASSIFY_TEMPLATE = """
 MESSAGE: {text}
+INPUT_PROFILE: {input_profile}
 SOURCE: {source}
 TYPE: {message_type}
 TIER: {tier}
@@ -206,9 +208,18 @@ def _fuzzy_match(text: str) -> Dict[str, Any]:
     _try_load_kb_synonyms()  # GAP-NEW-4: merge KB synonyms
     lower = text.lower()
     all_clusters = list(_FUZZY_INTENT_CLUSTERS) + list(_KB_EXTRA_CLUSTERS)
+
+    def _match_keyword(src: str, kw: str) -> bool:
+        kw = (kw or "").strip().lower()
+        if not kw:
+            return False
+        if " " in kw:
+            return kw in src
+        return bool(re.search(rf"(?<!\w){re.escape(kw)}(?!\w)", src))
+
     for intent, requires_tools, keywords in all_clusters:
         for kw in keywords:
-            if kw in lower:
+            if _match_keyword(lower, kw):
                 return {
                     "intent": intent,
                     "confidence": 0.85,
@@ -290,6 +301,7 @@ async def layer_3_classify(msg: OrchestratorMessage):
         try:
             prompt = _CLASSIFY_TEMPLATE.format(
                 text=msg.text[:500],
+                input_profile=json.dumps(msg.context.get("input_profile", {}), default=str)[:900],
                 source=msg.source,
                 message_type=msg.message_type,
                 tier=msg.tier,

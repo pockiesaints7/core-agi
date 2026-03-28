@@ -582,12 +582,18 @@ async def layer_4_reason(msg: OrchestratorMessage):
             print(f"[L4] evidence_gate build failed (non-fatal): {exc}")
 
     # ── Agentic mode check ────────────────────────────────────────────────────
-    # Only activate for complex requests — simple queries stay on fast path
+    # Only activate for genuinely multi-step requests. Pure interrupts/corrections
+    # and other control-plane inputs stay on the non-agentic path.
     try:
         from core_orch_agent import is_agentic_request, run_agent_loop, AGENT_MODEL
+        from core_orch_context import should_use_agentic_mode
+
         decision = msg.decision_packet or {}
         agentic_hint = bool(decision.get("agentic_hint", False))
-        if msg.response_mode == "agentic" or agentic_hint or is_agentic_request(msg.text, msg.intent or ""):
+        structured_agentic = should_use_agentic_mode(msg)
+        legacy_agentic = bool(msg.response_mode == "agentic" or agentic_hint or is_agentic_request(msg.text, msg.intent or ""))
+
+        if structured_agentic or (legacy_agentic and structured_agentic):
             model_label = AGENT_MODEL or "groq"
             print(f"[L4] AGENTIC MODE activated model={model_label} intent={msg.intent}")
             msg.track_layer("L4-AGENTIC")
@@ -595,6 +601,11 @@ async def layer_4_reason(msg: OrchestratorMessage):
             msg.context["delegation_target"] = "agentic"
             await run_agent_loop(msg, goal=msg.text)
             return
+        if legacy_agentic and not structured_agentic:
+            print(
+                "[L4] Agentic trigger suppressed by structured input packet "
+                f"primary={msg.input_profile.get('primary_class')!r} request_kind={msg.request_kind!r}"
+            )
     except ImportError as e:
         print(f"[L4] core_orch_agent not available (non-fatal): {e}")
     # ─────────────────────────────────────────────────────────────────────────
