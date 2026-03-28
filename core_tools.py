@@ -4510,15 +4510,19 @@ def t_validate_syntax(path: str, repo: str = "") -> dict:
     Returns ok=True/False, error line number and message if syntax error found.
     Use before any deploy to catch issues without pushing."""
     try:
-        import py_compile, tempfile as _tmpfile
+        import os
+        import py_compile
+        import tempfile as _tmpfile
         if not path.endswith(".py"):
             return {"ok": True, "skipped": True, "reason": "Not a .py file"}
         content = _gh_blob_read(path, repo or GITHUB_REPO)
         with _tmpfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False, encoding="utf-8") as tf:
             tf.write(content)
             tf_path = tf.name
+        with _tmpfile.NamedTemporaryFile(prefix="core_py_compile_", suffix=".pyc", delete=False) as cf:
+            cfile_path = cf.name
         try:
-            py_compile.compile(tf_path, doraise=True)
+            py_compile.compile(tf_path, doraise=True, cfile=cfile_path)
             return {"ok": True, "path": path, "lines": len(content.splitlines()),
                     "size_kb": round(len(content.encode()) / 1024, 1), "message": "Syntax OK"}
         except py_compile.PyCompileError as e:
@@ -4527,6 +4531,10 @@ def t_validate_syntax(path: str, repo: str = "") -> dict:
         finally:
             try:
                 os.unlink(tf_path)
+            except Exception:
+                pass
+            try:
+                os.unlink(cfile_path)
             except Exception:
                 pass
     except Exception as e:
