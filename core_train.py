@@ -2357,6 +2357,18 @@ def _safe_recent_changelog_context(limit: int = 5) -> dict:
             f"select={canonical_cols}&order=id.desc&limit={limit}",
             svc=True,
         )
+        try:
+            from core_tools import t_changelog_source_packet
+            source_context = t_changelog_source_packet(limit=limit)
+        except Exception as source_exc:
+            source_context = {
+                "available": False,
+                "counts": {"sessions": 0, "hot_reflections": 0, "mistakes": 0, "knowledge_base": 0},
+                "rows": {"sessions": [], "hot_reflections": [], "mistakes": [], "knowledge_base": []},
+                "text": "Unavailable.",
+                "sources": ["sessions", "hot_reflections", "mistakes", "knowledge_base"],
+                "error": str(source_exc),
+            }
         if not rows:
             text = "None yet."
         else:
@@ -2375,6 +2387,7 @@ def _safe_recent_changelog_context(limit: int = 5) -> dict:
             "text": text,
             "error": "",
             "schema": "canonical",
+            "source_context": source_context,
         }
     except Exception as exc:
         try:
@@ -2383,6 +2396,18 @@ def _safe_recent_changelog_context(limit: int = 5) -> dict:
                 f"select={legacy_cols}&order=id.desc&limit={limit}",
                 svc=True,
             )
+            try:
+                from core_tools import t_changelog_source_packet
+                source_context = t_changelog_source_packet(limit=limit)
+            except Exception as source_exc:
+                source_context = {
+                    "available": False,
+                    "counts": {"sessions": 0, "hot_reflections": 0, "mistakes": 0, "knowledge_base": 0},
+                    "rows": {"sessions": [], "hot_reflections": [], "mistakes": [], "knowledge_base": []},
+                    "text": "Unavailable.",
+                    "sources": ["sessions", "hot_reflections", "mistakes", "knowledge_base"],
+                    "error": str(source_exc),
+                }
             text = "\n".join(
                 f"  [{r.get('category','?')}] {r.get('summary','')[:120]}"
                 for r in rows
@@ -2394,9 +2419,23 @@ def _safe_recent_changelog_context(limit: int = 5) -> dict:
                 "error": "",
                 "schema": "legacy",
                 "fallback_error": str(exc),
+                "source_context": source_context,
             }
         except Exception as legacy_exc:
-            return {"available": False, "rows": [], "text": "Unavailable.", "error": str(legacy_exc)}
+            return {
+                "available": False,
+                "rows": [],
+                "text": "Unavailable.",
+                "error": str(legacy_exc),
+                "source_context": {
+                    "available": False,
+                    "counts": {"sessions": 0, "hot_reflections": 0, "mistakes": 0, "knowledge_base": 0},
+                    "rows": {"sessions": [], "hot_reflections": [], "mistakes": [], "knowledge_base": []},
+                    "text": "Unavailable.",
+                    "sources": ["sessions", "hot_reflections", "mistakes", "knowledge_base"],
+                    "error": str(legacy_exc),
+                },
+            }
 
 
 def _collect_background_research_context() -> dict:
@@ -2408,12 +2447,15 @@ def _collect_background_research_context() -> dict:
         "sessions": [],
         "mistakes": [],
         "changelog": _safe_recent_changelog_context(limit=5),
+        "source_context": {},
         "verification": {
             "anchor_source": "",
             "sessions_count": 0,
             "mistakes_count": 0,
             "changelog_available": False,
             "changelog_error": "",
+            "source_context_available": False,
+            "source_context_error": "",
             "data_ready": False,
             "note": "",
         },
@@ -2458,6 +2500,9 @@ def _collect_background_research_context() -> dict:
         result["verification"]["mistakes_count"] = len(mistakes)
         result["verification"]["changelog_available"] = bool(result["changelog"].get("available"))
         result["verification"]["changelog_error"] = result["changelog"].get("error") or ""
+        result["source_context"] = result["changelog"].get("source_context") or {}
+        result["verification"]["source_context_available"] = bool(result["source_context"].get("available"))
+        result["verification"]["source_context_error"] = result["source_context"].get("error") or ""
 
         if not sessions and not mistakes:
             result["verification"]["data_ready"] = False
@@ -2471,6 +2516,8 @@ def _collect_background_research_context() -> dict:
             notes.append("fallback_used=true")
         if not result["verification"]["changelog_available"]:
             notes.append("changelog_unavailable")
+        if not result["verification"]["source_context_available"]:
+            notes.append("changelog_sources_unavailable")
         result["verification"]["note"] = ", ".join(notes) if notes else "verified"
         return result
     except Exception as exc:

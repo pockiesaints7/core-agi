@@ -3983,6 +3983,7 @@ def t_changelog_add(version: str = "", component: str = "", summary: str = "",
             after=after_state,
             change_type=ctype,
         )
+        source_packet = _changelog_source_packet(limit=5)
         if ok:
             notify(f"CHANGELOG [{ver}] {comp}\n{title[:200]}")
         return {
@@ -3993,6 +3994,7 @@ def t_changelog_add(version: str = "", component: str = "", summary: str = "",
             "logged_at": ts,
             "verified": bool(verification.get("ok") and not verification.get("blocked")),
             "verification_packet": verification,
+            "source_packet": source_packet,
         }
     except Exception as e:
         return {"ok": False, "error": str(e)}
@@ -4131,6 +4133,80 @@ def _changelog_verification_packet(
         }
 
 
+def _changelog_source_packet(limit: int = 5) -> dict:
+    """Collect supporting source evidence for changelog context."""
+    try:
+        limit = max(1, int(limit))
+        sessions = sb_get(
+            "sessions",
+            f"select=summary,actions,interface,created_at&order=created_at.desc&limit={limit}",
+            svc=True,
+        ) or []
+        hot_reflections = sb_get(
+            "hot_reflections",
+            "select=domain,task_summary,reflection_text,new_patterns,new_mistakes,gaps_identified,source,created_at,processed_by_cold"
+            f"&order=created_at.desc&limit={limit}",
+            svc=True,
+        ) or []
+        mistakes = sb_get(
+            "mistakes",
+            "select=domain,what_failed,root_cause,how_to_avoid,severity,created_at"
+            f"&order=created_at.desc&limit={limit}",
+            svc=True,
+        ) or []
+        knowledge = sb_get(
+            "knowledge_base",
+            "select=domain,topic,source_type,source_ref,created_at"
+            f"&order=created_at.desc&limit={limit}",
+            svc=True,
+        ) or []
+
+        def _line(prefix: str, row: dict, keys: list[str]) -> str:
+            parts = []
+            for key in keys:
+                val = row.get(key)
+                if val:
+                    parts.append(str(val))
+            return f"- {prefix}: " + " | ".join(parts[:4]) if parts else f"- {prefix}: <empty>"
+
+        lines = []
+        for r in sessions[:limit]:
+            lines.append(_line("session", r, ["interface", "summary", "created_at"]))
+        for r in hot_reflections[:limit]:
+            lines.append(_line("hot_reflection", r, ["domain", "task_summary", "created_at"]))
+        for r in mistakes[:limit]:
+            lines.append(_line("mistake", r, ["domain", "what_failed", "created_at"]))
+        for r in knowledge[:limit]:
+            lines.append(_line("knowledge", r, ["domain", "topic", "source_type", "created_at"]))
+        return {
+            "available": True,
+            "counts": {
+                "sessions": len(sessions),
+                "hot_reflections": len(hot_reflections),
+                "mistakes": len(mistakes),
+                "knowledge_base": len(knowledge),
+            },
+            "rows": {
+                "sessions": sessions,
+                "hot_reflections": hot_reflections,
+                "mistakes": mistakes,
+                "knowledge_base": knowledge,
+            },
+            "text": "\n".join(lines) if lines else "None yet.",
+            "sources": ["sessions", "hot_reflections", "mistakes", "knowledge_base"],
+            "error": "",
+        }
+    except Exception as exc:
+        return {
+            "available": False,
+            "counts": {"sessions": 0, "hot_reflections": 0, "mistakes": 0, "knowledge_base": 0},
+            "rows": {"sessions": [], "hot_reflections": [], "mistakes": [], "knowledge_base": []},
+            "text": "Unavailable.",
+            "sources": ["sessions", "hot_reflections", "mistakes", "knowledge_base"],
+            "error": str(exc),
+        }
+
+
 def t_changelog_verification_packet(
     version: str = "",
     component: str = "",
@@ -4148,6 +4224,11 @@ def t_changelog_verification_packet(
         after=after,
         change_type=change_type,
     )
+
+
+def t_changelog_source_packet(limit: int = 5) -> dict:
+    """Return supporting source evidence for changelog context."""
+    return _changelog_source_packet(limit=limit)
 
 
 def t_bulk_apply(executor_override: str = "claude_desktop", dry_run: bool = False):
@@ -6390,6 +6471,8 @@ TOOLS = {
                                "desc": "Log a completed change to the changelog table + Telegram notify. Call after every deploy. before/after describe what changed. change_type=bugfix|feature|config|refactor. Returns a verification packet."},
     "changelog_verification_packet": {"fn": t_changelog_verification_packet, "perm": "READ", "args": ["version", "component", "summary", "before", "after", "change_type"],
                                "desc": "Verify a changelog row exists and matches the canonical write contract."},
+    "changelog_source_packet": {"fn": t_changelog_source_packet, "perm": "READ", "args": ["limit"],
+                               "desc": "Return supporting source evidence for changelog context from sessions, hot_reflections, mistakes, and knowledge_base."},
     "bulk_apply":             {"fn": t_bulk_apply,             "perm": "WRITE",   "args": ["executor_override", "dry_run"],
                                "desc": "Apply ALL pending evolution_queue items. executor_override=claude_desktop routes knowledge types to KB. dry_run=true shows plan without applying. Returns slim results to prevent overflow."},
     "list_templates":         {"fn": t_list_templates,         "perm": "READ",    "args": ["limit"],
