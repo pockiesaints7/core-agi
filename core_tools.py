@@ -4698,6 +4698,12 @@ def t_task_add(title: str = "", description: str = "", priority: str = "5",
         return {"ok": False, "error": "title required"}
     try: pri = int(priority) if priority else 5
     except Exception: pri = 5
+    task_json = json.dumps({
+        "title": title,
+        "description": description,
+        **({"subtasks": subtasks} if subtasks else {}),
+        **({"blocked_by": blocked_by} if blocked_by else {}),
+    })
     # Dedup guard: check for existing pending/in_progress task with identical title
     try:
         existing = sb_get(
@@ -4709,19 +4715,38 @@ def t_task_add(title: str = "", description: str = "", priority: str = "5",
             try:
                 t = json.loads(row.get("task") or "{}")
                 if t.get("title", "").strip().lower() == title.strip().lower():
-                    return {"ok": False, "error": "DUPLICATE_TASK",
-                            "message": f"Task with title '{title}' already exists (id={row['id']}, status={row['status']})",
-                            "existing_id": row["id"], "hint": "Use task_update to progress the existing task instead"}
+                    duplicate_result = {
+                        "duplicate_of": row["id"],
+                        "existing_status": row["status"],
+                        "message": f"Task with title '{title}' already exists (id={row['id']}, status={row['status']})",
+                    }
+                    ok = sb_post("task_queue", {
+                        "task": task_json,
+                        "status": "failed",
+                        "priority": pri,
+                        "source": "mcp_session",
+                        "result": json.dumps(duplicate_result, default=str),
+                    })
+                    if ok:
+                        return {
+                            "ok": True,
+                            "action": "duplicate_recorded",
+                            "title": title,
+                            "priority": pri,
+                            "duplicate_of": row["id"],
+                            "duplicate_status": row["status"],
+                        }
+                    return {
+                        "ok": False,
+                        "error": "DUPLICATE_TASK",
+                        "message": duplicate_result["message"],
+                        "existing_id": row["id"],
+                        "hint": "Use task_update to progress the existing task instead",
+                    }
             except Exception:
                 pass
     except Exception:
         pass  # Dedup check non-fatal -- proceed if it fails
-    task_json = json.dumps({
-        "title": title,
-        "description": description,
-        **({"subtasks": subtasks} if subtasks else {}),
-        **({"blocked_by": blocked_by} if blocked_by else {}),
-    })
     try:
         ok = sb_post("task_queue", {
             "task": task_json, "status": "pending",
