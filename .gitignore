@@ -1,6 +1,8 @@
 .env
 __pycache__/
 *.pyc
+.venv/
+venv/
 
 # Training scripts (contain hardcoded credentials — local only, never push)
 train_*.py
@@ -12,6 +14,7 @@ check_tasks.py
 
 # Credential files
 CREDENTIALS.md
+ssh-key-*.key
 *.secret
 secrets.json
 gemini-secrets.json

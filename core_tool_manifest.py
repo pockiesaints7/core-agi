@@ -6,6 +6,9 @@ facade registry in core_tools.py.
 """
 
 TOOL_FAMILY_MODULES = {
+    "reasoning": "core_tools_memory.py",
+    "graph": "core_tools_graph.py",
+    "temporal_world_model": "core_tools_world_model.py",
     "reasoning_world_model": "core_tools_world_model.py",
     "web": "core_web.py",
     "task_autonomy": "core_task_autonomy.py",

@@ -648,17 +648,36 @@ def _group_memory_hits(rows: list) -> dict:
     return grouped
 
 
-from core_tools_world_model import (
-    CausalGraph, t_causal_graph,
-    CausalGraphInference, t_causal_graph_inference, MetaContextualRouter, t_meta_contextual_router,
-    MonteCarloTreeSearch, t_monte_carlo_tree_search, WorldModel, AdaptiveTemporalFilter,
-    TemporalAttention, t_temporal_attention, HierarchicalSearchController, t_hierarchical_search_controller,
-    TemporalHierarchicalWorldModel, t_temporal_hierarchical_world_model, t_world_model,
-    t_adaptive_temporal_filter, t_dynamic_router,
+from core_tools_graph import (
+    CausalGraph,
+    CausalGraphInference,
+    DynamicRelationalGraph,
+    t_causal_graph,
+    t_causal_graph_inference,
+    t_dynamic_relational_graph,
 )
-from core_tools_reasoning import (
-    t_search_memory, t_reasoning_packet, StateEvaluator, t_evaluate_state,
-    DynamicRelationalGraph, t_dynamic_relational_graph,
+from core_tools_memory import (
+    StateEvaluator,
+    t_evaluate_state,
+    t_reasoning_packet,
+    t_search_memory,
+)
+from core_tools_world_model import (
+    AdaptiveTemporalFilter,
+    HierarchicalSearchController,
+    MetaContextualRouter,
+    MonteCarloTreeSearch,
+    TemporalAttention,
+    TemporalHierarchicalWorldModel,
+    WorldModel,
+    t_adaptive_temporal_filter,
+    t_dynamic_router,
+    t_hierarchical_search_controller,
+    t_meta_contextual_router,
+    t_monte_carlo_tree_search,
+    t_temporal_attention,
+    t_temporal_hierarchical_world_model,
+    t_world_model,
 )
 class MetaRepresentation:
     """Serializable meta representation for passing structured state between modules.
