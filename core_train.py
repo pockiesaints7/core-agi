@@ -1758,6 +1758,86 @@ def _mrc_meta_learning_objective(task_curriculum: dict, recent_mistakes: list[di
     }
 
 
+def _world_model_fusion_meta_learning_objective(
+    task_curriculum: dict,
+    recent_mistakes: list[dict],
+    recent_evos: list[dict] | None = None,
+) -> dict:
+    """Bounded meta-learning objective for the world-model fusion mechanism.
+
+    This records the contract that a future learned world-model fusion policy
+    should optimize against. It intentionally does not add a new runtime model.
+    """
+    counts = (task_curriculum or {}).get("counts", {}) or {}
+    focus_track = None
+    if counts:
+        try:
+            focus_track = sorted(counts.items(), key=lambda kv: int(kv[1] or 0))[0][0]
+        except Exception:
+            focus_track = None
+
+    sample_items = (task_curriculum or {}).get("items", []) or []
+    fusion_signals = []
+    for item in sample_items[:8]:
+        fusion_signals.append({
+            "work_track": item.get("work_track") or "general",
+            "status": item.get("status") or "",
+            "source": item.get("source") or "",
+            "title": (item.get("title") or "")[:120],
+            "result": (item.get("result") or "")[:120],
+        })
+
+    mistake_signals = []
+    for m in (recent_mistakes or [])[:8]:
+        mistake_signals.append((m.get("what_failed") or m.get("root_cause") or "")[:160])
+
+    evo_signals = []
+    for evo in (recent_evos or [])[:8]:
+        evo_signals.append({
+            "change_type": evo.get("change_type") or "unknown",
+            "impact": evo.get("impact") or "",
+            "status": evo.get("status") or "",
+            "summary": (evo.get("change_summary") or "")[:120],
+        })
+
+    return {
+        "class": "core_tools.WorldModel",
+        "objective": "Learn how to fuse temporal filtering, attention, evaluation, graph structure, and search into a calibrated next-action ranking.",
+        "focus_track": focus_track or "mixed",
+        "fusion_inputs": [
+            "AdaptiveTemporalFilter",
+            "TemporalAttention",
+            "StateEvaluator",
+            "DynamicRelationalGraph",
+            "MonteCarloTreeSearch",
+        ],
+        "fusion_contract": {
+            "temporal_context": "compress and rank the recent state/action sequence",
+            "state_evaluation": "score coherence, evidence, risk, and readiness",
+            "graph_context": "surface relational structure and density",
+            "search_context": "pick a stable best_action from candidate rollouts",
+        },
+        "reward_signal": {
+            "positive": [
+                "calibrated action ranking",
+                "better next-state prediction",
+                "lower rework",
+                "stable fusion across similar states",
+            ],
+            "negative": [
+                "overconfident fused predictions",
+                "ignoring high-risk signals",
+                "unstable action ranking",
+                "unnecessary escalation",
+            ],
+        },
+        "fusion_signals": fusion_signals,
+        "mistake_signals": mistake_signals,
+        "evolution_signals": evo_signals,
+        "notes": "Planner-only contract; no runtime model added in this patch.",
+    }
+
+
 def _run_joint_training_planner(cycle_count: int = 0) -> dict:
     """Bounded joint-training planner (no actual model training).
 
@@ -1768,6 +1848,16 @@ def _run_joint_training_planner(cycle_count: int = 0) -> dict:
         curriculum = _build_task_embedding_curriculum(limit=16)
         counts = curriculum.get("counts", {}) or {}
         items = curriculum.get("items", []) or []
+        recent_mistakes = sb_get(
+            "mistakes",
+            "select=what_failed,root_cause,how_to_avoid&order=created_at.desc&limit=8&id=gt.1",
+            svc=True,
+        ) or []
+        recent_evos = sb_get(
+            "evolution_queue",
+            "select=change_type,change_summary,impact,status,source&status=in.(pending,pending_desktop,applied,rejected,synthesized)&order=created_at.desc&limit=8",
+            svc=True,
+        ) or []
         # Emphasize transfer by focusing on the least-represented work_track.
         focus_track = None
         if counts:
@@ -1780,6 +1870,7 @@ def _run_joint_training_planner(cycle_count: int = 0) -> dict:
             "cycle_count": int(cycle_count or 0),
             "components": ["TMRF", "DAM", "world_model", "DynamicRouter", "MRC"],
             "curriculum_counts": counts,
+            "world_model_meta_objective": _world_model_fusion_meta_learning_objective(curriculum, recent_mistakes, recent_evos),
             "transfer_focus_work_track": focus_track or "mixed",
             "transfer_focus_items": [{
                 "work_track": (it.get("work_track") or "general"),
@@ -1796,7 +1887,7 @@ def _run_joint_training_planner(cycle_count: int = 0) -> dict:
             "mrc_meta_objective": _mrc_meta_learning_objective(curriculum, sb_get("mistakes", "select=what_failed,root_cause,how_to_avoid&order=created_at.desc&limit=8&id=gt.1", svc=True) or []),
             "notes": "Planner-only: this does not train models. It produces curriculum + interface guidance for later workers.",
         }
-        content = "Joint training planner (bounded).\n" + json.dumps(plan, ensure_ascii=True)[:3500]
+        content = "Joint training planner (bounded).\n" + json.dumps(plan, ensure_ascii=True)[:5000]
         ok = sb_upsert("knowledge_base", {
             "domain": "meta",
             "topic": topic,
