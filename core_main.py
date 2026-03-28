@@ -177,16 +177,17 @@ def get_system_counts():
             counts[t] = int(cr.split("/")[-1]) if "/" in cr else 0
         except:
             counts[t] = -1
-    # task_queue — pending only
-    try:
-        r = httpx.get(
-            f"{SUPABASE_URL}/rest/v1/task_queue?select=id&limit=1&status=eq.pending",
-            headers=_sbh_count_svc(), timeout=10
-        )
-        cr = r.headers.get("content-range", "*/0")
-        counts["task_queue_pending"] = int(cr.split("/")[-1]) if "/" in cr else 0
-    except:
-        counts["task_queue_pending"] = -1
+    # task_queue — counts by status
+    for task_status in ("pending", "in_progress", "done", "failed"):
+        try:
+            r = httpx.get(
+                f"{SUPABASE_URL}/rest/v1/task_queue?select=id&limit=1&status=eq.{task_status}",
+                headers=_sbh_count_svc(), timeout=10
+            )
+            cr = r.headers.get("content-range", "*/0")
+            counts[f"task_queue_{task_status}"] = int(cr.split("/")[-1]) if "/" in cr else 0
+        except:
+            counts[f"task_queue_{task_status}"] = -1
     # evolution_queue — counts by status
     for evo_status in ("pending", "applied", "rejected"):
         try:
@@ -435,7 +436,7 @@ def _render_queue_report(counts: dict, task_auto: dict, evo_auto: dict) -> str:
     code_auto = code_autonomy_status() if CODE_AUTONOMY_ENABLED else {}
     integration_auto = integration_autonomy_status() if INTEGRATION_AUTONOMY_ENABLED else {}
     lines = [
-        f"Task queue: {counts.get('task_queue_pending', 0)} pending",
+        f"Task queue: pending {counts.get('task_queue_pending', 0)} | in_progress {counts.get('task_queue_in_progress', 0)} | done {counts.get('task_queue_done', 0)} | failed {counts.get('task_queue_failed', 0)}",
         f"Evolution queue: pending {counts.get('evolution_pending', 0)} | applied {counts.get('evolution_applied', 0)} | rejected {counts.get('evolution_rejected', 0)}",
         f"Task autonomy backlog: {task_auto.get('pending', 0)} pending | {task_auto.get('in_progress', 0)} in progress",
         f"Code autonomy backlog: {code_auto.get('pending_code_tasks', 0)} pending code tasks | {code_auto.get('pending_review_proposals', 0)} review proposals",
@@ -485,6 +486,7 @@ def _render_autonomy_overview_report(counts: dict, task_auto: dict, evo_auto: di
             ", ".join(f"{_tg_escape(k)}={v}" for k, v in sorted(integration_auto.get("track_counts", {}).items())) or "none"
         ),
         f"Evolution autonomy: {'enabled' if evo_auto.get('enabled') else 'disabled'} | scope=improvement synthesis | pending {evo_auto.get('pending_evolutions', 0)} | synthesized {evo_auto.get('synthesized_evolutions', 0)} | follow-up tasks {evo_auto.get('pending_improvement_tasks', 0)}",
+        f"  Queue: pending {counts.get('evolution_pending', 0)} | applied {counts.get('evolution_applied', 0)} | rejected {counts.get('evolution_rejected', 0)}",
         f"  Last run: {_tg_escape(evo_last.get('finished_at') or evo_auto.get('last_run_at') or 'n/a', 40)} | tracks: " + (
             ", ".join(f"{_tg_escape(k)}={v}" for k, v in sorted(evo_auto.get("track_counts", {}).items())) or "none"
         ),
@@ -550,6 +552,9 @@ def _render_deployment_report() -> str:
 
 def _build_startup_brief(resume: str, counts: dict, orch: dict, task_auto: dict | None = None, evo_auto: dict | None = None) -> str:
     task_pending = counts.get("task_queue_pending", 0)
+    task_in_progress = counts.get("task_queue_in_progress", 0)
+    task_done = counts.get("task_queue_done", 0)
+    task_failed = counts.get("task_queue_failed", 0)
     if resume and resume != "No active tasks":
         task_summary = resume
     elif task_pending > 0:
@@ -574,7 +579,7 @@ def _build_startup_brief(resume: str, counts: dict, orch: dict, task_auto: dict 
         f"Orchestrator: <b>{orch.get('model', 'unknown')}</b> | {orch.get('layers', 'L0-L9 active')} | {orch.get('blueprint', '')}\n\n"
         f"<b>State</b>\n"
         f"KB: {counts.get('knowledge_base', 0)} | Mistakes: {counts.get('mistakes', 0)} | Sessions: {counts.get('sessions', 0)}\n"
-        f"Task queue: {task_pending} pending | {task_summary}\n"
+        f"Task queue: pending {task_pending} | in_progress {task_in_progress} | done {task_done} | failed {task_failed} | {task_summary}\n"
         f"Evolutions: pending {evo_pending} | applied {evo_applied} | rejected {evo_rejected}\n"
         f"Task autonomy: {'enabled' if AUTONOMY_ENABLED else 'disabled'} | pending {task_auto.get('pending', 0)} | in_progress {task_auto.get('in_progress', 0)} | sources {task_sources}\n"
         f"Research autonomy: {'enabled' if RESEARCH_AUTONOMY_ENABLED else 'disabled'} | pending {research_autonomy_status().get('pending', 0) if RESEARCH_AUTONOMY_ENABLED else 0}\n"
@@ -1765,7 +1770,7 @@ def handle_msg(msg):
                 [
                     f"Resume: {_tg_escape(resume or 'No active tasks', 180)}",
                     f"KB: {counts.get('knowledge_base', 0)} | Mistakes: {counts.get('mistakes', 0)} | Sessions: {counts.get('sessions', 0)}",
-                    f"Task queue: {counts.get('task_queue_pending', 0)} pending",
+                    f"Task queue: pending {counts.get('task_queue_pending', 0)} | in_progress {counts.get('task_queue_in_progress', 0)} | done {counts.get('task_queue_done', 0)} | failed {counts.get('task_queue_failed', 0)}",
                     f"Evolution queue: pending {counts.get('evolution_pending', 0)} | applied {counts.get('evolution_applied', 0)} | rejected {counts.get('evolution_rejected', 0)}",
                     f"Task autonomy: {'enabled' if task_auto.get('enabled') else 'disabled'} | pending {task_auto.get('pending', 0)}",
                     f"Code autonomy: {'enabled' if code_auto.get('enabled') else 'disabled'} | pending {code_auto.get('pending_code_tasks', 0)}",
@@ -1793,7 +1798,7 @@ def handle_msg(msg):
         sem = semantic_projection_status() if SEMANTIC_PROJECTION_ENABLED else {}
         lines = [
             f"Runtime: {'enabled' if AUTONOMY_ENABLED else 'disabled'} task autonomy | {'enabled' if CODE_AUTONOMY_ENABLED else 'disabled'} code autonomy | {'enabled' if INTEGRATION_AUTONOMY_ENABLED else 'disabled'} integration autonomy | {'enabled' if EVOLUTION_AUTONOMY_ENABLED else 'disabled'} evolution autonomy",
-            f"Queues: task {counts.get('task_queue_pending', 0)} pending | evolution {counts.get('evolution_pending', 0)} pending",
+            f"Queues: task pending {counts.get('task_queue_pending', 0)} | in_progress {counts.get('task_queue_in_progress', 0)} | done {counts.get('task_queue_done', 0)} | failed {counts.get('task_queue_failed', 0)} | evolution pending {counts.get('evolution_pending', 0)} | applied {counts.get('evolution_applied', 0)} | rejected {counts.get('evolution_rejected', 0)}",
             f"Memory: KB {counts.get('knowledge_base', 0)} | Mistakes {counts.get('mistakes', 0)} | Sessions {counts.get('sessions', 0)}",
             f"Workers: task {task_auto.get('pending', 0)} pending / {task_auto.get('in_progress', 0)} in progress | code {code_auto.get('pending_code_tasks', 0)} pending / {code_auto.get('pending_review_proposals', 0)} review proposals | integration {integration_auto.get('pending_integration_tasks', 0)} pending / {integration_auto.get('pending_review_proposals', 0)} review proposals | evolution {evo_auto.get('pending_evolutions', 0)} pending",
             f"Semantic projection: {'enabled' if SEMANTIC_PROJECTION_ENABLED else 'disabled'} | last_run {_tg_escape(sem.get('last_run_at') or 'n/a', 40)}",
