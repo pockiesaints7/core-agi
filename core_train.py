@@ -2798,7 +2798,12 @@ def reject_evolution(evolution_id: int, reason: str = "", silent: bool = False):
         rows = sb_get("evolution_queue",
                       f"select=*&id=eq.{evolution_id}&status=in.(pending,synthesized)&limit=1", svc=True)
         if not rows: return {"ok": False, "error": f"Evolution {evolution_id} not found or not pending/synthesized"}
-        sb_patch("evolution_queue", f"id=eq.{evolution_id}", {"status": "rejected"})
+        now = datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
+        sb_patch("evolution_queue", f"id=eq.{evolution_id}", {
+            "status": "rejected",
+            "rejected_by_owner": True,
+            "tier_applied_at": now,
+        })
         if not silent:
             sb_post("mistakes", {
                 "domain": "evolution", "context": f"Evolution #{evolution_id}: {rows[0].get('change_summary','')[:200]}",
