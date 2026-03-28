@@ -229,7 +229,7 @@ async def layer_5_tools(msg: OrchestratorMessage):
                         evidence_gate.get("needs_retrieval")
                         and not evidence_gate.get("public_research_needed")
                         and (
-                            stage == "local_code"
+                            stage in {"repo_map", "local_code"}
                             or (not evidence_gate.get("repo_map_needed") and stage == "supabase")
                         )
                     ):

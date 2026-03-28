@@ -302,6 +302,12 @@ def _format_evidence_gate(evidence_gate: dict) -> str:
         "repo_map_targets",
         "clarification_needed",
         "clarification_prompt",
+        "preferred_tools",
+        "search_query",
+        "code_targets",
+        "repo_map_targets",
+        "clarification_needed",
+        "clarification_prompt",
     ]
     return "\n".join(
         f"- {k}: {evidence_gate.get(k)}"

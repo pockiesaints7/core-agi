@@ -478,8 +478,8 @@ def _build_evidence_retrieval_plan(msg: OrchestratorMessage) -> Dict[str, Any]:
                 "args": {"path": target, "repo": "core-agi"},
                 "expected_output": "file content",
                 "evidence_stage": "local_code",
-                "blocking": False,
-            })
+            "blocking": False,
+        })
 
     # Public research sweep for public/current/latest/research/doc queries.
     if gate.get("public_research_needed") or gate.get("retrieval_mode", "").startswith("public_research"):
