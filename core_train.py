@@ -61,6 +61,8 @@ _last_meta_training_run: float = -1.0
 _META_TRAINING_INTERVAL = 21600  # 6 hours
 _last_causal_discovery_run: float = -1.0
 _CAUSAL_DISCOVERY_INTERVAL = 21600  # 6 hours
+_last_temporal_hwm_run: float = -1.0
+_TEMPORAL_HWM_INTERVAL = 21600  # 6 hours
 _last_joint_training_run: float = -1.0
 _JOINT_TRAINING_INTERVAL = 21600  # 6 hours
 _JOINT_TRAINING_PLANNER_ENABLED = os.getenv("JOINT_TRAINING_PLANNER_ENABLED", "").strip().lower() in {"1", "true", "yes", "on"}
@@ -134,6 +136,57 @@ def _hierarchical_auxiliary_loss(levels: list) -> tuple[float, dict]:
         "pairs": len(divergences),
         "avg_divergence": round(avg_div, 3),
         "max_divergence": round(max_div, 3),
+    }
+
+
+def _temporal_sequence_loss(sequence: list, decay: float = 0.82) -> tuple[float, dict]:
+    """Estimate bounded temporal loss over a sequence of textual states/actions."""
+    items = [str(item).strip() for item in (sequence or []) if str(item).strip()]
+    if len(items) < 2:
+        return 0.0, {
+            "pairs": 0,
+            "adjacency_loss": 0.0,
+            "recency_loss": 0.0,
+            "repetition_penalty": 0.0,
+            "sequence_loss": 0.0,
+        }
+
+    def _tokens(text: str) -> set[str]:
+        raw = str(text or "").lower().replace("\n", " ").split()
+        cleaned = []
+        for tok in raw:
+            tok = tok.strip(".,:;!?()[]{}<>\"'`|/\\")
+            if len(tok) > 2:
+                cleaned.append(tok)
+        return set(cleaned[:80])
+
+    token_sets = [_tokens(item) for item in items]
+    divergences = []
+    recency_deltas = []
+    for idx, cur in enumerate(token_sets):
+        if idx == 0:
+            continue
+        prev = token_sets[idx - 1]
+        union = prev | cur
+        overlap = (len(prev & cur) / len(union)) if union else 0.0
+        divergences.append(1.0 - overlap)
+
+    for idx, item in enumerate(items):
+        decay_target = max(0.05, min(1.0, float(decay or 0.82) ** max(0, len(items) - idx - 1)))
+        normalized_pos = (idx + 1) / len(items)
+        recency_deltas.append(abs(decay_target - normalized_pos))
+
+    unique_ratio = len(set(items)) / len(items)
+    repetition_penalty = round(max(0.0, 1.0 - unique_ratio), 3)
+    adjacency_loss = round(sum(divergences) / len(divergences), 3) if divergences else 0.0
+    recency_loss = round(sum(recency_deltas) / len(recency_deltas), 3) if recency_deltas else 0.0
+    sequence_loss = round(min(1.0, (adjacency_loss * 0.55) + (recency_loss * 0.3) + (repetition_penalty * 0.15)), 3)
+    return sequence_loss, {
+        "pairs": len(divergences),
+        "adjacency_loss": adjacency_loss,
+        "recency_loss": recency_loss,
+        "repetition_penalty": repetition_penalty,
+        "sequence_loss": sequence_loss,
     }
 
 
@@ -1846,6 +1899,171 @@ def _run_causal_discovery_phase(cycle_count: int = 0) -> dict:
         return {"ok": False, "reason": "kb_upsert_failed"}
     except Exception as e:
         print(f"[CAUSAL] discovery phase error (non-fatal): {e}")
+        return {"ok": False, "error": str(e)}
+def _run_temporal_hierarchical_training_phase(cycle_count: int = 0) -> dict:
+    """Bounded temporal training contract for TemporalHierarchicalWorldModel.
+
+    This does not update weights. It records sequence batches, temporal loss
+    summaries, and a training contract that future model code can consume.
+    """
+    try:
+        curriculum = _build_task_embedding_curriculum(limit=16)
+        counts = curriculum.get("counts", {}) or {}
+        items = curriculum.get("items", []) or []
+        recent_sessions = sb_get(
+            "sessions",
+            "select=summary,actions,interface,created_at&order=created_at.desc&limit=8",
+            svc=True,
+        ) or []
+        recent_hots = sb_get(
+            "hot_reflections",
+            "select=domain,quality_score,task_summary,new_patterns,new_mistakes,gaps_identified,source,created_at"
+            "&order=created_at.desc&limit=8",
+            svc=True,
+        ) or []
+        recent_mistakes = sb_get(
+            "mistakes",
+            "select=domain,what_failed,severity,root_cause,how_to_avoid&order=created_at.desc&limit=8",
+            svc=True,
+        ) or []
+        recent_evos = sb_get(
+            "evolution_queue",
+            "select=change_type,change_summary,confidence,impact,recommendation,status,source"
+            "&status=in.(pending,applied,rejected,synthesized)&order=created_at.desc&limit=8",
+            svc=True,
+        ) or []
+
+        sequence_batches: list[list[str]] = []
+        for item in items:
+            batch = []
+            for key in ("title", "description", "result", "source", "work_track", "topic"):
+                value = item.get(key)
+                if value:
+                    batch.append(str(value)[:180])
+            if batch:
+                sequence_batches.append(batch)
+            if len(sequence_batches) >= 8:
+                break
+        if len(sequence_batches) < 8:
+            for sess in recent_sessions:
+                batch = []
+                summary = sess.get("summary") or ""
+                if summary:
+                    batch.append(str(summary)[:180])
+                actions = sess.get("actions") or []
+                if isinstance(actions, list):
+                    batch.extend(str(a)[:180] for a in actions if a)
+                elif actions:
+                    batch.append(str(actions)[:180])
+                batch = [part for part in batch if part]
+                if batch:
+                    sequence_batches.append(batch)
+                if len(sequence_batches) >= 8:
+                    break
+        if len(sequence_batches) < 8:
+            for evo in recent_evos:
+                batch = []
+                for key in ("change_summary", "recommendation", "impact", "change_type"):
+                    value = evo.get(key)
+                    if value:
+                        batch.append(str(value)[:180])
+                if batch:
+                    sequence_batches.append(batch)
+                if len(sequence_batches) >= 8:
+                    break
+
+        temporal_losses = []
+        for idx, batch in enumerate(sequence_batches[:8]):
+            loss, detail = _temporal_sequence_loss(batch)
+            temporal_losses.append({
+                "index": idx,
+                "batch": batch[:6],
+                "loss": loss,
+                "detail": detail,
+            })
+
+        avg_loss = round(sum(item["loss"] for item in temporal_losses) / len(temporal_losses), 3) if temporal_losses else 0.0
+        best_batch = min(temporal_losses, key=lambda item: item["loss"], default={})
+        worst_batch = max(temporal_losses, key=lambda item: item["loss"], default={})
+        track_counts = Counter((item.get("work_track") or "general") for item in items)
+        focus_track = None
+        if counts:
+            try:
+                focus_track = sorted(counts.items(), key=lambda kv: int(kv[1] or 0))[0][0]
+            except Exception:
+                focus_track = None
+
+        phase_packet = {
+            "cycle_count": int(cycle_count or 0),
+            "phase": "temporal_hierarchical_world_model",
+            "focus_track": focus_track or "mixed",
+            "task_curriculum_counts": counts,
+            "sequence_batch_count": len(sequence_batches),
+            "sequence_batches": sequence_batches[:8],
+            "temporal_losses": temporal_losses,
+            "temporal_loss_summary": {
+                "average_loss": avg_loss,
+                "best_batch_loss": best_batch.get("loss") if best_batch else None,
+                "worst_batch_loss": worst_batch.get("loss") if worst_batch else None,
+            },
+            "training_contract": {
+                "model": "TemporalHierarchicalWorldModel",
+                "objective": "Learn sequence-aware routing and temporal ordering for hierarchical world-model planning.",
+                "inputs": [
+                    "sequence_batches",
+                    "recent_sessions",
+                    "recent_hot_reflections",
+                    "recent_mistakes",
+                    "recent_evolutions",
+                ],
+                "loss_terms": [
+                    "adjacency_loss",
+                    "recency_loss",
+                    "repetition_penalty",
+                ],
+                "rule": "prefer stable order, recency-aware context compression, and low repetition across adjacent sequence steps",
+            },
+            "performance_metrics": {
+                "hot_reflections": len(recent_hots),
+                "mistakes": len(recent_mistakes),
+                "evolutions": len(recent_evos),
+                "track_diversity": len(track_counts),
+                "top_track": track_counts.most_common(1)[0][0] if track_counts else None,
+            },
+            "notes": "Planner-only temporal phase. This records the contract and does not change model weights.",
+        }
+
+        today = datetime.utcnow().strftime("%Y-%m-%d")
+        topic = f"temporal_hierarchical_world_model_phase_{today}"
+        content = "Temporal hierarchical world-model phase (bounded).\n" + json.dumps(phase_packet, ensure_ascii=True)[:5000]
+        ok = sb_upsert("knowledge_base", {
+            "domain": "meta",
+            "topic": topic,
+            "content": content,
+            "instruction": content,
+            "source": "temporal_hierarchical_world_model_phase",
+            "source_type": "training_phase",
+            "source_ref": f"background_researcher:cycle={int(cycle_count or 0)}",
+            "confidence": "low",
+            "tags": ["meta", "training", "phase", "temporal", "hierarchical", "world_model"],
+            "active": True,
+        }, on_conflict="domain,topic")
+        if ok:
+            sb_post("sessions", {
+                "summary": f"[state_update] last_temporal_hwm_ts: {time.time()}",
+                "actions": ["last_temporal_hwm_ts persisted", "temporal_hierarchical_world_model_phase captured"],
+                "interface": "mcp",
+            })
+            return {
+                "ok": True,
+                "topic": topic,
+                "focus_track": focus_track or "mixed",
+                "metrics": phase_packet["performance_metrics"],
+                "temporal_loss_summary": phase_packet["temporal_loss_summary"],
+            }
+        return {"ok": False, "reason": "kb_upsert_failed"}
+    except Exception as e:
+        print(f"[TEMPORAL] hierarchical phase error (non-fatal): {e}")
         return {"ok": False, "error": str(e)}
 
 
@@ -3643,7 +3861,7 @@ def _load_researcher_prompt(target: str):
 
 
 def background_researcher():
-    global _last_research_run, _last_public_source_run, _last_smap_update, _last_meta_learning_run, _last_meta_training_run, _last_causal_discovery_run, _last_joint_training_run, _last_router_policy_run
+    global _last_research_run, _last_public_source_run, _last_smap_update, _last_meta_learning_run, _last_meta_training_run, _last_causal_discovery_run, _last_temporal_hwm_run, _last_joint_training_run, _last_router_policy_run
     print("[RESEARCH] background researcher started - real signal + simulation + public source mode")
     _cycle_count = 0
 
@@ -3708,6 +3926,18 @@ def background_researcher():
     except Exception as e:
         print(f"[RESEARCH] restore causal_discovery_ts error: {e}")
         _last_causal_discovery_run = time.time() - (_CAUSAL_DISCOVERY_INTERVAL + 60)
+
+    try:
+        rows = sb_get("sessions", "select=summary&summary=like.*last_temporal_hwm_ts*&order=created_at.desc&limit=1", svc=True)
+        if rows:
+            val = rows[0]["summary"].split("last_temporal_hwm_ts:")[-1].strip().split()[0]
+            _last_temporal_hwm_run = float(val)
+            print(f"[RESEARCH] Restored last_temporal_hwm_ts: {datetime.utcfromtimestamp(_last_temporal_hwm_run).isoformat()}")
+        else:
+            _last_temporal_hwm_run = time.time() - (_TEMPORAL_HWM_INTERVAL + 60)
+    except Exception as e:
+        print(f"[RESEARCH] restore temporal_hwm_ts error: {e}")
+        _last_temporal_hwm_run = time.time() - (_TEMPORAL_HWM_INTERVAL + 60)
 
     try:
         rows = sb_get("sessions", "select=summary&summary=like.*last_router_policy_ts*&order=created_at.desc&limit=1", svc=True)
@@ -3790,6 +4020,15 @@ def background_researcher():
                     meta_train_ok = bool(meta_train.get("ok"))
                     if meta_train_ok:
                         print(f"[META] Training phase stored: {meta_train.get('topic')} focus={meta_train.get('focus_track')}")
+                temporal_hwm_ok = False
+                if now - _last_temporal_hwm_run >= _TEMPORAL_HWM_INTERVAL:
+                    print("[RESEARCH] Running temporal hierarchical world-model phase...")
+                    _last_temporal_hwm_run = now
+                    sb_post("sessions", {"summary": f"[state_update] last_temporal_hwm_ts: {now}", "actions": ["last_temporal_hwm_ts persisted"], "interface": "mcp"})
+                    temporal_hwm = _run_temporal_hierarchical_training_phase(cycle_count=_cycle_count)
+                    temporal_hwm_ok = bool(temporal_hwm.get("ok"))
+                    if temporal_hwm_ok:
+                        print(f"[TEMPORAL] HWM phase stored: {temporal_hwm.get('topic')} focus={temporal_hwm.get('focus_track')}")
                 sim_ok = _run_rarl_epoch()
                 joint_ok = False
                 if _JOINT_TRAINING_PLANNER_ENABLED and (now - _last_joint_training_run >= _JOINT_TRAINING_INTERVAL):
@@ -3829,6 +4068,8 @@ def background_researcher():
                             parts.append("causal discovery phase stored")
                         if meta_train_ok:
                             parts.append("meta training phase stored")
+                        if temporal_hwm_ok:
+                            parts.append("temporal HWM phase stored")
                         if sim_ok:
                             parts.append("rarl epoch complete")
                         if joint_ok:

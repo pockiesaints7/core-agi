@@ -2541,6 +2541,132 @@ def t_hierarchical_search_controller(current_state: str = "", goal: str = "", hw
         ).run()
     except Exception as e:
         return {"ok": False, "error": str(e)}
+class TemporalHierarchicalWorldModel:
+    """Wrap hierarchical state reasoning with simple temporal sequence features."""
+
+    def __init__(self, domain: str = "general", state_hint: str = "", temporal_window: int = 5, decay: float = 0.82):
+        self.domain = (domain or "general").strip()
+        self.state_hint = (state_hint or "").strip()
+        self.temporal_window = max(1, min(int(temporal_window or 5), 25))
+        self.decay = max(0.1, min(float(decay or 0.82), 0.99))
+        self.world_model = WorldModel(domain=self.domain, state_hint=self.state_hint)
+
+    @staticmethod
+    def _normalize_sequence(sequence) -> list[str]:
+        if sequence in (None, "", []):
+            return []
+        if isinstance(sequence, str):
+            raw = sequence.strip()
+            if not raw:
+                return []
+            if raw.startswith("["):
+                try:
+                    parsed = json.loads(raw)
+                    if isinstance(parsed, list):
+                        return [str(item).strip() for item in parsed if str(item).strip()]
+                except Exception:
+                    try:
+                        parsed = ast.literal_eval(raw)
+                        if isinstance(parsed, (list, tuple, set)):
+                            return [str(item).strip() for item in parsed if str(item).strip()]
+                    except Exception:
+                        pass
+            return [part.strip() for part in raw.replace("\n", ",").split(",") if part.strip()]
+        if isinstance(sequence, dict):
+            sequence = [sequence]
+        if isinstance(sequence, (list, tuple, set)):
+            items = []
+            for item in sequence:
+                if isinstance(item, dict):
+                    parts = []
+                    for key in ("state", "current_state", "context", "summary", "value", "action", "title", "description"):
+                        value = item.get(key)
+                        if value:
+                            parts.append(str(value))
+                    text = " | ".join(parts).strip() or json.dumps(item, ensure_ascii=False, sort_keys=True)
+                else:
+                    text = str(item).strip()
+                if text:
+                    items.append(text[:1000])
+            return items
+        text = str(sequence).strip()
+        return [text] if text else []
+
+    def assess_sequence(self, sequence, horizon: int | None = None) -> dict:
+        items = self._normalize_sequence(sequence)
+        if not items:
+            return {"ok": False, "error": "sequence required"}
+        limit = max(1, min(int(horizon or self.temporal_window), self.temporal_window))
+        temporal = AdaptiveTemporalFilter(domain=self.domain, state_hint=self.state_hint, window=self.temporal_window, decay=self.decay).filter_sequence(items, horizon=limit)
+        attention = TemporalAttention(domain=self.domain, state_hint=self.state_hint, heads=3, window=self.temporal_window).attend(items, horizon=limit)
+        current_state = items[-1] if items else ""
+        actions = items[-min(len(items), limit):]
+        world = self.world_model.predict_future_states(current_state=current_state, actions=actions, horizon=min(limit, 8))
+        controller = HierarchicalSearchController(
+            current_state=current_state,
+            goal=temporal.get("summary") or attention.get("attention_summary") or "stabilize",
+            hwm_levels=actions or ["observe", "assess", "proceed"],
+            domain=self.domain,
+            state_hint=self.state_hint,
+            horizon=min(limit, 8),
+            candidate_actions=actions,
+            rollouts=min(max(8, len(actions) * 3), 32),
+            exploration_weight=1.2,
+        ).run()
+        history = []
+        for idx, text in enumerate(items[-self.temporal_window:]):
+            history.append({
+                "index": idx,
+                "text": text,
+                "decay_weight": round(self.decay ** max(0, len(items) - idx - 1), 3),
+            })
+        summary = " | ".join([
+            f"sequence={items[-1][:80] if items else ''}",
+            f"best_level={controller.get('best_level') or ''}",
+            f"best_action={controller.get('plan', {}).get('best_action') or ''}",
+        ]).strip(" |")
+        return {
+            "ok": True,
+            "domain": self.domain,
+            "state_hint": self.state_hint,
+            "temporal_window": self.temporal_window,
+            "decay": self.decay,
+            "sequence": items,
+            "temporal_filter": temporal,
+            "temporal_attention": attention,
+            "world_model": world,
+            "hierarchical_search": controller,
+            "history": history,
+            "summary": summary[:500],
+        }
+
+
+def t_temporal_hierarchical_world_model(sequence: str = "", current_state: str = "", actions: str = "", domain: str = "general", state_hint: str = "", temporal_window: str = "5", decay: str = "0.82", horizon: str = "3") -> dict:
+    """Temporal wrapper around hierarchical world-model reasoning."""
+    try:
+        try:
+            tw = max(1, min(int(temporal_window or 5), 25))
+        except Exception:
+            tw = 5
+        try:
+            hz = max(1, min(int(horizon or 3), 8))
+        except Exception:
+            hz = 3
+        if not sequence:
+            seq = []
+            if current_state:
+                seq.append(current_state)
+            if actions:
+                seq.extend([part.strip() for part in actions.replace("\n", ",").split(",") if part.strip()])
+            sequence = seq
+        return TemporalHierarchicalWorldModel(
+            domain=domain,
+            state_hint=state_hint,
+            temporal_window=tw,
+            decay=decay,
+        ).assess_sequence(sequence, horizon=hz)
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
 
 
 def t_world_model(domain: str = "general", state_hint: str = "", experience: str = "", current_state: str = "", actions: str = "", horizon: str = "3") -> dict:
@@ -7548,6 +7674,8 @@ TOOLS = {
                                "desc": "Run a flexible Monte Carlo Tree Search bridge over CORE reasoning packets. Uses built-in fallback unless class_path points to an external MonteCarloTreeSearch class."},
     "hierarchical_search_controller": {"fn": t_hierarchical_search_controller, "perm": "READ", "args": ["current_state", "goal", "hwm_levels", "domain", "state_hint", "horizon", "candidate_actions", "rollouts", "exploration_weight"],
                                "desc": "Manage multi-level MCTS with WorldModel prediction and state evaluation. Returns a level distribution and bounded plan."},
+    "temporal_hierarchical_world_model": {"fn": t_temporal_hierarchical_world_model, "perm": "READ", "args": ["sequence", "current_state", "actions", "domain", "state_hint", "temporal_window", "decay", "horizon"],
+                               "desc": "Temporal wrapper around hierarchical world-model reasoning with sequence filtering, attention, and bounded search."},
     "world_model":            {"fn": t_world_model,            "perm": "WRITE",   "args": ["domain", "state_hint", "experience", "current_state", "actions", "horizon"],
                                "desc": "Bounded world-model interface: capture an experience into knowledge_base or predict future states from a current state and candidate actions."},
     "dynamic_router":          {"fn": t_dynamic_router,          "perm": "READ", "args": ["predictions", "confidences", "candidates", "policy_topic", "policy_domain", "policy_override", "query", "domain", "state_hint", "use_state_evaluator", "exploration_weight"],
