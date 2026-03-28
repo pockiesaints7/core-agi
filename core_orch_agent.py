@@ -392,10 +392,50 @@ def _seed_repo_map_state(goal: str, agent_state: dict, evidence_gate: dict) -> N
     except Exception as exc:
         status_packet = {"ok": False, "error": str(exc)}
 
+    def _compact_component_packet(packet: dict) -> dict:
+        components = packet.get("components") or []
+        chunks = packet.get("chunks") or []
+        edges = packet.get("edges") or []
+        return {
+            "ok": bool(packet.get("ok", True)),
+            "summary": packet.get("summary") or packet.get("focus") or "",
+            "count_components": len(components),
+            "count_chunks": len(chunks),
+            "count_edges": len(edges),
+            "top_components": [
+                {
+                    "path": c.get("path") or c.get("rel_path") or "",
+                    "role": c.get("role") or c.get("runtime_role") or "",
+                    "summary": (c.get("summary") or c.get("purpose_summary") or "")[:180],
+                }
+                for c in components[:3]
+                if isinstance(c, dict)
+            ],
+        }
+
+    def _compact_graph_packet(packet: dict) -> dict:
+        nodes = packet.get("nodes") or []
+        edges = packet.get("edges") or []
+        return {
+            "ok": bool(packet.get("ok", True)),
+            "summary": packet.get("summary") or "",
+            "count_nodes": packet.get("count_nodes", len(nodes)),
+            "count_edges": packet.get("count_edges", len(edges)),
+            "top_nodes": [
+                {
+                    "path": n.get("path") or n.get("rel_path") or "",
+                    "label": n.get("label") or n.get("name") or "",
+                    "role": n.get("role") or "",
+                }
+                for n in nodes[:3]
+                if isinstance(n, dict)
+            ],
+        }
+
     agent_state["repo_map_seed"] = {
         "status": status_packet,
-        "component_packet": component_packet,
-        "graph_packet": graph_packet,
+        "component_packet": _compact_component_packet(component_packet),
+        "graph_packet": _compact_graph_packet(graph_packet),
         "target_paths": targets,
         "goal": goal[:240],
     }
@@ -428,7 +468,7 @@ def _build_prompt(
         parts.append("")
     repo_seed = effective_state.get("repo_map_seed")
     if repo_seed:
-        parts.append("REPO MAP SEED (prefer this before re-listing files or running repo_map_status):")
+        parts.append("REPO MAP SEED (use this before re-listing files; do NOT start with file_list or shell if it already has enough signal):")
         parts.append(_j.dumps(repo_seed, default=str))
         parts.append("")
     if history:
