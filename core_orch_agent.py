@@ -363,6 +363,43 @@ def _get_tools_summary() -> str:
         _TOOLS_CACHE = f"(tool list error: {e})"
     return _TOOLS_CACHE
 
+
+def _seed_repo_map_state(goal: str, agent_state: dict, evidence_gate: dict) -> None:
+    """Prime the agent with repo-map evidence before the first action."""
+    if not isinstance(agent_state, dict):
+        return
+    gate = evidence_gate or {}
+    if not (gate.get("repo_map_needed") or gate.get("code_targets") or gate.get("retrieval_mode") == "code"):
+        return
+
+    try:
+        from core_repo_map import build_repo_component_packet, build_repo_graph_packet, repo_map_status
+    except Exception:
+        return
+
+    targets = gate.get("repo_map_targets") or gate.get("code_targets") or []
+    path = targets[0] if isinstance(targets, list) and len(targets) == 1 else ""
+    try:
+        component_packet = build_repo_component_packet(path=path, query=goal, limit=8)
+    except Exception as exc:
+        component_packet = {"ok": False, "error": str(exc)}
+    try:
+        graph_packet = build_repo_graph_packet(path=path, query=goal, depth=2, limit=8)
+    except Exception as exc:
+        graph_packet = {"ok": False, "error": str(exc)}
+    try:
+        status_packet = repo_map_status()
+    except Exception as exc:
+        status_packet = {"ok": False, "error": str(exc)}
+
+    agent_state["repo_map_seed"] = {
+        "status": status_packet,
+        "component_packet": component_packet,
+        "graph_packet": graph_packet,
+        "target_paths": targets,
+        "goal": goal[:240],
+    }
+
 # ── Prompt builder ────────────────────────────────────────────────────────────
 def _build_prompt(
     goal: str,
@@ -388,6 +425,11 @@ def _build_prompt(
     parts.append("")
     if compressed_summary:
         parts.append(compressed_summary)
+        parts.append("")
+    repo_seed = effective_state.get("repo_map_seed")
+    if repo_seed:
+        parts.append("REPO MAP SEED (prefer this before re-listing files or running repo_map_status):")
+        parts.append(_j.dumps(repo_seed, default=str))
         parts.append("")
     if history:
         parts.append("STEP HISTORY (most recent last):")
@@ -490,6 +532,11 @@ async def run_agent_loop(msg: OrchestratorMessage, goal: str) -> None:
             _agent_state.setdefault("evidence_gate", msg.context.get("evidence_gate", {}))
     except Exception as _se:
         print(f"[AGENT] state load error (non-fatal): {_se}")
+
+    try:
+        _seed_repo_map_state(goal, _agent_state, msg.context.get("evidence_gate", {}) or {})
+    except Exception as _se:
+        print(f"[AGENT] repo-map seed error (non-fatal): {_se}")
 
     while True:
         step += 1
