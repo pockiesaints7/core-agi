@@ -17,6 +17,7 @@ import subprocess
 import time
 from collections import Counter
 from datetime import datetime, timedelta
+from typing import Any
 
 import httpx
 
@@ -7793,6 +7794,129 @@ def t_validate_output(value: str = "", target_field: str = "", table: str = ""):
 
     except Exception as e:
         return {"ok": False, "error": str(e)}
+
+
+def _validate_tool_output_packet(tool_name: str, result: Any, success: Any = None) -> dict:
+    """Validate an arbitrary tool output shape before downstream layers consume it."""
+    warnings = []
+    failed_checks = []
+    fatal = False
+    shape = type(result).__name__
+    ok_field = None
+
+    if not tool_name:
+        failed_checks.append("tool_name_missing")
+        fatal = True
+
+    if not isinstance(result, dict):
+        failed_checks.append(f"non_dict_output:{shape}")
+        fatal = True
+        return {
+            "ok": True,
+            "tool": tool_name or "?",
+            "shape": shape,
+            "fatal": fatal,
+            "blocked": True,
+            "warnings": warnings,
+            "failed_checks": failed_checks,
+            "validation_score": 0.0,
+            "summary": f"{tool_name or '?'} returned non-dict output ({shape})",
+        }
+
+    ok_field = result.get("ok", None)
+    if ok_field is None:
+        warnings.append("missing_ok_field")
+
+    if success is not None:
+        try:
+            success_bool = bool(success)
+            if ok_field is not None and bool(ok_field) != success_bool:
+                warnings.append("success_ok_mismatch")
+        except Exception:
+            warnings.append("success_unparseable")
+
+    # Hard contradictions: tool says ok but carries an explicit error payload.
+    error_text = str(result.get("error") or result.get("message") or "").strip()
+    if bool(ok_field) and error_text:
+        failed_checks.append("ok_true_with_error_payload")
+        fatal = True
+
+    # Structural issues that should not abort the pipeline but should be visible.
+    if result.get("blocked") is True:
+        warnings.append("blocked=True")
+    if result.get("status") and str(result.get("status")).lower() in {"degraded", "partial", "timeout", "error", "stale"}:
+        warnings.append(f"degraded_status:{result.get('status')}")
+    if result.get("verified") is False:
+        warnings.append("verified=False")
+    if result.get("safe_to_write") is False:
+        warnings.append("safe_to_write=False")
+    if result.get("validation_passed") is False:
+        warnings.append("validation_passed=False")
+    if result.get("verification_score") is not None:
+        try:
+            score = float(result.get("verification_score"))
+            if score < 0.8:
+                warnings.append(f"low_verification_score:{score:.2f}")
+        except Exception:
+            warnings.append("verification_score_unparseable")
+
+    validation_score = 1.0
+    validation_score -= 0.45 if fatal else 0.0
+    validation_score -= 0.10 * len(warnings)
+    validation_score = max(0.0, round(validation_score, 2))
+    blocked = fatal or validation_score < 0.8
+
+    return {
+        "ok": True,
+        "tool": tool_name,
+        "shape": shape,
+        "fatal": fatal,
+        "blocked": blocked,
+        "warnings": warnings,
+        "failed_checks": failed_checks,
+        "ok_field": ok_field,
+        "summary": (
+            f"{tool_name}: {'fatal' if fatal else 'ok'} "
+            f"(warnings={len(warnings)}, failed_checks={len(failed_checks)})"
+        ),
+        "validation_score": validation_score,
+    }
+
+
+def t_validate_tool_output(tool_name: str = "", result_json: str = "", success: str = ""):
+    """Validate a tool output payload from JSON text."""
+    try:
+        parsed = json.loads(result_json) if result_json else {}
+    except Exception as exc:
+        return {
+            "ok": True,
+            "tool": tool_name or "?",
+            "fatal": True,
+            "blocked": True,
+            "warnings": ["result_json_parse_failed"],
+            "failed_checks": ["invalid_json"],
+            "error": str(exc),
+            "validation_score": 0.0,
+        }
+    success_hint = None
+    if success != "":
+        try:
+            success_hint = str(success).strip().lower() not in ("false", "0", "no", "off", "null")
+        except Exception:
+            success_hint = None
+    return _validate_tool_output_packet(tool_name, parsed, success=success_hint)
+
+
+TOOLS["validate_tool_output"] = {
+    "fn": t_validate_tool_output,
+    "perm": "READ",
+    "args": [
+        {"name": "tool_name", "type": "string", "description": "Tool whose output is being validated"},
+        {"name": "result_json", "type": "string", "description": "JSON string of the tool output payload"},
+        {"name": "success", "type": "string", "description": "Optional success hint from the executor"},
+    ],
+    "desc": "Validate a tool output payload for structural correctness, contradictory fields, and degraded output markers. Use when a tool result looks malformed or suspicious.",
+}
 
 def t_tag_certainty(conclusion: str = "", basis: str = "inferred"):
     """AGI-13/S2: Tag a conclusion with its certainty level.

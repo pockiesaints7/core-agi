@@ -71,6 +71,7 @@ async def layer_6_validate(msg: OrchestratorMessage):
     fatal_errors = []
     warning_errors = []
     semantic_warnings = []
+    output_validation_packets = []
 
     for r in msg.tool_results:
         tool_name = r.get("tool", "?")
@@ -96,10 +97,33 @@ async def layer_6_validate(msg: OrchestratorMessage):
         sem_warns = _check_semantic(tool_name, result_data)
         semantic_warnings.extend(sem_warns)
 
+        # --- Structural tool-output validation ---
+        try:
+            from core_tools import _validate_tool_output_packet
+
+            output_validation = _validate_tool_output_packet(
+                tool_name,
+                result_data,
+                success=r.get("success", True),
+            )
+            output_validation_packets.append(output_validation)
+            if output_validation.get("fatal"):
+                fatal_errors.append((tool_name, output_validation.get("summary", "invalid tool output"), "TOOL_OUTPUT_INVALID"))
+                msg.add_error("L6", Exception(output_validation.get("summary", "invalid tool output")), f"FATAL:TOOL_OUTPUT_INVALID:{tool_name}")
+            elif output_validation.get("warnings"):
+                warning_errors.append((tool_name, output_validation.get("summary", "tool output warning"), "TOOL_OUTPUT_WARNING"))
+                msg.add_error("L6", Exception(output_validation.get("summary", "tool output warning")), f"WARNING:TOOL_OUTPUT_WARNING:{tool_name}")
+        except Exception as exc:
+            fatal_errors.append((tool_name, str(exc), "TOOL_OUTPUT_VALIDATION_ERROR"))
+            msg.add_error("L6", Exception(str(exc)), f"FATAL:TOOL_OUTPUT_VALIDATION_ERROR:{tool_name}")
+
     # Store semantic warnings in context for L9 to reference
     if semantic_warnings:
         msg.context["semantic_warnings"] = semantic_warnings
         print(f"[L6] Semantic warnings: {semantic_warnings}")
+    if output_validation_packets:
+        msg.context["tool_output_validation"] = output_validation_packets
+        print(f"[L6] Tool output validation: {[p.get('summary', '?') for p in output_validation_packets[:6]]}")
 
     passed = len(fatal_errors) == 0
     msg.validation_status = {
@@ -108,6 +132,7 @@ async def layer_6_validate(msg: OrchestratorMessage):
         "ok": total - len(fatal_errors) - len(warning_errors),
         "warnings": len(warning_errors) + len(semantic_warnings),
         "fatal": len(fatal_errors),
+        "tool_output_validations": len(output_validation_packets),
     }
 
     msg.track_layer("L6-COMPLETE")
