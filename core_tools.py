@@ -706,8 +706,10 @@ from core_tools_task import (
     TaskPacket,
     build_task_error_packet,
     build_task_packet,
+    build_task_tracking_packet,
     t_task_error_packet,
     t_task_packet,
+    t_task_tracking_packet,
 )
 class MetaRepresentation:
     """Serializable meta representation for passing structured state between modules.
@@ -6486,6 +6488,8 @@ TOOLS = {
                                "desc": "Update a task_queue row status. task_id=UUID or TASK-N string. status=pending/in_progress/done/failed. result=optional outcome note. Use instead of raw sb_query for task status changes."},
     "task_packet":            {"fn": t_task_packet,            "perm": "READ",    "args": ["task_id", "expected_status", "require_result", "require_checkpoint"],
                                 "desc": "Canonical task packet. Verifies a task row exists, matches expected status, and surfaces checkpoint/result/error state for task management."},
+    "task_tracking_packet":   {"fn": t_task_tracking_packet,   "perm": "READ",    "args": ["task_id", "include_history", "history_limit"],
+                               "desc": "Canonical ongoing-task tracking packet. Surfaces the task row, checkpoint history, last checkpoint, age, and stall state for in_progress work."},
     "task_error_packet":      {"fn": t_task_error_packet,      "perm": "WRITE",   "args": ["task_id", "error", "phase", "summary", "retryable", "next_step", "checkpoint"],
                                 "desc": "Record a terminal task failure with structured error metadata, then verify the failed row exists. Use for claim/execute/finalize failures."},
     "task_verification_packet": {"fn": t_task_verification_packet, "perm": "READ", "args": ["task_id", "expected_status", "require_result", "require_checkpoint"],
