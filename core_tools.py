@@ -642,6 +642,125 @@ def t_state(include_operating_context: str = "false"):
             "operating_context_included": load_oc,
             "session_md": session_md}
 
+
+def t_session_state_packet(session_id: str = "default", strict: str = "false", limit: str = "8") -> dict:
+    """Return the canonical state packet plus the most relevant state_update signals."""
+    try:
+        lim = max(1, min(int(limit or 8), 20))
+    except Exception:
+        lim = 8
+    try:
+        packet = t_state_packet(session_id=session_id or "default", strict=strict)
+        if not packet.get("ok"):
+            return packet
+        tracked_keys = [
+            "last_real_signal_ts",
+            "last_meta_learning_ts",
+            "last_meta_training_ts",
+            "last_causal_discovery_ts",
+            "last_temporal_hwm_ts",
+            "last_joint_training_ts",
+            "last_research_ts",
+            "last_public_source_ts",
+            "last_router_policy_ts",
+            "last_backup_ts",
+            "simulation_task",
+        ]
+        latest_updates = packet.get("state_updates") or {}
+        for key in tracked_keys:
+            value = latest_updates.get(key)
+            if value in (None, "", {}, []):
+                try:
+                    value = _latest_state_update_value(key).get("value")
+                except Exception:
+                    value = None
+            if value not in (None, "", {}, []):
+                latest_updates[key] = value
+        recent_rows = (packet.get("state_update_rows") or [])[:lim]
+        recent_updates = {}
+        for row in recent_rows:
+            if not isinstance(row, dict):
+                continue
+            key = str(row.get("key") or "").strip()
+            value = row.get("value")
+            if key and key not in recent_updates and value not in (None, "", {}, []):
+                recent_updates[key] = value
+        tracked_updates = {}
+        for key in tracked_keys:
+            value = latest_updates.get(key)
+            if value in (None, "", {}, []):
+                try:
+                    value = _latest_state_update_value(key).get("value")
+                except Exception:
+                    value = None
+            if value not in (None, "", {}, []):
+                tracked_updates[key] = value
+        combined_updates = {**recent_updates, **tracked_updates}
+        integrity = packet.get("state_update_integrity") or {}
+        diversity_keys = sorted(set(combined_updates.keys()) | set(latest_updates.keys()))
+        urgency_signals = []
+        for key, value in combined_updates.items():
+            text = f"{key} {value}".lower()
+            if any(term in text for term in ("urgent", "priority", "escalat", "block", "deadline", "critical")):
+                urgency_signals.append(key)
+        importance_keys = []
+        for key, value in combined_updates.items():
+            text = f"{key} {value}".lower()
+            if "verification" in text or "state_update" in text or "timestamp" in text or "_ts" in key:
+                importance_keys.append(key)
+        future_session_guidance = "capture_more_diverse_state_updates"
+        if any("verification" in str(key).lower() for key in diversity_keys):
+            future_session_guidance = "preserve_verification_context_for_future_sessions"
+        elif urgency_signals:
+            future_session_guidance = "surface_high_priority_updates_early"
+        if integrity.get("future_count", 0) > 0:
+            future_session_guidance = "clamp_future_state_timestamps_before_use"
+        session_state = {
+            "session_id": packet.get("session_id") or (session_id or "default"),
+            "summary": (
+                f"state_updates={len(combined_updates)} | "
+                f"rows={len(recent_rows)} | "
+                f"verified={bool((packet.get('verification') or {}).get('verified'))} | "
+                f"diversity={len(diversity_keys)} | urgent={len(urgency_signals)} | "
+                f"future_ts={integrity.get('future_count', 0)}"
+            ),
+            "state_update_keys": sorted(combined_updates.keys()),
+            "state_update_values": combined_updates,
+            "tracked_state_update_values": tracked_updates,
+            "state_update_rows": recent_rows,
+            "state_update_integrity": integrity,
+            "state_update_signal_summary": {
+                "signal_count": len(combined_updates),
+                "frequency_hint": len(recent_rows),
+                "importance_keys": importance_keys[:12],
+                "urgent_keys": urgency_signals[:12],
+                "last_real_signal_ts": combined_updates.get("last_real_signal_ts") or latest_updates.get("last_real_signal_ts") or "",
+            },
+            "session_diversity": {
+                "distinct_keys": len(diversity_keys),
+                "distinct_key_names": diversity_keys[:24],
+                "urgency_signals": urgency_signals[:12],
+                "future_session_guidance": future_session_guidance,
+                "future_timestamp_keys": integrity.get("future_keys", [])[:12],
+                "signal_frequency": len(recent_rows),
+            },
+            "latest_session": packet.get("latest_session") or {},
+            "agentic_session": packet.get("agentic_session") or {},
+            "checkpoint": packet.get("checkpoint") or {},
+            "session_snapshot": packet.get("session_snapshot") or {},
+            "session_continuity": packet.get("session_continuity") or {},
+            "verification": packet.get("verification") or {},
+        }
+        return {
+            "ok": True,
+            "session_id": session_state["session_id"],
+            "session_state": session_state,
+            "state_packet": packet,
+            "summary": session_state["summary"],
+        }
+    except Exception as e:
+        return {"ok": False, "error": str(e), "session_id": session_id or "default"}
+
 def t_health():
     from core_config import GROQ_API_KEY, TELEGRAM_TOKEN
     from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -753,27 +872,54 @@ from core_tools_memory import (
     StateEvaluator,
     t_system_verification_packet,
     t_evaluate_state,
+    t_generate_synthetic_data,
     t_state_consistency_check,
     t_state_packet,
     t_reasoning_packet,
     t_search_memory,
 )
 from core_tools_world_model import (
+    CausalMappingModule,
     AdaptiveTemporalFilter,
+    DynamicReplayBuffer,
+    DynamicGatingLayer,
+    GatingNetwork,
     HierarchicalSearchController,
+    HierarchicalSearchTree,
+    PrincipleSearchModule,
     MetaContextualRouter,
+    MetaLearner,
     MonteCarloTreeSearch,
+    PredictiveStateRepresentation,
+    StateReconciliationBuffer,
+    SimulatedCritic,
     TemporalAttention,
     TemporalHierarchicalWorldModel,
+    WorldModelInterface,
     WorldModel,
     t_adaptive_temporal_filter,
+    t_causal_graph_data_generator,
+    t_causal_mapping_module,
+    t_dynamic_gating_layer,
+    t_dynamic_replay_buffer,
     t_dynamic_router,
     t_hierarchical_search_controller,
+    t_hierarchical_search_tree,
+    t_meta_learner,
     t_meta_contextual_router,
     t_monte_carlo_tree_search,
+    t_module_assessment_packet,
+    t_hierarchical_gated_neuro_symbolic_world_model,
+    t_principle_search_module,
+    t_predict_with_uncertainty,
+    t_predictive_state_representation,
+    t_state_reconciliation_buffer,
+    t_simulated_critic,
     t_temporal_attention,
     t_temporal_hierarchical_world_model,
+    t_world_model_interface,
     t_world_model,
+    t_gating_network,
 )
 from core_tools_governance import (
     ToolRelianceAdvisor,
@@ -782,6 +928,9 @@ from core_tools_governance import (
 from core_tools_code_reader import (
     build_code_reading_packet,
     t_code_read_packet,
+)
+from core_causal_principle_discovery import (
+    t_causal_principle_discovery,
 )
 from core_repo_map import (
     apply_repo_map_schema,
@@ -828,11 +977,13 @@ def t_owner_review_cluster_close(
 
 from core_tools_task import (
     TaskPacket,
+    TaskVerificationBundle,
     build_task_error_packet,
     build_task_packet,
     build_task_tracking_packet,
     t_task_error_packet,
     t_task_packet,
+    t_task_verification_bundle,
     t_task_tracking_packet,
 )
 class MetaRepresentation:
@@ -1070,9 +1221,28 @@ def t_update_state(key="", value="", reason=""):
         preflight = _require_external_service_preflight("supabase", "update_state")
         if preflight:
             return preflight
-        ok = sb_post("sessions", {"summary": f"[state_update] {key}: {str(value)[:200]}",
-                              "actions": [f"{key}={str(value)[:100]} - {reason}"], "interface": "mcp"})
-        return {"ok": ok, "key": key}
+        key_text = str(key or "").strip()
+        value_text = str(value or "").strip()
+        if key_text and ("_ts" in key_text or "timestamp" in key_text.lower()):
+            try:
+                from datetime import datetime, timezone
+                raw = value_text.replace("Z", "+00:00") if value_text.endswith("Z") else value_text
+                dt = datetime.fromisoformat(raw)
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                else:
+                    dt = dt.astimezone(timezone.utc)
+                now = datetime.now(timezone.utc)
+                if dt > now:
+                    value_text = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+            except Exception:
+                pass
+        note = reason or ""
+        if value_text != str(value or ""):
+            note = "clamped future timestamp" if not note else f"{note}; clamped future timestamp"
+        ok = sb_post("sessions", {"summary": f"[state_update] {key_text}: {value_text}",
+                              "actions": [f"{key_text}={value_text} - {note}".strip(" -")], "interface": "mcp"})
+        return {"ok": ok, "key": key_text or key, "value": value_text or value}
 
     except Exception as e:
         return {"ok": False, "error": str(e)}
@@ -1647,6 +1817,13 @@ def t_debug_fn(fn_name: str, dry_run: str = "true", extra_args: str = None) -> d
                            "error": str(e), "trace": traceback.format_exc()[:1000]})
             return False, None
 
+    def _coerce_call_kwargs(value, default=None):
+        if isinstance(value, dict) and value:
+            return value
+        if default is not None:
+            return default
+        return {}
+
     # Stage 0 -- resolve function
     # Use reload() to pick up functions added in the current deploy/session.
     # Cached imports miss functions registered after Railway started.
@@ -1697,7 +1874,7 @@ def t_debug_fn(fn_name: str, dry_run: str = "true", extra_args: str = None) -> d
             if not ok:
                 return {"fn": fn_name, "dry_run": dry_run, "stages": stages, "final": "failed_at_stage_1", "result": None}
             if not dry_run:
-                call_kwargs = extra_args or {"system": "test", "user": "reply OK", "max_tokens": 10}
+                call_kwargs = _coerce_call_kwargs(extra_args, {"system": "test", "user": "reply OK", "max_tokens": 10})
                 ok2, result = stage("2_execute", target_fn, **call_kwargs)
             else:
                 stages.append({"stage": "2_execute", "status": "dry_run_skipped", "data": "pass dry_run=false to call Gemini API"})
@@ -1713,7 +1890,7 @@ def t_debug_fn(fn_name: str, dry_run: str = "true", extra_args: str = None) -> d
             if not ok:
                 return {"fn": fn_name, "dry_run": dry_run, "stages": stages, "final": "failed_at_stage_1", "result": None}
             if not dry_run:
-                call_kwargs = extra_args or {"system": "test", "user": "reply OK", "max_tokens": 10}
+                call_kwargs = _coerce_call_kwargs(extra_args, {"system": "test", "user": "reply OK", "max_tokens": 10})
                 ok2, result = stage("2_execute", target_fn, **call_kwargs)
             else:
                 stages.append({"stage": "2_execute", "status": "dry_run_skipped", "data": "pass dry_run=false to call Groq API"})
@@ -4634,6 +4811,108 @@ def t_changelog_tracking_packet(limit: int = 10) -> dict:
     return build_changelog_packet(limit=limit)
 
 
+def t_changelog_state_packet(limit: int = 10, strict: str = "false") -> dict:
+    """Return changelog tracking plus verification as a single state packet."""
+    try:
+        tracking = t_changelog_tracking_packet(limit=limit)
+        if not tracking.get("ok"):
+            return tracking
+        packet = tracking.get("packet") or {}
+        rows = packet.get("rows") or tracking.get("rows") or []
+        latest = rows[0] if rows else {}
+        verification = {}
+        if latest:
+            verification = _changelog_verification_packet(
+                version=str(latest.get("version") or ""),
+                component=str(latest.get("component") or ""),
+                summary=str(latest.get("title") or ""),
+                before=str(latest.get("before_state") or ""),
+                after=str(latest.get("after_state") or ""),
+                change_type=str(latest.get("change_type") or "upgrade"),
+            )
+        fallback_context = {}
+        availability = "available" if rows and tracking.get("tracking_state") == "healthy" else "degraded"
+        if availability != "available":
+            try:
+                fallback_context["state_packet"] = t_state_packet(strict="false")
+            except Exception as exc:
+                fallback_context["state_packet_error"] = str(exc)
+            try:
+                fallback_context["recent_mistakes"] = t_get_mistakes(limit=3)
+            except Exception as exc:
+                fallback_context["recent_mistakes_error"] = str(exc)
+            fallback_context["source_packet"] = t_changelog_source_packet(limit=max(3, int(limit or 10)))
+            fallback_context["fallback_note"] = "changelog unavailable; using state, mistakes, and source packet as fallback evidence"
+        return {
+            "ok": True,
+            "strict": str(strict).strip().lower() in ("true", "1", "yes"),
+            "availability": availability,
+            "tracking": tracking,
+            "verification": verification,
+            "rows": rows,
+            "source_packet": tracking.get("source_packet") or packet.get("source_packet") or {},
+            "fallback_context": fallback_context,
+            "summary": (
+                f"changelog_state={tracking.get('tracking_state') or 'unknown'} | "
+                f"availability={availability} | rows={len(rows)} | "
+                f"verified={bool((verification or {}).get('verified', False))}"
+            ),
+        }
+    except Exception as e:
+        return {"ok": False, "error": str(e), "summary": f"changelog_state error: {e}"}
+
+
+def t_knowledge_state_packet(
+    domain: str = "",
+    topic: str = "",
+    instruction: str = "",
+    content: str = "",
+    confidence: str = "medium",
+    source_type: str = "",
+    source_ref: str = "",
+    query: str = "",
+    limit: str = "5",
+) -> dict:
+    """Return a canonical KB state packet with search + entry verification."""
+    try:
+        lim = max(1, min(int(limit or 5), 20))
+    except Exception:
+        lim = 5
+    try:
+        if not domain and not topic and not query:
+            return {"ok": False, "error": "domain, topic, or query required"}
+        search_query = query or topic or instruction or content
+        search_results = t_search_kb(query=search_query, domain=domain, limit=lim) if search_query else {"ok": True, "count": 0, "results": []}
+        verification = None
+        if domain and topic:
+            verification = t_kb_entry_packet(
+                domain=domain,
+                topic=topic,
+                instruction=instruction or "",
+                content=content or "",
+                confidence=confidence,
+                source_type=source_type,
+                source_ref=source_ref,
+            )
+        state_rows = search_results if isinstance(search_results, list) else []
+        search_count = len(state_rows)
+        return {
+            "ok": True,
+            "domain": domain or "",
+            "topic": topic or "",
+            "query": search_query or "",
+            "search": search_results,
+            "verification": verification or {},
+            "rows": state_rows,
+            "summary": (
+                f"knowledge_state: rows={search_count} | "
+                f"verified={bool((verification or {}).get('verified', False))}"
+            ),
+        }
+    except Exception as e:
+        return {"ok": False, "error": str(e), "summary": f"knowledge_state error: {e}"}
+
+
 @dataclass
 class MistakePacket:
     total_rows: int = 0
@@ -5969,14 +6248,26 @@ def t_task_verification_packet(
         # Soft stale warning for task rows lingering too long without updates.
         try:
             from datetime import datetime, timezone, timedelta
-            ts_str = row.get("updated_at") or row.get("created_at") or ""
-            if ts_str:
+            ts_candidates = [
+                ("updated_at", row.get("updated_at")),
+                ("created_at", row.get("created_at")),
+            ]
+            now = datetime.now(timezone.utc)
+            for label, ts_str in ts_candidates:
+                if not ts_str:
+                    continue
                 ts = datetime.fromisoformat(str(ts_str).replace("Z", "+00:00"))
-                now = datetime.now(timezone.utc)
-                if current_status == "in_progress" and ts < now - timedelta(hours=24):
-                    warnings.append("in_progress_stale>24h")
-                if current_status == "pending" and ts < now - timedelta(days=7):
-                    warnings.append("pending_stale>7d")
+                if ts.tzinfo is None:
+                    ts = ts.replace(tzinfo=timezone.utc)
+                else:
+                    ts = ts.astimezone(timezone.utc)
+                if ts > now:
+                    warnings.append(f"{label}_future_timestamp_clamped")
+                if label == "updated_at":
+                    if current_status == "in_progress" and ts < now - timedelta(hours=24):
+                        warnings.append("in_progress_stale>24h")
+                    if current_status == "pending" and ts < now - timedelta(days=7):
+                        warnings.append("pending_stale>7d")
         except Exception:
             pass
 
@@ -6148,6 +6439,41 @@ def t_task_add(title: str = "", description: str = "", priority: str = "5",
         }
     except Exception as e:
         return {"ok": False, "error": str(e)}
+
+
+def t_task_state_packet(task_id: str = "", expected_status: str = "", require_result: str = "false", require_checkpoint: str = "false", include_history: str = "true", history_limit: str = "8") -> dict:
+    """Canonical task state packet combining tracking and verification."""
+    try:
+        tracking = t_task_tracking_packet(
+            task_id=task_id or "",
+            include_history=include_history,
+            history_limit=history_limit,
+        )
+        verification = t_task_verification_packet(
+            task_id=task_id or "",
+            expected_status=expected_status or "",
+            require_result=require_result,
+            require_checkpoint=require_checkpoint,
+        )
+        if not tracking.get("ok") and not verification.get("ok"):
+            return {
+                "ok": False,
+                "error": tracking.get("error") or verification.get("error") or "task_state unavailable",
+                "tracking": tracking,
+                "verification": verification,
+            }
+        return {
+            "ok": True,
+            "task_id": task_id or "",
+            "tracking": tracking,
+            "verification": verification,
+            "summary": (
+                f"task_state: tracking={'ok' if tracking.get('ok') else 'missing'} | "
+                f"verified={bool(verification.get('ok') and not verification.get('blocked'))}"
+            ),
+        }
+    except Exception as e:
+        return {"ok": False, "error": str(e), "task_id": task_id or ""}
 
 
 def t_kb_update(domain: str, topic: str, instruction: str = "",
@@ -6894,10 +7220,14 @@ TOOLS = {
                                "desc": "Full training pipeline status. Returns: hot (total, unprocessed, simulation_ok, last_real, last_simulation), cold (last_run_ts, last_run_mins_ago, threshold, last_patterns_found, last_evolutions_queued, recent_5_summaries), patterns (active_count, stale_count, top), evolutions (pending, applied), quality (7d_avg, trend), health_flags (simulation_dead|cold_stale_Xmin|unprocessed_backlog_X|zero_patterns_last_5_runs|quality_declining), pipeline_ok. Use at session_start or when diagnosing training issues."},
     "search_kb":              {"fn": t_search_kb,              "perm": "READ",    "args": ["query", "domain", "limit"],
                            "desc": "Search knowledge base by query. Returns domain, topic, content, confidence. ALWAYS include id=gt.1 filter behavior is automatic. IF EMPTY: do NOT give up — try sb_query(table='knowledge_base', filters='id=gt.1&domain=like.*core*') as fallback. Use before any write to check duplicates. EXAMPLE: search_kb(query='railway deploy', domain='core_agi', limit='5')"},
+    "knowledge_state_packet": {"fn": t_knowledge_state_packet, "perm": "READ", "args": ["domain", "topic", "instruction", "content", "confidence", "source_type", "source_ref", "query", "limit"],
+                               "desc": "Canonical knowledge state packet. Bundles KB search with entry verification so downstream tools can reason about knowledge freshness and accuracy."},
     "search_memory":          {"fn": t_search_memory,          "perm": "READ",    "args": ["query", "domain", "limit", "tables"],
                                "desc": "Unified semantic memory search across knowledge_base plus the native semantic tables. Use this when CORE needs one reasoning context for planning, self-correction, ambiguity resolution, or decomposition."},
     "reasoning_packet":       {"fn": t_reasoning_packet,       "perm": "READ",    "args": ["query", "domain", "limit", "tables", "per_table"],
                                "desc": "Build the canonical reasoning packet (query+focus+context+top_hits) that agentic tools should consume. Deterministic, no writes."},
+    "generate_synthetic_data": {"fn": t_generate_synthetic_data, "perm": "READ",  "args": ["context", "goal", "principles", "domain", "state_hint", "limit"],
+                               "desc": "Generate bounded synthetic memory samples with PrincipleUtilityScore for replay, curriculum, and memory-module training packets."},
     "task_mode_packet":       {"fn": t_task_mode_packet,       "perm": "READ",    "args": ["text", "goal", "source", "message_type", "route", "attachments", "artifact_hint", "content"],
                                "desc": "Build the human-work taxonomy packet. Classifies cowork inputs into analyze/transform/create/inspect/operate/research/coordinate/learn/decide/clarify/interrupt plus subintent/detail, artifact expectation, agentic recommendation, and preferred tool families."},
     "spreadsheet_work_packet": {"fn": t_spreadsheet_work_packet, "perm": "READ",   "args": ["content", "goal", "filename", "sheet_name", "format_hint"],
@@ -6926,6 +7256,38 @@ TOOLS = {
                                "desc": "Build a lightweight causal graph from unified memory context or a provided sequence. Returns causal order, paths, beliefs, and graph density."},
     "causal_graph_inference": {"fn": t_causal_graph_inference, "perm": "READ",    "args": ["query", "domain", "tables", "limit", "per_table", "state_hint", "sequence", "candidate_actions", "horizon"],
                                "desc": "Fuse causal graph, relational graph, and state evaluation into a transition model usable by world-model planning."},
+    "world_model_interface":  {"fn": t_world_model_interface,  "perm": "READ",    "args": ["domain", "state_hint", "current_state", "actions", "horizon"],
+                               "desc": "Expose the canonical world-model interface contract and optionally return an uncertainty prediction packet."},
+    "predict_with_uncertainty": {"fn": t_predict_with_uncertainty, "perm": "READ", "args": ["domain", "state_hint", "current_state", "actions", "horizon"],
+                               "desc": "Predict future states with mean, variance, uncertainty, and action distribution explicitly surfaced."},
+    "predictive_state_representation": {"fn": t_predictive_state_representation, "perm": "READ", "args": ["state", "error_signal", "learning_rate", "domain", "state_hint", "actions", "horizon"],
+                               "desc": "Build a predictive-state representation packet and optionally simulate action ranking."},
+    "dynamic_replay_buffer": {"fn": t_dynamic_replay_buffer, "perm": "READ", "args": ["experiences", "context", "limit", "capacity", "priority_floor", "domain", "state_hint"],
+                               "desc": "Rank experiences with priority and contextual weighting using a bounded replay buffer heuristic."},
+    "simulated_critic":       {"fn": t_simulated_critic,       "perm": "READ",    "args": ["sequence", "reward_signal", "side_effects", "domain", "state_hint"],
+                               "desc": "Score a sequence of states/actions with bounded reward and risk heuristics."},
+    "meta_learner":           {"fn": t_meta_learner,           "perm": "READ",    "args": ["state", "error_signal", "observation", "target", "learning_rate", "domain", "state_hint"],
+                               "desc": "Adapt a predictive-state representation from an error signal and optional observation."},
+    "dynamic_gating_layer":   {"fn": t_dynamic_gating_layer,   "perm": "READ",    "args": ["state", "task_context", "modules", "domain", "state_hint"],
+                               "desc": "Gate submodules from current state and task context using bounded weights."},
+    "gating_network":         {"fn": t_gating_network,         "perm": "READ",    "args": ["state", "task_context", "modules", "samples", "temperature", "domain", "state_hint"],
+                               "desc": "Meta-train a gating network over submodules from bounded samples."},
+    "causal_mapping_module":  {"fn": t_causal_mapping_module,  "perm": "READ",    "args": ["causal_graph", "context_embedding", "goal", "domain", "state_hint"],
+                               "desc": "Map causal graph structure and context embedding onto a goal translation."},
+    "causal_graph_data_generator": {"fn": t_causal_graph_data_generator, "perm": "READ", "args": ["context", "goal", "modules", "symbols", "actions", "domain", "state_hint", "limit"],
+                               "desc": "Generate bounded causal graph data from context, module hints, and action signals for analysis and training packets."},
+    "principle_search_module": {"fn": t_principle_search_module, "perm": "READ", "args": ["principles", "state", "goal", "task_context", "domain", "state_hint"],
+                               "desc": "Rank guiding principles against the current state and task context."},
+    "causal_principle_discovery": {"fn": t_causal_principle_discovery, "perm": "READ", "args": ["causal_graph", "context", "goal", "principles", "symbols", "actions", "task_context", "domain", "state_hint", "depth", "rollouts"],
+                               "desc": "Discover causal nodes, principle rankings, and symbolic rules from a bounded context packet."},
+    "state_reconciliation_buffer": {"fn": t_state_reconciliation_buffer, "perm": "READ", "args": ["states", "context", "limit", "capacity", "domain", "state_hint"],
+                               "desc": "Reconcile competing state snapshots before downstream planning."},
+    "hierarchical_search_tree": {"fn": t_hierarchical_search_tree, "perm": "READ", "args": ["current_state", "goal", "hwm_levels", "candidate_actions", "horizon", "rollouts", "exploration_weight", "domain", "state_hint"],
+                               "desc": "Build a bounded hierarchical search tree and return the best branch."},
+    "module_assessment_packet": {"fn": t_module_assessment_packet, "perm": "READ", "args": ["module_name", "module_description", "task_context", "goal", "evidence", "domain", "state_hint", "learning_rate"],
+                               "desc": "Assess a new module's readiness, cost, and overfit risk before promotion. Use for new-module verification, performance impact checks, and meta-learning robustness review."},
+    "hierarchical_gated_neuro_symbolic_world_model": {"fn": t_hierarchical_gated_neuro_symbolic_world_model, "perm": "READ", "args": ["current_state", "goal", "modules", "symbols", "actions", "hwm_levels", "horizon", "rollouts", "exploration_weight", "principles", "task_context", "causal_graph", "domain", "state_hint", "full_rollout"],
+                               "desc": "Combine hierarchical gating, state reconciliation, causal mapping, principled search, prediction, and critic scoring into one neuro-symbolic world-model packet."},
     "meta_contextual_router": {"fn": t_meta_contextual_router, "perm": "READ",    "args": ["current_state", "goal", "hwm_levels", "domain", "state_hint", "limit"],
                                "desc": "Route a current state toward a probability distribution over hierarchical world-model levels."},
     "adaptive_temporal_filter": {"fn": t_adaptive_temporal_filter, "perm": "READ", "args": ["sequence", "domain", "state_hint", "window", "decay"],
@@ -6984,10 +7346,14 @@ TOOLS = {
                                 "desc": "Canonical task packet. Verifies a task row exists, matches expected status, and surfaces checkpoint/result/error state for task management."},
     "task_tracking_packet":   {"fn": t_task_tracking_packet,   "perm": "READ",    "args": ["task_id", "include_history", "history_limit"],
                                "desc": "Canonical ongoing-task tracking packet. Surfaces the task row, checkpoint history, last checkpoint, age, and stall state for in_progress work."},
+    "task_state_packet":      {"fn": t_task_state_packet,      "perm": "READ",    "args": ["task_id", "expected_status", "require_result", "require_checkpoint", "include_history", "history_limit"],
+                               "desc": "Canonical task state packet combining tracking and verification into one structured read. Use when you need both the live task row and its verification status together."},
     "task_error_packet":      {"fn": t_task_error_packet,      "perm": "WRITE",   "args": ["task_id", "error", "phase", "summary", "retryable", "next_step", "checkpoint"],
                                 "desc": "Record a terminal task failure with structured error metadata, then verify the failed row exists. Use for claim/execute/finalize failures."},
     "task_verification_packet": {"fn": t_task_verification_packet, "perm": "READ", "args": ["task_id", "expected_status", "require_result", "require_checkpoint"],
                                "desc": "Canonical task verification packet. Verifies a task row exists, matches expected status, and has the required checkpoint/result fields. Use after task updates or before trusting task state."},
+    "task_verification_bundle": {"fn": t_task_verification_bundle, "perm": "READ", "args": ["task_id", "expected_status", "require_result", "require_checkpoint", "include_history", "history_limit", "session_id", "strict", "require_system_checkpoint", "operation", "target_file", "context", "assumed_state", "sources", "action_type", "owner_token", "sequence", "reward_signal", "side_effects", "principles", "task_context", "goal", "current_state", "hwm_levels", "candidate_actions", "horizon", "rollouts", "exploration_weight", "causal_graph", "domain", "state_hint"],
+                               "desc": "Integrated verification bundle for task work. Composes task state, system verification, deploy/trust checks, causal mapping, principle search, bounded critic scoring, and hierarchical planning into one packet. Use when verifying task side effects or step completeness across domains."},
     "task_add":               {"fn": t_task_add,               "perm": "WRITE",   "args": ["title", "description", "priority", "subtasks", "blocked_by"],
                                "desc": "Add a new task to task_queue with proper schema. Sets source=mcp_session automatically. Use instead of raw sb_insert for new tasks â€” enforces correct structure."},
     "kb_update":              {"fn": t_kb_update,              "perm": "WRITE",   "args": ["domain", "topic", "instruction", "content", "confidence", "source_type", "source_ref"],
@@ -7028,6 +7394,8 @@ TOOLS = {
                                "desc": "Verify a changelog row exists and matches the canonical write contract."},
     "changelog_tracking_packet": {"fn": t_changelog_tracking_packet, "perm": "READ", "args": ["limit"],
                                "desc": "Canonical changelog tracking packet. Summarizes latest changelog rows, today rows, missing triggered_by fields, and source evidence."},
+    "changelog_state_packet": {"fn": t_changelog_state_packet, "perm": "READ", "args": ["limit", "strict"],
+                               "desc": "Canonical changelog state packet. Bundles changelog tracking with verification so downstream tools can reason about freshness and correctness."},
     "changelog_source_packet": {"fn": t_changelog_source_packet, "perm": "READ", "args": ["limit"],
                                "desc": "Return supporting source evidence for changelog context from sessions, hot_reflections, mistakes, and knowledge_base."},
     "mistake_tracking_packet": {"fn": t_mistake_tracking_packet, "perm": "READ", "args": ["limit"],
@@ -7065,6 +7433,8 @@ TOOLS = {
                                "desc": "One-call session bootstrap. Returns: health, counts, resume_task (highest priority in_progress -- start here), in_progress_tasks, pending_tasks, recent_mistakes (last 10 all domains), stale_pattern_count, session_md (full SESSION.md static doc for claude.ai bootstrap), system_map. Use get_mistakes(domain=X) for domain-specific lookup before any write."},
     "session_snapshot":       {"fn": t_session_snapshot,       "perm": "READ",    "args": ["scope", "persist"],
                                "desc": "Canonical cross-session continuity snapshot. Captures health, counts, resume_task, checkpoint, quality, training, active goals, and capability context. Persisted into sessions.summary unless persist=false."},
+    "session_state_packet":   {"fn": t_session_state_packet,   "perm": "READ",    "args": ["session_id", "strict", "limit"],
+                               "desc": "Canonical state packet plus explicit [state_update] history and continuity metadata for session-state debugging."},
     "state_packet":           {"fn": t_state_packet,           "perm": "READ",    "args": ["session_id", "strict"],
                                "desc": "Canonical state continuity packet. Consolidates latest sessions row, agentic session scratchpad, checkpoint, session snapshot, and state_update history with verification metadata."},
     "state_consistency_check": {"fn": t_state_consistency_check, "perm": "READ",  "args": ["session_id", "strict"],
@@ -7555,6 +7925,20 @@ def t_crypto_price(symbol: str = "BTCUSDT") -> dict:
         return {"ok": False, "error": str(e)}
 
 
+def t_current_price_in_usd(symbol: str = "BTCUSDT") -> dict:
+    """Return a normalized current_price_in_usd packet for price calculations."""
+    try:
+        result = t_crypto_price(symbol=symbol)
+        if not result.get("ok"):
+            return result
+        price = float(result.get("price") or 0.0)
+        result["current_price_in_usd"] = price
+        result["summary"] = f"{result.get('symbol') or symbol} current_price_in_usd={price:.8f}"
+        return result
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
 
 
 def t_crypto_balance(asset: str = "") -> dict:
@@ -7654,6 +8038,8 @@ def t_crypto_trade(symbol: str = "", side: str = "", quantity: str = "",
 # â”€â”€ TASK-4: Register Binance tools in TOOLS dict (must be after function defs) â”€
 TOOLS["crypto_price"]   = {"fn": t_crypto_price,   "perm": "READ",    "args": ["symbol"],
                             "desc": "Get current Binance spot price + 24h stats for a symbol. symbol=e.g. BTCUSDT, ETHUSDT, BNBUSDT (default BTCUSDT). No API key required. Returns price, 24h change %, high, low, volume."}
+TOOLS["current_price_in_usd"] = {"fn": t_current_price_in_usd, "perm": "READ", "args": ["symbol"],
+                            "desc": "Normalized current_price_in_usd alias for BTC/crypto price calculations. Returns the live spot price under a stable current_price_in_usd field."}
 TOOLS["crypto_balance"] = {"fn": t_crypto_balance, "perm": "READ",    "args": ["asset"],
                             "desc": "Get Binance account balances. Requires BINANCE_API_KEY + BINANCE_SECRET_KEY env vars. asset=optional filter e.g. BTC. Returns all non-zero balances if asset empty."}
 TOOLS["crypto_trade"]   = {"fn": t_crypto_trade,   "perm": "EXECUTE", "args": ["symbol", "side", "quantity", "confirm", "order_type"],
@@ -9010,6 +9396,96 @@ def t_validate_tool_output(tool_name: str = "", result_json: str = "", success: 
     return _validate_tool_output_packet(tool_name, parsed, success=success_hint)
 
 
+def t_prompt_scaffold_packet(
+    prompt: str = "",
+    objective: str = "",
+    audience: str = "",
+    constraints: str = "",
+    output_format: str = "",
+    context: str = "",
+    examples: str = "",
+    tone: str = "",
+) -> dict:
+    """Turn a vague prompt into a structured scaffold plus missing-field hints."""
+    try:
+        text = " ".join(
+            part.strip()
+            for part in [prompt, objective, audience, constraints, output_format, context, examples, tone]
+            if str(part or "").strip()
+        ).strip()
+        prompt_text = (prompt or "").strip()
+        missing: list[str] = []
+        questions: list[str] = []
+        if not prompt_text:
+            missing.append("prompt")
+            questions.append("What do you want CORE to do?")
+        if not objective:
+            missing.append("objective")
+            questions.append("What is the desired outcome?")
+        if not context:
+            missing.append("context")
+            questions.append("What background or files should CORE use?")
+        if not constraints:
+            missing.append("constraints")
+            questions.append("What rules, limits, or boundaries must CORE follow?")
+        if not output_format:
+            missing.append("output_format")
+            questions.append("What output format do you want?")
+        if not audience:
+            missing.append("audience")
+        if not tone:
+            missing.append("tone")
+        if not examples:
+            missing.append("examples")
+
+        vague_signals = ("make it better", "help me", "do this", "fix this", "improve this", "not enough")
+        is_vague = not prompt_text or len(prompt_text) < 40 or any(sig in prompt_text.lower() for sig in vague_signals)
+        prompt_quality_score = 1.0
+        prompt_quality_score -= min(0.65, 0.15 * len({m for m in missing if m in {"prompt", "objective", "context", "constraints", "output_format"}}))
+        if is_vague:
+            prompt_quality_score -= 0.15
+        if len(prompt_text) < 12:
+            prompt_quality_score -= 0.1
+        prompt_quality_score = round(max(0.0, prompt_quality_score), 2)
+
+        scaffold_lines = [
+            f"Task: {prompt_text or objective or 'Describe the task clearly.'}",
+            f"Objective: {objective or 'State the expected outcome.'}",
+            f"Context: {context or 'Provide the relevant files, data, or background.'}",
+            f"Constraints: {constraints or 'State hard limits, safety rules, and scope.'}",
+            f"Output format: {output_format or 'Describe the desired output format.'}",
+        ]
+        if audience:
+            scaffold_lines.append(f"Audience: {audience}")
+        if tone:
+            scaffold_lines.append(f"Tone: {tone}")
+        if examples:
+            scaffold_lines.append(f"Examples: {examples}")
+        scaffold_lines.append("If any of the above is missing, ask for it before acting.")
+        return {
+            "ok": True,
+            "prompt": prompt_text,
+            "objective": objective.strip(),
+            "audience": audience.strip(),
+            "constraints": constraints.strip(),
+            "output_format": output_format.strip(),
+            "context": context.strip(),
+            "examples": examples.strip(),
+            "tone": tone.strip(),
+            "missing_fields": missing,
+            "clarification_questions": questions[:6],
+            "prompt_quality_score": prompt_quality_score,
+            "is_vague": is_vague,
+            "scaffold_prompt": "\n".join(scaffold_lines),
+            "summary": (
+                f"prompt_scaffold=ok | quality={prompt_quality_score:.2f} | "
+                f"missing={len(missing)} | vague={int(is_vague)}"
+            ),
+        }
+    except Exception as exc:
+        return {"ok": False, "error": str(exc), "summary": f"prompt_scaffold=error | {exc}"}
+
+
 TOOLS["validate_tool_output"] = {
     "fn": t_validate_tool_output,
     "perm": "READ",
@@ -9019,6 +9495,22 @@ TOOLS["validate_tool_output"] = {
         {"name": "success", "type": "string", "description": "Optional success hint from the executor"},
     ],
     "desc": "Validate a tool output payload for structural correctness, contradictory fields, and degraded output markers. Use when a tool result looks malformed or suspicious.",
+}
+
+TOOLS["prompt_scaffold_packet"] = {
+    "fn": t_prompt_scaffold_packet,
+    "perm": "READ",
+    "args": [
+        {"name": "prompt", "type": "string", "description": "Original human prompt or task request"},
+        {"name": "objective", "type": "string", "description": "Desired outcome or goal"},
+        {"name": "audience", "type": "string", "description": "Target audience or consumer of the output"},
+        {"name": "constraints", "type": "string", "description": "Hard limits, boundaries, or safety rules"},
+        {"name": "output_format", "type": "string", "description": "Requested output format"},
+        {"name": "context", "type": "string", "description": "Relevant background, files, or evidence"},
+        {"name": "examples", "type": "string", "description": "Optional examples or reference patterns"},
+        {"name": "tone", "type": "string", "description": "Desired tone or style"},
+    ],
+    "desc": "Transform a vague prompt into a structured scaffold with missing-field hints and clarification questions. Use when a request lacks instructions, context, constraints, or output format.",
 }
 
 def t_tag_certainty(conclusion: str = "", basis: str = "inferred"):

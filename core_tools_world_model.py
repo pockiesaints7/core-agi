@@ -7,6 +7,7 @@ import ast
 import json
 import re as _re
 from datetime import datetime
+from abc import ABC
 
 from core_config import sb_get, sb_post, sb_upsert
 from core_tools_reasoning import (
@@ -34,6 +35,68 @@ def _kb_upsert_world_model(*, domain: str, topic: str, instruction: str, content
     }
     ok = sb_upsert("knowledge_base", payload, on_conflict="domain,topic")
     return {"ok": bool(ok), "action": "upserted" if ok else "failed", "domain": domain, "topic": topic}
+
+
+class WorldModelInterface(ABC):
+    """Canonical bounded world-model interface.
+
+    The concrete WorldModel below implements this interface and the helper
+    wrappers expose the contract to core_tools.py and agentic routing.
+    """
+
+    def __init__(self, domain: str = "general", state_hint: str = ""):
+        self.domain = (domain or "general").strip()
+        self.state_hint = (state_hint or "").strip()
+
+    def update_model(self, experience) -> dict:
+        raise NotImplementedError
+
+    def predict_future_states(self, current_state, actions, horizon: int = 3) -> dict:
+        raise NotImplementedError
+
+    def predict_with_uncertainty(self, current_state, actions, horizon: int = 3) -> dict:
+        prediction = self.predict_future_states(current_state=current_state, actions=actions, horizon=horizon)
+        predicted_states = prediction.get("predicted_states") or []
+        scores = []
+        distribution = []
+        for item in predicted_states:
+            state = item.get("state") if isinstance(item, dict) else {}
+            confidence = 0.0
+            if isinstance(state, dict):
+                try:
+                    confidence = float(state.get("confidence") or item.get("confidence") or 0.0)
+                except Exception:
+                    confidence = 0.0
+            else:
+                try:
+                    confidence = float(item.get("confidence") or 0.0)
+                except Exception:
+                    confidence = 0.0
+            confidence = max(0.0, min(1.0, confidence))
+            scores.append(confidence)
+            distribution.append({
+                "step": item.get("step") if isinstance(item, dict) else None,
+                "action": item.get("action") if isinstance(item, dict) else "",
+                "confidence": round(confidence, 3),
+                "state_preview": (item.get("state_preview") if isinstance(item, dict) else "") or "",
+            })
+        mean_confidence = round(sum(scores) / len(scores), 3) if scores else 0.0
+        variance = 0.0
+        if scores:
+            variance = round(sum((s - mean_confidence) ** 2 for s in scores) / max(1, len(scores)), 3)
+        uncertainty = round(max(0.0, min(1.0, 1.0 - mean_confidence + min(0.5, variance))), 3)
+        return {
+            "ok": bool(prediction.get("ok", True)),
+            "domain": self.domain,
+            "state_hint": self.state_hint,
+            "prediction": prediction,
+            "distribution": distribution,
+            "prediction_mean": mean_confidence,
+            "prediction_variance": variance,
+            "uncertainty": uncertainty,
+            "confidence": round(max(0.0, min(1.0, 1.0 - uncertainty)), 3),
+            "summary": prediction.get("summary") or f"mean={mean_confidence} | uncertainty={uncertainty}",
+        }
 
 class CausalGraph:
     """Build a lightweight causal graph from unified reasoning packets and sequences."""
@@ -1100,7 +1163,7 @@ def t_monte_carlo_tree_search(
         return {"ok": False, "error": str(e)}
 
 
-class WorldModel:
+class WorldModel(WorldModelInterface):
     """Bounded world-model interface for experience updates and forward rollouts."""
 
     def __init__(self, domain: str = "general", state_hint: str = ""):
@@ -1441,6 +1504,586 @@ WorldModel.update_model = _world_model_update_model
 WorldModel.predict_future_states = _world_model_predict_future_states
 
 
+class PredictiveStateRepresentation:
+    """Compact predictive-state representation for bounded learning traces."""
+
+    def __init__(self, state=None, error_signal: float = 0.0, learning_rate: float = 0.1, domain: str = "general", state_hint: str = ""):
+        self.domain = (domain or "general").strip()
+        self.state_hint = (state_hint or "").strip()
+        self.learning_rate = max(0.01, min(float(learning_rate or 0.1), 1.0))
+        self.state = WorldModel._parse_blob(state)
+        self.error_signal = max(0.0, min(float(error_signal or 0.0), 1.0))
+        self.variance = round(min(1.0, max(0.0, self.error_signal * 0.75)), 3)
+        self.confidence = round(max(0.0, min(1.0, 1.0 - self.variance)), 3)
+
+    def encode(self) -> dict:
+        text = WorldModel._textify(self.state)
+        token_count = len([part for part in _re.split(r"[^A-Za-z0-9_]+", text.lower()) if len(part) >= 3])
+        return {
+            "ok": True,
+            "domain": self.domain,
+            "state_hint": self.state_hint,
+            "text": text[:500],
+            "token_count": token_count,
+            "error_signal": round(self.error_signal, 3),
+            "variance": self.variance,
+            "confidence": self.confidence,
+            "feature_vector": {
+                "length": len(text),
+                "token_count": token_count,
+                "variance": self.variance,
+                "confidence": self.confidence,
+            },
+        }
+
+    def update(self, error_signal: float | None = None, observation=None) -> dict:
+        if error_signal is not None:
+            try:
+                self.error_signal = max(0.0, min(float(error_signal), 1.0))
+            except Exception:
+                pass
+        if observation is not None:
+            obs = WorldModel._parse_blob(observation)
+            if obs:
+                self.state.update(obs if isinstance(obs, dict) else {"observation": obs})
+        self.variance = round(max(0.0, min(1.0, (self.variance * 0.7) + (self.error_signal * 0.3))), 3)
+        self.confidence = round(max(0.0, min(1.0, 1.0 - self.variance)), 3)
+        return self.encode()
+
+    def predict(self, actions, horizon: int = 3) -> dict:
+        action_list = []
+        if isinstance(actions, str):
+            action_list = [part.strip() for part in actions.replace("\n", ",").split(",") if part.strip()]
+        elif isinstance(actions, (list, tuple, set)):
+            action_list = [str(item).strip() for item in actions if str(item).strip()]
+        elif actions not in (None, ""):
+            action_list = [str(actions).strip()]
+        if not action_list:
+            action_list = ["observe", "assess", "proceed"]
+        steps = max(1, min(int(horizon or 3), 8))
+        state_text = WorldModel._textify(self.state).lower()
+        scores = []
+        for action in action_list:
+            action_lower = action.lower()
+            score = 0.25
+            if any(term in action_lower for term in ("observe", "inspect", "assess", "review")):
+                score += 0.15
+            if any(term in action_lower for term in ("fix", "update", "improve", "apply", "verify", "train")):
+                score += 0.1
+            overlap = len(set(action_lower.split()) & set(state_text.split()))
+            if overlap:
+                score += min(0.25, 0.05 * overlap)
+            score += max(0.0, 0.2 - self.variance)
+            scores.append({"action": action, "score": round(min(1.0, score), 3)})
+        scores.sort(key=lambda item: (item["score"], item["action"]), reverse=True)
+        ranked = [item["action"] for item in scores[:steps]]
+        return {
+            "ok": True,
+            "domain": self.domain,
+            "state_hint": self.state_hint,
+            "ranked_actions": scores,
+            "best_action": ranked[0] if ranked else None,
+            "summary": " | ".join(ranked[:3])[:500],
+        }
+
+
+class DynamicReplayBuffer:
+    """Bounded replay buffer with priority and context weighting."""
+
+    def __init__(self, capacity: int = 128, domain: str = "general", state_hint: str = ""):
+        self.capacity = max(8, min(int(capacity or 128), 1024))
+        self.domain = (domain or "general").strip()
+        self.state_hint = (state_hint or "").strip()
+        self.buffer = []
+
+    @staticmethod
+    def _token_set(text: str) -> set[str]:
+        return {part for part in _re.split(r"[^A-Za-z0-9_]+", (text or "").lower()) if len(part) >= 3}
+
+    def add(self, experience, priority: float = 0.5, context: str = "") -> dict:
+        item = WorldModel._parse_blob(experience)
+        text = WorldModel._textify(item)
+        ctx_tokens = self._token_set(context or self.state_hint)
+        exp_tokens = self._token_set(text)
+        overlap = len(ctx_tokens & exp_tokens)
+        try:
+            base_priority = max(0.0, min(float(priority or 0.5), 1.0))
+        except Exception:
+            base_priority = 0.5
+        contextual_weight = min(1.0, 0.35 + 0.1 * overlap)
+        score = round(min(1.0, base_priority * 0.55 + contextual_weight * 0.35 + 0.1), 3)
+        packet = {
+            "experience": item,
+            "text": text[:500],
+            "priority": base_priority,
+            "contextual_weight": round(contextual_weight, 3),
+            "score": score,
+            "domain": self.domain,
+            "state_hint": self.state_hint,
+        }
+        self.buffer.append(packet)
+        self.buffer = self.buffer[-self.capacity:]
+        return packet
+
+    def sample(self, limit: int = 5, context: str = "") -> dict:
+        lim = max(1, min(int(limit or 5), self.capacity))
+        ctx_tokens = self._token_set(context or self.state_hint)
+        ranked = []
+        for idx, item in enumerate(self.buffer):
+            text_tokens = self._token_set(item.get("text") or "")
+            overlap = len(ctx_tokens & text_tokens)
+            score = float(item.get("score") or 0.0) + min(0.2, 0.05 * overlap) + max(0.0, 0.05 * (idx / max(1, len(self.buffer))))
+            ranked.append({**item, "sample_score": round(min(1.0, score), 3)})
+        ranked.sort(key=lambda entry: (entry["sample_score"], entry.get("priority", 0.0)), reverse=True)
+        selected = ranked[:lim]
+        return {
+            "ok": True,
+            "domain": self.domain,
+            "state_hint": self.state_hint,
+            "capacity": self.capacity,
+            "buffer_count": len(self.buffer),
+            "selected_count": len(selected),
+            "selected": selected,
+            "summary": " | ".join(item.get("text", "")[:80] for item in selected[:3])[:500],
+        }
+
+
+class SimulatedCritic:
+    """Score a sequence of states/actions with bounded reward and risk heuristics."""
+
+    def __init__(self, domain: str = "general", state_hint: str = ""):
+        self.domain = (domain or "general").strip()
+        self.state_hint = (state_hint or "").strip()
+
+    @staticmethod
+    def _normalize(sequence) -> list[str]:
+        if sequence in (None, "", []):
+            return []
+        if isinstance(sequence, str):
+            return [part.strip() for part in sequence.replace("\n", ",").split(",") if part.strip()]
+        if isinstance(sequence, dict):
+            sequence = [sequence]
+        if isinstance(sequence, (list, tuple, set)):
+            items = []
+            for item in sequence:
+                if isinstance(item, dict):
+                    text = WorldModel._textify(item)
+                else:
+                    text = str(item).strip()
+                if text:
+                    items.append(text[:1000])
+            return items
+        text = str(sequence).strip()
+        return [text] if text else []
+
+    def score(self, sequence, reward_signal: str = "", side_effects=None) -> dict:
+        items = self._normalize(sequence)
+        side_effects = self._normalize(side_effects)
+        reward_tokens = {part for part in _re.split(r"[^A-Za-z0-9_]+", (reward_signal or "").lower()) if len(part) >= 3}
+        positive_terms = {"improve", "verify", "stabilize", "resolve", "complete", "success", "safe", "correct"}
+        negative_terms = {"fail", "error", "risk", "break", "stale", "duplicate", "conflict", "uncertain"}
+        score = 0.5
+        notes = []
+        for item in items:
+            lower = item.lower()
+            if any(term in lower for term in positive_terms):
+                score += 0.08
+                notes.append(f"positive:{item[:80]}")
+            if any(term in lower for term in negative_terms):
+                score -= 0.1
+                notes.append(f"negative:{item[:80]}")
+            if any(tok in lower for tok in reward_tokens):
+                score += 0.05
+        for item in side_effects:
+            lower = item.lower()
+            if any(term in lower for term in negative_terms):
+                score -= 0.05
+                notes.append(f"side_effect:{item[:80]}")
+        score = max(0.0, min(1.0, score))
+        risk = round(max(0.0, min(1.0, 1.0 - score + (0.05 * len([n for n in notes if n.startswith('negative')])))), 3)
+        return {
+            "ok": True,
+            "domain": self.domain,
+            "state_hint": self.state_hint,
+            "sequence": items,
+            "reward_signal": reward_signal[:160],
+            "side_effects": side_effects,
+            "score": round(score, 3),
+            "risk": risk,
+            "notes": notes[:8],
+            "summary": f"score={round(score, 3)} | risk={risk}",
+        }
+
+
+class MetaLearner:
+    """Bounded meta-learner over a predictive state representation."""
+
+    def __init__(self, model=None, domain: str = "general", state_hint: str = "", learning_rate: float = 0.1):
+        self.domain = (domain or "general").strip()
+        self.state_hint = (state_hint or "").strip()
+        self.learning_rate = max(0.01, min(float(learning_rate or 0.1), 1.0))
+        self.model = model if isinstance(model, PredictiveStateRepresentation) else PredictiveStateRepresentation(domain=self.domain, state_hint=self.state_hint)
+
+    def adapt(self, error_signal: float = 0.0, observation=None, target: str = "") -> dict:
+        psr = self.model.update(error_signal=error_signal, observation=observation)
+        target_text = (target or "").strip()
+        if target_text:
+            overlap = len(set(target_text.lower().split()) & set((psr.get("text") or "").lower().split()))
+            psr["target_alignment"] = round(min(1.0, 0.2 + 0.08 * overlap), 3)
+        adjustment = round(max(0.01, min(1.0, self.learning_rate * (1.0 - float(psr.get("error_signal") or 0.0)))), 3)
+        psr["learning_rate"] = adjustment
+        psr["meta_objective"] = "minimize_prediction_error_variance"
+        return {
+            "ok": True,
+            "domain": self.domain,
+            "state_hint": self.state_hint,
+            "error_signal": round(max(0.0, min(float(error_signal or 0.0), 1.0)), 3),
+            "learning_rate": adjustment,
+            "model_packet": psr,
+            "summary": f"error={round(max(0.0, min(float(error_signal or 0.0), 1.0)), 3)} | lr={adjustment}",
+        }
+
+
+class DynamicGatingLayer:
+    """Choose weights over submodules from current state/task context."""
+
+    def __init__(self, domain: str = "general", state_hint: str = ""):
+        self.domain = (domain or "general").strip()
+        self.state_hint = (state_hint or "").strip()
+
+    @staticmethod
+    def _normalize_modules(modules) -> list[str]:
+        if modules in (None, "", []):
+            return []
+        if isinstance(modules, str):
+            return [part.strip() for part in modules.replace("\n", ",").split(",") if part.strip()]
+        if isinstance(modules, dict):
+            modules = list(modules.keys())
+        if isinstance(modules, (list, tuple, set)):
+            out = []
+            for module in modules:
+                text = str(module).strip()
+                if text:
+                    out.append(text)
+            return out
+        text = str(modules).strip()
+        return [text] if text else []
+
+    @staticmethod
+    def _token_set(text: str) -> set[str]:
+        return {part for part in _re.split(r"[^A-Za-z0-9_]+", (text or "").lower()) if len(part) >= 3}
+
+    def gate(self, state, task_context="", modules=None) -> dict:
+        state_text = WorldModel._textify(WorldModel._parse_blob(state))
+        task_text = WorldModel._textify(WorldModel._parse_blob(task_context)) if isinstance(task_context, (dict, str)) else str(task_context or "")
+        module_list = self._normalize_modules(modules) or ["reasoning", "search", "verification"]
+        state_tokens = self._token_set(state_text + " " + self.state_hint)
+        task_tokens = self._token_set(task_text)
+        weights = []
+        for idx, module in enumerate(module_list):
+            module_tokens = self._token_set(module)
+            overlap = len((state_tokens | task_tokens) & module_tokens)
+            score = 0.15 + (0.1 * overlap)
+            if any(term in module.lower() for term in ("verify", "critic", "audit")):
+                score += 0.08 if any(term in task_text.lower() for term in ("review", "verify", "audit", "check")) else 0.02
+            if any(term in module.lower() for term in ("learn", "meta", "update", "train")):
+                score += 0.05 if any(term in task_text.lower() for term in ("learn", "improve", "adapt", "update")) else 0.0
+            if any(term in module.lower() for term in ("search", "retrieve", "query")):
+                score += 0.05 if any(term in task_text.lower() for term in ("find", "search", "look", "inspect")) else 0.0
+            score = max(0.01, min(1.0, score))
+            weights.append({"module": module, "weight": round(score, 3), "index": idx, "overlap": overlap})
+        weights.sort(key=lambda item: (item["weight"], -item["index"], item["module"]), reverse=True)
+        total = sum(max(item["weight"], 0.001) for item in weights) or 1.0
+        for item in weights:
+            item["probability"] = round(max(item["weight"], 0.001) / total, 4)
+        best = weights[0]["module"] if weights else None
+        return {
+            "ok": True,
+            "domain": self.domain,
+            "state_hint": self.state_hint,
+            "modules": module_list,
+            "weights": weights,
+            "best_module": best,
+            "summary": f"best={best or ''} | modules={len(module_list)}",
+        }
+
+
+class GatingNetwork:
+    """Meta-trainable wrapper around the dynamic gating layer."""
+
+    def __init__(self, modules=None, domain: str = "general", state_hint: str = "", temperature: float = 1.0):
+        self.domain = (domain or "general").strip()
+        self.state_hint = (state_hint or "").strip()
+        self.modules = DynamicGatingLayer._normalize_modules(modules) if modules is not None else []
+        self.temperature = max(0.2, min(float(temperature or 1.0), 3.0))
+        self.bias = {module: 0.0 for module in self.modules}
+
+    def meta_train(self, samples=None, state="", task_context="") -> dict:
+        samples = samples if isinstance(samples, (list, tuple)) else [samples] if samples else []
+        layer = DynamicGatingLayer(domain=self.domain, state_hint=self.state_hint)
+        gate = layer.gate(state=state, task_context=task_context, modules=self.modules)
+        for sample in samples:
+            if not isinstance(sample, dict):
+                continue
+            module = str(sample.get("module") or sample.get("best_module") or "").strip()
+            outcome = str(sample.get("outcome") or sample.get("result") or "").lower()
+            if module and module in self.bias:
+                delta = 0.08 if any(term in outcome for term in ("success", "good", "win", "pass")) else -0.05 if any(term in outcome for term in ("fail", "error", "bad", "reject")) else 0.0
+                self.bias[module] = round(max(-0.5, min(0.5, self.bias.get(module, 0.0) + delta)), 3)
+        for item in gate.get("weights") or []:
+            module = item.get("module")
+            if module in self.bias:
+                item["weight"] = round(max(0.01, min(1.0, item.get("weight", 0.0) + self.bias[module])), 3)
+        gate["weights"].sort(key=lambda item: (item["weight"], item["module"]), reverse=True)
+        best = gate["weights"][0]["module"] if gate.get("weights") else None
+        return {
+            "ok": True,
+            "domain": self.domain,
+            "state_hint": self.state_hint,
+            "temperature": self.temperature,
+            "bias": dict(sorted(self.bias.items())),
+            "gate": gate,
+            "best_module": best,
+            "summary": f"best={best or ''} | modules={len(self.modules)}",
+        }
+
+
+class CausalMappingModule:
+    """Map causal graph structures and context embeddings onto a goal translation."""
+
+    def __init__(self, domain: str = "general", state_hint: str = ""):
+        self.domain = (domain or "general").strip()
+        self.state_hint = (state_hint or "").strip()
+
+    @staticmethod
+    def _token_set(text: str) -> set[str]:
+        return {part for part in _re.split(r"[^A-Za-z0-9_]+", (text or "").lower()) if len(part) >= 3}
+
+    def map(self, causal_graph=None, context_embedding=None, goal: str = "") -> dict:
+        graph = causal_graph if isinstance(causal_graph, dict) else {}
+        context_text = WorldModel._textify(WorldModel._parse_blob(context_embedding))
+        goal_text = (goal or "").strip()
+        goal_tokens = self._token_set(goal_text)
+        context_tokens = self._token_set(context_text + " " + self.state_hint)
+        raw_nodes = graph.get("nodes") or []
+        nodes = []
+        for node in raw_nodes:
+            if isinstance(node, dict):
+                nodes.append(node)
+            else:
+                text = str(node).strip()
+                if text:
+                    nodes.append({"id": text, "label": text, "type": "node"})
+        ranked = []
+        for node in nodes:
+            label = str(node.get("label") or node.get("id") or "").strip()
+            node_tokens = self._token_set(label)
+            overlap = len((goal_tokens | context_tokens) & node_tokens)
+            score = 0.15 + (0.1 * overlap) + (0.05 if node.get("type") in {"module", "chunk", "memory"} else 0.0)
+            ranked.append({
+                "node_id": node.get("id"),
+                "label": label,
+                "score": round(min(1.0, score), 3),
+            })
+        ranked.sort(key=lambda item: (item["score"], item["label"]), reverse=True)
+        best = ranked[0] if ranked else {}
+        return {
+            "ok": True,
+            "domain": self.domain,
+            "state_hint": self.state_hint,
+            "goal": goal_text[:240],
+            "context_preview": context_text[:240],
+            "source_graph_density": graph.get("density"),
+            "source_graph_nodes": len(nodes),
+            "ranked_mappings": ranked[:8],
+            "best_mapping": best,
+            "summary": f"goal={goal_text[:80]} | best={best.get('label') or best.get('node_id') or ''}",
+        }
+
+
+class PrincipleSearchModule:
+    """Rank guiding principles against a current state/task context."""
+
+    def __init__(self, domain: str = "general", state_hint: str = ""):
+        self.domain = (domain or "general").strip()
+        self.state_hint = (state_hint or "").strip()
+
+    @staticmethod
+    def _token_set(text: str) -> set[str]:
+        return {part for part in _re.split(r"[^A-Za-z0-9_]+", (text or "").lower()) if len(part) >= 3}
+
+    def search(self, principles=None, state: str = "", goal: str = "", task_context: str = "") -> dict:
+        if isinstance(principles, str):
+            principle_list = [part.strip() for part in principles.replace("\n", ",").split(",") if part.strip()]
+        elif isinstance(principles, (list, tuple, set)):
+            principle_list = [str(item).strip() for item in principles if str(item).strip()]
+        elif principles:
+            principle_list = [str(principles).strip()]
+        else:
+            principle_list = []
+        if not principle_list:
+            principle_list = [
+                "stability_first",
+                "evidence_before_action",
+                "verify_before_close",
+                "prefer_small_safe_changes",
+            ]
+        state_text = WorldModel._textify(WorldModel._parse_blob(state))
+        goal_text = WorldModel._textify(WorldModel._parse_blob(goal)) if isinstance(goal, (dict, str)) else str(goal or "")
+        context_text = WorldModel._textify(WorldModel._parse_blob(task_context)) if isinstance(task_context, (dict, str)) else str(task_context or "")
+        combined_tokens = self._token_set(" ".join([state_text, goal_text, context_text, self.state_hint]))
+        ranked = []
+        for idx, principle in enumerate(principle_list):
+            principle_tokens = self._token_set(principle)
+            overlap = len(combined_tokens & principle_tokens)
+            score = 0.2 + (0.12 * overlap)
+            if any(term in principle.lower() for term in ("verify", "evidence", "safe", "stability")):
+                score += 0.1
+            if any(term in principle.lower() for term in ("search", "discover", "explore")):
+                score += 0.04
+            ranked.append({"principle": principle, "score": round(min(1.0, score), 3), "index": idx, "overlap": overlap})
+        ranked.sort(key=lambda item: (item["score"], item["principle"]), reverse=True)
+        best = ranked[0] if ranked else {}
+        return {
+            "ok": True,
+            "domain": self.domain,
+            "state_hint": self.state_hint,
+            "principles": principle_list,
+            "ranked_principles": ranked,
+            "best_principle": best.get("principle"),
+            "summary": f"best={best.get('principle') or ''} | principles={len(principle_list)}",
+        }
+
+
+class StateReconciliationBuffer:
+    """Collect and reconcile competing state snapshots before downstream planning."""
+
+    def __init__(self, capacity: int = 64, domain: str = "general", state_hint: str = ""):
+        self.capacity = max(8, min(int(capacity or 64), 512))
+        self.domain = (domain or "general").strip()
+        self.state_hint = (state_hint or "").strip()
+        self.replay = DynamicReplayBuffer(capacity=self.capacity, domain=self.domain, state_hint=self.state_hint)
+
+    def add(self, state, priority: float = 0.5, context: str = "") -> dict:
+        return self.replay.add({"state": state}, priority=priority, context=context)
+
+    def reconcile(self, states=None, context: str = "") -> dict:
+        states = states if isinstance(states, (list, tuple, set)) else [states] if states else []
+        snapshots = [WorldModel._textify(WorldModel._parse_blob(state)) for state in states if state not in (None, "", {})]
+        if not snapshots:
+            return {
+                "ok": False,
+                "error": "states required",
+                "domain": self.domain,
+                "state_hint": self.state_hint,
+            }
+        for idx, snap in enumerate(snapshots):
+            self.add({"snapshot": snap, "index": idx}, priority=max(0.3, 0.8 - (0.05 * idx)), context=context or self.state_hint)
+        sampled = self.replay.sample(limit=min(5, len(snapshots)), context=context or self.state_hint)
+        token_sets = [PrincipleSearchModule._token_set(s) for s in snapshots]
+        union = set().union(*token_sets) if token_sets else set()
+        intersections = set(token_sets[0]) if token_sets else set()
+        for token_set in token_sets[1:]:
+            intersections &= token_set
+        conflicts = sorted(union - intersections)[:24]
+        normalized_state = " | ".join(snapshots[:3])[:500]
+        return {
+            "ok": True,
+            "domain": self.domain,
+            "state_hint": self.state_hint,
+            "input_count": len(snapshots),
+            "normalized_state": normalized_state,
+            "shared_tokens": sorted(intersections)[:24],
+            "conflicting_tokens": conflicts,
+            "replay_summary": sampled,
+            "summary": f"snapshots={len(snapshots)} | conflicts={len(conflicts)}",
+        }
+
+
+class HierarchicalSearchTree:
+    """Build a bounded search tree over hierarchical levels and candidate actions."""
+
+    def __init__(self, domain: str = "general", state_hint: str = ""):
+        self.domain = (domain or "general").strip()
+        self.state_hint = (state_hint or "").strip()
+
+    @staticmethod
+    def _normalize(items) -> list[str]:
+        if items in (None, "", []):
+            return []
+        if isinstance(items, str):
+            return [part.strip() for part in items.replace("\n", ",").split(",") if part.strip()]
+        if isinstance(items, dict):
+            items = list(items.keys())
+        if isinstance(items, (list, tuple, set)):
+            return [str(item).strip() for item in items if str(item).strip()]
+        text = str(items).strip()
+        return [text] if text else []
+
+    def build(self, current_state: str = "", goal: str = "", hwm_levels=None, candidate_actions=None, horizon: int = 3, rollouts: int = 12, exploration_weight: float = 1.2) -> dict:
+        levels = self._normalize(hwm_levels) or ["low", "medium", "high"]
+        actions = self._normalize(candidate_actions) or levels[:]
+        goal_tokens = PrincipleSearchModule._token_set(goal)
+        state_tokens = PrincipleSearchModule._token_set(current_state)
+        combined_tokens = goal_tokens | state_tokens
+        principle_packet = PrincipleSearchModule(domain=self.domain, state_hint=self.state_hint).search(
+            state=current_state,
+            goal=goal,
+            task_context=" ".join([self.state_hint, goal]).strip(),
+        )
+        reconciliation = None
+        if current_state or goal:
+            reconciliation = StateReconciliationBuffer(domain=self.domain, state_hint=self.state_hint).reconcile(
+                states=[current_state, goal],
+                context=f"{self.state_hint} {goal}".strip(),
+            )
+        action_scores = []
+        for idx, action in enumerate(actions):
+            action_tokens = PrincipleSearchModule._token_set(action)
+            overlap = len(combined_tokens & action_tokens)
+            score = 0.2 + (0.15 * overlap)
+            if any(term in action.lower() for term in ("inspect", "verify", "evidence", "review")):
+                score += 0.08
+            if any(term in action.lower() for term in ("implement", "apply", "fix", "close")):
+                score += 0.06
+            action_scores.append({"action": action, "score": round(min(1.0, score), 3), "index": idx, "overlap": overlap})
+        action_scores.sort(key=lambda item: (item["score"], item["action"]), reverse=True)
+        best_action = action_scores[0]["action"] if action_scores else (actions[0] if actions else None)
+        tree = {
+            "root": {
+                "state": WorldModel._textify(WorldModel._parse_blob(current_state))[:180],
+                "goal": WorldModel._textify(WorldModel._parse_blob(goal))[:180],
+            },
+            "levels": levels,
+            "actions": actions,
+            "best_level": levels[min(1, len(levels) - 1)] if levels else None,
+            "best_action": best_action,
+            "level_distribution": [
+                {
+                    "index": idx,
+                    "level": level,
+                    "score": round(max(0.1, 0.9 - (0.2 * idx)), 3),
+                    "probability": round(max(0.1, 0.9 - (0.2 * idx)), 3),
+                }
+                for idx, level in enumerate(levels)
+            ],
+            "plan": {
+                "best_level": levels[min(1, len(levels) - 1)] if levels else None,
+                "best_action": best_action,
+                "principle_packet": principle_packet,
+                "reconciliation": reconciliation,
+                "action_scores": action_scores,
+            },
+            "search_controller": {
+                "mode": "lightweight_tree",
+                "principle_best": principle_packet.get("best_principle") if isinstance(principle_packet, dict) else None,
+            },
+        }
+        tree["node_count"] = 1 + len(levels) + len(actions)
+        tree["summary"] = f"best_level={tree['best_level'] or ''} | best_action={tree['best_action'] or ''}"
+        return {"ok": True, "domain": self.domain, "state_hint": self.state_hint, "tree": tree, "summary": tree["summary"]}
+
+
 class HierarchicalSearchController:
     """Coordinate world-model rollouts with bounded multi-level search."""
 
@@ -1771,6 +2414,629 @@ def t_world_model(domain: str = "general", state_hint: str = "", experience: str
         return WorldModel(domain=domain, state_hint=state_hint).predict_future_states(current_state=current_state, actions=actions, horizon=hz)
     except Exception as e:
         return {"ok": False, "error": str(e)}
+
+
+def t_world_model_interface(domain: str = "general", state_hint: str = "", current_state: str = "", actions: str = "", horizon: str = "3") -> dict:
+    """Return the canonical world-model interface contract and optional uncertainty summary."""
+    try:
+        model = WorldModel(domain=domain, state_hint=state_hint)
+        contract = {
+            "ok": True,
+            "domain": model.domain,
+            "state_hint": model.state_hint,
+            "interface": "WorldModelInterface",
+            "methods": ["update_model", "predict_future_states", "predict_with_uncertainty"],
+            "contract": {
+                "update_model": "capture experience into KB and session traces",
+                "predict_future_states": "roll forward bounded actions from current state",
+                "predict_with_uncertainty": "return mean/variance/distribution over future steps",
+            },
+        }
+        if current_state:
+            contract["prediction"] = model.predict_with_uncertainty(current_state=current_state, actions=actions, horizon=max(1, min(int(horizon or 3), 8)))
+        return contract
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def t_predict_with_uncertainty(domain: str = "general", state_hint: str = "", current_state: str = "", actions: str = "", horizon: str = "3") -> dict:
+    """Predict future states with mean/variance/uncertainty surfaced explicitly."""
+    try:
+        if not current_state and not actions:
+            return {"ok": False, "error": "current_state or actions required"}
+        hz = max(1, min(int(horizon or 3), 8))
+    except Exception:
+        hz = 3
+    try:
+        return WorldModel(domain=domain, state_hint=state_hint).predict_with_uncertainty(current_state=current_state, actions=actions, horizon=hz)
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def t_predictive_state_representation(state: str = "", error_signal: str = "0", learning_rate: str = "0.1", domain: str = "general", state_hint: str = "", actions: str = "", horizon: str = "3") -> dict:
+    """Build a predictive-state representation packet and optionally simulate action ranking."""
+    try:
+        err = max(0.0, min(float(error_signal or 0.0), 1.0))
+    except Exception:
+        err = 0.0
+    try:
+        lr = max(0.01, min(float(learning_rate or 0.1), 1.0))
+    except Exception:
+        lr = 0.1
+    psr = PredictiveStateRepresentation(state=state, error_signal=err, learning_rate=lr, domain=domain, state_hint=state_hint)
+    packet = psr.encode()
+    try:
+        hz = max(1, min(int(horizon or 3), 8))
+    except Exception:
+        hz = 3
+    if actions:
+        packet["prediction"] = psr.predict(actions=actions, horizon=hz)
+    return packet
+
+
+def t_dynamic_replay_buffer(experiences: str = "", context: str = "", limit: str = "5", capacity: str = "128", priority_floor: str = "0.3", domain: str = "general", state_hint: str = "") -> dict:
+    """Rank experiences with a bounded replay buffer heuristic."""
+    try:
+        lim = max(1, min(int(limit or 5), 32))
+    except Exception:
+        lim = 5
+    try:
+        cap = max(8, min(int(capacity or 128), 1024))
+    except Exception:
+        cap = 128
+    try:
+        floor = max(0.0, min(float(priority_floor or 0.3), 1.0))
+    except Exception:
+        floor = 0.3
+    buf = DynamicReplayBuffer(capacity=cap, domain=domain, state_hint=state_hint)
+    items = []
+    if experiences:
+        raw = experiences.strip()
+        if raw.startswith("["):
+            try:
+                parsed = json.loads(raw)
+                if isinstance(parsed, list):
+                    items = parsed
+            except Exception:
+                items = [part.strip() for part in raw.replace("\n", ",").split(",") if part.strip()]
+        else:
+            items = [part.strip() for part in raw.replace("\n", ",").split(",") if part.strip()]
+    for idx, exp in enumerate(items):
+        text = str(exp).strip()
+        if not text:
+            continue
+        buf.add({"experience": text, "index": idx}, priority=max(floor, 0.35 + 0.05 * idx), context=context or state_hint)
+    return buf.sample(limit=lim, context=context or state_hint)
+
+
+def t_simulated_critic(sequence: str = "", reward_signal: str = "", side_effects: str = "", domain: str = "general", state_hint: str = "") -> dict:
+    """Score a sequence with a bounded simulated critic."""
+    try:
+        return SimulatedCritic(domain=domain, state_hint=state_hint).score(sequence=sequence, reward_signal=reward_signal, side_effects=side_effects)
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def t_meta_learner(state: str = "", error_signal: str = "0", observation: str = "", target: str = "", learning_rate: str = "0.1", domain: str = "general", state_hint: str = "") -> dict:
+    """Adapt a predictive-state representation from an error signal."""
+    try:
+        err = max(0.0, min(float(error_signal or 0.0), 1.0))
+    except Exception:
+        err = 0.0
+    try:
+        lr = max(0.01, min(float(learning_rate or 0.1), 1.0))
+    except Exception:
+        lr = 0.1
+    model = PredictiveStateRepresentation(state=state, error_signal=err, learning_rate=lr, domain=domain, state_hint=state_hint)
+    return MetaLearner(model=model, domain=domain, state_hint=state_hint, learning_rate=lr).adapt(error_signal=err, observation=observation, target=target)
+
+
+def t_dynamic_gating_layer(state: str = "", task_context: str = "", modules: str = "", domain: str = "general", state_hint: str = "") -> dict:
+    """Gate submodules from a current state and task context."""
+    try:
+        return DynamicGatingLayer(domain=domain, state_hint=state_hint).gate(state=state, task_context=task_context, modules=modules)
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def t_gating_network(state: str = "", task_context: str = "", modules: str = "", samples: str = "", temperature: str = "1.0", domain: str = "general", state_hint: str = "") -> dict:
+    """Meta-train a gating network over submodules from bounded samples."""
+    try:
+        temp = max(0.2, min(float(temperature or 1.0), 3.0))
+    except Exception:
+        temp = 1.0
+    module_list = [part.strip() for part in modules.replace("\n", ",").split(",") if part.strip()] if modules else []
+    gate = GatingNetwork(modules=module_list, domain=domain, state_hint=state_hint, temperature=temp)
+    sample_list = []
+    if samples:
+        raw = samples.strip()
+        if raw.startswith("["):
+            try:
+                parsed = json.loads(raw)
+                if isinstance(parsed, list):
+                    sample_list = parsed
+            except Exception:
+                pass
+        if not sample_list:
+            sample_list = [part.strip() for part in raw.replace("\n", ",").split(",") if part.strip()]
+    return gate.meta_train(samples=sample_list, state=state, task_context=task_context)
+
+
+def t_causal_mapping_module(causal_graph: str = "", context_embedding: str = "", goal: str = "", domain: str = "general", state_hint: str = "") -> dict:
+    """Map causal graph structure and context embedding onto a goal translation."""
+    try:
+        graph = {}
+        if causal_graph:
+            try:
+                graph = json.loads(causal_graph) if isinstance(causal_graph, str) else causal_graph
+            except Exception:
+                graph = {"text": str(causal_graph)}
+        return CausalMappingModule(domain=domain, state_hint=state_hint).map(causal_graph=graph, context_embedding=context_embedding, goal=goal)
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def t_causal_graph_data_generator(
+    context: str = "",
+    goal: str = "",
+    modules: str = "",
+    symbols: str = "",
+    actions: str = "",
+    domain: str = "general",
+    state_hint: str = "",
+    limit: str = "8",
+) -> dict:
+    """Generate a bounded causal graph packet from task context and module hints."""
+    try:
+        try:
+            lim = max(1, min(int(limit or 8), 16))
+        except Exception:
+            lim = 8
+        context_text = " ".join([part.strip() for part in [context, goal, symbols, actions, state_hint] if str(part or "").strip()])
+        graph = DynamicRelationalGraph(query=context_text or goal or context or symbols, domain=domain, state_hint=state_hint).build()
+        normalized_nodes = []
+        for node in (graph.get("nodes") or [])[:lim]:
+            if isinstance(node, dict):
+                normalized_nodes.append({
+                    "id": node.get("id") or node.get("label") or node.get("name") or "",
+                    "label": node.get("label") or node.get("name") or node.get("id") or "",
+                    "type": node.get("type") or "node",
+                    "weight": node.get("weight") or node.get("score") or node.get("belief") or 0.0,
+                })
+            else:
+                text = str(node).strip()
+                if text:
+                    normalized_nodes.append({"id": text, "label": text, "type": "node", "weight": 0.0})
+        if not normalized_nodes:
+            for item in [modules, symbols, actions]:
+                for token in [part.strip() for part in str(item or "").replace("\n", ",").split(",") if part.strip()]:
+                    normalized_nodes.append({"id": token, "label": token, "type": "node", "weight": 0.0})
+        edges = []
+        for edge in (graph.get("edges") or [])[:lim]:
+            if isinstance(edge, dict):
+                edges.append(edge)
+            elif isinstance(edge, (list, tuple)) and len(edge) >= 2:
+                edges.append({"source": edge[0], "target": edge[1], "relation": "related_to"})
+        mapping = CausalMappingModule(domain=domain, state_hint=state_hint).map(
+            causal_graph={"nodes": normalized_nodes, "edges": edges},
+            context_embedding=context_text or goal,
+            goal=goal or context_text,
+        )
+        summary = (
+            f"causal_graph_data_generator=ok | nodes={len(normalized_nodes)} | "
+            f"edges={len(edges)} | best={((mapping.get('best_mapping') or {}).get('label') or (mapping.get('best_mapping') or {}).get('node_id') or 'none')}"
+        )
+        return {
+            "ok": True,
+            "domain": domain,
+            "state_hint": state_hint,
+            "context": context_text[:300],
+            "goal": goal[:200],
+            "modules": modules,
+            "symbols": symbols,
+            "actions": actions,
+            "nodes": normalized_nodes,
+            "edges": edges,
+            "graph": graph,
+            "mapping": mapping,
+            "summary": summary,
+        }
+    except Exception as exc:
+        return {"ok": False, "error": str(exc), "summary": f"causal_graph_data_generator=error | {exc}"}
+
+
+def t_principle_search_module(principles: str = "", state: str = "", goal: str = "", task_context: str = "", domain: str = "general", state_hint: str = "") -> dict:
+    """Rank guiding principles against the current state and task context."""
+    try:
+        return PrincipleSearchModule(domain=domain, state_hint=state_hint).search(principles=principles, state=state, goal=goal, task_context=task_context)
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def t_state_reconciliation_buffer(states: str = "", context: str = "", limit: str = "5", capacity: str = "64", domain: str = "general", state_hint: str = "") -> dict:
+    """Reconcile competing state snapshots before downstream planning."""
+    try:
+        cap = max(8, min(int(capacity or 64), 512))
+    except Exception:
+        cap = 64
+    try:
+        lim = max(1, min(int(limit or 5), 32))
+    except Exception:
+        lim = 5
+    buffer = StateReconciliationBuffer(capacity=cap, domain=domain, state_hint=state_hint)
+    items = []
+    if states:
+        raw = states.strip()
+        if raw.startswith("["):
+            try:
+                parsed = json.loads(raw)
+                if isinstance(parsed, list):
+                    items = parsed
+            except Exception:
+                items = [part.strip() for part in raw.replace("\n", ",").split(",") if part.strip()]
+        else:
+            items = [part.strip() for part in raw.replace("\n", ",").split(",") if part.strip()]
+    result = buffer.reconcile(states=items, context=context or state_hint)
+    if isinstance(result, dict):
+        result["limit"] = lim
+    return result
+
+
+def t_hierarchical_search_tree(current_state: str = "", goal: str = "", hwm_levels: str = "", candidate_actions: str = "", horizon: str = "3", rollouts: str = "12", exploration_weight: str = "1.2", domain: str = "general", state_hint: str = "") -> dict:
+    """Build a bounded hierarchical search tree and return the best branch."""
+    try:
+        hz = max(1, min(int(horizon or 3), 8))
+    except Exception:
+        hz = 3
+    try:
+        ro = max(1, min(int(rollouts or 12), 32))
+    except Exception:
+        ro = 12
+    try:
+        ew = max(0.1, min(float(exploration_weight or 1.2), 4.0))
+    except Exception:
+        ew = 1.2
+    try:
+        return HierarchicalSearchTree(domain=domain, state_hint=state_hint).build(
+            current_state=current_state,
+            goal=goal,
+            hwm_levels=hwm_levels,
+            candidate_actions=candidate_actions,
+            horizon=hz,
+            rollouts=ro,
+            exploration_weight=ew,
+        )
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def t_module_assessment_packet(
+    module_name: str = "",
+    module_description: str = "",
+    task_context: str = "",
+    goal: str = "",
+    evidence: str = "",
+    domain: str = "general",
+    state_hint: str = "",
+    learning_rate: str = "0.1",
+) -> dict:
+    """Assess a new module's cost, overfit risk, and readiness before promotion."""
+    try:
+        module_name = (module_name or "").strip()
+        module_description = (module_description or "").strip()
+        task_context = (task_context or "").strip()
+        goal = (goal or "").strip()
+        evidence = (evidence or "").strip()
+        module_blob = " | ".join(part for part in (module_name, module_description, task_context, goal, evidence) if part)
+        lower = module_blob.lower()
+
+        complexity_markers = {
+            "complex", "cost", "latency", "memory", "compute", "compute_cost", "induction",
+            "grammar", "hierarchical", "counterfactual", "causal", "meta-learning", "meta_learning",
+            "long-horizon", "long_horizon", "overfit", "robust", "robustness", "generalization",
+            "generalisation", "train", "training", "inference", "module", "integration",
+        }
+        risk_markers = {
+            "overfit", "fragile", "brittle", "unstable", "risk", "cost", "latency", "memory",
+            "compute", "slow", "expensive", "complex", "conflict", "failure", "drift",
+        }
+        positive_markers = {
+            "verified", "robust", "stable", "efficient", "scalable", "generalization", "safe",
+            "bounded", "lightweight", "reusable", "integrated",
+        }
+        complexity_hits = sum(1 for marker in complexity_markers if marker in lower)
+        risk_hits = sum(1 for marker in risk_markers if marker in lower)
+        positive_hits = sum(1 for marker in positive_markers if marker in lower)
+
+        complexity_score = max(0.0, min(1.0, round(0.18 + 0.08 * complexity_hits + 0.02 * len(module_blob.split()), 3)))
+        risk_score = max(0.0, min(1.0, round(0.15 + 0.1 * risk_hits + 0.02 * max(0, complexity_hits - positive_hits), 3)))
+        readiness_score = max(0.0, min(1.0, round(1.0 - (risk_score * 0.55) - (complexity_score * 0.25) + (0.06 * positive_hits), 3)))
+
+        critic = t_simulated_critic(
+            sequence=module_blob or goal or module_name,
+            reward_signal="robust generalization verify before merge",
+            side_effects="overfit cost latency memory risk",
+            domain=domain,
+            state_hint=state_hint,
+        )
+        principle_search = t_principle_search_module(
+            principles="measure_cost_before_scale,avoid_overfit,prefer_small_safe_changes,verify_before_close",
+            state=module_blob or goal or module_name,
+            goal=goal or module_name or "assess module readiness",
+            task_context=task_context or evidence,
+            domain=domain,
+            state_hint=state_hint,
+        )
+        meta = MetaLearner(
+            model=PredictiveStateRepresentation(state=module_blob or goal or module_name, domain=domain, state_hint=state_hint),
+            domain=domain,
+            state_hint=state_hint,
+            learning_rate=max(0.01, min(float(learning_rate or 0.1), 1.0)) if str(learning_rate).strip() else 0.1,
+        ).adapt(
+            error_signal=max(0.0, min(1.0, risk_score)),
+            observation=module_blob or evidence or task_context,
+            target=goal or module_name,
+        )
+        gating = DynamicGatingLayer(domain=domain, state_hint=state_hint).gate(
+            state=module_blob or goal or module_name,
+            task_context=task_context or goal or module_name,
+            modules="assess_cost,assess_risk,assess_overfit,verify_integration",
+        )
+
+        passed = []
+        warnings = []
+        failed = []
+        if readiness_score >= 0.75:
+            passed.append("module_ready")
+        elif readiness_score >= 0.6:
+            warnings.append("module_needs_more_verification")
+        else:
+            failed.append("module_not_ready")
+
+        if complexity_score >= 0.65:
+            warnings.append("high_complexity")
+        if risk_score >= 0.55:
+            warnings.append("high_risk")
+        if not gating.get("ok", True):
+            warnings.append("gating_failed")
+        if critic.get("risk") is not None and float(critic.get("risk") or 0.0) >= 0.6:
+            warnings.append("critic_high_risk")
+
+        blocked = bool(readiness_score < 0.55 or failed)
+        recommendation = "proceed" if readiness_score >= 0.75 else ("verify_more" if readiness_score >= 0.6 else "split_or_delay")
+        summary = (
+            f"module_assessment={'blocked' if blocked else 'ok'} | "
+            f"readiness={readiness_score:.2f} | complexity={complexity_score:.2f} | "
+            f"risk={risk_score:.2f} | recommendation={recommendation}"
+        )
+        return {
+            "ok": True,
+            "domain": domain,
+            "state_hint": state_hint,
+            "module_name": module_name,
+            "module_description": module_description,
+            "task_context": task_context,
+            "goal": goal,
+            "complexity_score": complexity_score,
+            "risk_score": risk_score,
+            "readiness_score": readiness_score,
+            "recommendation": recommendation,
+            "blocked": blocked,
+            "passed_checks": passed,
+            "failed_checks": failed,
+            "warnings": warnings,
+            "critic": critic,
+            "principle_search": principle_search,
+            "meta_update": meta,
+            "gating": gating,
+            "summary": summary,
+        }
+    except Exception as e:
+        return {"ok": False, "error": str(e), "blocked": True}
+
+
+def t_hierarchical_gated_neuro_symbolic_world_model(
+    current_state: str = "",
+    goal: str = "",
+    modules: str = "",
+    symbols: str = "",
+    actions: str = "",
+    hwm_levels: str = "low,medium,high",
+    horizon: str = "3",
+    rollouts: str = "8",
+    exploration_weight: str = "1.1",
+    principles: str = "",
+    task_context: str = "",
+    causal_graph: str = "",
+    domain: str = "general",
+    state_hint: str = "",
+    full_rollout: str = "false",
+) -> dict:
+    """Combine gating, symbolic memory, causal mapping, and hierarchical search into one packet."""
+    try:
+        current_state = (current_state or "").strip()
+        goal = (goal or "").strip()
+        modules_text = (modules or "").strip() or "neural,symbolic,memory,causal,verification"
+        symbols_text = (symbols or "").strip()
+        actions_text = (actions or "").strip() or "inspect,gate,verify,store"
+        task_context = (task_context or "").strip()
+        hwm_levels = (hwm_levels or "low,medium,high").strip()
+
+        try:
+            hz = max(1, min(int(horizon or 3), 8))
+        except Exception:
+            hz = 3
+        try:
+            ro = max(1, min(int(rollouts or 8), 24))
+        except Exception:
+            ro = 8
+        try:
+            ew = max(0.1, min(float(exploration_weight or 1.1), 4.0))
+        except Exception:
+            ew = 1.1
+        full_mode = str(full_rollout or "").strip().lower() in {"1", "true", "yes", "on"}
+
+        reconciler = StateReconciliationBuffer(capacity=64, domain=domain, state_hint=state_hint)
+        reconciliation = reconciler.reconcile(
+            states=[state for state in (current_state, symbols_text, task_context, goal) if state],
+            context=task_context or goal or state_hint,
+        )
+        reconciled_state = reconciliation.get("normalized_state") or current_state or task_context or goal
+
+        gating = DynamicGatingLayer(domain=domain, state_hint=state_hint).gate(
+            state=reconciled_state,
+            task_context=task_context or goal or symbols_text,
+            modules=modules_text,
+        )
+        causal_input = {}
+        if causal_graph:
+            try:
+                causal_input = json.loads(causal_graph) if isinstance(causal_graph, str) else causal_graph
+            except Exception:
+                causal_input = {"text": str(causal_graph)}
+        elif modules_text or symbols_text:
+            causal_input = {
+                "nodes": [
+                    {"id": mod.strip(), "label": mod.strip(), "type": "module"}
+                    for mod in (modules_text.replace("\n", ",").split(","))
+                    if mod.strip()
+                ],
+                "edges": [],
+            }
+        causal = t_causal_mapping_module(
+            causal_graph=json.dumps(causal_input, default=str) if isinstance(causal_input, dict) else str(causal_input),
+            context_embedding=reconciled_state,
+            goal=goal or task_context or "hierarchical neuro-symbolic alignment",
+            domain=domain,
+            state_hint=state_hint,
+        )
+        principles_packet = t_principle_search_module(
+            principles=principles or "hierarchical_gating,verify_before_close,prefer_small_safe_changes,causal_memory_access",
+            state=reconciled_state,
+            goal=goal or task_context or "hierarchical gating",
+            task_context=task_context or symbols_text or actions_text,
+            domain=domain,
+            state_hint=state_hint,
+        )
+        tree = t_hierarchical_search_tree(
+            current_state=reconciled_state,
+            goal=goal or task_context or "hierarchical gating",
+            hwm_levels=hwm_levels,
+            candidate_actions=actions_text,
+            horizon=hz,
+            rollouts=ro,
+            exploration_weight=ew,
+            domain=domain,
+            state_hint=state_hint,
+        )
+        if full_mode:
+            prediction = WorldModel(domain=domain, state_hint=state_hint).predict_future_states(
+                current_state=reconciled_state,
+                actions=actions_text,
+                horizon=hz,
+            )
+        else:
+            prediction = {
+                "ok": True,
+                "domain": domain,
+                "state_hint": state_hint,
+                "current_state_preview": reconciled_state[:240],
+                "horizon": hz,
+                "actions": [part.strip() for part in actions_text.replace("\n", ",").split(",") if part.strip()][:8],
+                "best_action": tree.get("best_action") or gating.get("best_module") or "observe",
+                "predicted_states": [],
+                "summary": f"lite_prediction | best={(tree.get('best_action') or gating.get('best_module') or 'observe')}",
+                "confidence": round(min(1.0, max(0.2, float((gating.get('gating') or {}).get('best_score') or 0.5))), 3),
+            }
+        critic = SimulatedCritic(domain=domain, state_hint=state_hint).score(
+            sequence=[current_state, goal, symbols_text, actions_text],
+            reward_signal="hierarchical gating neural symbolic memory access",
+            side_effects="overfit cost latency integration risk",
+        )
+        meta = MetaLearner(
+            model=PredictiveStateRepresentation(state=reconciled_state, domain=domain, state_hint=state_hint),
+            domain=domain,
+            state_hint=state_hint,
+            learning_rate=0.12,
+        ).adapt(
+            error_signal=max(0.0, min(1.0, 1.0 - float(critic.get("score") or 0.0))),
+            observation=f"{modules_text} | {symbols_text} | {actions_text}",
+            target=goal or task_context or "hierarchical gating",
+        )
+
+        gate_packet = gating.get("gating") if isinstance(gating, dict) and isinstance(gating.get("gating"), dict) else gating
+        gate_best = ""
+        gate_score = 0.0
+        try:
+            gate_best = str((gate_packet or {}).get("best_module") or (gate_packet or {}).get("best_action") or "")
+            gate_weights = (gate_packet or {}).get("weights") or []
+            if gate_weights:
+                gate_score = float(gate_weights[0].get("weight") or gate_weights[0].get("probability") or 0.0)
+        except Exception:
+            gate_best = ""
+            gate_score = 0.0
+        readiness = max(0.0, min(1.0, round(
+            0.35 * float(gate_score or 0.0)
+            + 0.25 * float((tree.get("search_tree") or {}).get("summary") and 0.5 or 0.0)
+            + 0.2 * float(prediction.get("confidence") or prediction.get("prediction_mean") or 0.0)
+            + 0.2 * float(critic.get("score") or 0.0),
+            3
+        )))
+
+        passed = []
+        warnings = []
+        failed = []
+        if gating.get("ok", True):
+            passed.append("gating_ok")
+        else:
+            failed.append("gating_blocked")
+        if reconciliation.get("ok", True):
+            passed.append("state_reconciled")
+        if causal.get("ok", True):
+            passed.append("causal_mapping_ok")
+        else:
+            warnings.append("causal_mapping_unavailable")
+        if principles_packet.get("best_principle"):
+            passed.append(f"principle:{principles_packet.get('best_principle')}")
+        if critic.get("score") is not None and float(critic.get("score") or 0.0) >= 0.55:
+            passed.append("critic_supportive")
+        else:
+            warnings.append("critic_low_confidence")
+        if float((prediction.get("confidence") or prediction.get("prediction_mean") or 0.0)) < 0.45:
+            warnings.append("prediction_uncertain")
+
+        blocked = bool(not gating.get("ok", True) or readiness < 0.55)
+        summary = (
+            f"hierarchical_gated_world_model={'blocked' if blocked else 'ok'} | "
+            f"best_gate={gate_best or 'none'} | best_principle={principles_packet.get('best_principle') or 'none'} | "
+            f"readiness={readiness:.2f}"
+        )
+        return {
+            "ok": True,
+            "domain": domain,
+            "state_hint": state_hint,
+            "current_state": current_state,
+            "goal": goal,
+            "modules": modules_text,
+            "symbols": symbols_text,
+            "actions": actions_text,
+            "reconciliation": reconciliation,
+            "gating": gating,
+            "causal_mapping": causal,
+            "principle_search": principles_packet,
+            "search_tree": tree,
+            "prediction": prediction,
+            "critic": critic,
+            "meta_update": meta,
+            "readiness_score": readiness,
+            "blocked": blocked,
+            "passed_checks": passed,
+            "failed_checks": failed,
+            "warnings": warnings,
+            "summary": summary,
+        }
+    except Exception as e:
+        return {"ok": False, "error": str(e), "blocked": True}
 
 
 def t_adaptive_temporal_filter(sequence: str = "", domain: str = "general", state_hint: str = "", window: str = "5", decay: str = "0.82") -> dict:

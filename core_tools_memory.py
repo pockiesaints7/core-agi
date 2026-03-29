@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 import re as _re
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 
 import httpx
 
@@ -90,6 +90,77 @@ def t_reasoning_packet(
             limit=lim,
             per_table=pt,
         )
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def t_generate_synthetic_data(
+    context: str = "",
+    goal: str = "",
+    principles: str = "",
+    domain: str = "general",
+    state_hint: str = "",
+    limit: str = "8",
+) -> dict:
+    """Generate bounded synthetic training samples for memory modules.
+
+    The output includes a PrincipleUtilityScore field so downstream memory or
+    policy components can quickly rank the usefulness of the sampled principles.
+    """
+    try:
+        if not context and not goal and not principles:
+            return {"ok": False, "error": "context, goal, or principles required"}
+        try:
+            lim = max(1, min(int(limit or 8), 16))
+        except Exception:
+            lim = 8
+
+        context_text = " ".join([part.strip() for part in [context, goal, state_hint] if str(part or "").strip()]).strip()
+        context_tokens = [tok for tok in _re.split(r"[^A-Za-z0-9_]+", context_text.lower()) if len(tok) >= 3]
+        principle_list = [part.strip() for part in str(principles or "").replace("\n", ",").split(",") if part.strip()]
+        if not principle_list:
+            principle_list = ["verify_before_close", "evidence_before_action", "prefer_small_safe_changes"]
+
+        synthetic_rows = []
+        principle_scores = []
+        for idx, principle in enumerate(principle_list[:lim]):
+            principle_tokens = [tok for tok in _re.split(r"[^A-Za-z0-9_]+", principle.lower()) if len(tok) >= 3]
+            overlap = len(set(context_tokens) & set(principle_tokens))
+            utility = round(min(1.0, 0.25 + (0.12 * overlap) + (0.06 if "verify" in principle.lower() else 0.0)), 3)
+            principle_scores.append({
+                "principle": principle,
+                "PrincipleUtilityScore": utility,
+                "index": idx,
+                "overlap": overlap,
+            })
+            synthetic_rows.append({
+                "id": f"synthetic-{idx+1}",
+                "context": context_text[:240],
+                "goal": goal[:160],
+                "principle": principle,
+                "PrincipleUtilityScore": utility,
+                "source": "memory_synthesis",
+                "domain": domain,
+                "state_hint": state_hint,
+            })
+
+        principle_scores.sort(key=lambda item: (item["PrincipleUtilityScore"], item["principle"]), reverse=True)
+        best = principle_scores[0] if principle_scores else {}
+        utility_mean = round(sum(item["PrincipleUtilityScore"] for item in principle_scores) / len(principle_scores), 3) if principle_scores else 0.0
+        summary = f"synthetic_data=ok | best_principle={best.get('principle') or 'none'} | utility={utility_mean:.2f} | samples={len(synthetic_rows)}"
+        return {
+            "ok": True,
+            "domain": domain,
+            "state_hint": state_hint,
+            "context": context_text[:300],
+            "goal": goal[:200],
+            "principles": principle_list[:lim],
+            "principle_scores": principle_scores,
+            "synthetic_rows": synthetic_rows,
+            "PrincipleUtilityScore": utility_mean,
+            "best_principle": best.get("principle"),
+            "summary": summary,
+        }
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
@@ -210,6 +281,80 @@ def _collect_state_updates(limit: int = 20) -> dict:
             "created_at": row.get("created_at"),
         })
     return {"latest": updates, "rows": ordered, "count": len(ordered)}
+
+
+def _parse_utc_timestamp(value) -> tuple[datetime | None, bool]:
+    """Parse an ISO-like timestamp into a UTC datetime."""
+    if value in (None, "", {}, []):
+        return None, False
+    text = str(value).strip()
+    if not text:
+        return None, False
+    text = text.replace("Z", "+00:00") if text.endswith("Z") else text
+    try:
+        dt = datetime.fromisoformat(text)
+    except Exception:
+        try:
+            dt = datetime.strptime(text[:19], "%Y-%m-%dT%H:%M:%S")
+        except Exception:
+            return None, False
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    else:
+        dt = dt.astimezone(timezone.utc)
+    return dt, True
+
+
+def _state_update_timestamp_guard(state_updates: dict, rows: list | None = None) -> dict:
+    """Normalize timestamp-like state updates and flag future timestamps."""
+    state_updates = state_updates if isinstance(state_updates, dict) else {}
+    rows = rows if isinstance(rows, list) else []
+    now = datetime.now(timezone.utc)
+    checked_keys: list[str] = []
+    future_keys: list[str] = []
+    future_key_set: set[str] = set()
+    normalized_values: dict[str, object] = {}
+    warnings: list[str] = []
+
+    for key, value in state_updates.items():
+        key_text = str(key or "").strip()
+        if not key_text:
+            continue
+        checked_keys.append(key_text)
+        dt, parsed = _parse_utc_timestamp(value)
+        if parsed and ("_ts" in key_text or "timestamp" in key_text.lower()):
+            if dt and dt > now:
+                if key_text not in future_key_set:
+                    future_key_set.add(key_text)
+                    future_keys.append(key_text)
+                    warnings.append(f"{key_text}_future_timestamp_clamped")
+                normalized_values[key_text] = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+                continue
+            if dt:
+                normalized_values[key_text] = dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+                continue
+        normalized_values[key_text] = value
+
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        key = str(row.get("key") or "").strip()
+        value = row.get("value")
+        dt, parsed = _parse_utc_timestamp(value)
+        if parsed and ("_ts" in key or "timestamp" in key.lower()) and dt and dt > now:
+            key_name = key or "unknown"
+            if key_name not in future_key_set:
+                future_key_set.add(key_name)
+                future_keys.append(key_name)
+                warnings.append(f"{key_name}_future_timestamp_clamped")
+
+    return {
+        "checked_keys": checked_keys,
+        "future_keys": future_keys,
+        "warnings": warnings,
+        "normalized_values": normalized_values,
+        "future_count": len(future_keys),
+    }
 
 
 def _latest_session_snapshot_raw() -> dict:
@@ -333,6 +478,7 @@ class StatePacket:
     session_continuity: dict
     state_updates: dict
     state_update_rows: list
+    state_update_integrity: dict
     counts: dict
     verification: dict
 
@@ -346,6 +492,7 @@ class StatePacket:
             "session_continuity": self.session_continuity,
             "state_updates": self.state_updates,
             "state_update_rows": self.state_update_rows,
+            "state_update_integrity": self.state_update_integrity,
             "counts": self.counts,
             "verification": self.verification,
         }
@@ -366,6 +513,10 @@ def _build_state_packet(session_id: str = "default", strict: bool = False) -> St
     checkpoint = _latest_checkpoint()
     checkpoint_row = checkpoint.get("checkpoint") or {}
     state_updates = _collect_state_updates(limit=20)
+    state_update_integrity = _state_update_timestamp_guard(
+        state_updates.get("latest", {}),
+        state_updates.get("rows", []),
+    )
     snapshot = _latest_session_snapshot_raw()
     snapshot_row = _safe_dict(snapshot.get("snapshot"))
     session_continuity = _compare_session_continuity(
@@ -373,7 +524,7 @@ def _build_state_packet(session_id: str = "default", strict: bool = False) -> St
         agentic_row=agentic_row,
         checkpoint_row=checkpoint_row,
         snapshot_row=snapshot_row,
-        state_updates=state_updates.get("latest", {}),
+        state_updates=state_update_integrity.get("normalized_values", state_updates.get("latest", {})),
     )
 
     counts = {
@@ -412,6 +563,9 @@ def _build_state_packet(session_id: str = "default", strict: bool = False) -> St
     else:
         warnings.append("no_state_updates_found")
 
+    if state_update_integrity.get("future_count", 0) > 0:
+        warnings.append("future_state_timestamps_clamped")
+
     if counts.get("sessions", -1) >= 0 and counts.get("agentic_sessions", -1) >= 0:
         passed_checks.append("counts_available")
     else:
@@ -434,7 +588,7 @@ def _build_state_packet(session_id: str = "default", strict: bool = False) -> St
         "verification_score": verification_score,
         "passed_checks": passed_checks,
         "failed_checks": failed_checks,
-        "warnings": warnings,
+        "warnings": warnings + state_update_integrity.get("warnings", []),
         "summary": summary,
     }
 
@@ -447,6 +601,7 @@ def _build_state_packet(session_id: str = "default", strict: bool = False) -> St
         session_continuity=session_continuity,
         state_updates=state_updates.get("latest", {}),
         state_update_rows=state_updates.get("rows", []),
+        state_update_integrity=state_update_integrity,
         counts=counts,
         verification=verification,
     )

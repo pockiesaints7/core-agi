@@ -96,6 +96,9 @@ class TaskPacket:
     failed_checks: list[str] | None = None
     warnings: list[str] | None = None
     summary: str = ""
+    context_vector: dict | None = None
+    principle_abstraction_score: float = 0.0
+    principle_abstraction_history: list[dict] | None = None
     row: dict | None = None
     task: dict | None = None
 
@@ -148,6 +151,34 @@ def _resolve_task_history(task_id: str, history_limit: int = 10) -> list[dict]:
     return matches[:limit]
 
 
+def _token_set(text: str) -> set[str]:
+    return {part for part in re.split(r"[^A-Za-z0-9_]+", (text or "").lower()) if len(part) >= 3}
+
+
+def _build_context_vector(task: dict, row: dict) -> dict:
+    title = _safe_text(task.get("title") or "", 200)
+    description = _safe_text(task.get("description") or "", 1000)
+    status = _safe_text(row.get("status") or "", 40)
+    checkpoint = _safe_text(row.get("checkpoint") or row.get("checkpoint_draft") or "", 1000)
+    result = _safe_text(row.get("result") or "", 1000)
+    combined = " ".join([title, description, status, checkpoint, result]).strip()
+    tokens = sorted(_token_set(combined))
+    abstract_tokens = {"principle", "causal", "abstract", "abstraction", "verify", "verification", "memory", "gating", "replay", "symbolic"}
+    overlap = len(set(tokens) & abstract_tokens)
+    token_count = len(tokens)
+    return {
+        "title_tokens": sorted(_token_set(title)),
+        "description_tokens": sorted(_token_set(description)),
+        "status_tokens": sorted(_token_set(status)),
+        "checkpoint_tokens": sorted(_token_set(checkpoint)),
+        "result_tokens": sorted(_token_set(result)),
+        "signal_tokens": tokens[:24],
+        "token_count": token_count,
+        "abstract_overlap": overlap,
+        "summary": f"context_vector: tokens={token_count} | abstract_overlap={overlap}",
+    }
+
+
 @dataclass
 class TaskTrackingPacket:
     task_id: str
@@ -184,6 +215,34 @@ class TaskTrackingPacket:
         data["failed_checks"] = list(self.failed_checks or [])
         data["warnings"] = list(self.warnings or [])
         data["checkpoint_history"] = list(self.checkpoint_history or [])
+        return data
+
+
+@dataclass
+class TaskVerificationBundle:
+    task_id: str
+    session_id: str = "default"
+    kind: str = "integrated_verification"
+    task_state: dict | None = None
+    system_verification: dict | None = None
+    action_verification: dict | None = None
+    causal_mapping: dict | None = None
+    causal_graph_packet: dict | None = None
+    principle_search: dict | None = None
+    search_tree: dict | None = None
+    critic: dict | None = None
+    verification_score: float = 0.0
+    blocked: bool = False
+    passed_checks: list[str] | None = None
+    failed_checks: list[str] | None = None
+    warnings: list[str] | None = None
+    summary: str = ""
+
+    def to_dict(self) -> dict:
+        data = asdict(self)
+        data["passed_checks"] = list(self.passed_checks or [])
+        data["failed_checks"] = list(self.failed_checks or [])
+        data["warnings"] = list(self.warnings or [])
         return data
 
 
@@ -416,6 +475,28 @@ def build_task_packet(
         expected_status = str(expected_status or "").strip()
         require_result_bool = _coerce_bool(require_result)
         require_checkpoint_bool = _coerce_bool(require_checkpoint)
+        context_vector = _build_context_vector(task, row)
+        principle_tokens = _token_set(" ".join([
+            task.get("title") or "",
+            task.get("description") or "",
+            row.get("next_step") or "",
+            row.get("checkpoint") or row.get("checkpoint_draft") or "",
+        ]))
+        principle_signals = {
+            "principle": len(principle_tokens & {"principle", "principles", "verify", "verification", "causal", "abstract", "abstraction", "replay"}),
+            "memory": len(principle_tokens & {"memory", "history", "replay"}),
+            "graph": len(principle_tokens & {"causal", "graph", "symbolic"}),
+            "task": len(principle_tokens & {"task", "queue", "checkpoint", "result"}),
+        }
+        principle_abstraction_score = round(min(1.0, 0.15 + (0.12 * principle_signals["principle"]) + (0.08 * principle_signals["memory"]) + (0.05 * principle_signals["graph"])), 3)
+        principle_abstraction_history = [
+            {
+                "task_id": task_id,
+                "score": principle_abstraction_score,
+                "signals": principle_signals,
+                "context_vector": context_vector,
+            }
+        ]
 
         passed = ["task_found", f"current_status={current_status or 'unknown'}"]
         failed: list[str] = []
@@ -480,6 +561,9 @@ def build_task_packet(
                 if blocked else
                 f"CLEAR: task {task_id} verified"
             ),
+            context_vector=context_vector,
+            principle_abstraction_score=principle_abstraction_score,
+            principle_abstraction_history=principle_abstraction_history,
             row={
                 "id": row.get("id"),
                 "priority": row.get("priority"),
@@ -502,6 +586,9 @@ def build_task_packet(
             "warnings": warnings,
             "packet": packet.to_dict(),
             "row": packet.row,
+            "context_vector": context_vector,
+            "principle_abstraction_score": principle_abstraction_score,
+            "principle_abstraction_history": principle_abstraction_history,
             "message": packet.summary,
         }
     except Exception as e:
@@ -645,3 +732,250 @@ def t_task_error_packet(
         next_step=next_step,
         checkpoint=checkpoint,
     )
+
+
+def t_task_verification_bundle(
+    task_id: str = "",
+    expected_status: str = "",
+    require_result: str = "false",
+    require_checkpoint: str = "false",
+    include_history: str = "true",
+    history_limit: str = "8",
+    session_id: str = "default",
+    strict: str = "false",
+    require_system_checkpoint: str = "false",
+    operation: str = "",
+    target_file: str = "",
+    context: str = "",
+    assumed_state: str = "",
+    sources: str = "supabase",
+    action_type: str = "deploy",
+    owner_token: str = "",
+    sequence: str = "",
+    reward_signal: str = "",
+    side_effects: str = "",
+    principles: str = "",
+    task_context: str = "",
+    goal: str = "",
+    current_state: str = "",
+    hwm_levels: str = "",
+    candidate_actions: str = "",
+    horizon: str = "3",
+    rollouts: str = "8",
+    exploration_weight: str = "1.2",
+    causal_graph: str = "",
+    domain: str = "general",
+    state_hint: str = "",
+) -> dict:
+    """Integrated verification bundle for task/state/action/counterfactual work."""
+    try:
+        from core_tools import t_task_state_packet as _t_task_state_packet, t_verification_packet as _t_verification_packet
+        from core_tools_memory import t_system_verification_packet
+        from core_tools_world_model import (
+            t_causal_mapping_module,
+            t_causal_graph_data_generator,
+            t_hierarchical_search_tree,
+            t_principle_search_module,
+            t_simulated_critic,
+        )
+
+        task_state = _t_task_state_packet(
+            task_id=task_id or "",
+            expected_status=expected_status or "",
+            require_result=require_result,
+            require_checkpoint=require_checkpoint,
+            include_history=include_history,
+            history_limit=history_limit,
+        )
+        system_verification = t_system_verification_packet(
+            session_id=session_id or "default",
+            strict=strict,
+            require_checkpoint=require_system_checkpoint,
+            task_sample_limit="5",
+            changelog_limit="5",
+        )
+
+        action_verification = None
+        if task_id or any(str(v).strip() for v in (operation, target_file, context, assumed_state, owner_token)):
+            try:
+                action_verification = _t_verification_packet(
+                    operation=operation or task_id or "",
+                    target_file=target_file or "",
+                    context=context or task_context or "",
+                    assumed_state=assumed_state or "",
+                    sources=sources or "supabase",
+                    action_type=action_type or "deploy",
+                    owner_token=owner_token or "",
+                )
+            except Exception as exc:
+                action_verification = {
+                    "ok": False,
+                    "blocked": True,
+                    "verification_score": 0.0,
+                    "error": str(exc),
+                }
+
+        causal_graph_packet = None
+        causal_graph_payload = causal_graph or "{}"
+        if not causal_graph_payload or causal_graph_payload == "{}":
+            try:
+                causal_graph_packet = t_causal_graph_data_generator(
+                    context=task_context or context or current_state or state_hint or "",
+                    goal=goal or operation or expected_status or task_id or "",
+                    modules=sources or "",
+                    symbols=principles or "",
+                    actions=candidate_actions or "",
+                    domain=domain,
+                    state_hint=state_hint,
+                    limit="6",
+                )
+                if isinstance(causal_graph_packet, dict) and causal_graph_packet.get("ok"):
+                    graph_obj = causal_graph_packet.get("graph")
+                    causal_graph_payload = json.dumps(graph_obj, default=str) if graph_obj is not None else "{}"
+            except Exception as exc:
+                causal_graph_packet = {"ok": False, "error": str(exc), "summary": f"causal_graph_data_generator=error | {exc}"}
+
+        critic = t_simulated_critic(
+            sequence=sequence or task_context or operation or task_id or "",
+            reward_signal=reward_signal or goal or expected_status or operation or "",
+            side_effects=side_effects or context or target_file or "",
+            domain=domain,
+            state_hint=state_hint,
+        )
+        causal_mapping = t_causal_mapping_module(
+            causal_graph=causal_graph_payload,
+            context_embedding=context or state_hint or task_context or "",
+            goal=goal or operation or expected_status or task_id or "",
+            domain=domain,
+            state_hint=state_hint,
+        )
+        principle_search = t_principle_search_module(
+            principles=principles or "verify_before_close,check_side_effects,prefer_evidence,do_not_guess",
+            state=current_state or (task_state.get("summary") or ""),
+            goal=goal or operation or expected_status or task_id or "",
+            task_context=task_context or context or sequence or "",
+            domain=domain,
+            state_hint=state_hint,
+        )
+        search_tree = t_hierarchical_search_tree(
+            current_state=current_state or (task_state.get("summary") or ""),
+            goal=goal or operation or expected_status or task_id or "",
+            hwm_levels=hwm_levels or "low,medium,high",
+            candidate_actions=candidate_actions or "inspect,implement,verify,close",
+            horizon=horizon,
+            rollouts=rollouts,
+            exploration_weight=exploration_weight,
+            domain=domain,
+            state_hint=state_hint,
+        ) if (hwm_levels or candidate_actions or goal or operation or task_id) else {"ok": True, "summary": "search_tree skipped"}
+
+        scores: list[float] = []
+        for pkt, key in (
+            (task_state.get("verification") or {}, "verification_score"),
+            (system_verification, "verification_score"),
+            (action_verification or {}, "verification_score"),
+            (critic, "score"),
+        ):
+            try:
+                val = float(pkt.get(key) or 0.0)
+            except Exception:
+                val = 0.0
+            if val > 0:
+                scores.append(max(0.0, min(1.0, val)))
+
+        bundle_score = round(sum(scores) / len(scores), 3) if scores else 0.0
+        task_ver = task_state.get("verification") or {}
+        passed = []
+        failed = []
+        warnings = []
+
+        if task_state.get("ok") and not task_ver.get("blocked"):
+            passed.append("task_state_verified")
+        else:
+            failed.append("task_state_blocked")
+
+        if system_verification.get("ok") and not system_verification.get("blocked"):
+            passed.append("system_verified")
+        else:
+            failed.append("system_blocked")
+
+        if action_verification and action_verification.get("ok") and not action_verification.get("blocked"):
+            passed.append("action_verified")
+        elif action_verification is not None:
+            failed.append("action_blocked")
+
+        critic_score = float(critic.get("score") or 0.0)
+        if critic_score >= 0.55:
+            passed.append("critic_supportive")
+        else:
+            warnings.append("critic_low_confidence")
+
+        if float(task_ver.get("verification_score") or 0.0) < 0.8:
+            warnings.append("task_verification_below_threshold")
+        if float(system_verification.get("verification_score") or 0.0) < 0.75:
+            warnings.append("system_verification_below_threshold")
+        if action_verification is not None and float(action_verification.get("verification_score") or 0.0) < 0.75 and action_verification.get("ok") is not False:
+            warnings.append("action_verification_below_threshold")
+        if isinstance(causal_mapping, dict) and not causal_mapping.get("ok", True):
+            warnings.append("causal_mapping_failed")
+        if isinstance(causal_graph_packet, dict) and not causal_graph_packet.get("ok", True):
+            warnings.append("causal_graph_generation_failed")
+        if isinstance(principle_search, dict) and not principle_search.get("ok", True):
+            warnings.append("principle_search_failed")
+        if isinstance(search_tree, dict) and not search_tree.get("ok", True):
+            warnings.append("search_tree_failed")
+
+        blocked = bool(
+            task_ver.get("blocked")
+            or system_verification.get("blocked")
+            or (action_verification.get("blocked") if action_verification is not None else False)
+            or bundle_score < 0.75
+        )
+        summary = (
+            f"integrated_verification={'blocked' if blocked else 'ok'} | "
+            f"task={float(task_ver.get('verification_score') or 0.0):.2f} | "
+            f"system={float(system_verification.get('verification_score') or 0.0):.2f} | "
+            f"action={(float(action_verification.get('verification_score') or 0.0) if action_verification is not None else 0.0):.2f} | "
+            f"critic={critic_score:.2f} | score={bundle_score:.2f}"
+        )
+
+        packet = TaskVerificationBundle(
+            task_id=task_id or "",
+            session_id=session_id or "default",
+            task_state=task_state,
+            system_verification=system_verification,
+            action_verification=action_verification,
+            causal_mapping=causal_mapping,
+            causal_graph_packet=causal_graph_packet,
+            principle_search=principle_search,
+            search_tree=search_tree,
+            critic=critic,
+            verification_score=bundle_score,
+            blocked=blocked,
+            passed_checks=passed,
+            failed_checks=failed,
+            warnings=warnings,
+            summary=summary,
+        )
+        return {
+            "ok": True,
+            "task_id": task_id or "",
+            "session_id": session_id or "default",
+            "verification_score": bundle_score,
+            "blocked": blocked,
+            "passed_checks": passed,
+            "failed_checks": failed,
+            "warnings": warnings,
+            "task_state": task_state,
+            "system_verification": system_verification,
+            "action_verification": action_verification,
+            "causal_mapping": causal_mapping,
+            "causal_graph_packet": causal_graph_packet,
+            "principle_search": principle_search,
+            "search_tree": search_tree,
+            "critic": critic,
+            "packet": packet.to_dict(),
+            "summary": summary,
+        }
+    except Exception as e:
+        return {"ok": False, "error": str(e), "blocked": True, "task_id": task_id or ""}

@@ -306,9 +306,14 @@ def _tool_family_for_name(tool_name: str, tool_desc: str = "") -> str:
         return "review"
     if has(
         "reasoning_packet", "tool_reliance_assessor", "dynamic_relational_graph", "causal_graph",
+        "causal_graph_data_generator",
         "causal_graph_inference", "meta_contextual_router", "adaptive_temporal_filter",
         "temporal_attention", "monte_carlo_tree_search", "hierarchical_search_controller",
         "temporal_hierarchical_world_model", "dynamic_router", "meta_representation",
+        "world_model_interface", "predict_with_uncertainty", "predictive_state_representation",
+        "dynamic_replay_buffer", "simulated_critic", "meta_learner", "dynamic_gating_layer",
+        "gating_network", "causal_mapping_module", "principle_search_module",
+        "state_reconciliation_buffer", "hierarchical_search_tree", "world_model",
         "novelty_assessment", "consolidation_manager", "active_learning_strategy",
         "register_tool", "contradiction_check", "negative_space", "circuit_breaker",
         "loop_detect", "partial_complete", "verify_external_state", "verification_packet",
@@ -317,6 +322,7 @@ def _tool_family_for_name(tool_name: str, tool_desc: str = "") -> str:
         return "self_improve"
     if has(
         "evaluate_state", "state_packet", "state_consistency_check", "session_snapshot",
+        "session_state_packet",
         "get_state", "get_system_health", "get_active_goals", "get_quality_trend",
         "get_time", "datetime_now", "get_constitution", "vm_info", "system_map_scan",
         "get_capability_model", "trigger_capability_calibration", "tool_health_scan",
@@ -327,10 +333,11 @@ def _tool_family_for_name(tool_name: str, tool_desc: str = "") -> str:
     if has(
         "semantic_kb_search", "semantic_episode_search", "get_owner_profile",
         "add_owner_observation", "mistakes_since", "changelog_verification_packet",
-        "changelog_tracking_packet", "mistake_tracking_packet", "core_py_fn",
+        "changelog_tracking_packet", "changelog_state_packet", "mistake_tracking_packet", "core_py_fn",
         "core_py_validate", "diff", "project_list", "project_get", "project_search",
         "project_context_check", "project_register", "project_update_kb",
-        "project_update_index", "project_consume", "public_evidence_packet", "ask",
+        "project_update_index", "project_consume", "public_evidence_packet", "knowledge_state_packet", "ask",
+        "changelog_state_packet", "causal_principle_discovery", "generate_synthetic_data",
     ):
         return "knowledge"
     if has("repo_map", "repo_component", "repo_graph", "code_read_packet", "file_list", "file_read", "file_write", "read_file", "write_file", "search_in_file", "gh_", "multi_patch", "smart_patch", "shell", "run_python", "run_script", "git"):
@@ -339,11 +346,11 @@ def _tool_family_for_name(tool_name: str, tool_desc: str = "") -> str:
         return "task"
     if has("spreadsheet_work_packet", "document_work_packet", "presentation_work_packet", "create_document", "create_spreadsheet", "create_presentation", "read_document", "convert_document", "read_pdf_content", "read_image_content", "image_process", "generate_image"):
         return "document"
-    if has("search_kb", "add_knowledge", "kb_update", "get_mistakes", "log_mistake", "get_behavioral_rules", "ingest_knowledge", "knowledge"):
+    if has("search_kb", "add_knowledge", "kb_update", "knowledge_state_packet", "get_mistakes", "log_mistake", "get_behavioral_rules", "ingest_knowledge", "knowledge"):
         return "knowledge"
     if has("web_search", "web_fetch", "summarize_url", "browser", "fetch_url"):
         return "web"
-    if has("get_state", "get_system_health", "state_packet", "state_consistency_check", "session_snapshot", "get_time", "datetime_now", "get_active_goals", "get_quality_trend", "get_constitution"):
+    if has("get_state", "get_system_health", "state_packet", "state_consistency_check", "session_snapshot", "session_state_packet", "get_time", "datetime_now", "get_active_goals", "get_quality_trend", "get_constitution"):
         return "state"
     if has("task_add", "task_update", "checkpoint", "set_goal", "update_goal_progress", "goal"):
         return "task"
@@ -355,7 +362,7 @@ def _tool_family_for_name(tool_name: str, tool_desc: str = "") -> str:
         return "notify"
     if has("sb_query", "sb_insert", "sb_patch", "sb_upsert", "sb_delete", "get_table_schema"):
         return "database"
-    if has("crypto_price", "crypto_balance", "crypto_trade"):
+    if has("crypto_price", "current_price_in_usd", "crypto_balance", "crypto_trade"):
         return "crypto"
     if has("reason_chain", "decompose_task", "lookahead", "impact_model"):
         return "self_improve"
@@ -367,7 +374,7 @@ def _tool_family_for_name(tool_name: str, tool_desc: str = "") -> str:
         return "training"
     if has("task_error_packet", "task_similarity_metric", "consolidation_manager"):
         return "task"
-    if has("list_templates", "run_template", "debug_fn", "listen", "install_package", "validate_tool_output", "test_gemini", "maintenance_purge"):
+    if has("list_templates", "run_template", "debug_fn", "listen", "install_package", "validate_tool_output", "prompt_scaffold_packet", "test_gemini", "maintenance_purge"):
         return "utility"
     if has("vm_info", "update_behavioral_rule", "log_quality_metrics", "get_quality_alert", "log_reasoning"):
         return "state"
@@ -1524,12 +1531,16 @@ def tool_result_has_evidence(tool_name: str, result: Any) -> bool:
             if isinstance(val, list) and val:
                 return True
         return False
-    if tool_name in {"repo_map_status", "repo_map_sync", "repo_component_packet", "repo_graph_packet", "public_evidence_packet"}:
+    if tool_name in {"repo_map_status", "repo_map_sync", "repo_component_packet", "repo_graph_packet", "public_evidence_packet", "module_assessment_packet", "causal_graph_data_generator"}:
         return any(result.get(k) for k in ("summary", "counts", "components", "chunks", "edges", "nodes", "packet", "families"))
     if tool_name in {"git"}:
         return any(result.get(k) for k in ("stdout", "status", "diff", "log", "commit", "branch"))
-    if tool_name in {"get_state", "state_packet", "session_snapshot", "system_verification_packet"}:
+    if tool_name in {"get_state", "state_packet", "session_snapshot", "session_state_packet", "system_verification_packet", "task_state_packet", "task_verification_bundle"}:
         return True
+    if tool_name in {"changelog_state_packet", "knowledge_state_packet", "causal_principle_discovery", "generate_synthetic_data"}:
+        return any(result.get(k) for k in ("summary", "tracking", "verification", "rows", "source_packet"))
+    if tool_name in {"prompt_scaffold_packet"}:
+        return any(result.get(k) for k in ("summary", "scaffold_prompt", "clarification_questions", "missing_fields"))
     return any(
         result.get(k)
         for k in ("content", "text", "summary", "result", "data", "rows", "state", "status", "details")

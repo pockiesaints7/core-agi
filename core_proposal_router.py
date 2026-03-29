@@ -193,19 +193,27 @@ def _owner_review_cluster_packet(rows: list[dict], persist: bool = True) -> dict
             "theme": cluster["theme"],
             "review_scope": cluster["review_scope"],
             "owner_only": cluster["owner_only"],
+            "workflow_state": "review_only",
+            "review_ready": True,
+            "implementation_needed": True,
+            "implementation_state": "pending_upgrade",
+            "safe_to_close_after_verification": False,
             "mean_confidence": mean_conf,
             "sample_summaries": sample_summaries,
             "member_summary": sample_summaries[0] if sample_summaries else "",
             "shared_verification": (
-                "code proposal queued for owner review"
+                "owner-review proposal awaiting implementation and verification"
                 if cluster["work_track"] in {"code_patch", "new_module", "integration", "proposal_only"}
                 else "owner review cluster"
             ),
             "shared_artifact": "evolution_queue",
             "shared_route": cluster["route_worker"],
-            "close_ready": True,
-            "close_eligible_members": len(members),
-            "close_blocked_members": 0,
+            "close_ready": False,
+            "review_eligible_members": len(members),
+            "review_blocked_members": 0,
+            "close_eligible_members": 0,
+            "close_blocked_members": len(members),
+            "next_step": "implement_then_verify_before_close",
         }
         packets.append(packet)
 
@@ -223,7 +231,8 @@ def _owner_review_cluster_packet(rows: list[dict], persist: bool = True) -> dict
                 topic = f"cluster:{pkt['cluster_id']}"
                 content = json.dumps(pkt, default=str)
                 instruction = (
-                    "Use this owner-review cluster packet as the canonical batch summary. "
+                    "Use this owner-review cluster packet as the canonical review summary. "
+                    "Implementation and verification are required before any close action. "
                     "Do not route worker lanes from this packet."
                 )
                 try:
@@ -712,6 +721,18 @@ def proposal_router_status(limit: int = 5) -> dict:
             "task_group_counts": dict(sorted(group_counts.items())),
             "cluster_count": cluster_packet.get("cluster_count", 0),
             "cluster_member_count": cluster_packet.get("member_count", 0),
+            "cluster_review_ready_count": sum(
+                1 for c in (cluster_packet.get("clusters") or []) if bool(c.get("review_ready"))
+            ),
+            "cluster_review_ready_rows": sum(
+                int(c.get("review_eligible_members") or 0) for c in (cluster_packet.get("clusters") or [])
+            ),
+            "cluster_implementation_needed_count": sum(
+                1 for c in (cluster_packet.get("clusters") or []) if bool(c.get("implementation_needed"))
+            ),
+            "cluster_implementation_needed_rows": sum(
+                int(c.get("review_eligible_members") or 0) for c in (cluster_packet.get("clusters") or [])
+            ),
             "cluster_theme_counts": dict(sorted(cluster_theme_counts.items())),
             "review_packets": packets,
             "top_packets": top_packets,
@@ -720,7 +741,7 @@ def proposal_router_status(limit: int = 5) -> dict:
             "cluster_persisted": cluster_packet.get("persisted", []),
             "cluster_persist_errors": cluster_packet.get("persist_errors", []),
             "cluster_close_ready_count": sum(
-                1 for c in (cluster_packet.get("clusters") or []) if bool(c.get("close_ready"))
+                1 for c in (cluster_packet.get("clusters") or []) if bool(c.get("safe_to_close_after_verification"))
             ),
             "cluster_close_ready_rows": sum(
                 int(c.get("close_eligible_members") or 0) for c in (cluster_packet.get("clusters") or [])
@@ -747,6 +768,10 @@ def proposal_router_status(limit: int = 5) -> dict:
             "task_group_counts": {},
             "cluster_count": 0,
             "cluster_member_count": 0,
+            "cluster_review_ready_count": 0,
+            "cluster_review_ready_rows": 0,
+            "cluster_implementation_needed_count": 0,
+            "cluster_implementation_needed_rows": 0,
             "cluster_theme_counts": {},
             "review_packets": [],
             "top_packets": [],
@@ -774,15 +799,18 @@ def render_proposal_router_dashboard(status: dict | None = None, summary_note: s
         f"Tracks: " + (", ".join(f"{_escape(k)}={v}" for k, v in sorted((status.get('track_counts') or {}).items())) or "none"),
         f"Routes: " + (", ".join(f"{_escape(k)}={v}" for k, v in sorted((status.get('route_counts') or {}).items())) or "none"),
         f"Owner-review clusters: {status.get('cluster_count', 0)} groups / {status.get('cluster_member_count', 0)} rows",
-        f"Cluster close-ready: {status.get('cluster_close_ready_count', 0)} groups / {status.get('cluster_close_ready_rows', 0)} rows",
+        f"Review-ready: {status.get('cluster_review_ready_count', 0)} groups / {status.get('cluster_review_ready_rows', 0)} rows",
+        f"Implementation needed: {status.get('cluster_implementation_needed_count', 0)} groups / {status.get('cluster_implementation_needed_rows', 0)} rows",
+        f"Close-ready after verification: {status.get('cluster_close_ready_count', 0)} groups / {status.get('cluster_close_ready_rows', 0)} rows",
         f"Cluster themes: " + (", ".join(f"{_escape(k)}={v}" for k, v in sorted((status.get('cluster_theme_counts') or {}).items())) or "none"),
         "Cluster packets are mirrored into knowledge_base as domain=owner_review_cluster.",
         f"Auto-routed: " + (", ".join(f"{_escape(k)}={v}" for k, v in sorted((status.get('auto_routed_counts') or {}).items())) or "none"),
         "",
         "<b>Review (read-only)</b>",
         "This queue contains owner_only proposals only.",
+        "Review packets are inspect-only until the corresponding upgrade is implemented and verified.",
         "Auto-routing note: db_only, behavioral_rule, and research proposals are routed automatically to existing workers.",
-        "Apply actions happen in workers or desktop review flows, not from Telegram.",
+        "Close actions happen only after implementation and verification, not from Telegram review alone.",
     ]
     if summary_note:
         lines.append(summary_note)
@@ -956,31 +984,37 @@ def owner_review_cluster_packet(limit: int = 5, persist: str = "true") -> dict:
             owner_rows.append(row)
     cluster_packet = _owner_review_cluster_packet(owner_rows, persist=persist_bool)
     clusters = cluster_packet.get("clusters") or []
-    recommended_cluster = next((c for c in clusters if bool(c.get("close_ready"))), clusters[0] if clusters else {})
+    recommended_cluster = clusters[0] if clusters else {}
     theme_counts = Counter(pkt["theme"] for pkt in clusters)
     target_counts = Counter(pkt["target_module"] for pkt in clusters)
+    review_ready_count = sum(1 for c in clusters if bool(c.get("review_ready")))
+    review_ready_rows = sum(int(c.get("review_eligible_members") or 0) for c in clusters)
+    impl_needed_count = sum(1 for c in clusters if bool(c.get("implementation_needed")))
+    impl_needed_rows = sum(int(c.get("review_eligible_members") or 0) for c in clusters)
+    close_ready_count = sum(1 for c in clusters if bool(c.get("safe_to_close_after_verification")))
+    close_ready_rows = sum(int(c.get("close_eligible_members") or 0) for c in clusters)
     return {
         "ok": True,
         "limit": lim,
         "owner_pending": len(owner_rows),
         "cluster_count": cluster_packet.get("cluster_count", 0),
         "cluster_member_count": cluster_packet.get("member_count", 0),
-        "cluster_close_ready_count": sum(1 for c in clusters if bool(c.get("close_ready"))),
-        "cluster_close_ready_rows": sum(int(c.get("close_eligible_members") or 0) for c in clusters),
+        "cluster_review_ready_count": review_ready_count,
+        "cluster_review_ready_rows": review_ready_rows,
+        "cluster_implementation_needed_count": impl_needed_count,
+        "cluster_implementation_needed_rows": impl_needed_rows,
+        "cluster_close_ready_count": close_ready_count,
+        "cluster_close_ready_rows": close_ready_rows,
         "recommended_cluster_id": recommended_cluster.get("cluster_id"),
         "recommended_cluster_key": recommended_cluster.get("cluster_key"),
         "recommended_cluster_count": recommended_cluster.get("count"),
-        "recommended_cluster_close_ready": bool(recommended_cluster.get("close_ready")),
-        "recommended_action": (
-            f"batch_close cluster_id={recommended_cluster.get('cluster_id')} "
-            f"cluster_key={recommended_cluster.get('cluster_key')}"
-            if recommended_cluster.get("cluster_id") and recommended_cluster.get("close_ready")
-            else "inspect_only"
-        ),
+        "recommended_cluster_review_ready": bool(recommended_cluster.get("review_ready")),
+        "recommended_cluster_implementation_needed": bool(recommended_cluster.get("implementation_needed")),
+        "recommended_cluster_close_ready": bool(recommended_cluster.get("safe_to_close_after_verification")),
+        "recommended_action": "inspect_only",
         "close_instruction": (
-            f"Use owner_review_cluster_close(cluster_id='{recommended_cluster.get('cluster_id')}', outcome='applied') "
-            f"after verification"
-            if recommended_cluster.get("cluster_id") and recommended_cluster.get("close_ready")
+            f"Implement the corresponding upgrade, verify it, then call owner_review_cluster_close(cluster_id='{recommended_cluster.get('cluster_id')}', outcome='applied')."
+            if recommended_cluster.get("cluster_id")
             else ""
         ),
         "theme_counts": dict(sorted(theme_counts.items())),
@@ -991,9 +1025,11 @@ def owner_review_cluster_packet(limit: int = 5, persist: str = "true") -> dict:
         "summary": (
             f"owner_review_clusters={cluster_packet.get('cluster_count', 0)} | "
             f"members={cluster_packet.get('member_count', 0)} | "
-            f"close_ready_groups={sum(1 for c in clusters if bool(c.get('close_ready')))} | "
+            f"review_ready_groups={review_ready_count} | "
+            f"implementation_needed_groups={impl_needed_count} | "
+            f"close_ready_groups={close_ready_count} | "
             f"recommended={recommended_cluster.get('cluster_id') or 'none'} | "
-            f"action={('batch_close ' + str(recommended_cluster.get('cluster_id'))) if recommended_cluster.get('cluster_id') and recommended_cluster.get('close_ready') else 'inspect_only'} | "
+            f"action=inspect_only | "
             f"themes={', '.join(f'{k}={v}' for k, v in sorted(theme_counts.items())) or 'none'}"
         ),
     }

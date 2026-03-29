@@ -17,7 +17,7 @@ import os
 import time
 import threading as _threading
 from collections import Counter
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import httpx
 
@@ -46,6 +46,32 @@ def _sel_force(table: str, cols: list) -> str:
     except Exception:
         pass
     return ",".join(cols)
+
+
+def _normalize_utc_timestamp(value: str, *, clamp_future: bool = True) -> tuple[str | None, bool, bool]:
+    """Return (timestamp_str, parsed_ok, future_detected)."""
+    if value in (None, "", {}, []):
+        return None, False, False
+    text = str(value).strip()
+    if not text:
+        return None, False, False
+    text = text.replace("Z", "+00:00") if text.endswith("Z") else text
+    try:
+        dt = datetime.fromisoformat(text)
+    except Exception:
+        try:
+            dt = datetime.strptime(text[:19], "%Y-%m-%dT%H:%M:%S")
+        except Exception:
+            return None, False, False
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    else:
+        dt = dt.astimezone(timezone.utc)
+    now = datetime.now(timezone.utc)
+    future = dt > now
+    if future and clamp_future:
+        dt = now
+    return dt.strftime("%Y-%m-%dT%H:%M:%SZ"), True, future
 
 
 # Training globals
@@ -115,6 +141,7 @@ def _hierarchical_auxiliary_loss(levels: list) -> tuple[float, dict]:
 
     prev = None
     divergences = []
+    disentanglement_scores = []
     for lvl in levels:
         cur = _tokens(lvl)
         if not cur:
@@ -124,6 +151,7 @@ def _hierarchical_auxiliary_loss(levels: list) -> tuple[float, dict]:
             if union:
                 divergence = 1.0 - (len(prev & cur) / len(union))
                 divergences.append(divergence)
+                disentanglement_scores.append(len(prev & cur) / len(union))
         prev = cur
 
     if not divergences:
@@ -131,11 +159,13 @@ def _hierarchical_auxiliary_loss(levels: list) -> tuple[float, dict]:
 
     avg_div = sum(divergences) / len(divergences)
     max_div = max(divergences)
-    aux_loss = round(min(1.0, (avg_div * 0.7) + (max_div * 0.3)), 3)
+    causal_disentanglement_loss = round(sum(disentanglement_scores) / len(disentanglement_scores), 3) if disentanglement_scores else 0.0
+    aux_loss = round(min(1.0, (avg_div * 0.55) + (max_div * 0.25) + (causal_disentanglement_loss * 0.20)), 3)
     return aux_loss, {
         "pairs": len(divergences),
         "avg_divergence": round(avg_div, 3),
         "max_divergence": round(max_div, 3),
+        "causal_disentanglement_loss": causal_disentanglement_loss,
     }
 
 
@@ -211,17 +241,18 @@ def _hierarchical_reward_schedule(epoch_number: int, research_domain: str, champ
         "stability_score": 0.20,
         "sample_efficiency": 0.20,
         "reasoning_depth": 0.20,
+        "planning_success_rate": 0.20,
     }
     phase_focus = {
-        "explore": {"stability_score": 0.08, "sample_efficiency": 0.08, "reasoning_depth": 0.04},
-        "stabilize": {"stability_score": 0.04, "transfer_score": 0.04, "reasoning_depth": 0.04},
-        "exploit": {"benchmark_score": 0.08, "transfer_score": 0.08, "reasoning_depth": 0.04},
+        "explore": {"stability_score": 0.08, "sample_efficiency": 0.08, "reasoning_depth": 0.04, "planning_success_rate": 0.04},
+        "stabilize": {"stability_score": 0.04, "transfer_score": 0.04, "reasoning_depth": 0.04, "planning_success_rate": 0.04},
+        "exploit": {"benchmark_score": 0.08, "transfer_score": 0.08, "reasoning_depth": 0.04, "planning_success_rate": 0.03},
     }
     domain_focus = {
         "memory": {"stability_score": 0.08, "sample_efficiency": 0.05},
         "world_modeling": {"benchmark_score": 0.08, "transfer_score": 0.05},
         "reasoning": {"reasoning_depth": 0.10, "transfer_score": 0.04},
-        "planning": {"reasoning_depth": 0.10, "benchmark_score": 0.04},
+        "planning": {"reasoning_depth": 0.10, "benchmark_score": 0.04, "planning_success_rate": 0.12},
         "sample_efficiency": {"sample_efficiency": 0.12, "stability_score": 0.04},
         "generalization": {"transfer_score": 0.12, "reasoning_depth": 0.03},
     }
@@ -233,6 +264,7 @@ def _hierarchical_reward_schedule(epoch_number: int, research_domain: str, champ
     if not champion_exists:
         weights["stability_score"] += 0.05
         weights["sample_efficiency"] += 0.05
+        weights["planning_success_rate"] += 0.04
 
     total = sum(weights.values()) or 1.0
     norm_weights = {k: round(v / total, 3) for k, v in weights.items()}
@@ -2341,6 +2373,113 @@ def _world_model_fusion_meta_learning_objective(
     }
 
 
+def _hierarchical_gated_dual_loss(
+    neural_prediction_loss: float = 0.0,
+    symbolic_transition_loss: float = 0.0,
+    gating_weight: float = 0.55,
+) -> dict:
+    """Bounded dual-loss contract for hierarchical gated neuro-symbolic training.
+
+    The gating weight is interpreted as the share assigned to the neural
+    prediction head; the remainder is assigned to symbolic transition
+    consistency.
+    """
+    try:
+        neural_loss = max(0.0, min(1.0, float(neural_prediction_loss or 0.0)))
+    except Exception:
+        neural_loss = 0.0
+    try:
+        symbolic_loss = max(0.0, min(1.0, float(symbolic_transition_loss or 0.0)))
+    except Exception:
+        symbolic_loss = 0.0
+    try:
+        gate = max(0.1, min(0.9, float(gating_weight or 0.55)))
+    except Exception:
+        gate = 0.55
+
+    weighted_loss = round((neural_loss * gate) + (symbolic_loss * (1.0 - gate)), 3)
+    balance = round(abs(neural_loss - symbolic_loss), 3)
+    alignment = round(max(0.0, min(1.0, 1.0 - balance)), 3)
+    return {
+        "class": "core_tools.WorldModel",
+        "objective": "Balance neural prediction and symbolic transition consistency using gating-aware weighting.",
+        "gating_weight": gate,
+        "neural_prediction_loss": neural_loss,
+        "symbolic_transition_loss": symbolic_loss,
+        "weighted_loss": weighted_loss,
+        "balance": balance,
+        "alignment": alignment,
+        "summary": (
+            f"dual_loss={weighted_loss:.3f} | gate={gate:.2f} | "
+            f"neural={neural_loss:.3f} | symbolic={symbolic_loss:.3f}"
+        ),
+    }
+
+
+def _meta_replay_update(
+    task_curriculum: dict,
+    recent_mistakes: list[dict],
+    recent_evos: list[dict] | None = None,
+    buffer_limit: int = 12,
+) -> dict:
+    """Bounded meta-replay update packet for curriculum-aware replay sampling.
+
+    The helper samples a small replay buffer from the least-represented task
+    track plus recent mistakes/evolutions so future training batches can
+    rebalance under-exposed work without adding a new runtime learner.
+    """
+    counts = (task_curriculum or {}).get("counts", {}) or {}
+    focus_track = None
+    if counts:
+        try:
+            focus_track = sorted(counts.items(), key=lambda kv: int(kv[1] or 0))[0][0]
+        except Exception:
+            focus_track = None
+
+    items = (task_curriculum or {}).get("items", []) or []
+    replay_buffer: list[dict] = []
+    for idx, item in enumerate(items[: max(4, buffer_limit)]):
+        replay_buffer.append({
+            "source": "curriculum",
+            "work_track": item.get("work_track") or "general",
+            "title": (item.get("title") or "")[:120],
+            "status": item.get("status") or "",
+            "priority": round(0.9 - (0.03 * idx), 3),
+        })
+
+    for idx, m in enumerate((recent_mistakes or [])[:6]):
+        replay_buffer.append({
+            "source": "mistake",
+            "work_track": focus_track or "mixed",
+            "title": (m.get("what_failed") or m.get("root_cause") or "mistake")[:120],
+            "status": m.get("severity") or "medium",
+            "priority": round(0.7 - (0.04 * idx), 3),
+        })
+
+    for idx, evo in enumerate((recent_evos or [])[:6]):
+        replay_buffer.append({
+            "source": "evolution",
+            "work_track": focus_track or "mixed",
+            "title": (evo.get("change_summary") or evo.get("summary") or "evolution")[:120],
+            "status": evo.get("status") or "",
+            "priority": round(0.6 - (0.04 * idx), 3),
+        })
+
+    replay_buffer.sort(key=lambda item: (item.get("priority", 0.0), item.get("source", ""), item.get("title", "")), reverse=True)
+    selected = replay_buffer[: max(3, min(int(buffer_limit or 12), 16))]
+    replay_gain = round(min(1.0, 0.45 + (0.05 * len(selected)) + (0.08 if focus_track else 0.0)), 3)
+    return {
+        "class": "core_tools.MetaReplay",
+        "objective": "Sample replay items from curriculum, mistakes, and evolutions to rebalance under-represented training tracks.",
+        "focus_track": focus_track or "mixed",
+        "buffer_count": len(replay_buffer),
+        "selected_count": len(selected),
+        "selected": selected,
+        "replay_gain": replay_gain,
+        "summary": f"meta_replay_update=ok | focus={focus_track or 'mixed'} | selected={len(selected)} | gain={replay_gain:.2f}",
+    }
+
+
 def _safe_recent_changelog_context(limit: int = 5) -> dict:
     """Return recent changelog text plus availability metadata.
 
@@ -2567,11 +2706,21 @@ def _collect_background_research_context() -> dict:
         state_rows = sb_get("sessions", "select=summary&summary=like.*last_real_signal_ts:*&order=created_at.desc&limit=1", svc=True)
         if state_rows and state_rows[0].get("summary"):
             raw = state_rows[0]["summary"].split("last_real_signal_ts:")[-1].strip().split()[0]
-            since_ts = raw.replace("Z", "").split("+")[0]
-            result["verification"]["anchor_source"] = "last_real_signal_ts"
-            print(f"[RESEARCH/REAL] Using last_real_signal_ts: {since_ts}")
+            normalized, parsed, future = _normalize_utc_timestamp(raw, clamp_future=True)
+            if parsed and normalized:
+                since_ts = normalized
+                result["verification"]["anchor_source"] = "last_real_signal_ts"
+                if future:
+                    print(f"[RESEARCH/REAL] last_real_signal_ts was in the future; clamped to {since_ts}")
+                else:
+                    print(f"[RESEARCH/REAL] Using last_real_signal_ts: {since_ts}")
+            else:
+                since_ts = (datetime.utcnow() - timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+                result["verification"]["anchor_source"] = "soft_boot_1d"
+                result["fallback_used"] = True
+                print(f"[RESEARCH/REAL] Invalid last_real_signal_ts, soft-boot to yesterday: {since_ts}")
         else:
-            since_ts = (datetime.utcnow() - timedelta(days=1)).isoformat()
+            since_ts = (datetime.utcnow() - timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
             result["verification"]["anchor_source"] = "soft_boot_1d"
             result["fallback_used"] = True
             print(f"[RESEARCH/REAL] No state key found, soft-boot to yesterday: {since_ts}")
@@ -2585,7 +2734,7 @@ def _collect_background_research_context() -> dict:
             svc=True) or []
 
         if not sessions and not mistakes:
-            since_ts = (datetime.utcnow() - timedelta(days=7)).isoformat()
+            since_ts = (datetime.utcnow() - timedelta(days=7)).strftime("%Y-%m-%dT%H:%M:%SZ")
             result["fallback_used"] = True
             result["since_ts"] = since_ts
             result["verification"]["anchor_source"] = "soft_boot_7d"
@@ -2661,7 +2810,13 @@ def _run_joint_training_planner(cycle_count: int = 0) -> dict:
             "cycle_count": int(cycle_count or 0),
             "components": ["TMRF", "DAM", "world_model", "DynamicRouter", "MRC"],
             "curriculum_counts": counts,
+            "meta_replay_update": _meta_replay_update(curriculum, recent_mistakes, recent_evos),
             "world_model_meta_objective": _world_model_fusion_meta_learning_objective(curriculum, recent_mistakes, recent_evos),
+            "world_model_dual_loss_contract": _hierarchical_gated_dual_loss(
+                neural_prediction_loss=0.42,
+                symbolic_transition_loss=0.38,
+                gating_weight=0.58,
+            ),
             "transfer_focus_work_track": focus_track or "mixed",
             "transfer_focus_items": [{
                 "work_track": (it.get("work_track") or "general"),
@@ -3378,10 +3533,18 @@ def _extract_real_signal() -> bool:
             svc=True)
         if state_rows and state_rows[0].get("summary"):
             raw = state_rows[0]["summary"].split("last_real_signal_ts:")[-1].strip().split()[0]
-            since_ts = raw.replace("Z", "").split("+")[0]
-            print(f"[RESEARCH/REAL] Using last_real_signal_ts: {since_ts}")
+            normalized, parsed, future = _normalize_utc_timestamp(raw, clamp_future=True)
+            if parsed and normalized:
+                since_ts = normalized
+                if future:
+                    print(f"[RESEARCH/REAL] last_real_signal_ts was in the future; clamped to {since_ts}")
+                else:
+                    print(f"[RESEARCH/REAL] Using last_real_signal_ts: {since_ts}")
+            else:
+                since_ts = (datetime.utcnow() - timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+                print(f"[RESEARCH/REAL] Invalid last_real_signal_ts, soft-boot to yesterday: {since_ts}")
         else:
-            since_ts = (datetime.utcnow() - timedelta(days=1)).isoformat()
+            since_ts = (datetime.utcnow() - timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
             print(f"[RESEARCH/REAL] No state key found, soft-boot to yesterday: {since_ts}")
 
         sessions = sb_get("sessions",
@@ -3392,7 +3555,7 @@ def _extract_real_signal() -> bool:
             svc=True)
 
         if not sessions and not mistakes:
-            since_ts = (datetime.utcnow() - timedelta(days=7)).isoformat()
+            since_ts = (datetime.utcnow() - timedelta(days=7)).strftime("%Y-%m-%dT%H:%M:%SZ")
             print(f"[RESEARCH/REAL] No new data since anchor -- falling back to 7d window: {since_ts}")
             sessions = sb_get("sessions",
                 f"select=summary,actions,interface&created_at=gte.{since_ts}&order=created_at.desc&limit=20",
@@ -3469,7 +3632,7 @@ Output ONLY valid JSON, no preamble."""
         })
         print(f"[RESEARCH/REAL] ok={ok} patterns={len(patterns)} domain={result.get('domain')}")
         if ok:
-            run_ts = datetime.utcnow().isoformat()
+            run_ts = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
             sb_post("sessions", {
                 "summary": f"[state_update] last_real_signal_ts: {run_ts}",
                 "actions": [f"last_real_signal_ts={run_ts} - auto updated after real signal extraction"],
@@ -3736,6 +3899,7 @@ def _run_rarl_epoch() -> bool:
         '"stability_score":<REAL float 0.0-3.0 — training stability>,'
         '"sample_efficiency":<REAL float 0.0-3.0 — learning from limited data>,'
         '"reasoning_depth":<REAL float 0.0-3.0 — multi-step reasoning depth>,'
+        '"planning_success_rate":<REAL float 0.0-3.0 — planning module success rate>,'
         '"complexity_penalty":<REAL float 0.5-3.0 — implementation complexity cost>,'
         '"compute_cost":<REAL float 0.5-3.0 — training/inference cost>,'
         '"inference_latency":<REAL float 0.5-3.0 — response speed penalty>,'
@@ -3760,7 +3924,7 @@ def _run_rarl_epoch() -> bool:
         f"Reward schedule phase: {reward_schedule['phase']}\n"
         f"Reward focus: {reward_schedule['reward_focus']}\n"
         f"Reward weights: {json.dumps(reward_schedule['weights'], sort_keys=True)}\n\n"
-        f"Discovery Score: DS = (benchmark+transfer+stability+sample_efficiency+reasoning_depth)"
+        f"Discovery Score: DS = (benchmark+transfer+stability+sample_efficiency+reasoning_depth+planning_success_rate)"
         f" / (complexity_penalty+compute_cost+inference_latency)\n"
         f"Numerators 0.0-3.0. Denominators 0.5-3.0. beats_champion=true only if DS>{ds_before:.3f}\n"
         f"arch_id format: DescriptiveMechanism_v{epoch_number}\n\n"
@@ -3814,18 +3978,40 @@ def _run_rarl_epoch() -> bool:
         pseudocode,
     ])
     aux_penalty      = round(min(0.5, aux_loss * 0.25), 3)
+    try:
+        gating_weight = max(0.1, min(0.9, float(parsed.get("gating_weight", parsed.get("symbolic_weight", 0.58)))))
+    except Exception:
+        gating_weight = 0.58
+    dual_loss_contract = _hierarchical_gated_dual_loss(
+        neural_prediction_loss=max(0.0, min(1.0, 1.0 - float(parsed.get("benchmark_score", 0)))),
+        symbolic_transition_loss=max(0.0, min(1.0, 1.0 - float(parsed.get("transfer_score", 0)))),
+        gating_weight=gating_weight,
+    )
+    dual_loss = float(dual_loss_contract.get("weighted_loss") or 0.0)
+    dual_penalty = round(min(0.45, dual_loss * 0.22), 3)
+    planning_success_rate = float(parsed.get("planning_success_rate", 0))
+    planning_note = f"planning_success_rate={planning_success_rate:.3f}"
+    if insight_for_core:
+        insight_for_core = f"{insight_for_core[:200]} | {planning_note}"[:300]
+    else:
+        insight_for_core = planning_note[:300]
+    if next_direction:
+        next_direction = f"{next_direction[:220]} | {planning_note}"[:300]
+    else:
+        next_direction = planning_note[:300]
     reward_inputs = {
         "benchmark_score": float(parsed.get("benchmark_score", 0)),
         "transfer_score": float(parsed.get("transfer_score", 0)),
-        "stability_score": max(0.0, float(parsed.get("stability_score", 0)) - (aux_loss * 0.4)),
+        "stability_score": max(0.0, float(parsed.get("stability_score", 0)) - (aux_loss * 0.4) - (dual_penalty * 0.5)),
         "sample_efficiency": float(parsed.get("sample_efficiency", 0)),
         "reasoning_depth": float(parsed.get("reasoning_depth", 0)),
+        "planning_success_rate": planning_success_rate,
         "complexity_penalty": float(parsed.get("complexity_penalty", 1)),
         "compute_cost": float(parsed.get("compute_cost", 1)),
         "inference_latency": float(parsed.get("inference_latency", 1)),
     }
     scheduled_reward, reward_meta = _weighted_reward_score(reward_inputs, reward_schedule)
-    ds               = max(0.0, round((raw_ds * 0.55) + (scheduled_reward * 0.45) - aux_penalty, 3))
+    ds               = max(0.0, round((raw_ds * 0.55) + (scheduled_reward * 0.45) - aux_penalty - dual_penalty, 3))
     beats_champion   = ds > ds_before
     role             = "champion" if beats_champion else "mutant"
     duration         = int(_time.time() - _start)
@@ -3850,6 +4036,8 @@ def _run_rarl_epoch() -> bool:
             "next_direction": next_direction, "mutation_applied": mutation_applied,
             "parent_arch_id": champion["arch_id"] if champion else None,
             "insight_for_core": insight_for_core, "research_branch": "main",
+            "dual_loss": dual_loss,
+            "dual_penalty": dual_penalty,
         }, on_conflict="arch_id")
         print(f"[RARL] rarl_architectures: {arch_id} role={role}")
     except Exception as e:
@@ -3869,6 +4057,8 @@ def _run_rarl_epoch() -> bool:
                               "Critic","Evaluation","Archivist","Meta-Learning","Prompt Evolution"],
             "insights_count": 1, "branch": "main",
             "groq_model_used": GROQ_MODEL, "duration_seconds": duration,
+            "dual_loss": dual_loss,
+            "dual_penalty": dual_penalty,
         })
         print(f"[RARL] rarl_epochs: epoch={epoch_number}")
     except Exception as e:
@@ -3894,6 +4084,7 @@ def _run_rarl_epoch() -> bool:
             f"Arch: {arch_id} | DS: {ds:.3f} | Role: {role} | "
             f"ModelBeat: {raw_beats_champion} | "
             f"RawDS: {raw_ds:.3f} | AuxLoss: {aux_loss:.3f} | "
+            f"DualLoss: {dual_loss:.3f} | DualPenalty: {dual_penalty:.3f} | "
             f"Phase: {reward_meta['phase']} | Reward: {scheduled_reward:.3f} | "
             f"Mutation: {mutation_applied} | Duration: {duration}s | "
             f"For CORE: {insight_for_core[:150]}"
@@ -3954,6 +4145,9 @@ def _run_rarl_epoch() -> bool:
                     "raw_discovery_score": raw_ds,
                     "auxiliary_loss": aux_loss,
                     "auxiliary_penalty": aux_penalty,
+                    "dual_loss": dual_loss,
+                    "dual_penalty": dual_penalty,
+                    "dual_loss_contract": dual_loss_contract,
                     "reward_phase": reward_meta["phase"],
                     "reward_weights": reward_meta["weights"],
                     "reward_contributions": reward_meta["contributions"],
