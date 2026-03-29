@@ -1541,7 +1541,36 @@ def t_add_knowledge(domain="", topic="", instruction="", content="", tags="", co
     try:
         r = httpx.post(f"{SUPABASE_URL}/rest/v1/knowledge_base", headers=_sbh(True), json=row, timeout=15)
         if not r.is_success:
-            return {"ok": False, "topic": topic, "error": f"Supabase {r.status_code}: {r.text[:300]}"}
+            err_text = f"Supabase {r.status_code}: {r.text[:300]}"
+            err_blob = f"{r.status_code} {r.text}".lower()
+            duplicate_hint = (
+                r.status_code == 409
+                or "duplicate key value violates unique constraint" in err_blob
+                or "duplicate" in err_blob
+                or "unique violation" in err_blob
+                or "on_conflict" in err_blob
+            )
+            if duplicate_hint:
+                retry = t_kb_update(
+                    domain=domain,
+                    topic=topic,
+                    instruction=instruction or "",
+                    content=content or "",
+                    confidence=confidence,
+                    source_type=canon_source_type,
+                    source_ref=canon_source_ref,
+                )
+                if retry.get("ok"):
+                    retry.setdefault("action", "upserted_via_kb_update")
+                    retry.setdefault("topic", topic)
+                    return retry
+                return {
+                    "ok": False,
+                    "topic": topic,
+                    "error": retry.get("error") or err_text,
+                    "action": "kb_update_retry_failed",
+                }
+            return {"ok": False, "topic": topic, "error": err_text}
         verification = _kb_entry_verification_packet(
             domain=domain,
             topic=topic,
