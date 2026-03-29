@@ -162,6 +162,58 @@ def _task_rows(limit: int = 1, source: str = AUTONOMY_SOURCE) -> list[dict]:
     return sorted(rows, key=_priority_key)
 
 
+def _close_duplicate_noop_tasks(source: str = AUTONOMY_SOURCE, limit: int = 50) -> dict:
+    """Terminalize pending task rows that already resolved as duplicate no-ops.
+
+    Some rerouted tasks write a downstream duplicate/no-op result (e.g. KB entry already
+    existed) before the parent task row is terminalized. Those rows are not live work and
+    should not remain pending.
+    """
+    source_list = [s.strip() for s in str(source or ",".join(AUTONOMY_SOURCES)).split(",") if s.strip()] or list(AUTONOMY_SOURCES)
+    try:
+        rows = sb_get(
+            "task_queue",
+            (
+                "select=id,status,source,task,result,checkpoint,next_step,updated_at"
+                f"&status=eq.pending&source=in.({','.join(source_list)})"
+                "&or=(result.ilike.*skipped_duplicate*,result.ilike.*duplicate_of*,result.ilike.*existing_status*)"
+                f"&limit={max(1, min(int(limit or 50), 100))}"
+            ),
+            svc=True,
+        ) or []
+    except Exception:
+        rows = []
+
+    closed: list[str] = []
+    for row in rows:
+        task_id = str(row.get("id") or "")
+        if not task_id:
+            continue
+        now = _utcnow()
+        checkpoint = {
+            "phase": "complete",
+            "reason": "duplicate_noop_terminalized",
+            "ts": now,
+        }
+        patch = {
+            "status": "done",
+            "error": None,
+            "next_step": "",
+            "updated_at": now,
+            "checkpoint": checkpoint,
+            "checkpoint_at": now,
+            "checkpoint_draft": json.dumps(checkpoint, default=str)[:4000],
+        }
+        if sb_patch("task_queue", f"id=eq.{task_id}&status=eq.pending", patch):
+            closed.append(task_id)
+
+    return {
+        "checked": len(rows),
+        "closed": len(closed),
+        "closed_ids": closed[:20],
+    }
+
+
 def _patch_task(task_id: str, patch: dict) -> bool:
     data = dict(patch or {})
     data.setdefault("updated_at", _utcnow())
@@ -755,6 +807,7 @@ def run_autonomy_cycle(max_tasks: int = AUTONOMY_BATCH_LIMIT, source: str = AUTO
     errors: list[dict] = []
     track_counts: dict[str, int] = {}
     try:
+        duplicate_cleanup = _close_duplicate_noop_tasks(source=source, limit=max_tasks * 5)
         rows = _task_rows(limit=max_tasks, source=source)
         for row in rows[:max(1, min(int(max_tasks or 1), 10))]:
             try:
@@ -797,6 +850,7 @@ def run_autonomy_cycle(max_tasks: int = AUTONOMY_BATCH_LIMIT, source: str = AUTO
             "deferred_tasks": deferred_tasks,
             "error_details": errors,
             "track_counts": track_counts,
+            "duplicate_cleanup": duplicate_cleanup,
         }
         try:
             source_list = list(AUTONOMY_SOURCES)

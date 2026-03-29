@@ -170,29 +170,50 @@ def _extract_kind(change_type: str, summary: str, recommendation: str, autonomy:
 
 
 def _task_exists(evolution_id: str, title: str) -> bool:
-    rows = sb_get(
-        "task_queue",
-        "select=id,task,status,source&status=in.(pending,in_progress)&source=in.(improvement,self_assigned)&limit=200",
-        svc=True,
-    ) or []
-    for row in rows:
-        blob = row.get("task", "")
-        try:
-            task = json.loads(blob) if isinstance(blob, str) else blob
-        except Exception:
-            task = {}
-        if not isinstance(task, dict):
-            task = {}
-        autonomy = task.get("autonomy") or {}
-        if isinstance(autonomy, str):
+    # First check the explicit evolution id across the full task history.
+    try:
+        rows = sb_get(
+            "task_queue",
+            (
+                "select=id,task,status,source"
+                f"&source=in.(improvement,self_assigned)"
+                f"&task=ilike.*\"evolution_id\":\"{_safe_text(evolution_id, 40)}\"*"
+                "&limit=20"
+            ),
+            svc=True,
+        ) or []
+        if rows:
+            return True
+    except Exception:
+        pass
+
+    # Fallback: exact title match across the full task history. This catches
+    # re-runs of the same evolution after the earlier task is no longer open.
+    try:
+        from urllib.parse import quote as _urlquote
+        title_q = _urlquote(title.strip(), safe="")
+        rows = sb_get(
+            "task_queue",
+            (
+                "select=id,task,status,source"
+                f"&source=in.(improvement,self_assigned)"
+                f"&task=ilike.*{title_q}*"
+                "&limit=50"
+            ),
+            svc=True,
+        ) or []
+        for row in rows:
+            blob = row.get("task", "")
             try:
-                autonomy = json.loads(autonomy)
+                task = json.loads(blob) if isinstance(blob, str) else blob
             except Exception:
-                autonomy = {}
-        if str(autonomy.get("evolution_id") or "") == str(evolution_id):
-            return True
-        if _safe_text(task.get("title"), 200).strip().lower() == title.strip().lower():
-            return True
+                task = {}
+            if not isinstance(task, dict):
+                task = {}
+            if _safe_text(task.get("title"), 200).strip().lower() == title.strip().lower():
+                return True
+    except Exception:
+        pass
     return False
 
 
