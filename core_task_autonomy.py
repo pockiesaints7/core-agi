@@ -885,8 +885,13 @@ def run_autonomy_cycle(max_tasks: int = AUTONOMY_BATCH_LIMIT, source: str = AUTO
     try:
         metadata_backfill = _backfill_autonomy_metadata(source=source, limit=max_tasks * 20)
         duplicate_cleanup = _close_duplicate_noop_tasks(source=source, limit=max_tasks * 5)
-        rows = _task_rows(limit=max_tasks, source=source)
-        for row in rows[:max(1, min(int(max_tasks or 1), 10))]:
+        candidate_limit = max(10, max_tasks * 20)
+        rows = _task_rows(limit=candidate_limit, source=source)
+        inspected = 0
+        for row in rows:
+            if processed and len(processed) >= max_tasks:
+                break
+            inspected += 1
             try:
                 task = _parse_task_blob(row)
                 strategy = _classify_task(_safe_text(task.get("title"), 200), _safe_text(task.get("description"), 1000), _safe_text(row.get("source"), 80))
@@ -903,6 +908,8 @@ def run_autonomy_cycle(max_tasks: int = AUTONOMY_BATCH_LIMIT, source: str = AUTO
                 processed.append(result)
                 track = _safe_text((result.get("strategy") or {}).get("work_track") or "unknown", 40)
                 track_counts[track] = track_counts.get(track, 0) + 1
+                if len(processed) >= max_tasks:
+                    break
             except Exception as e:
                 errors.append({"task_id": row.get("id"), "error": str(e)})
                 try:
@@ -927,6 +934,7 @@ def run_autonomy_cycle(max_tasks: int = AUTONOMY_BATCH_LIMIT, source: str = AUTO
             "deferred_tasks": deferred_tasks,
             "error_details": errors,
             "track_counts": track_counts,
+            "inspected": inspected,
             "metadata_backfill": metadata_backfill,
             "duplicate_cleanup": duplicate_cleanup,
         }
