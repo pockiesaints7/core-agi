@@ -483,6 +483,26 @@ def _build_prompt(
                 parts.append(f"- file_read({path})")
             parts.append("Instruction: inspect one of the starting points or repo_component_packet(query=goal) before any file_list/shell/list_tools.")
             parts.append("")
+
+    tool_policy = effective_state.get("tool_policy_packet") or {}
+    if tool_policy:
+        parts.append("TOOL POLICY PACKET (updates automatically as the tool registry changes):")
+        parts.append(_j.dumps(tool_policy, default=str))
+        parts.append("")
+        preferred_families = tool_policy.get("preferred_families") or []
+        preferred_tools = tool_policy.get("preferred_tools") or []
+        avoid_first = tool_policy.get("avoid_first") or []
+        if preferred_families:
+            parts.append("TOOL FAMILY ORDER (preferred first):")
+            parts.append(", ".join(str(x) for x in preferred_families[:8]))
+        if preferred_tools:
+            parts.append("TOP TOOL START POINTS:")
+            parts.append(", ".join(str(x) for x in preferred_tools[:12]))
+        if avoid_first:
+            parts.append("AVOID FIRST:")
+            parts.append(", ".join(str(x) for x in avoid_first[:8]))
+        parts.append("Instruction: choose the smallest tool family that can fill the current evidence gap. If a tool family has zero matching tools in the registry, skip it and move to the next family. Recompute your choice from the live tool policy packet when the registry changes.")
+        parts.append("")
     if history:
         parts.append("STEP HISTORY (most recent last):")
         for h in history:
@@ -582,6 +602,8 @@ async def run_agent_loop(msg: OrchestratorMessage, goal: str) -> None:
             _agent_state.update(loaded)
         if msg.context.get("evidence_gate"):
             _agent_state.setdefault("evidence_gate", msg.context.get("evidence_gate", {}))
+        if msg.context.get("tool_policy_packet"):
+            _agent_state.setdefault("tool_policy_packet", msg.context.get("tool_policy_packet", {}))
     except Exception as _se:
         print(f"[AGENT] state load error (non-fatal): {_se}")
 
@@ -589,6 +611,12 @@ async def run_agent_loop(msg: OrchestratorMessage, goal: str) -> None:
         _seed_repo_map_state(goal, _agent_state, msg.context.get("evidence_gate", {}) or {})
     except Exception as _se:
         print(f"[AGENT] repo-map seed error (non-fatal): {_se}")
+
+    try:
+        if msg.context.get("tool_policy_packet"):
+            _agent_state["tool_policy_packet"] = msg.context.get("tool_policy_packet", {})
+    except Exception as _se:
+        print(f"[AGENT] tool-policy seed error (non-fatal): {_se}")
 
     while True:
         step += 1

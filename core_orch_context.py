@@ -6,6 +6,7 @@ instead of ad hoc dicts at each layer.
 from __future__ import annotations
 
 import re
+import hashlib
 from dataclasses import asdict
 from typing import Any, Dict, Iterable, List
 from datetime import datetime
@@ -291,6 +292,157 @@ def _pick_public_sources(text: str) -> List[str]:
     return out[:6]
 
 
+def _tool_family_for_name(tool_name: str, tool_desc: str = "") -> str:
+    """Classify a tool into a broad capability family."""
+    name = (tool_name or "").lower()
+    desc = (tool_desc or "").lower()
+    combined = f"{name} {desc}"
+
+    def has(*needles: str) -> bool:
+        return any(n in combined for n in needles)
+
+    if has("owner_review_cluster_packet", "owner_review_cluster_close", "review_cluster", "cluster_close"):
+        return "review"
+    if has("repo_map", "repo_component", "repo_graph", "code_read_packet", "file_list", "file_read", "file_write", "read_file", "write_file", "search_in_file", "gh_", "multi_patch", "smart_patch", "shell", "run_python", "run_script", "git"):
+        return "repo_code"
+    if has("search_kb", "add_knowledge", "kb_update", "get_mistakes", "log_mistake", "get_behavioral_rules", "ingest_knowledge", "knowledge"):
+        return "knowledge"
+    if has("web_search", "web_fetch", "summarize_url", "browser", "fetch_url"):
+        return "web"
+    if has("get_state", "get_system_health", "state_packet", "state_consistency_check", "session_snapshot", "get_time", "datetime_now", "get_active_goals", "get_quality_trend", "get_constitution"):
+        return "state"
+    if has("task_add", "task_update", "checkpoint", "set_goal", "update_goal_progress", "goal"):
+        return "task"
+    if has("list_evolutions", "approve_evolution", "reject_evolution", "trigger_cold_processor", "get_training_pipeline", "evolution"):
+        return "training"
+    if has("deploy_status", "railway_logs_live", "redeploy", "build_status", "ping_health", "service_info", "env_get", "env_set"):
+        return "deploy"
+    if has("notify_owner", "notify"):
+        return "notify"
+    if has("sb_query", "sb_insert", "sb_patch", "sb_upsert", "sb_delete", "get_table_schema"):
+        return "database"
+    if has("crypto_price", "crypto_balance", "crypto_trade"):
+        return "crypto"
+    if has("reason_chain", "decompose_task", "lookahead", "impact_model"):
+        return "self_improve"
+    if has("agent_session_init", "agent_state_get", "agent_state_set", "agent_step_done"):
+        return "agent_ops"
+    if has("weather", "currency", "translate", "generate_image", "calc", "list_tools", "datetime_now", "get_time"):
+        return "utility"
+    return "other"
+
+
+def build_tool_policy_packet(msg) -> Dict[str, Any]:
+    """Fingerprint the live tool registry and surface capability-aware tool policy."""
+    try:
+        from core_tools import TOOLS
+    except Exception as exc:
+        return {
+            "ok": False,
+            "error": f"tool registry unavailable: {exc}",
+            "registry_size": 0,
+            "registry_signature": "",
+            "family_counts": {},
+            "preferred_families": [],
+            "preferred_tools": [],
+            "avoid_first": ["file_list", "shell", "list_tools"],
+        }
+
+    decision = (msg.context or {}).get("decision_packet", {}) if hasattr(msg, "context") else {}
+    input_profile = (msg.context or {}).get("input_profile", {}) if hasattr(msg, "context") else {}
+    evidence_gate = (msg.context or {}).get("evidence_gate", {}) if hasattr(msg, "context") else {}
+    request_kind = getattr(msg, "request_kind", "") or decision.get("request_kind") or input_profile.get("request_kind") or "question"
+    response_mode = getattr(msg, "response_mode", "") or decision.get("response_mode") or input_profile.get("response_mode") or "tool"
+    primary_class = input_profile.get("primary_class") or input_profile.get("top_level_class") or ""
+
+    tool_rows = []
+    for name in sorted(TOOLS):
+        entry = TOOLS.get(name)
+        desc = ""
+        if isinstance(entry, dict):
+            desc = str(entry.get("desc") or entry.get("description") or "")
+        tool_rows.append((name, desc, _tool_family_for_name(name, desc)))
+
+    family_map: Dict[str, List[str]] = {}
+    for name, desc, family in tool_rows:
+        family_map.setdefault(family, []).append(name)
+
+    registry_names = [name for name, _, _ in tool_rows]
+    registry_signature = hashlib.sha1("\n".join(registry_names).encode("utf-8")).hexdigest()[:12]
+    family_counts = {family: len(names) for family, names in sorted(family_map.items())}
+
+    gate_tools = list(dict.fromkeys((evidence_gate or {}).get("preferred_tools", []) or []))
+    gate_families = [_tool_family_for_name(tool) for tool in gate_tools]
+    gate_families = [family for family in gate_families if family != "other"]
+
+    preferred_families: List[str] = []
+    if request_kind in {"status", "self_assessment"}:
+        if gate_tools or evidence_gate.get("code_targets") or evidence_gate.get("repo_map_needed") or any(k in (msg.text or "").lower() for k in ("code", "repo", "file", "commit", "git", "patch")):
+            preferred_families.extend(["repo_code", "state", "knowledge"])
+        else:
+            preferred_families.extend(["state", "knowledge"])
+    elif request_kind in {"debug"}:
+        preferred_families.extend(["repo_code", "state", "knowledge"])
+    elif request_kind in {"owner_review"}:
+        preferred_families.extend(["review", "repo_code", "knowledge", "state"])
+    elif request_kind in {"task"}:
+        preferred_families.extend(["task", "repo_code", "state", "knowledge"])
+    elif request_kind in {"conversation"}:
+        preferred_families.extend(["state", "knowledge", "utility"])
+    else:
+        preferred_families.extend(["knowledge", "state", "repo_code"])
+
+    if evidence_gate.get("public_research_needed"):
+        preferred_families = [fam for fam in preferred_families if fam != "repo_code"] + ["knowledge", "web"]
+
+    # Keep ordering stable and dedupe.
+    preferred_families = [fam for i, fam in enumerate(preferred_families) if fam and fam not in preferred_families[:i]]
+
+    preferred_tools: List[str] = []
+    for tool in gate_tools:
+        if tool in registry_names and tool not in preferred_tools:
+            preferred_tools.append(tool)
+    for family in preferred_families:
+        preferred_tools.extend(family_map.get(family, [])[:4])
+    for tool in gate_tools:
+        if tool in registry_names and tool not in preferred_tools:
+            preferred_tools.append(tool)
+
+    avoid_first = ["file_list", "shell", "list_tools"]
+    if request_kind in {"status", "self_assessment"} and "repo_map_status" in registry_names:
+        avoid_first = ["file_list", "shell", "list_tools", "web_search"]
+    if request_kind in {"debug", "owner_review"}:
+        avoid_first = ["file_list", "shell", "list_tools", "web_search"]
+
+    family_examples = {family: names[:5] for family, names in family_map.items() if names}
+    best_fit_family = preferred_families[0] if preferred_families else "other"
+    growth_hint = "updates automatically when TOOLS changes"
+
+    return {
+        "ok": True,
+        "registry_size": len(registry_names),
+        "registry_signature": registry_signature,
+        "registry_sample": registry_names[:24],
+        "family_counts": family_counts,
+        "family_examples": family_examples,
+        "request_kind": request_kind,
+        "response_mode": response_mode,
+        "primary_class": primary_class,
+        "evidence_gate_mode": evidence_gate.get("retrieval_mode", ""),
+        "preferred_families": preferred_families,
+        "preferred_tools": preferred_tools[:16],
+        "avoid_first": avoid_first,
+        "best_fit_family": best_fit_family,
+        "gate_families": gate_families,
+        "growth_hint": growth_hint,
+        "capability_summary": (
+            f"{len(registry_names)} live tools across {len(family_map)} capability families. "
+            f"Best fit family: {best_fit_family}. Registry signature: {registry_signature}."
+        ),
+        "timestamp": datetime.utcnow().isoformat(),
+    }
+
+
 def _count_table(table: str, where: str = "") -> int:
     try:
         url = f"{SUPABASE_URL}/rest/v1/{table}?select=id&limit=1"
@@ -453,6 +605,8 @@ def build_decision_packet(msg) -> Dict[str, Any]:
         clarification_needed = False
         clarification_prompt = ""
 
+    tool_policy_packet = build_tool_policy_packet(msg)
+
     return {
         "request_kind": request_kind,
         "response_mode": response_mode,
@@ -467,6 +621,7 @@ def build_decision_packet(msg) -> Dict[str, Any]:
         "command": cmd,
         "input_profile": input_profile,
         "primary_class": primary_class,
+        "tool_policy_packet": tool_policy_packet,
         "response_style_packet": build_response_style_packet(
             msg,
             request_kind=request_kind,

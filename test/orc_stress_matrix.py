@@ -26,6 +26,7 @@ from core_orch_context import (
     initial_request_profile,
     build_decision_packet,
     build_evidence_gate,
+    build_tool_policy_packet,
     build_response_style_packet,
     should_use_agentic_mode,
 )
@@ -61,6 +62,8 @@ MATRIX: list[StressCase] = [
             "gate_mode": "state_only",
             "public_family": "public_general",
             "public_needed": False,
+            "tool_best_fit_family": "state",
+            "tool_registry_size_min": 1,
         },
     ),
     StressCase(
@@ -79,6 +82,8 @@ MATRIX: list[StressCase] = [
             "gate_mode": "state_only",
             "public_family": "public_general",
             "public_needed": False,
+            "tool_best_fit_family": "state",
+            "tool_registry_size_min": 1,
         },
     ),
     StressCase(
@@ -95,6 +100,8 @@ MATRIX: list[StressCase] = [
             "agentic": True,
             "gate_mode": "code",
             "repo_map_needed": True,
+            "tool_best_fit_family": "task",
+            "tool_registry_size_min": 1,
         },
     ),
     StressCase(
@@ -108,6 +115,7 @@ MATRIX: list[StressCase] = [
             "response_mode": "review",
             "style_mode": "review",
             "agentic": False,
+            "tool_best_fit_family": "review",
         },
     ),
     StressCase(
@@ -121,6 +129,7 @@ MATRIX: list[StressCase] = [
             "gate_mode": "code",
             "repo_map_needed": True,
             "public_needed": False,
+            "tool_best_fit_family": "repo_code",
         },
         repo_path="core_orch_layer9.py",
     ),
@@ -136,6 +145,7 @@ MATRIX: list[StressCase] = [
             "public_family": "public_general",
             "public_needed": True,
             "gate_mode": "public_research_then_web",
+            "tool_best_fit_family": "knowledge",
         },
     ),
     StressCase(
@@ -149,6 +159,7 @@ MATRIX: list[StressCase] = [
             "public_family": "public_trading",
             "public_needed": True,
             "gate_mode": "public_research_then_web",
+            "tool_best_fit_family": "knowledge",
         },
     ),
     StressCase(
@@ -242,6 +253,9 @@ def run_case(case: StressCase) -> tuple[dict[str, Any], list[str]]:
     gate = build_evidence_gate(msg)
     msg.evidence_gate = gate
     msg.context["evidence_gate"] = gate
+    tool_policy = build_tool_policy_packet(msg)
+    msg.tool_policy_packet = tool_policy
+    msg.context["tool_policy_packet"] = tool_policy
     msg.response_style_packet = decision.get("response_style_packet", {})
     msg.context["response_style_packet"] = msg.response_style_packet
     style = build_response_style_packet(msg)
@@ -273,6 +287,11 @@ def run_case(case: StressCase) -> tuple[dict[str, Any], list[str]]:
         "public_family": gate.get("public_family"),
         "public_needed": bool(gate.get("public_research_needed", False)),
         "public_sources": gate.get("public_sources", []),
+        "tool_policy": tool_policy,
+        "tool_registry_size": tool_policy.get("registry_size"),
+        "tool_best_fit_family": tool_policy.get("best_fit_family"),
+        "tool_preferred_families": tool_policy.get("preferred_families", []),
+        "tool_avoid_first": tool_policy.get("avoid_first", []),
         "route_hint": profile.get("route_hint"),
         "speech_acts": profile.get("speech_acts", []),
         "multi_label": bool(profile.get("multi_label", False)),
@@ -295,6 +314,13 @@ def run_case(case: StressCase) -> tuple[dict[str, Any], list[str]]:
             continue
         if key == "response_style_structure":
             _assert_equals(case, actual, "response_style_structure", expected, failures)
+            continue
+        if key == "tool_best_fit_family":
+            _assert_equals(case, actual, "tool_best_fit_family", expected, failures)
+            continue
+        if key == "tool_registry_size_min":
+            if int(actual.get("tool_registry_size", 0)) < int(expected):
+                failures.append(f"{case.case_id}: tool_registry_size < {expected} got {actual.get('tool_registry_size')!r}")
             continue
         _assert_equals(case, actual, key, expected, failures)
 

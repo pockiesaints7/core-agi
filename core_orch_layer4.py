@@ -7,7 +7,7 @@ import json
 from typing import Any, Dict, List
 
 from orchestrator_message import OrchestratorMessage
-from core_orch_context import build_decision_packet, build_evidence_gate, tool_result_has_evidence
+from core_orch_context import build_decision_packet, build_evidence_gate, build_tool_policy_packet, tool_result_has_evidence
 from core_config import groq_chat, GROQ_MODEL
 
 # Destructive action keywords requiring owner tier
@@ -572,6 +572,8 @@ async def layer_4_reason(msg: OrchestratorMessage):
             msg.context["clarification_needed"] = msg.clarification_needed
             msg.context["response_style_packet"] = msg.response_style_packet
             msg.context["decision_packet"] = decision
+            msg.tool_policy_packet = decision.get("tool_policy_packet", msg.tool_policy_packet)
+            msg.context["tool_policy_packet"] = msg.tool_policy_packet
         except Exception as exc:
             print(f"[L4] decision_packet build failed (non-fatal): {exc}")
 
@@ -582,6 +584,16 @@ async def layer_4_reason(msg: OrchestratorMessage):
             msg.context["evidence_gate"] = gate
         except Exception as exc:
             print(f"[L4] evidence_gate build failed (non-fatal): {exc}")
+
+    try:
+        # Refresh tool policy after evidence gate is known so the agent sees the latest routing hints.
+        msg.tool_policy_packet = build_tool_policy_packet(msg)
+        msg.context["tool_policy_packet"] = msg.tool_policy_packet
+        if isinstance(msg.decision_packet, dict):
+            msg.decision_packet["tool_policy_packet"] = msg.tool_policy_packet
+            msg.context["decision_packet"] = msg.decision_packet
+    except Exception as exc:
+        print(f"[L4] tool_policy_packet build failed (non-fatal): {exc}")
 
     # ── Agentic mode check ────────────────────────────────────────────────────
     # Only activate for genuinely multi-step requests. Pure interrupts/corrections
