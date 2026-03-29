@@ -16,6 +16,7 @@ Phase 2, later:
 from __future__ import annotations
 
 import json
+import html
 import os
 import re
 import threading
@@ -67,6 +68,10 @@ def _safe_text(value: Any, limit: int = 240) -> str:
     if value in (None, ""):
         return ""
     return str(value).strip()[:limit]
+
+
+def _safe_html(value: Any, limit: int = 240) -> str:
+    return html.escape(_safe_text(value, limit), quote=False)
 
 
 def _jsonable(value: Any) -> Any:
@@ -248,8 +253,9 @@ def _notify_cycle(summary: dict) -> None:
     failures = summary.get("failures", 0)
     track_counts = summary.get("track_counts") or {}
     parts = [
-        "<b>EVOLUTION AUTONOMY CYCLE</b>",
-        f"Window: {summary.get('started_at', '?')} -> {summary.get('finished_at', '?')}",
+        "<b>EVOLUTION AUTONOMY</b>",
+        "Cycle summary",
+        f"Window: {_safe_html(summary.get('started_at', '?'), 60)} -> {_safe_html(summary.get('finished_at', '?'), 60)}",
         f"Processed: {processed} | Created: {created} | Duplicates: {duplicates} | Failures: {failures}",
         f"Skipped total: {summary.get('skipped', 0)} | Pending evolutions remaining: {summary.get('pending_remaining', 0)}",
         f"Task queue: pending {summary.get('pending_improvement_tasks', '?')}",
@@ -259,12 +265,13 @@ def _notify_cycle(summary: dict) -> None:
     details = summary.get("details") or []
     for item in details[:5]:
         outcome = item.get("outcome") or ("created" if item.get("task_created") else "duplicate")
-        task_label = _safe_text(item.get("task_title") or item.get("change_summary") or "", 180)
+        task_label = _safe_html(item.get("task_title") or item.get("change_summary") or "", 180)
         parts.append(
-            f"- #{item.get('evolution_id')} [{item.get('change_type')}] {outcome}: {task_label} "
-            f"({item.get('task_group')} / {item.get('work_track') or 'unknown'})"
+            f"- #{item.get('evolution_id')} [{_safe_html(item.get('change_type') or 'unknown', 40)}] "
+            f"{_safe_html(outcome, 30)}: {task_label} "
+            f"({_safe_html(item.get('task_group') or '', 40)} / {_safe_html(item.get('work_track') or 'unknown', 40)})"
         )
-        reason = _safe_text(item.get("reason") or item.get("error") or "", 220)
+        reason = _safe_html(item.get("reason") or item.get("error") or "", 220)
         if reason:
             parts.append(f"  reason: {reason}")
     try:

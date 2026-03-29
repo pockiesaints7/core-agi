@@ -288,7 +288,8 @@ def _notify_cycle(summary: dict) -> None:
         )
 
     parts = [
-        "<b>TASK AUTONOMY CYCLE</b>",
+        "<b>TASK AUTONOMY</b>",
+        "Cycle summary",
         f"Window: {summary.get('started_at', '?')} -> {summary.get('finished_at', '?')}",
         f"Processed: {summary.get('processed', 0)} | Completed: {success} | Deferred: {summary.get('deferred', deferred)} | Failed: {failures} | Blocked: {blocked} | Errors: {summary.get('errors', 0)}",
         f"Current queue: pending {summary.get('pending_now', '?')} | in_progress {summary.get('in_progress_now', '?')}",
