@@ -151,7 +151,7 @@ def _task_rows(limit: int = 1, source: str = AUTONOMY_SOURCE) -> list[dict]:
     rows = sb_get(
         "task_queue",
         f"select=id,task,status,priority,source,created_at,updated_at,next_step,blocked_by,checkpoint,checkpoint_at,checkpoint_draft"
-        f"&status=eq.pending&source=in.({','.join(source_list)})&order=priority.desc&limit={max(1, min(limit, 10))}",
+        f"&status=eq.pending&source=in.({','.join(source_list)})&order=priority.desc&limit={max(1, min(limit, 250))}",
         svc=True,
     ) or []
     # Prefer oldest among the highest-priority slice to avoid starvation.
@@ -885,7 +885,7 @@ def run_autonomy_cycle(max_tasks: int = AUTONOMY_BATCH_LIMIT, source: str = AUTO
     try:
         metadata_backfill = _backfill_autonomy_metadata(source=source, limit=max_tasks * 20)
         duplicate_cleanup = _close_duplicate_noop_tasks(source=source, limit=max_tasks * 5)
-        candidate_limit = max(10, max_tasks * 20)
+        candidate_limit = max(250, max_tasks * 100)
         rows = _task_rows(limit=candidate_limit, source=source)
         inspected = 0
         for row in rows:

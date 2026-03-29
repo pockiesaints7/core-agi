@@ -95,7 +95,7 @@ def _task_rows(limit: int = 1) -> list[dict]:
     rows = sb_get(
         "task_queue",
         "select=id,task,status,priority,source,created_at,updated_at,next_step,blocked_by,checkpoint,checkpoint_at,checkpoint_draft"
-        f"&status=eq.pending&source=in.({','.join(source_list)})&order=priority.desc,created_at.asc&limit={max(1, min(limit, 25))}",
+        f"&status=eq.pending&source=in.({','.join(source_list)})&order=priority.desc,created_at.asc&limit={max(1, min(limit, 250))}",
         svc=True,
     ) or []
     rows.sort(key=lambda row: (-int(row.get("priority") or 0), row.get("created_at") or ""))
@@ -103,7 +103,7 @@ def _task_rows(limit: int = 1) -> list[dict]:
 
 
 def _research_rows(limit: int = 1) -> list[dict]:
-    rows = _task_rows(limit=max(limit, 25))
+    rows = _task_rows(limit=max(limit, 250))
     picked = []
     for row in rows:
         task = _parse_task_blob(row)
@@ -394,22 +394,28 @@ def run_research_autonomy_cycle(max_tasks: int = AUTONOMY_BATCH_LIMIT) -> dict:
             return {"ok": False, "busy": True, "message": "research autonomy cycle already running"}
         _state["running"] = True
     try:
-        rows = _research_rows(limit=max_tasks)
+        scan_limit = max(250, max_tasks * 100)
+        rows = _research_rows(limit=scan_limit)
         processed = []
         skipped = 0
         failed = 0
         follow_up_queued = 0
         track_counts = Counter()
+        claimed = 0
         for row in rows:
             task = _parse_task_blob(row)
             strategy = _task_strategy(task, task.get("title") or "", task.get("description") or "", source=row.get("source") or "")
             track_counts[strategy.get("work_track") or "unknown"] += 1
+            if claimed >= max_tasks:
+                break
             if strategy.get("work_track") != "research":
                 skipped += 1
                 continue
             try:
                 result = _claim_task(row, strategy)
                 processed.append(result)
+                if result.get("kb_ok"):
+                    claimed += 1
                 if result.get("follow_up_queued"):
                     follow_up_queued += 1
                 if not result.get("kb_ok"):
@@ -433,6 +439,7 @@ def run_research_autonomy_cycle(max_tasks: int = AUTONOMY_BATCH_LIMIT) -> dict:
             "started_at": started_at,
             "finished_at": _utcnow(),
             "processed": len(processed),
+            "inspected": len(rows),
             "completed": sum(1 for item in processed if item.get("kb_ok")),
             "failed": failed,
             "skipped": skipped,

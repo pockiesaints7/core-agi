@@ -500,20 +500,27 @@ def run_evolution_autonomy_cycle(max_evolutions: int = AUTONOMY_BATCH_LIMIT) -> 
     errors: list[dict] = []
     track_counts: dict[str, int] = {}
     try:
+        scan_limit = max(250, max_evolutions * 100)
         rows = sb_get(
             "evolution_queue",
             f"select=id,change_type,change_summary,recommendation,confidence,impact,status,diff_content,pattern_key"
-            f"&status=eq.pending&order=confidence.desc&limit={max(1, min(max_evolutions, 10))}",
+            f"&status=eq.pending&order=confidence.desc&limit={max(1, min(scan_limit, 250))}",
             svc=True,
         ) or []
-        for row in rows[:max(1, min(max_evolutions, 10))]:
+        attempted = 0
+        claimed = 0
+        for row in rows:
             try:
+                if claimed >= max_evolutions:
+                    break
                 result = process_evolution_row(row)
                 details.append(result)
+                attempted += 1
                 track = _safe_text(result.get("work_track") or "unknown", 40)
                 track_counts[track] = track_counts.get(track, 0) + 1
                 if result.get("task_created"):
                     queued += 1
+                    claimed += 1
                 elif result.get("outcome") == "duplicate":
                     duplicates += 1
                 else:
@@ -528,7 +535,8 @@ def run_evolution_autonomy_cycle(max_evolutions: int = AUTONOMY_BATCH_LIMIT) -> 
         summary = {
             "started_at": started_at,
             "finished_at": _utcnow(),
-            "processed": len(rows),
+            "processed": attempted,
+            "inspected": len(rows),
             "queued": queued,
             "duplicates": duplicates,
             "failures": failures,

@@ -226,7 +226,7 @@ def _task_rows(limit: int = 1) -> list[dict]:
     rows = sb_get(
         "task_queue",
         "select=id,task,status,priority,source,created_at,updated_at,next_step,blocked_by,checkpoint,checkpoint_at,checkpoint_draft"
-        f"&status=eq.pending&source=in.({','.join(source_list)})&order=priority.desc,created_at.asc&limit={max(1, min(limit, 25))}",
+        f"&status=eq.pending&source=in.({','.join(source_list)})&order=priority.desc,created_at.asc&limit={max(1, min(limit, 250))}",
         svc=True,
     ) or []
     rows.sort(key=lambda row: (-int(row.get("priority") or 0), row.get("created_at") or ""))
@@ -234,7 +234,7 @@ def _task_rows(limit: int = 1) -> list[dict]:
 
 
 def _code_rows(limit: int = 1) -> list[dict]:
-    rows = _task_rows(limit=max(limit, 25))
+    rows = _task_rows(limit=max(limit, 250))
     picked = []
     for row in rows:
         task = _parse_task_blob(row)
@@ -1013,17 +1013,24 @@ def run_code_autonomy_cycle(max_tasks: int = AUTONOMY_BATCH_LIMIT) -> dict:
     errors: list[dict] = []
     track_counts: dict[str, int] = {}
     try:
-        rows = _code_rows(limit=max_tasks)
-        for row in rows[:max(1, min(max_tasks, 10))]:
+        scan_limit = max(250, max_tasks * 100)
+        rows = _code_rows(limit=scan_limit)
+        attempted = 0
+        claimed = 0
+        for row in rows:
             try:
+                if claimed >= max_tasks:
+                    break
                 result = process_code_row(row)
                 details.append(result)
+                attempted += 1
                 track = _safe_text((result.get("strategy") or {}).get("work_track") or result.get("work_track") or "unknown", 40)
                 track_counts[track] = track_counts.get(track, 0) + 1
                 if result.get("deferred"):
                     deferred += 1
                 elif result.get("proposal_created"):
                     proposed += 1
+                    claimed += 1
                 elif result.get("outcome") == "duplicate":
                     duplicates += 1
                 else:
@@ -1036,7 +1043,8 @@ def run_code_autonomy_cycle(max_tasks: int = AUTONOMY_BATCH_LIMIT) -> dict:
         summary = {
             "started_at": started_at,
             "finished_at": _utcnow(),
-            "processed": len(rows),
+            "processed": attempted,
+            "inspected": len(rows),
             "proposed": proposed,
             "duplicates": duplicates,
             "deferred": deferred,
