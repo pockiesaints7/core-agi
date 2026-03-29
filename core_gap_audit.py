@@ -340,7 +340,8 @@ def format_core_gap_audit(report: dict[str, Any]) -> str:
     counts = report.get("counts") or {}
     families = report.get("tool_family_counts") or {}
     lines = [
-        "<b>CORE Manual Work Audit</b>",
+        "<b>CORE Manual Work Audit (now)</b>",
+        f"Generated: {_escape(str(report.get('generated_at') or ''), 40)}",
         f"Status: {'enabled' if report.get('enabled') else 'disabled'} | gaps={len(gaps)} | critical={report.get('summary', {}).get('critical_count', 0)} | warning={report.get('summary', {}).get('warning_count', 0)}",
         f"Repo map: components {counts.get('repo_components', 0)} | chunks {counts.get('repo_component_chunks', 0)} | edges {counts.get('repo_component_edges', 0)} | scans {counts.get('repo_scan_runs', 0)}",
         f"Queues: task pending {counts.get('task_queue_pending', 0)} | evolution pending {counts.get('evolution_pending', 0)} | owner-review pending {counts.get('owner_review_pending', 0)}",
@@ -358,6 +359,15 @@ def format_core_gap_audit(report: dict[str, Any]) -> str:
         lines.append("")
         lines.append("No manual work gaps detected.")
     return "\n".join(lines)
+
+
+def format_core_gap_audit_status(report: dict[str, Any]) -> str:
+    """Compact one-line status for /status and /start."""
+    gaps = report.get("summary", {}).get("gap_count", 0)
+    critical = report.get("summary", {}).get("critical_count", 0)
+    warning = report.get("summary", {}).get("warning_count", 0)
+    ts = report.get("last_run_at") or "n/a"
+    return f"enabled | gaps {gaps} | critical {critical} | warning {warning} | last_run {ts}"
 
 
 def _escape(text: str, limit: int = 180) -> str:
@@ -424,4 +434,3 @@ def core_gap_audit_loop() -> None:
             with _LOCK:
                 _STATE["last_error"] = str(exc)[:500]
         time.sleep(AUDIT_INTERVAL_S)
-
