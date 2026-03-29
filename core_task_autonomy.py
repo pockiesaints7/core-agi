@@ -44,8 +44,8 @@ from core_queue_cursor import build_seek_filter, cursor_from_row
 AUTONOMY_ENABLED = os.getenv("CORE_AUTONOMY_ENABLED", "true").strip().lower() not in {
     "0", "false", "no", "off"
 }
-AUTONOMY_INTERVAL_S = max(60, int(os.getenv("CORE_AUTONOMY_INTERVAL_S", "120")))
-AUTONOMY_BATCH_LIMIT = max(1, int(os.getenv("CORE_AUTONOMY_BATCH_LIMIT", "3")))
+AUTONOMY_INTERVAL_S = max(60, int(os.getenv("CORE_AUTONOMY_INTERVAL_S", "60")))
+AUTONOMY_BATCH_LIMIT = max(1, int(os.getenv("CORE_AUTONOMY_BATCH_LIMIT", "10")))
 AUTONOMY_SOURCES = tuple(
     s.strip() for s in os.getenv("CORE_AUTONOMY_SOURCES", "self_assigned,improvement").split(",") if s.strip()
 )
