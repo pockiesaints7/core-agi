@@ -214,6 +214,82 @@ def _close_duplicate_noop_tasks(source: str = AUTONOMY_SOURCE, limit: int = 50) 
     }
 
 
+def _backfill_autonomy_metadata(source: str = AUTONOMY_SOURCE, limit: int = 1000) -> dict:
+    """Normalize legacy task rows so autonomy metadata is explicit.
+
+    Older evolution-synthesized rows may have a valid worker route but missing
+    review_scope/owner_only/route fields in the task JSON. This sweep backfills
+    those fields in place so the queue stops showing unlabeled legacy noise.
+    """
+    source_list = [s.strip() for s in str(source or ",".join(AUTONOMY_SOURCES)).split(",") if s.strip()] or list(AUTONOMY_SOURCES)
+    patched: list[str] = []
+    inspected = 0
+    page_size = max(1, min(int(limit or 1000), 1000))
+    offset = 0
+    while True:
+        try:
+            rows = sb_get(
+                "task_queue",
+                (
+                    "select=id,task,status,source,created_at,updated_at"
+                    f"&status=eq.pending&source=in.({','.join(source_list)})"
+                    f"&limit={page_size}&offset={offset}"
+                ),
+                svc=True,
+            ) or []
+        except Exception:
+            rows = []
+        if not rows:
+            break
+
+        for row in rows:
+            inspected += 1
+            task = _parse_task_blob(row)
+            auto = task.get("autonomy") if isinstance(task, dict) else {}
+            if isinstance(auto, str):
+                try:
+                    auto = json.loads(auto)
+                except Exception:
+                    auto = {}
+            if not isinstance(auto, dict):
+                auto = {}
+
+            title = _safe_text(task.get("title"), 200)
+            description = _safe_text(task.get("description"), 1000)
+            normalized = build_autonomy_contract(
+                title,
+                description,
+                source=_safe_text(row.get("source") or task.get("source") or "", 80),
+                autonomy=auto,
+                context="task_autonomy_backfill",
+            )
+
+            needs_patch = False
+            for key in ("work_track", "route", "review_scope", "owner_only", "task_group", "specialized_worker", "execution_mode", "verification", "expected_artifact"):
+                if auto.get(key) in (None, "") and normalized.get(key) not in (None, ""):
+                    auto[key] = normalized.get(key)
+                    needs_patch = True
+
+            if needs_patch:
+                task["autonomy"] = auto
+                patch = {
+                    "task": json.dumps(task, default=str),
+                    "updated_at": _utcnow(),
+                }
+                if sb_patch("task_queue", f"id=eq.{row.get('id')}&status=eq.pending", patch):
+                    patched.append(str(row.get("id") or ""))
+
+        if len(rows) < page_size:
+            break
+        offset += page_size
+
+    return {
+        "inspected": inspected,
+        "patched": len(patched),
+        "patched_ids": patched[:20],
+    }
+
+
 def _patch_task(task_id: str, patch: dict) -> bool:
     data = dict(patch or {})
     data.setdefault("updated_at", _utcnow())
@@ -807,6 +883,7 @@ def run_autonomy_cycle(max_tasks: int = AUTONOMY_BATCH_LIMIT, source: str = AUTO
     errors: list[dict] = []
     track_counts: dict[str, int] = {}
     try:
+        metadata_backfill = _backfill_autonomy_metadata(source=source, limit=max_tasks * 20)
         duplicate_cleanup = _close_duplicate_noop_tasks(source=source, limit=max_tasks * 5)
         rows = _task_rows(limit=max_tasks, source=source)
         for row in rows[:max(1, min(int(max_tasks or 1), 10))]:
@@ -850,6 +927,7 @@ def run_autonomy_cycle(max_tasks: int = AUTONOMY_BATCH_LIMIT, source: str = AUTO
             "deferred_tasks": deferred_tasks,
             "error_details": errors,
             "track_counts": track_counts,
+            "metadata_backfill": metadata_backfill,
             "duplicate_cleanup": duplicate_cleanup,
         }
         try:

@@ -253,6 +253,8 @@ def _build_task_payload(row: dict, strategy: dict) -> dict:
             "verification": strategy.get("verification") or "task_queue checkpoint + durable artifact",
             "route": "task_autonomy",
             "specialized_worker": strategy.get("specialized_worker") or "task_autonomy",
+            "review_scope": strategy.get("review_scope") or ("worker" if strategy.get("work_track") in {"db_only", "behavioral_rule", "research"} else "owner"),
+            "owner_only": bool(strategy.get("owner_only", strategy.get("review_scope") == "owner")),
         },
     }
     return {
