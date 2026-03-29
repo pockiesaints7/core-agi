@@ -32,7 +32,9 @@ from core_orch_context import (
 )
 from core_public_evidence import build_public_evidence_packet
 from core_repo_map import build_repo_component_packet, build_repo_graph_packet
+from core_task_autonomy import _deferred_worker
 from core_task_taxonomy import build_task_mode_packet
+from core_work_taxonomy import build_autonomy_contract
 
 
 @dataclass
@@ -284,6 +286,69 @@ MATRIX: list[StressCase] = [
     ),
 ]
 
+ROUTE_CONTRACTS: list[dict[str, Any]] = [
+    {
+        "name": "db_only",
+        "title": "Expand KB coverage for domain: engineering",
+        "description": "Self-diagnosis: domain 'engineering' has only 2 KB entries. Knowledge base is shallow here. Consider ingesting or adding structured entries.",
+        "work_track": "db_only",
+        "review_scope": "worker",
+        "owner_only": False,
+        "specialized_worker": "task_autonomy",
+        "deferred": False,
+    },
+    {
+        "name": "behavioral_rule",
+        "title": "Improve add_behavioral_rule function to handle partial or failed rule creations.",
+        "description": "Rerouted from evolution #1194\nTrack: behavioral_rule\nWorker: task_autonomy",
+        "work_track": "behavioral_rule",
+        "review_scope": "worker",
+        "owner_only": False,
+        "specialized_worker": "task_autonomy",
+        "deferred": False,
+    },
+    {
+        "name": "research",
+        "title": "Research the latest evidence on CORE autonomy routing.",
+        "description": "Gather evidence about task routing and summarize the result.",
+        "work_track": "research",
+        "review_scope": "worker",
+        "owner_only": False,
+        "specialized_worker": "research_autonomy",
+        "deferred": True,
+    },
+    {
+        "name": "code_patch",
+        "title": "Patch core_tools.py to improve route selection.",
+        "description": "Modify the code path that selects tools.",
+        "work_track": "code_patch",
+        "review_scope": "owner",
+        "owner_only": True,
+        "specialized_worker": "code_autonomy",
+        "deferred": True,
+    },
+    {
+        "name": "new_module",
+        "title": "Create a new module for routing experiments.",
+        "description": "Add a module that manages routing experiments.",
+        "work_track": "new_module",
+        "review_scope": "owner",
+        "owner_only": True,
+        "specialized_worker": "code_autonomy",
+        "deferred": True,
+    },
+    {
+        "name": "integration",
+        "title": "Wire the new route into the existing pipeline.",
+        "description": "Integrate the route into the startup path.",
+        "work_track": "integration",
+        "review_scope": "owner",
+        "owner_only": True,
+        "specialized_worker": "integration_autonomy",
+        "deferred": True,
+    },
+]
+
 
 def _build_message(case: StressCase) -> OrchestratorMessage:
     msg = OrchestratorMessage(text=case.text, source=case.source, message_type="message", route="conversation")
@@ -454,6 +519,29 @@ def run_case(case: StressCase) -> tuple[dict[str, Any], list[str]]:
     return actual, failures
 
 
+def run_route_contracts() -> list[str]:
+    failures: list[str] = []
+    for case in ROUTE_CONTRACTS:
+        strat = build_autonomy_contract(case["title"], case["description"], source="improvement", context="route_contract_test")
+        deferred = bool(_deferred_worker(strat))
+        expected_deferred = bool(case["deferred"])
+        expected_track = case["work_track"]
+        expected_scope = case["review_scope"]
+        expected_owner_only = bool(case["owner_only"])
+        expected_worker = case["specialized_worker"]
+        if strat.get("work_track") != expected_track:
+            failures.append(f"{case['name']}: work_track expected {expected_track!r} got {strat.get('work_track')!r}")
+        if strat.get("review_scope") != expected_scope:
+            failures.append(f"{case['name']}: review_scope expected {expected_scope!r} got {strat.get('review_scope')!r}")
+        if bool(strat.get("owner_only")) != expected_owner_only:
+            failures.append(f"{case['name']}: owner_only expected {expected_owner_only!r} got {bool(strat.get('owner_only'))!r}")
+        if strat.get("specialized_worker") != expected_worker:
+            failures.append(f"{case['name']}: specialized_worker expected {expected_worker!r} got {strat.get('specialized_worker')!r}")
+        if deferred != expected_deferred:
+            failures.append(f"{case['name']}: deferred expected {expected_deferred!r} got {deferred!r}")
+    return failures
+
+
 def render_matrix(cases: list[StressCase]) -> str:
     rows = [
         "| ID | Difficulty | Channel | Prompt | Expected route |",
@@ -481,6 +569,14 @@ def main() -> int:
 
     results = []
     all_failures: list[str] = []
+    route_failures = run_route_contracts()
+    all_failures.extend(route_failures)
+    if route_failures:
+        print("[FAIL] route_contracts")
+        for item in route_failures:
+            print(f"  - {item}")
+    else:
+        print("[PASS] route_contracts")
     for case in MATRIX:
         actual, failures = run_case(case)
         results.append({
@@ -500,6 +596,7 @@ def main() -> int:
 
     summary = {
         "cases": len(MATRIX),
+        "route_contracts": len(ROUTE_CONTRACTS),
         "passed": len(MATRIX) - len({f.split(':', 1)[0] for f in all_failures}),
         "failed_cases": len({f.split(':', 1)[0] for f in all_failures}),
         "failures": all_failures,
