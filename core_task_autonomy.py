@@ -233,15 +233,17 @@ def _backfill_autonomy_metadata(source: str = AUTONOMY_SOURCE, limit: int = 1000
     patched: list[str] = []
     inspected = 0
     page_size = max(1, min(int(limit or 1000), 1000))
-    offset = 0
+    cursor: dict[str, Any] = {}
     while True:
         try:
+            cursor_filter = build_seek_filter(cursor, QUEUE_ORDER)
             rows = sb_get(
                 "task_queue",
                 (
                     "select=id,task,status,source,created_at,updated_at"
                     f"&status=eq.pending&source=in.({','.join(source_list)})"
-                    f"&limit={page_size}&offset={offset}"
+                    f"{('&' + cursor_filter) if cursor_filter else ''}"
+                    f"&order=priority.desc,created_at.asc,id.asc&limit={page_size}"
                 ),
                 svc=True,
             ) or []
@@ -252,6 +254,7 @@ def _backfill_autonomy_metadata(source: str = AUTONOMY_SOURCE, limit: int = 1000
 
         for row in rows:
             inspected += 1
+            cursor = cursor_from_row(row, QUEUE_ORDER)
             task = _parse_task_blob(row)
             auto = task.get("autonomy") if isinstance(task, dict) else {}
             if isinstance(auto, str):
@@ -289,7 +292,6 @@ def _backfill_autonomy_metadata(source: str = AUTONOMY_SOURCE, limit: int = 1000
 
         if len(rows) < page_size:
             break
-        offset += page_size
 
     return {
         "inspected": inspected,
