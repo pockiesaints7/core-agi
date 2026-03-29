@@ -37,6 +37,199 @@ def _kb_upsert_world_model(*, domain: str, topic: str, instruction: str, content
     return {"ok": bool(ok), "action": "upserted" if ok else "failed", "domain": domain, "topic": topic}
 
 
+def t_domain_invariant_feature_packet(
+    current_state: str = "",
+    goal: str = "",
+    modules: str = "",
+    symbols: str = "",
+    actions: str = "",
+    task_context: str = "",
+    hwm_levels: str = "",
+    domain: str = "general",
+    state_hint: str = "",
+    limit: str = "10",
+) -> dict:
+    """Extract domain-invariant features for meta-controller and verification work.
+
+    The packet focuses on stable cross-domain signals such as verification pressure,
+    actionability, state continuity, transferability, and risk. It is intentionally
+    domain-agnostic so task routing and verification can reuse the same structure
+    across code, research, review, and ops work.
+    """
+    try:
+        lim = max(1, min(int(limit or 10), 25))
+    except Exception:
+        lim = 10
+
+    def _split_items(value) -> list[str]:
+        if value in (None, "", []):
+            return []
+        if isinstance(value, str):
+            raw = value.strip()
+            if not raw:
+                return []
+            if raw.startswith("["):
+                try:
+                    parsed = json.loads(raw)
+                    if isinstance(parsed, list):
+                        value = parsed
+                    else:
+                        value = raw
+                except Exception:
+                    value = raw
+            else:
+                value = raw
+        if isinstance(value, (list, tuple, set)):
+            out: list[str] = []
+            for item in value:
+                text = str(item).strip()
+                if text:
+                    out.append(text)
+            return out
+        text = str(value).strip()
+        if not text:
+            return []
+        return [part.strip() for part in _re.split(r"[,\n|]+", text) if part.strip()]
+
+    def _count_terms(text: str, terms: tuple[str, ...]) -> int:
+        lower = (text or "").lower()
+        return sum(1 for term in terms if term in lower)
+
+    current_state = (current_state or "").strip()
+    goal = (goal or "").strip()
+    modules_text = (modules or "").strip()
+    symbols_text = (symbols or "").strip()
+    actions_text = (actions or "").strip()
+    task_context = (task_context or "").strip()
+    hwm_levels = (hwm_levels or "").strip()
+    state_hint = (state_hint or "").strip()
+
+    modules_list = _split_items(modules_text)
+    symbols_list = _split_items(symbols_text)
+    actions_list = _split_items(actions_text)
+    levels_list = _split_items(hwm_levels)
+
+    merged_text = " | ".join(
+        part for part in (
+            current_state,
+            goal,
+            task_context,
+            modules_text,
+            symbols_text,
+            actions_text,
+            hwm_levels,
+            domain,
+            state_hint,
+        ) if part
+    )
+    merged_tokens = sorted(_re.findall(r"[a-z0-9_]{3,}", merged_text.lower()))
+    state_tokens = set(_re.findall(r"[a-z0-9_]{3,}", current_state.lower()))
+    goal_tokens = set(_re.findall(r"[a-z0-9_]{3,}", goal.lower()))
+    overlap = sorted((state_tokens & goal_tokens) - {"the", "and", "for", "with", "from", "that", "this"})
+
+    verification_terms = (
+        "verify", "verification", "checkpoint", "test", "audit", "validate", "validation",
+        "confirm", "close", "closed", "done", "complete", "coverage", "proof",
+    )
+    state_terms = (
+        "state", "continuity", "session", "snapshot", "memory", "context", "checkpoint",
+        "resume", "reconcile", "drift", "stale",
+    )
+    action_terms = (
+        "action", "actions", "execute", "implement", "apply", "route", "scan", "build",
+        "update", "write", "process", "claim", "queue", "inspect",
+    )
+    risk_terms = (
+        "risk", "failure", "blocked", "stale", "drift", "missing", "duplicate", "conflict",
+        "error", "bug", "rollback", "loss", "unsafe",
+    )
+    transfer_terms = (
+        "domain", "invariant", "generalize", "generalization", "transfer", "reuse",
+        "meta", "meta-controller", "meta_controller", "cross-domain", "cross domain",
+        "shared", "common", "stable", "abstract",
+    )
+
+    verification_hits = _count_terms(merged_text, verification_terms)
+    state_hits = _count_terms(merged_text, state_terms)
+    action_hits = _count_terms(merged_text, action_terms)
+    risk_hits = _count_terms(merged_text, risk_terms)
+    transfer_hits = _count_terms(merged_text, transfer_terms)
+    goal_alignment_hits = len(overlap)
+    structural_density = min(1.0, round((len(modules_list) + len(symbols_list) + len(actions_list) + len(levels_list)) / 12.0, 3))
+
+    verification_pressure = min(1.0, round(verification_hits / 5.0, 3))
+    continuity_score = min(1.0, round((state_hits + goal_alignment_hits) / 6.0, 3))
+    actionability_score = min(1.0, round((action_hits + len(actions_list)) / 6.0, 3))
+    transferability_score = min(1.0, round((transfer_hits + len(set(modules_list))) / 7.0, 3))
+    risk_pressure = min(1.0, round(risk_hits / 6.0, 3))
+    feature_score = round(
+        max(
+            0.0,
+            min(
+                1.0,
+                (verification_pressure + continuity_score + actionability_score + transferability_score + (1.0 - risk_pressure)) / 5.0,
+            ),
+        ),
+        3,
+    )
+
+    feature_ranking = [
+        ("verification_pressure", verification_pressure),
+        ("continuity", continuity_score),
+        ("actionability", actionability_score),
+        ("transferability", transferability_score),
+        ("risk_pressure", risk_pressure),
+        ("goal_alignment", min(1.0, round(goal_alignment_hits / 4.0, 3))),
+        ("structural_density", structural_density),
+    ]
+    feature_ranking.sort(key=lambda item: (item[1], item[0]), reverse=True)
+    feature_labels = [name for name, score in feature_ranking if score >= 0.35][:lim]
+    if not feature_labels:
+        feature_labels = [name for name, _ in feature_ranking[: min(3, len(feature_ranking))]]
+
+    feature_signature = "+".join(feature_labels[:6]) or "domain_invariant"
+    summary = (
+        f"domain_invariant_features=ok | score={feature_score:.2f} | "
+        f"best={feature_signature} | overlap={','.join(overlap[:4]) or 'none'}"
+    )
+    packet = {
+        "current_state": current_state[:1000],
+        "goal": goal[:1000],
+        "task_context": task_context[:1000],
+        "modules": modules_list[:lim],
+        "symbols": symbols_list[:lim],
+        "actions": actions_list[:lim],
+        "hwm_levels": levels_list[:lim],
+        "domain": domain,
+        "state_hint": state_hint,
+        "merged_tokens": merged_tokens[:40],
+        "token_overlap": overlap[:16],
+        "feature_vector": {
+            "verification_pressure": verification_pressure,
+            "continuity_score": continuity_score,
+            "actionability_score": actionability_score,
+            "transferability_score": transferability_score,
+            "risk_pressure": risk_pressure,
+            "goal_alignment_score": min(1.0, round(goal_alignment_hits / 4.0, 3)),
+            "structural_density": structural_density,
+            "feature_score": feature_score,
+        },
+        "feature_labels": feature_labels,
+        "feature_signature": feature_signature,
+    }
+    return {
+        "ok": True,
+        "domain": domain,
+        "state_hint": state_hint,
+        "feature_score": feature_score,
+        "feature_labels": feature_labels,
+        "feature_signature": feature_signature,
+        "feature_vector": packet["feature_vector"],
+        "packet": packet,
+        "summary": summary,
+    }
+
+
 class WorldModelInterface(ABC):
     """Canonical bounded world-model interface.
 
@@ -736,6 +929,14 @@ class MetaContextualRouter:
 
         current_text = WorldModel._textify(WorldModel._parse_blob(self.current_state)) if self.current_state else ""
         goal_text = WorldModel._textify(WorldModel._parse_blob(self.goal)) if isinstance(self.goal, (dict, str)) else str(self.goal or "")
+        feature_packet = t_domain_invariant_feature_packet(
+            current_state=current_text,
+            goal=goal_text,
+            hwm_levels=",".join(levels),
+            domain=self.domain,
+            state_hint=self.state_hint,
+            limit=str(min(self.limit, len(levels) + 4)),
+        )
         query = " | ".join(part for part in (current_text, goal_text) if part).strip() or goal_text or current_text
         packet = t_reasoning_packet(query=query, domain=self.domain, limit=str(min(self.limit, len(levels) + 4)), tables="")
         evaluation = StateEvaluator(query=query, domain=self.domain, state_hint=self.state_hint).evaluate()
@@ -744,12 +945,22 @@ class MetaContextualRouter:
             str(packet.get("focus") or ""),
             str(packet.get("context") or ""),
             str(packet.get("summary") or ""),
+            str(feature_packet.get("feature_signature") or ""),
+            str(feature_packet.get("summary") or ""),
         ]).lower()
         goal_lower = goal_text.lower()
         current_lower = current_text.lower()
         readiness = float(evaluation.get("readiness_score") or 0.0)
         coherence = float(evaluation.get("coherence_score") or 0.0)
         risk = float(evaluation.get("risk_score") or 0.0)
+        feature_score = float(feature_packet.get("feature_score") or 0.0)
+        feature_vector = feature_packet.get("feature_vector") or {}
+        if feature_score >= 0.7:
+            readiness = min(1.0, readiness + 0.03)
+        elif feature_score <= 0.35:
+            risk = min(1.0, risk + 0.03)
+        if float(feature_vector.get("verification_pressure") or 0.0) >= 0.6:
+            readiness = min(1.0, readiness + 0.02)
         level_scores = []
         for idx, level in enumerate(levels):
             label = self._level_text(level)
@@ -795,6 +1006,7 @@ class MetaContextualRouter:
             f"best={best.get('level','')}",
             f"readiness={round(readiness, 3)}",
             f"risk={round(risk, 3)}",
+            f"feature={feature_packet.get('feature_signature', '')[:80]}",
         ]).strip(" |")
         return {
             "ok": True,
@@ -807,6 +1019,8 @@ class MetaContextualRouter:
             "best_level": best.get("level"),
             "summary": summary[:500],
             "state_evaluation": evaluation,
+            "domain_invariant_features": feature_packet,
+            "feature_score": feature_score,
             "reasoning_packet": packet,
         }
 
@@ -2882,6 +3096,18 @@ def t_hierarchical_gated_neuro_symbolic_world_model(
             context=task_context or goal or state_hint,
         )
         reconciled_state = reconciliation.get("normalized_state") or current_state or task_context or goal
+        feature_packet = t_domain_invariant_feature_packet(
+            current_state=reconciled_state,
+            goal=goal or task_context or "",
+            modules=modules_text,
+            symbols=symbols_text,
+            actions=actions_text,
+            task_context=task_context,
+            hwm_levels=hwm_levels,
+            domain=domain,
+            state_hint=state_hint,
+            limit="8",
+        )
 
         gating = DynamicGatingLayer(domain=domain, state_hint=state_hint).gate(
             state=reconciled_state,
@@ -3004,12 +3230,23 @@ def t_hierarchical_gated_neuro_symbolic_world_model(
             warnings.append("critic_low_confidence")
         if float((prediction.get("confidence") or prediction.get("prediction_mean") or 0.0)) < 0.45:
             warnings.append("prediction_uncertain")
+        feature_score = float(feature_packet.get("feature_score") or 0.0)
+        feature_vector = feature_packet.get("feature_vector") or {}
+        if feature_score >= 0.7:
+            passed.append("feature_packet_strong")
+            readiness = min(1.0, readiness + 0.03)
+        elif feature_score <= 0.35:
+            warnings.append("feature_packet_low_signal")
+            readiness = max(0.0, readiness - 0.02)
+        if float(feature_vector.get("verification_pressure") or 0.0) >= 0.6:
+            passed.append("verification_pressure_detected")
+            readiness = min(1.0, readiness + 0.02)
 
         blocked = bool(not gating.get("ok", True) or readiness < 0.55)
         summary = (
             f"hierarchical_gated_world_model={'blocked' if blocked else 'ok'} | "
             f"best_gate={gate_best or 'none'} | best_principle={principles_packet.get('best_principle') or 'none'} | "
-            f"readiness={readiness:.2f}"
+            f"readiness={readiness:.2f} | feature={feature_packet.get('feature_signature') or 'none'}"
         )
         return {
             "ok": True,
@@ -3028,6 +3265,8 @@ def t_hierarchical_gated_neuro_symbolic_world_model(
             "prediction": prediction,
             "critic": critic,
             "meta_update": meta,
+            "domain_invariant_features": feature_packet,
+            "feature_score": feature_score,
             "readiness_score": readiness,
             "blocked": blocked,
             "passed_checks": passed,

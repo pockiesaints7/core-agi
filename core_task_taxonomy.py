@@ -568,8 +568,10 @@ def _preferred_tools(top_level: str, subintent: str, text: str, goal: str, artif
     if top_level == "analyze":
         if _signal(hay, ("current price in usd", "current_price_in_usd", "spot price", "btc price", "crypto price")):
             tools.extend(["current_price_in_usd", "crypto_price", "reasoning_packet"])
+        if _signal(hay, ("architecture", "architectural review", "framework", "hcpn", "cgcan")):
+            tools.extend(["architecture_review_packet", "module_assessment_packet", "knowledge_state_packet", "state_packet"])
         if _signal(hay, ("world model", "world_model", "hierarchical", "neuro symbolic", "neuro-symbolic", "symbolic memory", "causal memory", "gating")):
-            tools.extend(["hierarchical_gated_neuro_symbolic_world_model", "causal_principle_discovery", "causal_graph_data_generator", "generate_synthetic_data", "module_assessment_packet", "state_reconciliation_buffer"])
+            tools.extend(["domain_invariant_feature_packet", "hierarchical_gated_neuro_symbolic_world_model", "causal_principle_discovery", "causal_graph_data_generator", "generate_synthetic_data", "module_assessment_packet", "state_reconciliation_buffer"])
         elif _signal(hay, ("causal", "principle", "symbolic regression", "regression", "discovery", "abstraction")):
             tools.extend(["causal_principle_discovery", "causal_graph_data_generator", "generate_synthetic_data", "module_assessment_packet", "state_reconciliation_buffer"])
         elif subintent == "spreadsheet_analysis":
@@ -610,23 +612,33 @@ def _preferred_tools(top_level: str, subintent: str, text: str, goal: str, artif
         elif "doc" in hay or "document" in hay or "report" in hay or "proposal" in hay:
             tools.extend(["document_review_packet", "document_work_packet", "read_document", "search_memory"])
         else:
+            if _signal(hay, ("architecture", "architectural review", "framework", "hcpn", "cgcan")):
+                tools.extend(["architecture_review_packet", "module_assessment_packet", "knowledge_state_packet"])
+            if _signal(hay, ("world model", "world_model", "hierarchical", "neuro symbolic", "neuro-symbolic", "symbolic memory", "causal memory", "gating", "meta-controller", "meta controller", "feature extraction", "domain invariant")):
+                tools.extend(["domain_invariant_feature_packet", "hierarchical_gated_neuro_symbolic_world_model", "causal_principle_discovery", "causal_graph_data_generator", "module_assessment_packet", "state_reconciliation_buffer"])
             if _signal(hay, ("module", "performance", "cost", "overfit", "robustness", "generalization", "readiness")):
                 tools.extend(["module_assessment_packet", "state_packet", "reasoning_packet"])
-            if _signal(hay, ("verify", "verification", "side effect", "side effects", "counterfactual", "completeness", "reward", "success", "checkpoint", "complete")):
-                tools.extend(["task_verification_bundle", "task_state_packet", "system_verification_packet"])
+            if _signal(hay, ("verify", "verification", "side effect", "side effects", "counterfactual", "completeness", "schema", "required field", "required fields", "reward", "success", "checkpoint", "complete")):
+                tools.extend(["completeness_monitor_packet", "task_verification_bundle", "task_state_packet", "system_verification_packet"])
             tools.extend(["review_work_packet", "document_review_packet", "search_memory", "reasoning_packet"])
     elif top_level == "operate":
         tools.extend(["state_packet", "deploy_status", "build_status", "railway_logs_live", "service"])
     elif top_level == "research":
         tools.extend(["search_kb", "public_evidence_packet", "ingest_knowledge", "web_search", "web_fetch"])
     elif top_level == "coordinate":
-        tools.extend(["owner_review_cluster_packet", "task_verification_bundle", "task_tracking_packet", "task_packet", "state_packet"])
+        if _signal(hay, ("architecture", "architectural review", "framework", "hcpn", "cgcan")):
+            tools.extend(["architecture_review_packet", "module_assessment_packet", "knowledge_state_packet"])
+        if _signal(hay, ("world model", "world_model", "hierarchical", "neuro symbolic", "neuro-symbolic", "symbolic memory", "causal memory", "gating", "meta-controller", "meta controller", "feature extraction", "domain invariant")):
+            tools.extend(["domain_invariant_feature_packet", "hierarchical_gated_neuro_symbolic_world_model", "task_verification_bundle"])
+        tools.extend(["owner_review_cluster_packet", "completeness_monitor_packet", "task_verification_bundle", "task_tracking_packet", "task_packet", "state_packet"])
     elif top_level == "learn":
+        if _signal(hay, ("architecture", "architectural review", "framework", "hcpn", "cgcan")):
+            tools.extend(["architecture_review_packet", "module_assessment_packet", "knowledge_state_packet"])
         if _signal(hay, ("world model", "world_model", "hierarchical", "neuro symbolic", "neuro-symbolic", "symbolic memory", "causal memory", "gating")):
-            tools.extend(["hierarchical_gated_neuro_symbolic_world_model", "causal_principle_discovery", "causal_graph_data_generator", "generate_synthetic_data", "module_assessment_packet", "state_reconciliation_buffer"])
+            tools.extend(["domain_invariant_feature_packet", "hierarchical_gated_neuro_symbolic_world_model", "causal_principle_discovery", "causal_graph_data_generator", "generate_synthetic_data", "module_assessment_packet", "state_reconciliation_buffer"])
         elif _signal(hay, ("causal", "principle", "symbolic regression", "regression", "discovery", "abstraction")):
             tools.extend(["causal_principle_discovery", "causal_graph_data_generator", "generate_synthetic_data", "module_assessment_packet", "state_reconciliation_buffer"])
-        tools.extend(["search_memory", "reasoning_packet", "tool_reliance_assessor", "state_packet"])
+        tools.extend(["search_memory", "reasoning_packet", "completeness_monitor_packet", "tool_reliance_assessor", "state_packet"])
     elif top_level == "decide":
         tools.extend(["evaluate_state", "reasoning_packet", "tool_reliance_assessor", "state_packet"])
     elif top_level == "clarify":

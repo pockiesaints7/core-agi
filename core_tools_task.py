@@ -236,6 +236,7 @@ class TaskVerificationBundle:
     passed_checks: list[str] | None = None
     failed_checks: list[str] | None = None
     warnings: list[str] | None = None
+    domain_invariant_features: dict | None = None
     summary: str = ""
 
     def to_dict(self) -> dict:
@@ -775,6 +776,7 @@ def t_task_verification_bundle(
             t_causal_mapping_module,
             t_causal_graph_data_generator,
             t_hierarchical_search_tree,
+            t_domain_invariant_feature_packet,
             t_principle_search_module,
             t_simulated_critic,
         )
@@ -857,6 +859,18 @@ def t_task_verification_bundle(
             domain=domain,
             state_hint=state_hint,
         )
+        invariant_features = t_domain_invariant_feature_packet(
+            current_state=current_state or (task_state.get("summary") or ""),
+            goal=goal or operation or expected_status or task_id or "",
+            modules=sources or "",
+            symbols=principles or "",
+            actions=candidate_actions or "",
+            task_context=task_context or context or sequence or "",
+            hwm_levels=hwm_levels or "",
+            domain=domain,
+            state_hint=state_hint,
+            limit="8",
+        )
         search_tree = t_hierarchical_search_tree(
             current_state=current_state or (task_state.get("summary") or ""),
             goal=goal or operation or expected_status or task_id or "",
@@ -875,6 +889,7 @@ def t_task_verification_bundle(
             (system_verification, "verification_score"),
             (action_verification or {}, "verification_score"),
             (critic, "score"),
+            (invariant_features or {}, "feature_score"),
         ):
             try:
                 val = float(pkt.get(key) or 0.0)
@@ -909,6 +924,10 @@ def t_task_verification_bundle(
             passed.append("critic_supportive")
         else:
             warnings.append("critic_low_confidence")
+        if invariant_features.get("ok"):
+            passed.append("domain_invariant_features_extracted")
+        else:
+            warnings.append("domain_invariant_features_failed")
 
         if float(task_ver.get("verification_score") or 0.0) < 0.8:
             warnings.append("task_verification_below_threshold")
@@ -936,7 +955,7 @@ def t_task_verification_bundle(
             f"task={float(task_ver.get('verification_score') or 0.0):.2f} | "
             f"system={float(system_verification.get('verification_score') or 0.0):.2f} | "
             f"action={(float(action_verification.get('verification_score') or 0.0) if action_verification is not None else 0.0):.2f} | "
-            f"critic={critic_score:.2f} | score={bundle_score:.2f}"
+            f"critic={critic_score:.2f} | feature={(invariant_features.get('feature_signature') or 'none')[:60]} | score={bundle_score:.2f}"
         )
 
         packet = TaskVerificationBundle(
@@ -950,6 +969,7 @@ def t_task_verification_bundle(
             principle_search=principle_search,
             search_tree=search_tree,
             critic=critic,
+            domain_invariant_features=invariant_features,
             verification_score=bundle_score,
             blocked=blocked,
             passed_checks=passed,
@@ -974,6 +994,7 @@ def t_task_verification_bundle(
             "principle_search": principle_search,
             "search_tree": search_tree,
             "critic": critic,
+            "domain_invariant_features": invariant_features,
             "packet": packet.to_dict(),
             "summary": summary,
         }

@@ -315,6 +315,7 @@ def _tool_family_for_name(tool_name: str, tool_desc: str = "") -> str:
         "gating_network", "causal_mapping_module", "principle_search_module",
         "state_reconciliation_buffer", "hierarchical_search_tree", "world_model",
         "novelty_assessment", "consolidation_manager", "active_learning_strategy",
+        "domain_invariant_feature_packet",
         "register_tool", "contradiction_check", "negative_space", "circuit_breaker",
         "loop_detect", "partial_complete", "verify_external_state", "verification_packet",
         "system_verification_packet", "mid_task_correct", "resolve_ambiguity", "assert_source",
@@ -372,7 +373,7 @@ def _tool_family_for_name(tool_name: str, tool_desc: str = "") -> str:
         return "database"
     if has("crypto_price", "current_price_in_usd", "crypto_balance", "crypto_trade"):
         return "crypto"
-    if has("reason_chain", "decompose_task", "lookahead", "impact_model"):
+    if has("reason_chain", "decompose_task", "lookahead", "impact_model", "architecture_review_packet"):
         return "self_improve"
     if has("agent_session_init", "agent_state_get", "agent_state_set", "agent_step_done"):
         return "agent_ops"
@@ -382,7 +383,7 @@ def _tool_family_for_name(tool_name: str, tool_desc: str = "") -> str:
         return "training"
     if has("task_error_packet", "task_similarity_metric", "consolidation_manager"):
         return "task"
-    if has("list_templates", "run_template", "debug_fn", "listen", "install_package", "validate_tool_output", "prompt_scaffold_packet", "test_gemini", "maintenance_purge"):
+    if has("list_templates", "run_template", "debug_fn", "listen", "install_package", "validate_tool_output", "completeness_monitor_packet", "prompt_scaffold_packet", "test_gemini", "maintenance_purge"):
         return "utility"
     if has(
         "tool_metrics_summary", "update_state", "stats", "logs", "session_start",

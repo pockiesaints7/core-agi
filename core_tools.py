@@ -910,6 +910,7 @@ from core_tools_world_model import (
     t_monte_carlo_tree_search,
     t_module_assessment_packet,
     t_hierarchical_gated_neuro_symbolic_world_model,
+    t_domain_invariant_feature_packet,
     t_principle_search_module,
     t_predict_with_uncertainty,
     t_predictive_state_representation,
@@ -1388,7 +1389,44 @@ def _kb_entry_verification_packet(
             "failed_checks": ["kb_verification_exception"],
             "warnings": [str(exc)],
             "summary": f"{domain}/{topic}: KB verification error",
+    }
+
+
+def _kb_refresh_freshness_markers(
+    source_type: str = "",
+    source_ref: str = "",
+    domain: str = "",
+    topic: str = "",
+) -> dict:
+    """Project KB provenance into state markers so freshness is visible system-wide."""
+    try:
+        markers = {}
+        now_ts = datetime.utcnow().isoformat()
+        canon_source_type, canon_source_ref = _kb_normalize_provenance(source_type, source_ref)
+        reason = f"kb:{domain}/{topic}:{canon_source_type}:{canon_source_ref}"
+        if canon_source_type == "ingested":
+            markers["last_research_ts"] = now_ts
+            markers["last_public_source_ts"] = now_ts
+        elif canon_source_type == "session":
+            markers["last_real_signal_ts"] = now_ts
+        if not markers:
+            return {"ok": True, "updated": False, "markers": {}, "summary": "kb_freshness: noop"}
+        applied = {}
+        for key, value in markers.items():
+            try:
+                res = t_update_state(key=key, value=value, reason=reason)
+            except Exception as exc:
+                res = {"ok": False, "error": str(exc)}
+            applied[key] = res
+        return {
+            "ok": True,
+            "updated": True,
+            "markers": markers,
+            "applied": applied,
+            "summary": f"kb_freshness: updated={len(markers)}",
         }
+    except Exception as exc:
+        return {"ok": False, "updated": False, "error": str(exc), "summary": f"kb_freshness error: {exc}"}
 
 
 def t_kb_entry_packet(domain: str = "", topic: str = "", instruction: str = "",
@@ -1452,6 +1490,12 @@ def t_add_knowledge(domain="", topic="", instruction="", content="", tags="", co
                             "message": "Instruction contradicts existing KB entry. Use kb_update to overwrite."}
             # Check 2: exact duplicate -- skip silently
             if ex_instr == new_instr and ex_content.lower() == new_content.lower():
+                _kb_refresh_freshness_markers(
+                    source_type=canon_source_type,
+                    source_ref=canon_source_ref,
+                    domain=domain,
+                    topic=topic,
+                )
                 verification = _kb_entry_verification_packet(
                     domain=domain,
                     topic=topic,
@@ -1507,11 +1551,18 @@ def t_add_knowledge(domain="", topic="", instruction="", content="", tags="", co
             source_type=canon_source_type,
             source_ref=canon_source_ref,
         )
+        freshness = _kb_refresh_freshness_markers(
+            source_type=canon_source_type,
+            source_ref=canon_source_ref,
+            domain=domain,
+            topic=topic,
+        )
         return {
             "ok": bool(verification.get("ok") and verification.get("verified") and not verification.get("blocked")),
             "topic": topic,
             "verified": bool(verification.get("verified")),
             "verification_packet": verification,
+            "freshness_packet": freshness,
         }
     except Exception as e:
         return {"ok": False, "topic": topic, "error": str(e)}
@@ -4896,6 +4947,15 @@ def t_knowledge_state_packet(
             )
         state_rows = search_results if isinstance(search_results, list) else []
         search_count = len(state_rows)
+        freshness_keys = ["last_research_ts", "last_real_signal_ts", "last_public_source_ts"]
+        freshness_values = {}
+        for key in freshness_keys:
+            try:
+                value = _latest_state_update_value(key).get("value")
+            except Exception:
+                value = None
+            if value not in (None, "", {}, []):
+                freshness_values[key] = value
         return {
             "ok": True,
             "domain": domain or "",
@@ -4903,14 +4963,108 @@ def t_knowledge_state_packet(
             "query": search_query or "",
             "search": search_results,
             "verification": verification or {},
+            "freshness": freshness_values,
             "rows": state_rows,
             "summary": (
                 f"knowledge_state: rows={search_count} | "
-                f"verified={bool((verification or {}).get('verified', False))}"
+                f"verified={bool((verification or {}).get('verified', False))} | "
+                f"freshness={len(freshness_values)}"
             ),
         }
     except Exception as e:
         return {"ok": False, "error": str(e), "summary": f"knowledge_state error: {e}"}
+
+
+def t_architecture_review_packet(
+    module_name: str = "",
+    architecture_name: str = "",
+    task_context: str = "",
+    goal: str = "",
+    evidence: str = "",
+    domain: str = "general",
+    state_hint: str = "",
+    knowledge_domain: str = "",
+    knowledge_topic: str = "",
+    source_type: str = "",
+    source_ref: str = "",
+    learning_rate: str = "0.1",
+) -> dict:
+    """Bundle module readiness with KB freshness for architecture decisions."""
+    try:
+        module_name = (module_name or "").strip()
+        architecture_name = (architecture_name or "").strip()
+        task_context = (task_context or "").strip()
+        goal = (goal or "").strip()
+        evidence = (evidence or "").strip()
+        arch_blob = " | ".join(part for part in (architecture_name, module_name, task_context, goal, evidence) if part)
+
+        module_assessment = t_module_assessment_packet(
+            module_name=module_name or architecture_name,
+            module_description=architecture_name or module_name,
+            task_context=task_context or goal,
+            goal=goal or architecture_name or module_name,
+            evidence=evidence,
+            domain=domain,
+            state_hint=state_hint,
+            learning_rate=learning_rate,
+        )
+        kb_domain = knowledge_domain or domain or "general"
+        kb_topic = knowledge_topic or architecture_name or module_name or "architecture_review"
+        kb_state = t_knowledge_state_packet(
+            domain=kb_domain,
+            topic=kb_topic,
+            instruction=architecture_name or module_name or goal,
+            content=evidence or task_context,
+            confidence="medium",
+            source_type=source_type,
+            source_ref=source_ref,
+            query=architecture_name or module_name or goal or evidence or "",
+            limit="5",
+        )
+
+        module_ready = bool(module_assessment.get("ok") and not module_assessment.get("blocked"))
+        kb_verified = bool((kb_state.get("verification") or {}).get("verified", False))
+        kb_rows = len((kb_state.get("rows") or []))
+        freshness = kb_state.get("freshness") or {}
+        freshness_score = min(1.0, round(0.35 + 0.15 * len(freshness), 2))
+        readiness_score = round(
+            min(1.0, max(0.0, (
+                float(module_assessment.get("readiness_score") or 0.0) * 0.7
+                + freshness_score * 0.3
+            ))),
+            2,
+        )
+        recommendation = "proceed" if readiness_score >= 0.75 and kb_verified else ("verify_more" if readiness_score >= 0.6 else "split_or_delay")
+        warnings = list(module_assessment.get("warnings") or [])
+        if not kb_verified:
+            warnings.append("kb_unverified")
+        if not freshness:
+            warnings.append("kb_freshness_missing")
+        summary = (
+            f"architecture_review={'ok' if module_ready and kb_verified else 'review'} | "
+            f"readiness={readiness_score:.2f} | kb_rows={kb_rows} | freshness={len(freshness)} | "
+            f"recommendation={recommendation}"
+        )
+        return {
+            "ok": True,
+            "architecture_name": architecture_name or module_name,
+            "module_name": module_name,
+            "task_context": task_context,
+            "goal": goal,
+            "module_assessment": module_assessment,
+            "knowledge_state": kb_state,
+            "freshness": freshness,
+            "readiness_score": readiness_score,
+            "module_ready": module_ready,
+            "kb_verified": kb_verified,
+            "kb_rows": kb_rows,
+            "recommendation": recommendation,
+            "warnings": warnings,
+            "summary": summary,
+            "arch_blob": arch_blob,
+        }
+    except Exception as e:
+        return {"ok": False, "error": str(e), "blocked": True}
 
 
 @dataclass
@@ -6537,6 +6691,12 @@ def t_kb_update(domain: str, topic: str, instruction: str = "",
                 source_ref=canon_source_ref,
                 require_exact_match=False,
             )
+            freshness = _kb_refresh_freshness_markers(
+                source_type=canon_source_type,
+                source_ref=canon_source_ref,
+                domain=domain,
+                topic=topic,
+            )
             return {
                 "ok": bool(verification.get("verified")),
                 "domain": domain,
@@ -6544,6 +6704,7 @@ def t_kb_update(domain: str, topic: str, instruction: str = "",
                 "action": "upserted",
                 "verified": bool(verification.get("verified")),
                 "verification_packet": verification,
+                "freshness_packet": freshness,
             }
         except Exception as e:
             return {"ok": False, "domain": domain, "topic": topic, "action": "upserted", "error": str(e)}
@@ -7222,6 +7383,8 @@ TOOLS = {
                            "desc": "Search knowledge base by query. Returns domain, topic, content, confidence. ALWAYS include id=gt.1 filter behavior is automatic. IF EMPTY: do NOT give up — try sb_query(table='knowledge_base', filters='id=gt.1&domain=like.*core*') as fallback. Use before any write to check duplicates. EXAMPLE: search_kb(query='railway deploy', domain='core_agi', limit='5')"},
     "knowledge_state_packet": {"fn": t_knowledge_state_packet, "perm": "READ", "args": ["domain", "topic", "instruction", "content", "confidence", "source_type", "source_ref", "query", "limit"],
                                "desc": "Canonical knowledge state packet. Bundles KB search with entry verification so downstream tools can reason about knowledge freshness and accuracy."},
+    "architecture_review_packet": {"fn": t_architecture_review_packet, "perm": "READ", "args": ["module_name", "architecture_name", "task_context", "goal", "evidence", "domain", "state_hint", "knowledge_domain", "knowledge_topic", "source_type", "source_ref", "learning_rate"],
+                               "desc": "Bundle module readiness with KB freshness for architecture decisions. Use when reviewing a framework change, architecture proposal, or knowledge-backed integration."},
     "search_memory":          {"fn": t_search_memory,          "perm": "READ",    "args": ["query", "domain", "limit", "tables"],
                                "desc": "Unified semantic memory search across knowledge_base plus the native semantic tables. Use this when CORE needs one reasoning context for planning, self-correction, ambiguity resolution, or decomposition."},
     "reasoning_packet":       {"fn": t_reasoning_packet,       "perm": "READ",    "args": ["query", "domain", "limit", "tables", "per_table"],
@@ -7284,6 +7447,8 @@ TOOLS = {
                                "desc": "Reconcile competing state snapshots before downstream planning."},
     "hierarchical_search_tree": {"fn": t_hierarchical_search_tree, "perm": "READ", "args": ["current_state", "goal", "hwm_levels", "candidate_actions", "horizon", "rollouts", "exploration_weight", "domain", "state_hint"],
                                "desc": "Build a bounded hierarchical search tree and return the best branch."},
+    "domain_invariant_feature_packet": {"fn": t_domain_invariant_feature_packet, "perm": "READ", "args": ["current_state", "goal", "modules", "symbols", "actions", "task_context", "hwm_levels", "domain", "state_hint", "limit"],
+                               "desc": "Extract domain-invariant features from state, goal, and task context for meta-controller routing and task verification."},
     "module_assessment_packet": {"fn": t_module_assessment_packet, "perm": "READ", "args": ["module_name", "module_description", "task_context", "goal", "evidence", "domain", "state_hint", "learning_rate"],
                                "desc": "Assess a new module's readiness, cost, and overfit risk before promotion. Use for new-module verification, performance impact checks, and meta-learning robustness review."},
     "hierarchical_gated_neuro_symbolic_world_model": {"fn": t_hierarchical_gated_neuro_symbolic_world_model, "perm": "READ", "args": ["current_state", "goal", "modules", "symbols", "actions", "hwm_levels", "horizon", "rollouts", "exploration_weight", "principles", "task_context", "causal_graph", "domain", "state_hint", "full_rollout"],
@@ -9275,6 +9440,7 @@ def _validate_tool_output_packet(tool_name: str, result: Any, success: Any = Non
     fatal = False
     shape = type(result).__name__
     ok_field = None
+    completeness_monitor = _completeness_monitor_packet(tool_name, result, success=success)
 
     if not tool_name:
         failed_checks.append("tool_name_missing")
@@ -9341,6 +9507,18 @@ def _validate_tool_output_packet(tool_name: str, result: Any, success: Any = Non
         warnings.append("safe_to_write=False")
     if result.get("validation_passed") is False:
         warnings.append("validation_passed=False")
+    if completeness_monitor.get("missing_required_fields"):
+        warnings.append("missing_required_fields")
+    if completeness_monitor.get("schema_supplied") and completeness_monitor.get("blocked"):
+        failed_checks.append("schema_required_fields_missing")
+        fatal = True
+    if completeness_monitor.get("completeness_score") is not None:
+        try:
+            score = float(completeness_monitor.get("completeness_score"))
+            if score < 0.8:
+                warnings.append(f"completeness_monitor_low:{score:.2f}")
+        except Exception:
+            warnings.append("completeness_monitor_score_unparseable")
     if result.get("verification_score") is not None:
         try:
             score = float(result.get("verification_score"))
@@ -9364,6 +9542,7 @@ def _validate_tool_output_packet(tool_name: str, result: Any, success: Any = Non
         "warnings": warnings,
         "failed_checks": failed_checks,
         "ok_field": ok_field,
+        "completeness_monitor": completeness_monitor,
         "summary": (
             f"{tool_name}: {'fatal' if fatal else 'ok'} "
             f"(warnings={len(warnings)}, failed_checks={len(failed_checks)})"
@@ -9372,7 +9551,7 @@ def _validate_tool_output_packet(tool_name: str, result: Any, success: Any = Non
     }
 
 
-def t_validate_tool_output(tool_name: str = "", result_json: str = "", success: str = ""):
+def t_validate_tool_output(tool_name: str = "", result_json: str = "", success: str = "", required_fields: str = "", schema_json: str = ""):
     """Validate a tool output payload from JSON text."""
     try:
         parsed = json.loads(result_json) if result_json else {}
@@ -9393,7 +9572,241 @@ def t_validate_tool_output(tool_name: str = "", result_json: str = "", success: 
             success_hint = str(success).strip().lower() not in ("false", "0", "no", "off", "null")
         except Exception:
             success_hint = None
-    return _validate_tool_output_packet(tool_name, parsed, success=success_hint)
+    completeness = _completeness_monitor_packet(
+        tool_name,
+        parsed,
+        required_fields=required_fields,
+        schema_json=schema_json,
+        success=success_hint,
+    )
+    validation = _validate_tool_output_packet(tool_name, parsed, success=success_hint)
+    validation["completeness_monitor"] = completeness
+    if completeness.get("blocked"):
+        validation["blocked"] = True
+        validation["warnings"].append("completeness_monitor_blocked")
+        if required_fields or schema_json or completeness.get("schema_supplied"):
+            validation["fatal"] = True
+            validation["failed_checks"].append("completeness_required_fields_missing")
+            try:
+                validation["validation_score"] = round(
+                    min(float(validation.get("validation_score", 0.0)), float(completeness.get("completeness_score", 0.0))),
+                    2,
+                )
+            except Exception:
+                validation["validation_score"] = 0.0
+            validation["summary"] = (
+                f"{tool_name or '?'}: fatal (completeness={completeness.get('completeness_score', 0.0):.2f}, "
+                f"missing={len(completeness.get('missing_required_fields') or [])})"
+            )
+    return validation
+
+
+def t_completeness_monitor_packet(tool_name: str = "", result_json: str = "", success: str = "", required_fields: str = "", schema_json: str = ""):
+    """Monitor payload completeness and schema adherence for output-generation pipelines."""
+    try:
+        parsed = json.loads(result_json) if result_json else {}
+    except Exception as exc:
+        return {
+            "ok": True,
+            "tool": tool_name or "?",
+            "fatal": True,
+            "blocked": True,
+            "warnings": ["result_json_parse_failed"],
+            "failed_checks": ["invalid_json"],
+            "error": str(exc),
+            "completeness_score": 0.0,
+            "summary": f"{tool_name or '?'} completeness=error | invalid_json",
+        }
+    success_hint = None
+    if success != "":
+        try:
+            success_hint = str(success).strip().lower() not in ("false", "0", "no", "off", "null")
+        except Exception:
+            success_hint = None
+    return _completeness_monitor_packet(
+        tool_name,
+        parsed,
+        required_fields=required_fields,
+        schema_json=schema_json,
+        success=success_hint,
+    )
+
+
+def _coerce_field_list(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, (list, tuple, set)):
+        return [str(item).strip() for item in value if str(item or "").strip()]
+    text = str(value).strip()
+    if not text:
+        return []
+    try:
+        parsed = json.loads(text)
+    except Exception:
+        parsed = None
+    if isinstance(parsed, (list, tuple, set)):
+        return [str(item).strip() for item in parsed if str(item or "").strip()]
+    return [part.strip() for part in text.split(",") if part.strip()]
+
+
+def _completeness_monitor_packet(
+    tool_name: str,
+    result: Any,
+    required_fields: Any = None,
+    schema_json: str = "",
+    success: Any = None,
+) -> dict:
+    """Monitor payload completeness and schema adherence for tool outputs."""
+    warnings = []
+    missing_required = []
+    extra_fields = []
+    structural_notes = []
+    schema_supplied = False
+    schema_fields = []
+    required_list = _coerce_field_list(required_fields)
+    shape = type(result).__name__
+    data_keys = []
+
+    if schema_json:
+        try:
+            parsed_schema = json.loads(schema_json)
+            if isinstance(parsed_schema, dict):
+                schema_supplied = True
+                schema_fields = _coerce_field_list(
+                    parsed_schema.get("required")
+                    or parsed_schema.get("fields")
+                    or parsed_schema.get("columns")
+                    or parsed_schema.get("properties")
+                )
+                if not required_list:
+                    required_list = schema_fields[:]
+        except Exception:
+            warnings.append("schema_json_parse_failed")
+
+    if isinstance(result, dict):
+        data_keys = sorted(result.keys())
+        if not required_list:
+            required_list = _coerce_field_list(result.get("required_fields") or result.get("_required_fields"))
+        if not schema_supplied:
+            schema_candidate = result.get("schema") or result.get("_schema")
+            if isinstance(schema_candidate, dict):
+                schema_supplied = True
+                schema_fields = _coerce_field_list(
+                    schema_candidate.get("required")
+                    or schema_candidate.get("fields")
+                    or schema_candidate.get("columns")
+                    or schema_candidate.get("properties")
+                )
+                if not required_list:
+                    required_list = schema_fields[:]
+            elif isinstance(result.get("schema_json"), str) and result.get("schema_json"):
+                try:
+                    parsed_schema = json.loads(result.get("schema_json"))
+                    if isinstance(parsed_schema, dict):
+                        schema_supplied = True
+                        schema_fields = _coerce_field_list(
+                            parsed_schema.get("required")
+                            or parsed_schema.get("fields")
+                            or parsed_schema.get("columns")
+                            or parsed_schema.get("properties")
+                        )
+                        if not required_list:
+                            required_list = schema_fields[:]
+                except Exception:
+                    warnings.append("result_schema_json_parse_failed")
+        if not required_list:
+            inferred = ["ok", "summary"] if "summary" in result else ["ok"]
+            required_list = inferred if inferred else ["ok"]
+        for field in required_list:
+            value = result.get(field, None)
+            if value is None or value == "" or value == [] or value == {}:
+                missing_required.append(field)
+        if schema_fields:
+            extra_fields = sorted([key for key in data_keys if key not in set(schema_fields)])
+            if extra_fields:
+                structural_notes.append("schema_extra_fields")
+        field_count = len(data_keys)
+        present_count = sum(1 for key in data_keys if result.get(key) not in (None, "", [], {}, ()))
+        field_coverage = round(present_count / max(1, field_count), 2)
+        required_score = round((len(required_list) - len(missing_required)) / max(1, len(required_list)), 2) if required_list else 1.0
+        completeness_score = round((required_score * 0.7) + (field_coverage * 0.3), 2)
+        status = "complete" if not missing_required else ("partial" if completeness_score >= 0.66 else "incomplete")
+    elif isinstance(result, list):
+        field_count = len(result)
+        dict_rows = [row for row in result if isinstance(row, dict)]
+        if dict_rows:
+            shared_keys = set(dict_rows[0].keys())
+            for row in dict_rows[1:]:
+                shared_keys &= set(row.keys())
+            if not required_list:
+                required_list = sorted(shared_keys)[:6]
+            present_rows = 0
+            row_scores = []
+            for row in dict_rows:
+                if required_list:
+                    row_missing = [field for field in required_list if row.get(field) in (None, "", [], {}, ())]
+                    if not row_missing:
+                        present_rows += 1
+                    missing_required.extend([f"{field}" for field in row_missing if field not in missing_required])
+                    row_scores.append(round((len(required_list) - len(row_missing)) / max(1, len(required_list)), 2))
+                else:
+                    row_scores.append(1.0)
+            completeness_score = round(sum(row_scores) / max(1, len(row_scores)), 2) if row_scores else 0.0
+            required_score = round(present_rows / max(1, len(dict_rows)), 2)
+            status = "complete" if not missing_required else ("partial" if completeness_score >= 0.66 else "incomplete")
+            schema_supplied = bool(schema_json)
+            data_keys = sorted(shared_keys)
+        else:
+            completeness_score = 0.5 if result else 0.0
+            required_score = 0.0
+            status = "partial" if result else "empty"
+            structural_notes.append("non_dict_rows")
+    else:
+        completeness_score = 0.0
+        required_score = 0.0
+        status = "empty" if not result else "unsupported_shape"
+        structural_notes.append(f"unsupported_shape:{shape}")
+
+    if result and isinstance(result, dict) and bool(result.get("ok")) and str(result.get("summary") or "").strip():
+        completeness_score = min(1.0, round(completeness_score + 0.05, 2))
+    if success is not None:
+        try:
+            if bool(success) and completeness_score < 0.5:
+                warnings.append("success_with_sparse_payload")
+        except Exception:
+            warnings.append("success_unparseable")
+
+    if missing_required:
+        warnings.append("missing_required_fields")
+    if extra_fields and schema_supplied:
+        warnings.append("schema_extra_fields")
+    if completeness_score < 0.8:
+        warnings.append(f"low_completeness:{completeness_score:.2f}")
+    if required_score < 0.8 and required_list:
+        warnings.append(f"low_required_coverage:{required_score:.2f}")
+
+    blocked = bool(missing_required) and (schema_supplied or required_fields is not None)
+    return {
+        "ok": True,
+        "tool": tool_name or "?",
+        "shape": shape,
+        "schema_supplied": schema_supplied,
+        "required_fields": required_list,
+        "missing_required_fields": missing_required,
+        "extra_fields": extra_fields,
+        "data_keys": data_keys,
+        "field_coverage": field_coverage if isinstance(result, dict) else None,
+        "required_coverage": required_score,
+        "completeness_score": completeness_score,
+        "status": status,
+        "blocked": blocked,
+        "warnings": warnings,
+        "structural_notes": structural_notes,
+        "summary": (
+            f"{tool_name or '?'} completeness={completeness_score:.2f} "
+            f"| required={required_score:.2f} | missing={len(missing_required)}"
+        ),
+    }
 
 
 def t_prompt_scaffold_packet(
@@ -9493,8 +9906,23 @@ TOOLS["validate_tool_output"] = {
         {"name": "tool_name", "type": "string", "description": "Tool whose output is being validated"},
         {"name": "result_json", "type": "string", "description": "JSON string of the tool output payload"},
         {"name": "success", "type": "string", "description": "Optional success hint from the executor"},
+        {"name": "required_fields", "type": "string", "description": "Comma-separated required fields for completeness checks"},
+        {"name": "schema_json", "type": "string", "description": "Optional JSON schema or field contract for adherence checks"},
     ],
-    "desc": "Validate a tool output payload for structural correctness, contradictory fields, and degraded output markers. Use when a tool result looks malformed or suspicious.",
+    "desc": "Validate a tool output payload for structural correctness, completeness, contradictory fields, and degraded output markers. Use when a tool result looks malformed, incomplete, or suspicious.",
+}
+
+TOOLS["completeness_monitor_packet"] = {
+    "fn": t_completeness_monitor_packet,
+    "perm": "READ",
+    "args": [
+        {"name": "tool_name", "type": "string", "description": "Tool or pipeline producing the payload"},
+        {"name": "result_json", "type": "string", "description": "JSON string of the payload being inspected"},
+        {"name": "success", "type": "string", "description": "Optional success hint from the executor"},
+        {"name": "required_fields", "type": "string", "description": "Comma-separated required fields for completeness checks"},
+        {"name": "schema_json", "type": "string", "description": "Optional JSON schema or field contract for adherence checks"},
+    ],
+    "desc": "Monitor payload completeness and schema adherence for output-generation pipelines. Use when you need required fields, completeness coverage, or schema contract checks before downstream consumption.",
 }
 
 TOOLS["prompt_scaffold_packet"] = {
