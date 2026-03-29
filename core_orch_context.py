@@ -302,7 +302,7 @@ def _tool_family_for_name(tool_name: str, tool_desc: str = "") -> str:
     def has(*needles: str) -> bool:
         return any(n in combined for n in needles)
 
-    if has("owner_review_cluster_packet", "owner_review_cluster_close", "review_cluster", "cluster_close", "review_work_packet", "repo_review_packet", "document_review_packet", "spreadsheet_review_packet", "presentation_review_packet"):
+    if has("owner_review_cluster_packet", "owner_review_cluster_close", "review_cluster", "cluster_close", "review_work_packet", "repo_review_packet", "document_review_packet", "spreadsheet_review_packet", "presentation_review_packet", "module_assessment_packet"):
         return "review"
     if has(
         "reasoning_packet", "tool_reliance_assessor", "dynamic_relational_graph", "causal_graph",
@@ -318,6 +318,7 @@ def _tool_family_for_name(tool_name: str, tool_desc: str = "") -> str:
         "register_tool", "contradiction_check", "negative_space", "circuit_breaker",
         "loop_detect", "partial_complete", "verify_external_state", "verification_packet",
         "system_verification_packet", "mid_task_correct", "resolve_ambiguity", "assert_source",
+        "tool_improve",
     ):
         return "self_improve"
     if has(
@@ -338,6 +339,13 @@ def _tool_family_for_name(tool_name: str, tool_desc: str = "") -> str:
         "project_context_check", "project_register", "project_update_kb",
         "project_update_index", "project_consume", "public_evidence_packet", "knowledge_state_packet", "ask",
         "changelog_state_packet", "causal_principle_discovery", "generate_synthetic_data",
+    ):
+        return "knowledge"
+    if has(
+        "search_memory", "search_mistakes", "changelog_add", "changelog_source_packet",
+        "project_index", "project_prepare", "add_behavioral_rule", "get_credentials_index",
+        "add_credentials_index", "embed_kb_entry", "backfill_kb_embeddings",
+        "synthesize_cross_domain", "get_tool_info",
     ):
         return "knowledge"
     if has("repo_map", "repo_component", "repo_graph", "code_read_packet", "file_list", "file_read", "file_write", "read_file", "write_file", "search_in_file", "gh_", "multi_patch", "smart_patch", "shell", "run_python", "run_script", "git"):
@@ -375,6 +383,21 @@ def _tool_family_for_name(tool_name: str, tool_desc: str = "") -> str:
     if has("task_error_packet", "task_similarity_metric", "consolidation_manager"):
         return "task"
     if has("list_templates", "run_template", "debug_fn", "listen", "install_package", "validate_tool_output", "prompt_scaffold_packet", "test_gemini", "maintenance_purge"):
+        return "utility"
+    if has(
+        "tool_metrics_summary", "update_state", "stats", "logs", "session_start",
+        "session_end", "get_infrastructure", "update_infrastructure_status",
+        "add_infrastructure", "backup_brain", "progress_model", "cognitive_load",
+        "sync_system_map", "scope_tracker",
+    ):
+        return "state"
+    if has("bulk_apply"):
+        return "task"
+    if has("core_py_rollback", "deploy_and_wait", "verify_before_deploy"):
+        return "deploy"
+    if has("patch_file", "append_to_file", "replace_fn"):
+        return "repo_code"
+    if has("validate_syntax"):
         return "utility"
     if has("vm_info", "update_behavioral_rule", "log_quality_metrics", "get_quality_alert", "log_reasoning"):
         return "state"
