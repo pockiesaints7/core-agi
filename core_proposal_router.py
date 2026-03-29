@@ -993,6 +993,7 @@ def owner_review_cluster_packet(limit: int = 5, persist: str = "true") -> dict:
     impl_needed_rows = sum(int(c.get("review_eligible_members") or 0) for c in clusters)
     close_ready_count = sum(1 for c in clusters if bool(c.get("safe_to_close_after_verification")))
     close_ready_rows = sum(int(c.get("close_eligible_members") or 0) for c in clusters)
+    recommended_action = "idle" if len(owner_rows) == 0 else "inspect_only"
     return {
         "ok": True,
         "limit": lim,
@@ -1011,10 +1012,10 @@ def owner_review_cluster_packet(limit: int = 5, persist: str = "true") -> dict:
         "recommended_cluster_review_ready": bool(recommended_cluster.get("review_ready")),
         "recommended_cluster_implementation_needed": bool(recommended_cluster.get("implementation_needed")),
         "recommended_cluster_close_ready": bool(recommended_cluster.get("safe_to_close_after_verification")),
-        "recommended_action": "inspect_only",
+        "recommended_action": recommended_action,
         "close_instruction": (
             f"Implement the corresponding upgrade, verify it, then call owner_review_cluster_close(cluster_id='{recommended_cluster.get('cluster_id')}', outcome='applied')."
-            if recommended_cluster.get("cluster_id")
+            if recommended_cluster.get("cluster_id") and recommended_action != "idle"
             else ""
         ),
         "theme_counts": dict(sorted(theme_counts.items())),
@@ -1029,7 +1030,7 @@ def owner_review_cluster_packet(limit: int = 5, persist: str = "true") -> dict:
             f"implementation_needed_groups={impl_needed_count} | "
             f"close_ready_groups={close_ready_count} | "
             f"recommended={recommended_cluster.get('cluster_id') or 'none'} | "
-            f"action=inspect_only | "
+            f"action={recommended_action} | "
             f"themes={', '.join(f'{k}={v}' for k, v in sorted(theme_counts.items())) or 'none'}"
         ),
     }
