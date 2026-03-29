@@ -320,6 +320,7 @@ def _tool_family_for_name(tool_name: str, tool_desc: str = "") -> str:
         "get_state", "get_system_health", "get_active_goals", "get_quality_trend",
         "get_time", "datetime_now", "get_constitution", "vm_info", "system_map_scan",
         "get_capability_model", "trigger_capability_calibration", "tool_health_scan",
+        "core_gap_audit", "gap_audit",
         "tool_stats", "load_arch_context", "task_health", "crash_report", "verify_live",
     ):
         return "state"
@@ -412,6 +413,10 @@ def build_tool_policy_packet(msg) -> Dict[str, Any]:
         "cluster_key",
         "cluster member",
     )) or ("cluster" in lower_text and ("owner" in lower_text or "review" in lower_text))
+    audit_query = any(marker in lower_text for marker in (
+        "audit", "manual work", "manual gap", "taxonomy update", "capability family",
+        "what can't you do", "what can you not do", "what you cannot do", "cannot do itself",
+    ))
 
     tool_rows = []
     for name in sorted(TOOLS):
@@ -540,6 +545,10 @@ def build_tool_policy_packet(msg) -> Dict[str, Any]:
     best_first_reason = ""
 
     query = _safe_text((msg.text or ""), 240)
+    if audit_query and "core_gap_audit" in registry_names:
+        best_first_tool = "core_gap_audit"
+        best_first_args = {"force": False, "notify_owner": True}
+        best_first_reason = "audit and gap queries should start from the dedicated CORE-wide manual work audit."
     if cluster_query:
         if "owner_review_cluster_packet" in registry_names:
             best_first_tool = "owner_review_cluster_packet"
@@ -1410,6 +1419,10 @@ def build_evidence_gate(msg) -> Dict[str, Any]:
     cluster_query = any(marker in lower_text for marker in cluster_markers) or (
         "cluster" in lower_text and ("owner" in lower_text or "review" in lower_text)
     )
+    audit_query = any(marker in lower_text for marker in (
+        "audit", "manual work", "manual gap", "taxonomy update", "capability family",
+        "what can't you do", "what can you not do", "what you cannot do", "cannot do itself",
+    ))
 
     if request_kind in {"status", "self_assessment"}:
         if code_hits >= 1 or code_targets or web_hits >= 1:
@@ -1436,6 +1449,10 @@ def build_evidence_gate(msg) -> Dict[str, Any]:
     else:
         retrieval_mode = "supabase_then_web"
         preferred_tools = ["search_kb", "web_search"]
+
+    if audit_query and "core_gap_audit" in registry_names:
+        retrieval_mode = "state_only" if request_kind in {"status", "self_assessment"} else retrieval_mode
+        preferred_tools = ["core_gap_audit", "repo_map_status", "get_quality_alert", "get_capability_model", "state_packet"]
 
     if cluster_query and "owner_review_cluster_packet" not in preferred_tools:
         preferred_tools = ["owner_review_cluster_packet", "owner_review_cluster_close"] + preferred_tools

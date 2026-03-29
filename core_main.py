@@ -90,6 +90,13 @@ from core_repo_map import (
     render_repo_map_status_report,
     run_repo_map_cycle,
 )
+from core_gap_audit import (
+    build_core_gap_audit,
+    core_gap_audit_loop,
+    core_gap_audit_status,
+    format_core_gap_audit,
+    notify_core_gap_audit,
+)
 from core_work_taxonomy import build_autonomy_contract
 
 # ── Orchestrator v2 ───────────────────────────────────────────────────────────
@@ -113,6 +120,7 @@ CORE_TELEGRAM_COMMANDS = [
     {"command": "evolution", "description": "Evolution worker details or run"},
     {"command": "semantic", "description": "Semantic projection status or run"},
     {"command": "repo", "description": "Repository semantic map status or sync"},
+    {"command": "audit", "description": "CORE manual work audit and gap notifier"},
     {"command": "deploycheck", "description": "Running commit and file hashes"},
     {"command": "project", "description": "Project context tools"},
     {"command": "restart", "description": "Restart CORE service"},
@@ -658,6 +666,7 @@ def _build_startup_brief(resume: str, counts: dict, orch: dict, task_auto: dict 
     code_auto = code_autonomy_status() if CODE_AUTONOMY_ENABLED else {}
     integration_auto = integration_autonomy_status() if INTEGRATION_AUTONOMY_ENABLED else {}
     sem_proj = semantic_projection_status() if SEMANTIC_PROJECTION_ENABLED else {}
+    audit_status = core_gap_audit_status()
     state_packet = t_state_packet(session_id="default")
     state_verification = state_packet.get("verification") or {}
     return (
@@ -666,6 +675,7 @@ def _build_startup_brief(resume: str, counts: dict, orch: dict, task_auto: dict 
         f"<b>State</b>\n"
         f"KB: {counts.get('knowledge_base', 0)} | Mistakes: {counts.get('mistakes', 0)} | Sessions: {counts.get('sessions', 0)}\n"
         f"Repo map: components {counts.get('repo_components', 0)} | chunks {counts.get('repo_component_chunks', 0)} | edges {counts.get('repo_component_edges', 0)} | scans {counts.get('repo_scan_runs', 0)}\n"
+        f"Manual work audit: {'enabled' if audit_status.get('enabled') else 'disabled'} | gaps {audit_status.get('last_report', {}).get('summary', {}).get('gap_count', 0)} | last_run {_tg_escape(audit_status.get('last_run_at') or 'n/a', 40)}\n"
         f"State continuity: {'verified' if state_verification.get('verified') else 'degraded'} | score {state_verification.get('verification_score', 0):.2f} | warnings {len(state_verification.get('warnings') or [])}\n"
         f"Task queue: pending {task_pending} | in_progress {task_in_progress} | done {task_done} | failed {task_failed} | {task_summary}\n"
         f"Evolutions: pending {evo_pending} | applied {evo_applied} | rejected {evo_rejected}\n"
@@ -1889,9 +1899,10 @@ def handle_msg(msg):
                 "CORE Online",
                 [
                     f"Resume: {_tg_escape(resume or 'No active tasks', 180)}",
-                    f"KB: {counts.get('knowledge_base', 0)} | Mistakes: {counts.get('mistakes', 0)} | Sessions: {counts.get('sessions', 0)}",
-                    f"Repo map: components {counts.get('repo_components', 0)} | chunks {counts.get('repo_component_chunks', 0)} | edges {counts.get('repo_component_edges', 0)} | scans {counts.get('repo_scan_runs', 0)}",
-                    f"Task queue: pending {counts.get('task_queue_pending', 0)} | in_progress {counts.get('task_queue_in_progress', 0)} | done {counts.get('task_queue_done', 0)} | failed {counts.get('task_queue_failed', 0)}",
+        f"KB: {counts.get('knowledge_base', 0)} | Mistakes: {counts.get('mistakes', 0)} | Sessions: {counts.get('sessions', 0)}",
+        f"Repo map: components {counts.get('repo_components', 0)} | chunks {counts.get('repo_component_chunks', 0)} | edges {counts.get('repo_component_edges', 0)} | scans {counts.get('repo_scan_runs', 0)}",
+        f"Manual work audit: {'enabled' if core_gap_audit_status().get('enabled') else 'disabled'} | gaps {core_gap_audit_status().get('last_report', {}).get('summary', {}).get('gap_count', 0)} | last_run {_tg_escape(core_gap_audit_status().get('last_run_at') or 'n/a', 40)}",
+        f"Task queue: pending {counts.get('task_queue_pending', 0)} | in_progress {counts.get('task_queue_in_progress', 0)} | done {counts.get('task_queue_done', 0)} | failed {counts.get('task_queue_failed', 0)}",
                     f"Evolution queue: pending {counts.get('evolution_pending', 0)} | applied {counts.get('evolution_applied', 0)} | rejected {counts.get('evolution_rejected', 0)}",
                     f"Task autonomy: {'enabled' if task_auto.get('enabled') else 'disabled'} | pending {task_auto.get('pending', 0)}",
                     f"Code autonomy: {'enabled' if code_auto.get('enabled') else 'disabled'} | pending {code_auto.get('pending_code_tasks', 0)}",
@@ -1899,7 +1910,7 @@ def handle_msg(msg):
                     f"Evolution autonomy: {'enabled' if evo_auto.get('enabled') else 'disabled'} | pending {evo_auto.get('pending_evolutions', 0)}",
                     "",
                     "<b>Quick actions</b>",
-                    "/status, /queues, /tasks, /code, /integration, /evolutions, /review",
+                    "/status, /queues, /tasks, /code, /integration, /evolutions, /review, /audit",
                     "/memory, /autonomy, /evolution, /semantic, /repo",
                     "/health, /deploycheck, /project, /restart, /kill",
                 ],
@@ -1918,12 +1929,14 @@ def handle_msg(msg):
         integration_auto = integration_autonomy_status() if INTEGRATION_AUTONOMY_ENABLED else {}
         evo_auto = evolution_autonomy_status() if EVOLUTION_AUTONOMY_ENABLED else {}
         sem = semantic_projection_status() if SEMANTIC_PROJECTION_ENABLED else {}
+        audit_status = core_gap_audit_status()
         state_packet = t_state_packet(session_id="default")
         state_verification = state_packet.get("verification") or {}
         lines = [
             f"Runtime: {'enabled' if AUTONOMY_ENABLED else 'disabled'} task autonomy | {'enabled' if CODE_AUTONOMY_ENABLED else 'disabled'} code autonomy | {'enabled' if INTEGRATION_AUTONOMY_ENABLED else 'disabled'} integration autonomy | {'enabled' if EVOLUTION_AUTONOMY_ENABLED else 'disabled'} evolution autonomy",
             f"Queues: task pending {counts.get('task_queue_pending', 0)} | in_progress {counts.get('task_queue_in_progress', 0)} | done {counts.get('task_queue_done', 0)} | failed {counts.get('task_queue_failed', 0)} | evolution pending {counts.get('evolution_pending', 0)} | applied {counts.get('evolution_applied', 0)} | rejected {counts.get('evolution_rejected', 0)}",
             f"Memory: KB {counts.get('knowledge_base', 0)} | Mistakes {counts.get('mistakes', 0)} | Sessions {counts.get('sessions', 0)} | Repo map {counts.get('repo_components', 0)} comps / {counts.get('repo_component_chunks', 0)} chunks / {counts.get('repo_component_edges', 0)} edges",
+            f"Manual work audit: {'enabled' if audit_status.get('enabled') else 'disabled'} | gaps {audit_status.get('last_report', {}).get('summary', {}).get('gap_count', 0)} | last_run {_tg_escape(audit_status.get('last_run_at') or 'n/a', 40)}",
             f"State continuity: {'verified' if state_verification.get('verified') else 'degraded'} | score {state_verification.get('verification_score', 0):.2f} | warnings {len(state_verification.get('warnings') or [])}",
             f"Workers: task {task_auto.get('pending', 0)} pending / {task_auto.get('in_progress', 0)} in progress | code {code_auto.get('pending_code_tasks', 0)} pending / {code_auto.get('pending_review_proposals', 0)} review proposals | integration {integration_auto.get('pending_integration_tasks', 0)} pending / {integration_auto.get('pending_review_proposals', 0)} review proposals | evolution {evo_auto.get('pending_evolutions', 0)} pending",
             f"Semantic projection: {'enabled' if SEMANTIC_PROJECTION_ENABLED else 'disabled'} | last_run {_tg_escape(sem.get('last_run_at') or 'n/a', 40)}",
@@ -2078,6 +2091,17 @@ def handle_msg(msg):
                 if packet.get("summary"):
                     lines.append(f"Summary: {_tg_escape(packet.get('summary'), 260)}")
                 notify(_render_section("Repo Packet", lines), cid)
+
+    elif cmd in {"/audit", "/gaps"}:
+        force = arg_str.lower().strip() in {"run", "force", "now", "full"}
+        result = build_core_gap_audit(force=force)
+        if result.get("ok"):
+            if force or (result.get("gaps") and len(result.get("gaps") or [])):
+                notify(format_core_gap_audit(result), cid)
+            else:
+                notify(_render_section("Manual Work Audit", ["No manual work gaps detected."]), cid)
+        else:
+            notify(_render_section("Manual Work Audit", [f"Error: {_tg_escape(result.get('error') or 'unknown', 220)}"]), cid)
 
     elif cmd == "/deploycheck":
         notify(_render_deployment_report(), cid)
@@ -2256,6 +2280,7 @@ def on_start():
     # self_sync_check disabled -- CORE_SELF.md is tombstoned, superseded by system_map
     threading.Thread(target=background_researcher, daemon=True).start()
     threading.Thread(target=repo_map_loop, daemon=True).start()
+    threading.Thread(target=core_gap_audit_loop, daemon=True).start()
     if AUTONOMY_ENABLED:
         threading.Thread(target=autonomy_loop, daemon=True).start()
     if CODE_AUTONOMY_ENABLED:

@@ -11266,6 +11266,23 @@ def t_trigger_capability_calibration() -> dict:
         return {"ok": False, "error": str(e)}
 
 
+def t_core_gap_audit(force: str = "false", notify_owner: str = "true") -> dict:
+    """Run the CORE-wide manual work audit.
+
+    Returns a structured packet describing gaps CORE cannot self-resolve.
+    If notify_owner is true, also sends the report to Telegram.
+    """
+    try:
+        from core_gap_audit import build_core_gap_audit, notify_core_gap_audit
+        want_force = str(force).strip().lower() in {"1", "true", "yes", "on"}
+        want_notify = str(notify_owner).strip().lower() in {"1", "true", "yes", "on"}
+        if want_notify:
+            return notify_core_gap_audit(force=want_force)
+        return build_core_gap_audit(force=want_force)
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
 # =============================================================================
 # TOOLS REGISTRATION — P3-02 + P3-07
 # Append these registrations to the TOOLS dict in core_tools.py.
@@ -11334,6 +11351,21 @@ TOOLS["trigger_capability_calibration"] = {
         "updates capability_model table, notifies owner of weak domains. "
         "Normally runs automatically every Thursday. Call manually after a major "
         "tool fix session to get updated reliability scores."
+    ),
+}
+
+TOOLS["core_gap_audit"] = {
+    "fn":   t_core_gap_audit,
+    "perm": "WRITE",
+    "args": [
+        {"name": "force", "type": "string", "description": "true to notify even if the signature is unchanged"},
+        {"name": "notify_owner", "type": "string", "description": "true to send the report to Telegram (default true)"},
+    ],
+    "desc": (
+        "CORE-wide manual work audit. Scans tool taxonomy, repo-map health, capability model, "
+        "quality alerts, state continuity, and backlog pressure. Returns a gap packet showing what "
+        "CORE cannot self-resolve yet. Use when you need the system to tell the owner what human "
+        "work is required next. EXAMPLE: core_gap_audit()"
     ),
 }
 
