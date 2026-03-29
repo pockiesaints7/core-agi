@@ -304,6 +304,34 @@ def _tool_family_for_name(tool_name: str, tool_desc: str = "") -> str:
 
     if has("owner_review_cluster_packet", "owner_review_cluster_close", "review_cluster", "cluster_close", "review_work_packet", "repo_review_packet", "document_review_packet", "spreadsheet_review_packet", "presentation_review_packet"):
         return "review"
+    if has(
+        "reasoning_packet", "tool_reliance_assessor", "dynamic_relational_graph", "causal_graph",
+        "causal_graph_inference", "meta_contextual_router", "adaptive_temporal_filter",
+        "temporal_attention", "monte_carlo_tree_search", "hierarchical_search_controller",
+        "temporal_hierarchical_world_model", "dynamic_router", "meta_representation",
+        "novelty_assessment", "consolidation_manager", "active_learning_strategy",
+        "register_tool", "contradiction_check", "negative_space", "circuit_breaker",
+        "loop_detect", "partial_complete", "verify_external_state", "verification_packet",
+        "system_verification_packet", "mid_task_correct", "resolve_ambiguity", "assert_source",
+    ):
+        return "self_improve"
+    if has(
+        "evaluate_state", "state_packet", "state_consistency_check", "session_snapshot",
+        "get_state", "get_system_health", "get_active_goals", "get_quality_trend",
+        "get_time", "datetime_now", "get_constitution", "vm_info", "system_map_scan",
+        "get_capability_model", "trigger_capability_calibration", "tool_health_scan",
+        "tool_stats", "load_arch_context", "task_health", "crash_report", "verify_live",
+    ):
+        return "state"
+    if has(
+        "semantic_kb_search", "semantic_episode_search", "get_owner_profile",
+        "add_owner_observation", "mistakes_since", "changelog_verification_packet",
+        "changelog_tracking_packet", "mistake_tracking_packet", "core_py_fn",
+        "core_py_validate", "diff", "project_list", "project_get", "project_search",
+        "project_context_check", "project_register", "project_update_kb",
+        "project_update_index", "project_consume", "public_evidence_packet", "ask",
+    ):
+        return "knowledge"
     if has("repo_map", "repo_component", "repo_graph", "code_read_packet", "file_list", "file_read", "file_write", "read_file", "write_file", "search_in_file", "gh_", "multi_patch", "smart_patch", "shell", "run_python", "run_script", "git"):
         return "repo_code"
     if has("task_mode_packet"):
@@ -334,6 +362,18 @@ def _tool_family_for_name(tool_name: str, tool_desc: str = "") -> str:
         return "agent_ops"
     if has("weather", "currency", "translate", "generate_image", "calc", "list_tools", "datetime_now", "get_time"):
         return "utility"
+    if has("sb_bulk_insert", "set_simulation", "backfill_patterns"):
+        return "training"
+    if has("task_error_packet", "task_similarity_metric", "consolidation_manager"):
+        return "task"
+    if has("list_templates", "run_template", "debug_fn", "listen", "install_package", "validate_tool_output", "test_gemini", "maintenance_purge"):
+        return "utility"
+    if has("vm_info", "update_behavioral_rule", "log_quality_metrics", "get_quality_alert", "log_reasoning"):
+        return "state"
+    if has("predict_failure"):
+        return "self_improve"
+    if has("service", "install_package", "vm_info"):
+        return "deploy"
     return "other"
 
 
