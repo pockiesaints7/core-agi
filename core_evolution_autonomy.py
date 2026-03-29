@@ -29,6 +29,7 @@ import httpx
 
 from core_config import SUPABASE_URL, _sbh_count_svc, sb_get, sb_patch, sb_post
 from core_github import notify
+from core_queue_cursor import build_seek_filter, cursor_from_row
 from core_work_taxonomy import build_autonomy_contract
 
 AUTONOMY_ENABLED = os.getenv("CORE_EVOLUTION_AUTONOMY_ENABLED", "true").strip().lower() not in {
@@ -57,7 +58,11 @@ _state = {
     "backlog_samples": [],
     "last_backlog_monitor": {},
     "last_backlog_alert_at": "",
+    "queue_cursor": {},
 }
+
+QUEUE_ORDER = (("confidence", "desc"), ("created_at", "asc"), ("id", "asc"))
+QUEUE_PAGE_LIMIT = 250
 
 
 def _utcnow() -> str:
@@ -500,43 +505,62 @@ def run_evolution_autonomy_cycle(max_evolutions: int = AUTONOMY_BATCH_LIMIT) -> 
     errors: list[dict] = []
     track_counts: dict[str, int] = {}
     try:
-        scan_limit = max(250, max_evolutions * 100)
-        rows = sb_get(
-            "evolution_queue",
-            f"select=id,change_type,change_summary,recommendation,confidence,impact,status,diff_content,pattern_key"
-            f"&status=eq.pending&order=confidence.desc&limit={max(1, min(scan_limit, 250))}",
-            svc=True,
-        ) or []
         attempted = 0
         claimed = 0
-        for row in rows:
-            try:
-                if claimed >= max_evolutions:
-                    break
-                result = process_evolution_row(row)
-                details.append(result)
-                attempted += 1
-                track = _safe_text(result.get("work_track") or "unknown", 40)
-                track_counts[track] = track_counts.get(track, 0) + 1
-                if result.get("task_created"):
-                    queued += 1
-                    claimed += 1
-                elif result.get("outcome") == "duplicate":
-                    duplicates += 1
-                else:
+        inspected = 0
+        cursor = _state.get("queue_cursor") or {}
+        page_limit = max(100, min(max_evolutions * 80, QUEUE_PAGE_LIMIT))
+        while True:
+            cursor_filter = build_seek_filter(cursor, QUEUE_ORDER)
+            qs = (
+                "select=id,change_type,change_summary,recommendation,confidence,impact,status,diff_content,pattern_key,created_at"
+                f"&status=eq.pending"
+                f"{('&' + cursor_filter) if cursor_filter else ''}"
+                f"&order=confidence.desc,created_at.asc,id.asc&limit={page_limit}"
+            )
+            rows = sb_get("evolution_queue", qs, svc=True) or []
+            if not rows:
+                if cursor:
+                    cursor = {}
+                    _state["queue_cursor"] = {}
+                break
+            for row in rows:
+                try:
+                    if claimed >= max_evolutions:
+                        break
+                    inspected += 1
+                    cursor = cursor_from_row(row, QUEUE_ORDER)
+                    _state["queue_cursor"] = cursor
+                    result = process_evolution_row(row)
+                    details.append(result)
+                    attempted += 1
+                    track = _safe_text(result.get("work_track") or "unknown", 40)
+                    track_counts[track] = track_counts.get(track, 0) + 1
+                    if result.get("task_created"):
+                        queued += 1
+                        claimed += 1
+                    elif result.get("outcome") == "duplicate":
+                        duplicates += 1
+                    else:
+                        failures += 1
+                        skipped += 1
+                except Exception as e:
+                    errors.append({"evolution_id": row.get("id"), "error": str(e)})
                     failures += 1
                     skipped += 1
-            except Exception as e:
-                errors.append({"evolution_id": row.get("id"), "error": str(e)})
-                failures += 1
-                skipped += 1
+            if claimed >= max_evolutions:
+                break
+            if len(rows) < page_limit:
+                cursor = {}
+                _state["queue_cursor"] = {}
+                break
         pending_remaining = _count_rows("evolution_queue", "select=id&status=eq.pending")
         task_pending = _count_rows("task_queue", "select=id&status=eq.pending&source=eq.improvement")
         summary = {
             "started_at": started_at,
             "finished_at": _utcnow(),
             "processed": attempted,
-            "inspected": len(rows),
+            "inspected": inspected,
             "queued": queued,
             "duplicates": duplicates,
             "failures": failures,
@@ -546,6 +570,7 @@ def run_evolution_autonomy_cycle(max_evolutions: int = AUTONOMY_BATCH_LIMIT) -> 
             "track_counts": track_counts,
             "details": details,
             "errors": errors,
+            "queue_cursor": _state.get("queue_cursor") or {},
         }
         summary["backlog_monitor"] = _monitor_backlog(summary)
         _state["last_run_at"] = summary["finished_at"]
@@ -604,6 +629,7 @@ def evolution_autonomy_status() -> dict:
         "pending_improvement_tasks": task_pending,
         "track_counts": _state["last_summary"].get("track_counts", {}),
         "last_summary": _state["last_summary"],
+        "queue_cursor": _state.get("queue_cursor") or {},
     }
 
 

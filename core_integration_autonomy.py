@@ -25,6 +25,7 @@ from typing import Any
 
 from core_config import GROQ_MODEL, groq_chat, sb_get, sb_patch, sb_post
 from core_github import notify
+from core_queue_cursor import build_seek_filter, cursor_from_row
 from core_reflection_audit import finalize_reflection_event, note_reflection_stage, register_reflection_event
 from core_tools import t_agent_session_init, t_agent_state_set, t_agent_step_done, t_reasoning_packet
 from core_work_taxonomy import build_autonomy_contract
@@ -53,7 +54,11 @@ _state = {
     "last_summary": {},
     "last_error": "",
     "last_claimed_task_id": "",
+    "queue_cursor": {},
 }
+
+QUEUE_ORDER = (("priority", "desc"), ("created_at", "asc"), ("id", "asc"))
+QUEUE_PAGE_LIMIT = 250
 
 _FILE_HINTS = [
     {"repo": "core-agi", "path": "core_main.py", "focus": ["telegram", "command", "review", "autonomy", "startup", "webhook", "deploy", "health", "operator"], "anchors": [
@@ -176,15 +181,18 @@ def _task_strategy(task: dict, title: str, description: str, source: str = "") -
     return build_autonomy_contract(title, description, source=source, autonomy=autonomy, context="integration_autonomy")
 
 
-def _task_rows(limit: int = 1) -> list[dict]:
+def _task_rows(limit: int = 1, cursor: dict | None = None) -> list[dict]:
     source_list = [s.strip() for s in TASK_SOURCES if s.strip()] or ["mcp_session", "self_assigned", "improvement"]
+    cursor_filter = build_seek_filter(cursor, QUEUE_ORDER)
     rows = sb_get(
         "task_queue",
         "select=id,task,status,priority,source,created_at,updated_at,next_step,blocked_by,checkpoint,checkpoint_at,checkpoint_draft"
-        f"&status=eq.pending&source=in.({','.join(source_list)})&order=priority.desc,created_at.asc&limit={max(1, min(limit, 250))}",
+        f"&status=eq.pending&source=in.({','.join(source_list)})"
+        f"{('&' + cursor_filter) if cursor_filter else ''}"
+        f"&order=priority.desc,created_at.asc,id.asc&limit={max(1, min(limit, QUEUE_PAGE_LIMIT))}",
         svc=True,
     ) or []
-    rows.sort(key=lambda row: (-int(row.get("priority") or 0), row.get("created_at") or ""))
+    rows.sort(key=lambda row: (-int(row.get("priority") or 0), row.get("created_at") or "", str(row.get("id") or "")))
     return rows
 
 
@@ -920,38 +928,55 @@ def run_integration_autonomy_cycle(max_tasks: int = AUTONOMY_BATCH_LIMIT) -> dic
     errors: list[dict] = []
     track_counts: dict[str, int] = {}
     try:
-        scan_limit = max(250, max_tasks * 100)
-        rows = _integration_rows(limit=scan_limit)
+        cursor = _state.get("queue_cursor") or {}
+        page_limit = max(100, min(max_tasks * 80, QUEUE_PAGE_LIMIT))
         attempted = 0
         claimed = 0
-        for row in rows:
-            try:
-                if claimed >= max_tasks:
-                    break
-                result = _claim_task(row)
-                details.append(result)
-                attempted += 1
-                track = _safe_text((result.get("strategy") or {}).get("work_track") or result.get("work_track") or "unknown", 40)
-                track_counts[track] = track_counts.get(track, 0) + 1
-                if result.get("deferred"):
-                    deferred += 1
-                elif result.get("proposal_created"):
-                    proposed += 1
-                    claimed += 1
-                elif result.get("outcome") == "duplicate":
-                    duplicates += 1
-                else:
+        inspected = 0
+        while True:
+            rows = _task_rows(limit=page_limit, cursor=cursor)
+            if not rows:
+                if cursor:
+                    cursor = {}
+                    _state["queue_cursor"] = {}
+                break
+            for row in rows:
+                try:
+                    if claimed >= max_tasks:
+                        break
+                    inspected += 1
+                    cursor = cursor_from_row(row, QUEUE_ORDER)
+                    _state["queue_cursor"] = cursor
+                    result = _claim_task(row)
+                    details.append(result)
+                    attempted += 1
+                    track = _safe_text((result.get("strategy") or {}).get("work_track") or result.get("work_track") or "unknown", 40)
+                    track_counts[track] = track_counts.get(track, 0) + 1
+                    if result.get("deferred"):
+                        deferred += 1
+                    elif result.get("proposal_created"):
+                        proposed += 1
+                        claimed += 1
+                    elif result.get("outcome") == "duplicate":
+                        duplicates += 1
+                    else:
+                        failures += 1
+                except Exception as e:
+                    errors.append({"task_id": row.get("id"), "error": str(e)})
                     failures += 1
-            except Exception as e:
-                errors.append({"task_id": row.get("id"), "error": str(e)})
-                failures += 1
+            if claimed >= max_tasks:
+                break
+            if len(rows) < page_limit:
+                cursor = {}
+                _state["queue_cursor"] = {}
+                break
         pending_now = _count_rows("task_queue", "select=id&status=eq.pending")
         pending_props = _count_rows("evolution_queue", "select=id&status=eq.pending&source=eq.integration_autonomy")
         summary = {
             "started_at": started_at,
             "finished_at": _utcnow(),
             "processed": attempted,
-            "inspected": len(rows),
+            "inspected": inspected,
             "proposed": proposed,
             "duplicates": duplicates,
             "deferred": deferred,
@@ -961,6 +986,7 @@ def run_integration_autonomy_cycle(max_tasks: int = AUTONOMY_BATCH_LIMIT) -> dic
             "track_counts": track_counts,
             "details": details,
             "errors": errors,
+            "queue_cursor": _state.get("queue_cursor") or {},
         }
         _state["last_run_at"] = summary["finished_at"]
         _state["last_summary"] = summary
@@ -1016,6 +1042,7 @@ def integration_autonomy_status() -> dict:
         "track_counts": _state["last_summary"].get("track_counts", {}),
         "last_summary": _state["last_summary"],
         "deferred": _state["last_summary"].get("deferred", 0),
+        "queue_cursor": _state.get("queue_cursor") or {},
     }
 
 

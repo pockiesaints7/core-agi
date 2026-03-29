@@ -39,12 +39,13 @@ from core_tools import (
     t_add_behavioral_rule,
     t_task_error_packet,
 )
+from core_queue_cursor import build_seek_filter, cursor_from_row
 
 AUTONOMY_ENABLED = os.getenv("CORE_AUTONOMY_ENABLED", "true").strip().lower() not in {
     "0", "false", "no", "off"
 }
-AUTONOMY_INTERVAL_S = max(60, int(os.getenv("CORE_AUTONOMY_INTERVAL_S", "300")))
-AUTONOMY_BATCH_LIMIT = max(1, int(os.getenv("CORE_AUTONOMY_BATCH_LIMIT", "1")))
+AUTONOMY_INTERVAL_S = max(60, int(os.getenv("CORE_AUTONOMY_INTERVAL_S", "120")))
+AUTONOMY_BATCH_LIMIT = max(1, int(os.getenv("CORE_AUTONOMY_BATCH_LIMIT", "3")))
 AUTONOMY_SOURCES = tuple(
     s.strip() for s in os.getenv("CORE_AUTONOMY_SOURCES", "self_assigned,improvement").split(",") if s.strip()
 )
@@ -60,7 +61,11 @@ _state = {
     "last_summary": {},
     "last_error": "",
     "last_claimed_task_id": "",
+    "queue_cursor": {},
 }
+
+QUEUE_ORDER = (("priority", "desc"), ("created_at", "asc"), ("id", "asc"))
+QUEUE_PAGE_LIMIT = 250
 
 
 def _utcnow() -> str:
@@ -144,20 +149,23 @@ def _classify_task(title: str, description: str, source: str = "") -> dict:
     return build_autonomy_contract(title, description, source=source, context="task_autonomy")
 
 
-def _task_rows(limit: int = 1, source: str = AUTONOMY_SOURCE) -> list[dict]:
+def _task_rows(limit: int = 1, source: str = AUTONOMY_SOURCE, cursor: dict | None = None) -> list[dict]:
     if limit <= 0:
         return []
     source_list = [s.strip() for s in str(source or ",".join(AUTONOMY_SOURCES)).split(",") if s.strip()] or list(AUTONOMY_SOURCES)
+    cursor_filter = build_seek_filter(cursor, QUEUE_ORDER)
     rows = sb_get(
         "task_queue",
         f"select=id,task,status,priority,source,created_at,updated_at,next_step,blocked_by,checkpoint,checkpoint_at,checkpoint_draft"
-        f"&status=eq.pending&source=in.({','.join(source_list)})&order=priority.desc&limit={max(1, min(limit, 250))}",
+        f"&status=eq.pending&source=in.({','.join(source_list)})"
+        f"{('&' + cursor_filter) if cursor_filter else ''}"
+        f"&order=priority.desc,created_at.asc,id.asc&limit={max(1, min(limit, QUEUE_PAGE_LIMIT))}",
         svc=True,
     ) or []
     # Prefer oldest among the highest-priority slice to avoid starvation.
     def _priority_key(row: dict) -> tuple:
         created = row.get("created_at") or ""
-        return (-int(row.get("priority") or 0), created)
+        return (-int(row.get("priority") or 0), created, str(row.get("id") or ""))
 
     return sorted(rows, key=_priority_key)
 
@@ -885,45 +893,58 @@ def run_autonomy_cycle(max_tasks: int = AUTONOMY_BATCH_LIMIT, source: str = AUTO
     try:
         metadata_backfill = _backfill_autonomy_metadata(source=source, limit=max_tasks * 20)
         duplicate_cleanup = _close_duplicate_noop_tasks(source=source, limit=max_tasks * 5)
-        candidate_limit = max(250, max_tasks * 100)
-        rows = _task_rows(limit=candidate_limit, source=source)
+        cursor = _state.get("queue_cursor") or {}
+        page_limit = max(100, min(max_tasks * 60, QUEUE_PAGE_LIMIT))
         inspected = 0
-        for row in rows:
-            if processed and len(processed) >= max_tasks:
+        while True:
+            rows = _task_rows(limit=page_limit, source=source, cursor=cursor)
+            if not rows:
+                if cursor:
+                    cursor = {}
+                    _state["queue_cursor"] = {}
                 break
-            inspected += 1
-            try:
-                task = _parse_task_blob(row)
-                strategy = _classify_task(_safe_text(task.get("title"), 200), _safe_text(task.get("description"), 1000), _safe_text(row.get("source"), 80))
-                if _is_deferred_track(strategy):
-                    deferred_to = _deferred_worker(strategy) or "evolution_autonomy"
-                    deferred_tasks.append({
-                        "task_id": row.get("id"),
-                        "title": _safe_text(task.get("title"), 200),
-                        "strategy": strategy,
-                        "deferred_to": deferred_to,
-                    })
-                    continue
-                result = process_task_row(row)
-                processed.append(result)
-                track = _safe_text((result.get("strategy") or {}).get("work_track") or "unknown", 40)
-                track_counts[track] = track_counts.get(track, 0) + 1
-                if len(processed) >= max_tasks:
-                    break
-            except Exception as e:
-                errors.append({"task_id": row.get("id"), "error": str(e)})
+            for row in rows:
+                inspected += 1
+                cursor = cursor_from_row(row, QUEUE_ORDER)
+                _state["queue_cursor"] = cursor
                 try:
-                    task_id = str(row.get("id") or "")
-                    t_task_error_packet(
-                        task_id=task_id,
-                        error=str(e),
-                        phase="cycle",
-                        summary="Unhandled task autonomy exception",
-                        retryable="false",
-                        next_step="owner_review",
-                    )
-                except Exception:
-                    pass
+                    task = _parse_task_blob(row)
+                    strategy = _classify_task(_safe_text(task.get("title"), 200), _safe_text(task.get("description"), 1000), _safe_text(row.get("source"), 80))
+                    if _is_deferred_track(strategy):
+                        deferred_to = _deferred_worker(strategy) or "evolution_autonomy"
+                        deferred_tasks.append({
+                            "task_id": row.get("id"),
+                            "title": _safe_text(task.get("title"), 200),
+                            "strategy": strategy,
+                            "deferred_to": deferred_to,
+                        })
+                        continue
+                    result = process_task_row(row)
+                    processed.append(result)
+                    track = _safe_text((result.get("strategy") or {}).get("work_track") or "unknown", 40)
+                    track_counts[track] = track_counts.get(track, 0) + 1
+                    if len(processed) >= max_tasks:
+                        break
+                except Exception as e:
+                    errors.append({"task_id": row.get("id"), "error": str(e)})
+                    try:
+                        task_id = str(row.get("id") or "")
+                        t_task_error_packet(
+                            task_id=task_id,
+                            error=str(e),
+                            phase="cycle",
+                            summary="Unhandled task autonomy exception",
+                            retryable="false",
+                            next_step="owner_review",
+                        )
+                    except Exception:
+                        pass
+            if len(processed) >= max_tasks:
+                break
+            if len(rows) < page_limit:
+                cursor = {}
+                _state["queue_cursor"] = {}
+                break
         summary = {
             "started_at": started_at,
             "finished_at": _utcnow(),
@@ -937,6 +958,7 @@ def run_autonomy_cycle(max_tasks: int = AUTONOMY_BATCH_LIMIT, source: str = AUTO
             "inspected": inspected,
             "metadata_backfill": metadata_backfill,
             "duplicate_cleanup": duplicate_cleanup,
+            "queue_cursor": _state.get("queue_cursor") or {},
         }
         try:
             source_list = list(AUTONOMY_SOURCES)
@@ -1021,6 +1043,7 @@ def autonomy_status() -> dict:
         "in_progress": len(in_progress),
         "deferred": _state["last_summary"].get("deferred", 0),
         "track_counts": _state["last_summary"].get("track_counts", {}),
+        "queue_cursor": _state.get("queue_cursor") or {},
         "last_summary": _state["last_summary"],
     }
 
@@ -1051,7 +1074,7 @@ def register_tools() -> None:
         }
 
 
-def t_task_autonomy_run(max_tasks: str = "1", source: str = ",".join(AUTONOMY_SOURCES)) -> dict:
+def t_task_autonomy_run(max_tasks: str = str(AUTONOMY_BATCH_LIMIT), source: str = ",".join(AUTONOMY_SOURCES)) -> dict:
     try:
         lim = int(max_tasks) if max_tasks else AUTONOMY_BATCH_LIMIT
     except Exception:

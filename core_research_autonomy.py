@@ -23,14 +23,15 @@ from typing import Any
 
 from core_config import GROQ_MODEL, groq_chat, sb_get, sb_patch, sb_post
 from core_github import notify
+from core_queue_cursor import build_seek_filter, cursor_from_row
 from core_tools import t_add_knowledge, t_reasoning_packet, t_agent_session_init, t_agent_state_set, t_agent_step_done
 from core_work_taxonomy import build_autonomy_contract
 
 AUTONOMY_ENABLED = os.getenv("CORE_RESEARCH_AUTONOMY_ENABLED", "true").strip().lower() not in {
     "0", "false", "no", "off"
 }
-AUTONOMY_INTERVAL_S = max(300, int(os.getenv("CORE_RESEARCH_AUTONOMY_INTERVAL_S", "1200")))
-AUTONOMY_BATCH_LIMIT = max(1, int(os.getenv("CORE_RESEARCH_AUTONOMY_BATCH_LIMIT", "2")))
+AUTONOMY_INTERVAL_S = max(300, int(os.getenv("CORE_RESEARCH_AUTONOMY_INTERVAL_S", "600")))
+AUTONOMY_BATCH_LIMIT = max(1, int(os.getenv("CORE_RESEARCH_AUTONOMY_BATCH_LIMIT", "3")))
 AUTONOMY_NOTIFY = os.getenv("CORE_RESEARCH_AUTONOMY_NOTIFY", "true").strip().lower() in {
     "1", "true", "yes", "on"
 }
@@ -44,7 +45,11 @@ _state = {
     "last_run_at": "",
     "last_summary": {},
     "last_error": "",
+    "queue_cursor": {},
 }
+
+QUEUE_ORDER = (("priority", "desc"), ("created_at", "asc"), ("id", "asc"))
+QUEUE_PAGE_LIMIT = 250
 
 
 def _utcnow() -> str:
@@ -90,15 +95,18 @@ def _task_strategy(task: dict, title: str, description: str, source: str = "") -
     return build_autonomy_contract(title, description, source=source, autonomy=autonomy, context="research_autonomy")
 
 
-def _task_rows(limit: int = 1) -> list[dict]:
+def _task_rows(limit: int = 1, cursor: dict | None = None) -> list[dict]:
     source_list = [s.strip() for s in TASK_SOURCES if s.strip()] or ["mcp_session", "self_assigned", "improvement"]
+    cursor_filter = build_seek_filter(cursor, QUEUE_ORDER)
     rows = sb_get(
         "task_queue",
         "select=id,task,status,priority,source,created_at,updated_at,next_step,blocked_by,checkpoint,checkpoint_at,checkpoint_draft"
-        f"&status=eq.pending&source=in.({','.join(source_list)})&order=priority.desc,created_at.asc&limit={max(1, min(limit, 250))}",
+        f"&status=eq.pending&source=in.({','.join(source_list)})"
+        f"{('&' + cursor_filter) if cursor_filter else ''}"
+        f"&order=priority.desc,created_at.asc,id.asc&limit={max(1, min(limit, 1500))}",
         svc=True,
     ) or []
-    rows.sort(key=lambda row: (-int(row.get("priority") or 0), row.get("created_at") or ""))
+    rows.sort(key=lambda row: (-int(row.get("priority") or 0), row.get("created_at") or "", str(row.get("id") or "")))
     return rows
 
 
@@ -116,7 +124,7 @@ def _research_rows(limit: int = 1) -> list[dict]:
 
 
 def _research_pending_rows(limit: int = 500) -> list[dict]:
-    rows = _task_rows(limit=max(1, min(limit, 500)))
+    rows = _task_rows(limit=max(1, min(limit, 1500)))
     picked = []
     for row in rows:
         task = _parse_task_blob(row)
@@ -394,44 +402,61 @@ def run_research_autonomy_cycle(max_tasks: int = AUTONOMY_BATCH_LIMIT) -> dict:
             return {"ok": False, "busy": True, "message": "research autonomy cycle already running"}
         _state["running"] = True
     try:
-        scan_limit = max(250, max_tasks * 100)
-        rows = _research_rows(limit=scan_limit)
+        cursor = _state.get("queue_cursor") or {}
+        page_limit = max(100, min(max_tasks * 80, QUEUE_PAGE_LIMIT))
         processed = []
         skipped = 0
         failed = 0
         follow_up_queued = 0
         track_counts = Counter()
         claimed = 0
-        for row in rows:
-            task = _parse_task_blob(row)
-            strategy = _task_strategy(task, task.get("title") or "", task.get("description") or "", source=row.get("source") or "")
-            track_counts[strategy.get("work_track") or "unknown"] += 1
+        inspected = 0
+        while True:
+            rows = _task_rows(limit=page_limit, cursor=cursor)
+            if not rows:
+                if cursor:
+                    cursor = {}
+                    _state["queue_cursor"] = {}
+                break
+            for row in rows:
+                task = _parse_task_blob(row)
+                strategy = _task_strategy(task, task.get("title") or "", task.get("description") or "", source=row.get("source") or "")
+                track_counts[strategy.get("work_track") or "unknown"] += 1
+                inspected += 1
+                cursor = cursor_from_row(row, QUEUE_ORDER)
+                _state["queue_cursor"] = cursor
+                if claimed >= max_tasks:
+                    break
+                if strategy.get("work_track") != "research":
+                    skipped += 1
+                    continue
+                try:
+                    result = _claim_task(row, strategy)
+                    processed.append(result)
+                    if result.get("kb_ok"):
+                        claimed += 1
+                    if result.get("follow_up_queued"):
+                        follow_up_queued += 1
+                    if not result.get("kb_ok"):
+                        failed += 1
+                except Exception as e:
+                    failed += 1
+                    processed.append({
+                        "task_id": row.get("id"),
+                        "title": _safe_text(task.get("title") or "", 120),
+                        "ok": False,
+                        "kb_ok": False,
+                        "track": "research",
+                        "error": str(e),
+                    })
             if claimed >= max_tasks:
                 break
-            if strategy.get("work_track") != "research":
-                skipped += 1
-                continue
-            try:
-                result = _claim_task(row, strategy)
-                processed.append(result)
-                if result.get("kb_ok"):
-                    claimed += 1
-                if result.get("follow_up_queued"):
-                    follow_up_queued += 1
-                if not result.get("kb_ok"):
-                    failed += 1
-            except Exception as e:
-                failed += 1
-                processed.append({
-                    "task_id": row.get("id"),
-                    "title": _safe_text(task.get("title") or "", 120),
-                    "ok": False,
-                    "kb_ok": False,
-                    "track": "research",
-                    "error": str(e),
-                })
+            if len(rows) < page_limit:
+                cursor = {}
+                _state["queue_cursor"] = {}
+                break
 
-        pending = len(_research_pending_rows(limit=500))
+        pending = len(_research_pending_rows(limit=1000))
         status = {
             "ok": True,
             "enabled": AUTONOMY_ENABLED,
@@ -439,7 +464,7 @@ def run_research_autonomy_cycle(max_tasks: int = AUTONOMY_BATCH_LIMIT) -> dict:
             "started_at": started_at,
             "finished_at": _utcnow(),
             "processed": len(processed),
-            "inspected": len(rows),
+            "inspected": inspected,
             "completed": sum(1 for item in processed if item.get("kb_ok")),
             "failed": failed,
             "skipped": skipped,
@@ -447,6 +472,7 @@ def run_research_autonomy_cycle(max_tasks: int = AUTONOMY_BATCH_LIMIT) -> dict:
             "pending": pending,
             "track_counts": dict(sorted(track_counts.items())),
             "details": processed,
+            "queue_cursor": _state.get("queue_cursor") or {},
         }
         with _lock:
             _state["last_run_at"] = status["finished_at"]
@@ -490,7 +516,7 @@ def research_autonomy_loop() -> None:
 
 
 def research_autonomy_status() -> dict:
-    pending = len(_research_pending_rows(limit=500))
+    pending = len(_research_pending_rows(limit=1000))
     summary = _state.get("last_summary") or {}
     return {
         "enabled": AUTONOMY_ENABLED,
@@ -506,6 +532,7 @@ def research_autonomy_status() -> dict:
         "follow_up_queued": int(summary.get("follow_up_queued") or 0),
         "track_counts": summary.get("track_counts") or {},
         "recent_tasks": summary.get("details") or [],
+        "queue_cursor": _state.get("queue_cursor") or {},
     }
 
 
