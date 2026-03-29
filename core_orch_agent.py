@@ -468,6 +468,11 @@ def _build_prompt(
     sid = effective_state.get("session_id", "default")
     parts.append(f"YOUR SESSION_ID IS: {sid!r} — use this exact value for all agent_* tool calls.")
     parts.append("")
+    task_mode = effective_state.get("task_mode_packet") or {}
+    if task_mode:
+        parts.append("TASK MODE PACKET (choose tools from this work-intent matrix before guessing):")
+        parts.append(_j.dumps(task_mode, default=str))
+        parts.append("")
     if compressed_summary:
         parts.append(compressed_summary)
         parts.append("")
@@ -610,6 +615,8 @@ async def run_agent_loop(msg: OrchestratorMessage, goal: str) -> None:
             _agent_state.update(loaded)
         if msg.context.get("evidence_gate"):
             _agent_state.setdefault("evidence_gate", msg.context.get("evidence_gate", {}))
+        if msg.context.get("task_mode_packet"):
+            _agent_state.setdefault("task_mode_packet", msg.context.get("task_mode_packet", {}))
         if msg.context.get("tool_policy_packet"):
             _agent_state.setdefault("tool_policy_packet", msg.context.get("tool_policy_packet", {}))
     except Exception as _se:
@@ -623,6 +630,8 @@ async def run_agent_loop(msg: OrchestratorMessage, goal: str) -> None:
     try:
         if msg.context.get("tool_policy_packet"):
             _agent_state["tool_policy_packet"] = msg.context.get("tool_policy_packet", {})
+        if msg.context.get("task_mode_packet"):
+            _agent_state["task_mode_packet"] = msg.context.get("task_mode_packet", {})
     except Exception as _se:
         print(f"[AGENT] tool-policy seed error (non-fatal): {_se}")
 

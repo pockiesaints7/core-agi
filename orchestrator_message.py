@@ -42,6 +42,7 @@ class OrchestratorMessage:
     # Shared decision/evidence packets (cross-layer)
     input_profile: Dict[str, Any] = field(default_factory=dict)      # L1 human-input packet
     speech_act_packet: Dict[str, Any] = field(default_factory=dict) # L1 speech-act packet
+    task_mode_packet: Dict[str, Any] = field(default_factory=dict)   # L1-L4 work-intent matrix
     response_style_packet: Dict[str, Any] = field(default_factory=dict) # L1/L4 output shaping packet
     tool_policy_packet: Dict[str, Any] = field(default_factory=dict)    # L4/L5 tool-selection policy
     request_kind: str = ""                                          # high-level request type

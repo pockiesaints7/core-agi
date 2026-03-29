@@ -31,6 +31,17 @@ from core_config import (
 from core_config import _sbh, _sbh_count_svc
 from core_github import _ghh, _gh_blob_read, _gh_blob_write, gh_read, gh_write, notify
 from core_train import apply_evolution, reject_evolution, bulk_reject_evolutions, run_cold_processor
+from core_task_taxonomy import (
+    t_task_mode_packet,
+    t_spreadsheet_work_packet,
+    t_document_work_packet,
+    t_presentation_work_packet,
+    t_review_work_packet,
+    t_repo_review_packet,
+    t_document_review_packet,
+    t_spreadsheet_review_packet,
+    t_presentation_review_packet,
+)
 
 # Alias â€” used in t_core_py_rollback and t_deploy_and_wait
 notify_owner = notify
@@ -6887,6 +6898,24 @@ TOOLS = {
                                "desc": "Unified semantic memory search across knowledge_base plus the native semantic tables. Use this when CORE needs one reasoning context for planning, self-correction, ambiguity resolution, or decomposition."},
     "reasoning_packet":       {"fn": t_reasoning_packet,       "perm": "READ",    "args": ["query", "domain", "limit", "tables", "per_table"],
                                "desc": "Build the canonical reasoning packet (query+focus+context+top_hits) that agentic tools should consume. Deterministic, no writes."},
+    "task_mode_packet":       {"fn": t_task_mode_packet,       "perm": "READ",    "args": ["text", "goal", "source", "message_type", "route", "attachments", "artifact_hint", "content"],
+                               "desc": "Build the human-work taxonomy packet. Classifies cowork inputs into analyze/transform/create/inspect/operate/research/coordinate/learn/decide/clarify/interrupt plus subintent/detail, artifact expectation, agentic recommendation, and preferred tool families."},
+    "spreadsheet_work_packet": {"fn": t_spreadsheet_work_packet, "perm": "READ",   "args": ["content", "goal", "filename", "sheet_name", "format_hint"],
+                               "desc": "Analyze spreadsheet-like content and return a structured work packet: row/column counts, header detection, numeric columns, blank/duplicate rows, analysis focus, and recommended next step."},
+    "document_work_packet":   {"fn": t_document_work_packet,   "perm": "READ",    "args": ["content", "goal", "audience", "format_hint"],
+                               "desc": "Analyze document/text content and return a structured work packet: summary focus, action items, paragraph/sentence counts, and recommended next step."},
+    "presentation_work_packet": {"fn": t_presentation_work_packet, "perm": "READ", "args": ["content", "goal", "audience", "slide_target", "theme"],
+                               "desc": "Analyze presentation intent/content and return a structured work packet with slide outline, suggested slide count, and next step."},
+    "review_work_packet":     {"fn": t_review_work_packet,     "perm": "READ",    "args": ["content", "goal", "artifact_type", "focus", "rubric"],
+                               "desc": "Build a structured review packet for code, documents, spreadsheets, presentations, or generic artifacts. Returns findings, issues, severity, checklist, and recommended next step."},
+    "repo_review_packet":     {"fn": t_repo_review_packet,     "perm": "READ",    "args": ["content", "goal", "focus"],
+                               "desc": "Specialized review packet for repo diffs and code changes. Returns review checklist, findings, severity, and next step."},
+    "document_review_packet": {"fn": t_document_review_packet, "perm": "READ",    "args": ["content", "goal", "focus"],
+                               "desc": "Specialized review packet for documents. Returns clarity/completeness/action/fact checks and next step."},
+    "spreadsheet_review_packet": {"fn": t_spreadsheet_review_packet, "perm": "READ", "args": ["content", "goal", "focus"],
+                               "desc": "Specialized review packet for spreadsheets. Returns totals/duplicates/blanks/formulas/anomalies checks and next step."},
+    "presentation_review_packet": {"fn": t_presentation_review_packet, "perm": "READ", "args": ["content", "goal", "focus"],
+                               "desc": "Specialized review packet for presentations. Returns story-flow/slide-count/evidence/audience-fit checks and next step."},
     "tool_reliance_assessor": {"fn": t_tool_reliance_assessor, "perm": "READ",    "args": ["query", "domain", "tables", "limit", "per_table", "state_hint", "planned_action"],
                                "desc": "Assess whether CORE should stay memory-first or use more tools. Returns strategy, tool_budget, and recommended tools."},
     "evaluate_state":         {"fn": t_evaluate_state,         "perm": "READ",    "args": ["query", "domain", "tables", "limit", "per_table", "state_hint"],

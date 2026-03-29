@@ -360,12 +360,14 @@ async def layer_3_classify(msg: OrchestratorMessage):
         msg.route_reason = decision.get("route_reason", msg.route_reason)
         msg.clarification_needed = bool(decision.get("clarification_needed", False))
         msg.response_style_packet = decision.get("response_style_packet", {}) or {}
+        msg.task_mode_packet = decision.get("task_mode_packet", {}) or msg.task_mode_packet
         msg.context["request_kind"] = msg.request_kind
         msg.context["response_mode"] = msg.response_mode
         msg.context["route_reason"] = msg.route_reason
         msg.context["clarification_needed"] = msg.clarification_needed
         msg.context["decision_packet"] = decision
         msg.context["response_style_packet"] = msg.response_style_packet
+        msg.context["task_mode_packet"] = msg.task_mode_packet
     except Exception as exc:
         print(f"[L3] decision_packet build failed (non-fatal): {exc}")
 

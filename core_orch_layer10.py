@@ -71,6 +71,7 @@ def _format_mcp(msg: OrchestratorMessage) -> dict:
         "evidence_gate": getattr(msg, "evidence_gate", {}) or {},
         "input_profile": getattr(msg, "input_profile", {}) or {},
         "speech_act_packet": getattr(msg, "speech_act_packet", {}) or {},
+        "task_mode_packet": getattr(msg, "task_mode_packet", {}) or {},
         "response_style_packet": getattr(msg, "response_style_packet", {}) or {},
         "agentic_metadata": getattr(msg, "agentic_metadata", {}) or {},
     }

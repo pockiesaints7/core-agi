@@ -32,6 +32,7 @@ from core_orch_context import (
 )
 from core_public_evidence import build_public_evidence_packet
 from core_repo_map import build_repo_component_packet, build_repo_graph_packet
+from core_task_taxonomy import build_task_mode_packet
 
 
 @dataclass
@@ -102,7 +103,7 @@ MATRIX: list[StressCase] = [
             "agentic": True,
             "gate_mode": "code",
             "repo_map_needed": True,
-            "tool_best_fit_family": "task",
+            "tool_best_fit_family": "repo_code",
             "tool_best_first_tool": "repo_component_packet",
             "tool_registry_size_min": 1,
         },
@@ -116,7 +117,7 @@ MATRIX: list[StressCase] = [
             "primary_class": "evaluate",
             "request_kind": "owner_review",
             "response_mode": "review",
-            "style_mode": "review",
+            "style_mode": "coordination",
             "agentic": False,
             "tool_best_fit_family": "review",
             "tool_best_first_tool": "owner_review_cluster_packet",
@@ -208,6 +209,79 @@ MATRIX: list[StressCase] = [
         repo_path="THIS_FILE_DOES_NOT_EXIST.py",
         expect_repo_missing=True,
     ),
+    StressCase(
+        case_id="T11",
+        difficulty="medium",
+        source="telegram",
+        text="Analyze this Excel sales table and tell me the anomalies.",
+        expect={
+            "request_kind": "task",
+            "response_mode": "agentic",
+            "work_intent": "analyze",
+            "work_subintent": "spreadsheet_analysis",
+            "task_agentic": True,
+            "artifact_expected": "analysis_report",
+            "task_best_fit_family": "document",
+            "task_best_first_tool": "spreadsheet_work_packet",
+        },
+    ),
+    StressCase(
+        case_id="T12",
+        difficulty="medium",
+        source="telegram",
+        text="Make a presentation for this quarterly update.",
+        expect={
+            "request_kind": "task",
+            "response_mode": "agentic",
+            "work_intent": "create",
+            "work_subintent": "presentation_creation",
+            "task_agentic": True,
+            "artifact_expected": "slide_deck",
+            "task_best_fit_family": "document",
+            "task_best_first_tool": "presentation_work_packet",
+        },
+    ),
+    StressCase(
+        case_id="T13",
+        difficulty="medium",
+        source="telegram",
+        text="Summarize this document and extract action items.",
+        expect={
+            "request_kind": "task",
+            "work_intent": "transform",
+            "work_subintent": "summarize",
+            "task_agentic": False,
+            "artifact_expected": "transformed_artifact",
+            "task_best_fit_family": "document",
+            "task_best_first_tool": "document_work_packet",
+        },
+    ),
+    StressCase(
+        case_id="T14",
+        difficulty="medium",
+        source="telegram",
+        text="Review the repo diff and tell me whether the fix is safe.",
+        expect={
+            "work_intent": "inspect",
+            "work_subintent": "review",
+            "task_agentic": True,
+            "task_best_fit_family": "repo_code",
+            "task_best_first_tool": "repo_review_packet",
+        },
+    ),
+    StressCase(
+        case_id="T15",
+        difficulty="hard",
+        source="telegram",
+        text="Batch cluster these owner-only items and close them if verified.",
+        expect={
+            "work_intent": "coordinate",
+            "work_subintent": "batch",
+            "task_agentic": True,
+            "task_best_fit_family": "review",
+            "task_best_first_tool": "owner_review_cluster_packet",
+        },
+    ),
 ]
 
 
@@ -222,6 +296,8 @@ def _build_message(case: StressCase) -> OrchestratorMessage:
     msg.clarification_needed = bool(profile["clarification_needed"])
     msg.context["input_profile"] = msg.input_profile
     msg.context["speech_act_packet"] = msg.speech_act_packet
+    msg.task_mode_packet = profile.get("task_mode_packet", {})
+    msg.context["task_mode_packet"] = msg.task_mode_packet
     msg.context["request_profile"] = profile
     msg.context["request_kind"] = msg.request_kind
     msg.context["response_mode"] = msg.response_mode
@@ -252,11 +328,13 @@ def run_case(case: StressCase) -> tuple[dict[str, Any], list[str]]:
     msg.response_mode = decision.get("response_mode", msg.response_mode)
     msg.route_reason = decision.get("route_reason", msg.route_reason)
     msg.clarification_needed = bool(decision.get("clarification_needed", False))
+    msg.task_mode_packet = decision.get("task_mode_packet", msg.task_mode_packet)
     msg.context["decision_packet"] = decision
     msg.context["request_kind"] = msg.request_kind
     msg.context["response_mode"] = msg.response_mode
     msg.context["route_reason"] = msg.route_reason
     msg.context["clarification_needed"] = msg.clarification_needed
+    msg.context["task_mode_packet"] = msg.task_mode_packet
     gate = build_evidence_gate(msg)
     msg.evidence_gate = gate
     msg.context["evidence_gate"] = gate
@@ -300,9 +378,16 @@ def run_case(case: StressCase) -> tuple[dict[str, Any], list[str]]:
         "tool_best_first_tool": tool_policy.get("best_first_tool"),
         "tool_preferred_families": tool_policy.get("preferred_families", []),
         "tool_avoid_first": tool_policy.get("avoid_first", []),
+        "task_best_first_tool": tool_policy.get("best_first_tool"),
         "route_hint": profile.get("route_hint"),
         "speech_acts": profile.get("speech_acts", []),
         "multi_label": bool(profile.get("multi_label", False)),
+        "task_mode_packet": msg.task_mode_packet,
+        "work_intent": (msg.task_mode_packet or {}).get("work_intent"),
+        "work_subintent": (msg.task_mode_packet or {}).get("work_subintent"),
+        "task_agentic": bool((msg.task_mode_packet or {}).get("agentic_recommended", False)),
+        "artifact_expected": (msg.task_mode_packet or {}).get("artifact_expected"),
+        "task_best_fit_family": (tool_policy or {}).get("best_fit_family"),
         "response_style_structure": style.get("structure", []),
         "repo_packet": None,
         "public_packet": public_packet,
@@ -328,6 +413,24 @@ def run_case(case: StressCase) -> tuple[dict[str, Any], list[str]]:
             continue
         if key == "tool_best_first_tool":
             _assert_equals(case, actual, "tool_best_first_tool", expected, failures)
+            continue
+        if key == "task_best_fit_family":
+            _assert_equals(case, actual, "task_best_fit_family", expected, failures)
+            continue
+        if key == "task_best_first_tool":
+            _assert_equals(case, actual, "task_best_first_tool", expected, failures)
+            continue
+        if key == "work_intent":
+            _assert_equals(case, actual, "work_intent", expected, failures)
+            continue
+        if key == "work_subintent":
+            _assert_equals(case, actual, "work_subintent", expected, failures)
+            continue
+        if key == "task_agentic":
+            _assert_equals(case, actual, "task_agentic", expected, failures)
+            continue
+        if key == "artifact_expected":
+            _assert_equals(case, actual, "artifact_expected", expected, failures)
             continue
         if key == "tool_registry_size_min":
             if int(actual.get("tool_registry_size", 0)) < int(expected):

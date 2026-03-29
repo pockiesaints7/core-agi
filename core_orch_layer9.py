@@ -60,6 +60,7 @@ _PERSONA_SYSTEM = (
 _PERSONA_TEMPLATE = """
 USER MESSAGE: {text}
 INTENT: {intent}
+TASK MODE: {task_mode_packet}
 DELIVERY_CHANNEL: {delivery_channel}
 RESPONSE_STYLE: {response_style_packet}
 TOOL RESULTS:
@@ -96,6 +97,7 @@ USER: {text}
 INTENT: {intent}
 REQUEST_KIND: {request_kind}
 RESPONSE_MODE: {response_mode}
+TASK MODE: {task_mode_packet}
 DELIVERY_CHANNEL: {delivery_channel}
 RESPONSE_STYLE: {response_style_packet}
 
@@ -134,6 +136,7 @@ USER MESSAGE: {text}
 INTENT: {intent}
 REQUEST_KIND: {request_kind}
 RESPONSE_MODE: {response_mode}
+TASK MODE: {task_mode_packet}
 DELIVERY_CHANNEL: {delivery_channel}
 RESPONSE_STYLE: {response_style_packet}
 
@@ -288,6 +291,35 @@ def _format_decision_packet(decision_packet: dict) -> str:
         for k in keys
         if decision_packet.get(k) not in (None, "", [])
 ) or _trim_json(decision_packet, 1200)
+
+
+def _format_task_mode_packet(task_mode_packet: dict) -> str:
+    if not task_mode_packet:
+        return "none"
+    keys = [
+        "work_intent",
+        "work_subintent",
+        "work_detail_intents",
+        "execution_mode",
+        "agentic_recommended",
+        "artifact_expected",
+        "artifact_hint",
+        "preferred_tool_families",
+        "preferred_tools",
+        "coverage_status",
+        "stop_condition",
+        "route_hint",
+        "needs_clarification",
+    ]
+    lines = []
+    for key in keys:
+        value = task_mode_packet.get(key)
+        if value not in (None, "", [], {}):
+            lines.append(f"- {key}: {value}")
+    matrix = task_mode_packet.get("matrix", {})
+    if matrix:
+        lines.append("MATRIX: " + _trim_json(matrix, 900))
+    return "\n".join(lines) or _trim_json(task_mode_packet, 1200)
 
 
 def _format_response_style_packet(response_style_packet: dict) -> str:
@@ -488,6 +520,12 @@ async def layer_9_tone(msg: OrchestratorMessage):
     evidence_packet = msg.evidence_packet or msg.context.get("evidence_packet", {})
     capability_packet = msg.capability_packet or msg.context.get("capability_packet", {})
     evidence_gate = msg.evidence_gate or msg.context.get("evidence_gate", {})
+    task_mode_packet = (
+        msg.task_mode_packet
+        or msg.context.get("task_mode_packet", {})
+        or (decision_packet.get("task_mode_packet") if isinstance(decision_packet, dict) else {})
+        or {}
+    )
     response_style_packet = (
         msg.response_style_packet
         or msg.context.get("response_style_packet", {})
@@ -554,6 +592,7 @@ async def layer_9_tone(msg: OrchestratorMessage):
                 response_mode=response_mode,
                 delivery_channel=delivery_channel,
                 response_style_packet=_format_response_style_packet(response_style_packet),
+                task_mode_packet=_format_task_mode_packet(task_mode_packet),
                 decision_packet=_format_decision_packet(decision_packet),
                 evidence_gate=_format_evidence_gate(evidence_gate),
                 evidence_packet=_format_evidence_packet(evidence_packet),
@@ -584,6 +623,7 @@ async def layer_9_tone(msg: OrchestratorMessage):
                 intent=msg.intent or "unknown",
                 delivery_channel=delivery_channel,
                 response_style_packet=_format_response_style_packet(response_style_packet),
+                task_mode_packet=_format_task_mode_packet(task_mode_packet),
                 tool_summary=tool_summary,
                 errors=errors_str,
                 domain=msg.context.get("current_domain", "general"),
@@ -620,12 +660,13 @@ async def layer_9_tone(msg: OrchestratorMessage):
                     request_kind=request_kind,
                     response_mode=response_mode,
                     delivery_channel=delivery_channel,
-                    response_style_packet=_format_response_style_packet(response_style_packet),
-                    session_state=session_state,
-                    kb_snippets=kb_str,
-                    behavioral_rules=rules_str,
-                    decision_packet=_format_decision_packet(decision_packet),
-                    evidence_gate=_format_evidence_gate(evidence_gate),
+                response_style_packet=_format_response_style_packet(response_style_packet),
+                task_mode_packet=_format_task_mode_packet(task_mode_packet),
+                session_state=session_state,
+                kb_snippets=kb_str,
+                behavioral_rules=rules_str,
+                decision_packet=_format_decision_packet(decision_packet),
+                evidence_gate=_format_evidence_gate(evidence_gate),
                     evidence_packet=_format_evidence_packet(evidence_packet),
                 )
                 # Prompt length guard on conversational path

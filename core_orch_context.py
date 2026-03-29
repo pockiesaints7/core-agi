@@ -16,6 +16,7 @@ import httpx
 
 from core_config import SUPABASE_URL, _sbh_count_svc
 from core_public_evidence import classify_public_evidence
+from core_task_taxonomy import build_task_mode_packet
 
 
 # ── Basic helpers ────────────────────────────────────────────────────────────
@@ -301,10 +302,14 @@ def _tool_family_for_name(tool_name: str, tool_desc: str = "") -> str:
     def has(*needles: str) -> bool:
         return any(n in combined for n in needles)
 
-    if has("owner_review_cluster_packet", "owner_review_cluster_close", "review_cluster", "cluster_close"):
+    if has("owner_review_cluster_packet", "owner_review_cluster_close", "review_cluster", "cluster_close", "review_work_packet", "repo_review_packet", "document_review_packet", "spreadsheet_review_packet", "presentation_review_packet"):
         return "review"
     if has("repo_map", "repo_component", "repo_graph", "code_read_packet", "file_list", "file_read", "file_write", "read_file", "write_file", "search_in_file", "gh_", "multi_patch", "smart_patch", "shell", "run_python", "run_script", "git"):
         return "repo_code"
+    if has("task_mode_packet"):
+        return "task"
+    if has("spreadsheet_work_packet", "document_work_packet", "presentation_work_packet", "create_document", "create_spreadsheet", "create_presentation", "read_document", "convert_document", "read_pdf_content", "read_image_content", "image_process", "generate_image"):
+        return "document"
     if has("search_kb", "add_knowledge", "kb_update", "get_mistakes", "log_mistake", "get_behavioral_rules", "ingest_knowledge", "knowledge"):
         return "knowledge"
     if has("web_search", "web_fetch", "summarize_url", "browser", "fetch_url"):
@@ -350,6 +355,7 @@ def build_tool_policy_packet(msg) -> Dict[str, Any]:
 
     decision = (msg.context or {}).get("decision_packet", {}) if hasattr(msg, "context") else {}
     input_profile = (msg.context or {}).get("input_profile", {}) if hasattr(msg, "context") else {}
+    task_mode_packet = (msg.context or {}).get("task_mode_packet", {}) if hasattr(msg, "context") else {}
     evidence_gate = (msg.context or {}).get("evidence_gate", {}) if hasattr(msg, "context") else {}
     request_kind = getattr(msg, "request_kind", "") or decision.get("request_kind") or input_profile.get("request_kind") or "question"
     response_mode = getattr(msg, "response_mode", "") or decision.get("response_mode") or input_profile.get("response_mode") or "tool"
@@ -384,15 +390,70 @@ def build_tool_policy_packet(msg) -> Dict[str, Any]:
     family_counts = {family: len(names) for family, names in sorted(family_map.items())}
 
     gate_tools = list(dict.fromkeys((evidence_gate or {}).get("preferred_tools", []) or []))
+    task_tools = []
+    if isinstance(task_mode_packet, dict):
+        task_tools = list(dict.fromkeys(task_mode_packet.get("preferred_tools", []) or []))
+    for tool in task_tools:
+        if tool not in gate_tools:
+            gate_tools.append(tool)
     gate_families = [_tool_family_for_name(tool) for tool in gate_tools]
     gate_families = [family for family in gate_families if family != "other"]
 
     preferred_families: List[str] = []
-    if request_kind in {"status", "self_assessment"}:
-        if gate_tools or evidence_gate.get("code_targets") or evidence_gate.get("repo_map_needed") or any(k in (msg.text or "").lower() for k in ("code", "repo", "file", "commit", "git", "patch")):
-            preferred_families.extend(["repo_code", "state", "knowledge"])
-        else:
+    work_intent = task_mode_packet.get("work_intent") if isinstance(task_mode_packet, dict) else ""
+    work_subintent = task_mode_packet.get("work_subintent") if isinstance(task_mode_packet, dict) else ""
+    work_detail = task_mode_packet.get("work_detail_intents") if isinstance(task_mode_packet, dict) else []
+    codeish = bool(any(k in lower_text for k in ("codebase", " repo ", "diff", "commit", " patch ", "function", "module", "bug", "stack trace", ".py", " file ")))
+    if work_intent in {"analyze", "inspect", "create", "transform"} and codeish:
+        preferred_families.extend(["repo_code", "state", "knowledge"])
+    if work_intent in {"analyze", "transform", "create", "inspect", "operate", "research", "coordinate", "learn", "decide", "clarify", "interrupt"}:
+        if work_intent == "analyze":
+            if work_subintent in {"spreadsheet_analysis", "document_analysis", "presentation_creation", "spreadsheet_creation", "document_creation"}:
+                preferred_families.extend(["document", "knowledge", "state"])
+            elif work_subintent in {"code_analysis", "incident_analysis"}:
+                preferred_families.extend(["repo_code", "state", "knowledge"])
+            else:
+                preferred_families.extend(["knowledge", "state", "document"])
+        elif work_intent == "transform":
+            preferred_families.extend(["document", "knowledge", "state"])
+        elif work_intent == "create":
+            if work_subintent in {"presentation_creation", "document_creation", "spreadsheet_creation"}:
+                preferred_families.extend(["document", "state", "knowledge"])
+            elif work_subintent == "code_creation":
+                preferred_families.extend(["repo_code", "state", "knowledge"])
+            else:
+                preferred_families.extend(["document", "knowledge", "state"])
+        elif work_intent == "inspect":
+            if work_subintent in {"review", "audit", "test"}:
+                preferred_families.extend(["review", "repo_code", "state"])
+            else:
+                preferred_families.extend(["repo_code", "document", "state"])
+        elif work_intent == "operate":
+            preferred_families.extend(["state", "deploy", "repo_code"])
+        elif work_intent == "research":
+            preferred_families.extend(["knowledge", "web", "state"])
+        elif work_intent == "coordinate":
+            preferred_families.extend(["review", "task", "state"])
+        elif work_intent == "learn":
+            preferred_families.extend(["knowledge", "state", "review"])
+        elif work_intent == "decide":
+            preferred_families.extend(["review", "knowledge", "state"])
+        elif work_intent == "clarify":
             preferred_families.extend(["state", "knowledge"])
+        elif work_intent == "interrupt":
+            preferred_families.extend(["state"])
+
+    if request_kind in {"status", "self_assessment"}:
+        has_code_evidence = bool(
+            evidence_gate.get("code_targets")
+            or evidence_gate.get("repo_map_needed")
+            or codeish
+            or any(k in (msg.text or "").lower() for k in ("code", "repo", "file", "commit", "git", "patch"))
+        )
+        if has_code_evidence:
+            preferred_families = ["repo_code", "state", "knowledge"] + preferred_families
+        else:
+            preferred_families = ["state", "knowledge"] + [fam for fam in preferred_families if fam != "repo_code"]
     elif request_kind in {"debug"}:
         preferred_families.extend(["repo_code", "state", "knowledge"])
     elif request_kind in {"owner_review"}:
@@ -405,7 +466,13 @@ def build_tool_policy_packet(msg) -> Dict[str, Any]:
         preferred_families.extend(["knowledge", "state", "repo_code"])
 
     if evidence_gate.get("public_research_needed"):
-        preferred_families = [fam for fam in preferred_families if fam != "repo_code"] + ["knowledge", "web"]
+        if evidence_gate.get("repo_map_needed") or codeish:
+            preferred_families = preferred_families + ["knowledge", "web"]
+        else:
+            preferred_families = [fam for fam in preferred_families if fam != "repo_code"]
+            if request_kind in {"status", "self_assessment"}:
+                preferred_families = [fam for fam in preferred_families if fam != "task"]
+            preferred_families += ["knowledge", "web"]
 
     # Keep ordering stable and dedupe.
     preferred_families = [fam for i, fam in enumerate(preferred_families) if fam and fam not in preferred_families[:i]]
@@ -433,11 +500,67 @@ def build_tool_policy_packet(msg) -> Dict[str, Any]:
     best_first_reason = ""
 
     query = _safe_text((msg.text or ""), 240)
-    if request_kind in {"owner_review"} or best_fit_family == "review" or cluster_query:
+    if cluster_query:
         if "owner_review_cluster_packet" in registry_names:
             best_first_tool = "owner_review_cluster_packet"
             best_first_args = {"query": query, "limit": 8}
             best_first_reason = "owner-review cluster inspection is the safest first action."
+    elif work_intent == "inspect" and work_subintent in {"review", "audit", "test"}:
+        if "repo_review_packet" in registry_names and (evidence_gate.get("code_targets") or any(k in lower_text for k in ("code", "repo", "diff", "commit", "patch", ".py"))):
+            best_first_tool = "repo_review_packet"
+            best_first_args = {"content": query, "goal": query, "focus": "repo_diff"}
+            best_first_reason = "repo review should start with a specialized review packet."
+        elif "repo_component_packet" in registry_names and (evidence_gate.get("code_targets") or any(k in lower_text for k in ("code", "repo", "diff", "commit", "patch", ".py"))):
+            best_first_tool = "repo_component_packet"
+            best_first_args = {"query": query, "limit": 8}
+            best_first_reason = "code review should start from the repository map, not the owner-review queue."
+        elif "code_read_packet" in registry_names and any(k in lower_text for k in ("code", "repo", "diff", "patch")):
+            best_first_tool = "code_read_packet"
+            best_first_args = {"query": query}
+            best_first_reason = "code review should start by reading the relevant code packet."
+        elif "document_review_packet" in registry_names and any(k in lower_text for k in ("doc", "document", "proposal", "report", "memo", "brief", "pdf", "notes")):
+            best_first_tool = "document_review_packet"
+            best_first_args = {"content": query, "goal": query, "focus": "document_quality"}
+            best_first_reason = "document review should start with a specialized review packet."
+        elif "spreadsheet_review_packet" in registry_names and any(k in lower_text for k in ("sheet", "spreadsheet", "excel", "csv", "table")):
+            best_first_tool = "spreadsheet_review_packet"
+            best_first_args = {"content": query, "goal": query, "focus": "spreadsheet_quality"}
+            best_first_reason = "spreadsheet review should start with a specialized review packet."
+        elif "presentation_review_packet" in registry_names and any(k in lower_text for k in ("slide", "deck", "presentation", "speaker notes")):
+            best_first_tool = "presentation_review_packet"
+            best_first_args = {"content": query, "goal": query, "focus": "presentation_quality"}
+            best_first_reason = "presentation review should start with a specialized review packet."
+        elif "document_work_packet" in registry_names:
+            best_first_tool = "document_work_packet"
+            best_first_args = {"content": query, "goal": query}
+            best_first_reason = "document review should start with a document work packet."
+    elif work_intent == "analyze" and work_subintent == "spreadsheet_analysis":
+        if "spreadsheet_work_packet" in registry_names:
+            best_first_tool = "spreadsheet_work_packet"
+            best_first_args = {"content": query, "goal": query}
+            best_first_reason = "spreadsheet analysis should start with a spreadsheet work packet."
+        elif "read_document" in registry_names:
+            best_first_tool = "read_document"
+            best_first_args = {"base64_content": "", "filename": query, "format": "xlsx"}
+            best_first_reason = "spreadsheet analysis should start by extracting document text if available."
+    elif work_intent == "create" and work_subintent == "presentation_creation":
+        if "presentation_work_packet" in registry_names:
+            best_first_tool = "presentation_work_packet"
+            best_first_args = {"content": query, "goal": query}
+            best_first_reason = "presentation creation should start with a presentation work packet."
+        elif "create_presentation" in registry_names:
+            best_first_tool = "create_presentation"
+            best_first_args = {"slides": "[]"}
+            best_first_reason = "presentation creation should start with the presentation builder."
+    elif work_intent in {"analyze", "transform", "create"} and work_subintent in {"document_analysis", "document_creation"}:
+        if "document_work_packet" in registry_names:
+            best_first_tool = "document_work_packet"
+            best_first_args = {"content": query, "goal": query}
+            best_first_reason = "document work should start with a document work packet."
+        elif "read_document" in registry_names:
+            best_first_tool = "read_document"
+            best_first_args = {"base64_content": "", "filename": query, "format": "md"}
+            best_first_reason = "document work should start with read_document when source text exists."
     elif request_kind in {"debug", "status"} and (evidence_gate.get("repo_map_needed") or evidence_gate.get("code_targets") or any(k in lower_text for k in ("code", "repo", "file", "commit", "git", "patch", ".py"))):
         if "repo_component_packet" in registry_names:
             best_first_tool = "repo_component_packet"
@@ -458,6 +581,19 @@ def build_tool_policy_packet(msg) -> Dict[str, Any]:
             best_first_tool = "search_kb"
             best_first_args = {"query": query, "limit": 5}
             best_first_reason = "knowledge queries should start from the KB."
+    elif best_fit_family == "document":
+        if "document_work_packet" in registry_names and work_intent in {"analyze", "create", "transform", "inspect"}:
+            best_first_tool = "document_work_packet"
+            best_first_args = {"content": query, "goal": query}
+            best_first_reason = "document-heavy work should start from the document work packet."
+        elif "task_mode_packet" in registry_names and work_intent and work_intent in {"analyze", "create", "transform", "inspect"}:
+            best_first_tool = "task_mode_packet"
+            best_first_args = {"text": query, "goal": query, "artifact_hint": work_subintent or "document"}
+            best_first_reason = "document-heavy work should first classify the task mode and then use the right artifact tool."
+        elif "read_document" in registry_names:
+            best_first_tool = "read_document"
+            best_first_args = {"base64_content": "", "filename": query, "format": "md"}
+            best_first_reason = "document-heavy work should start with document extraction if available."
     elif best_fit_family == "web" and "web_search" in registry_names:
         best_first_tool = "web_search"
         best_first_args = {"query": query, "max_results": 5}
@@ -482,6 +618,7 @@ def build_tool_policy_packet(msg) -> Dict[str, Any]:
         "request_kind": request_kind,
         "response_mode": response_mode,
         "primary_class": primary_class,
+        "task_mode_packet": task_mode_packet,
         "evidence_gate_mode": evidence_gate.get("retrieval_mode", ""),
         "preferred_families": preferred_families,
         "preferred_tools": preferred_tools[:16],
@@ -538,6 +675,24 @@ def classify_request_kind(
         return "status"
     if any(k in t for k in ("how advanced", "capability", "capabilities", "what can you do", "strengths", "weaknesses", "limitations")):
         return "self_assessment"
+    if t.strip().startswith((
+        "what is ",
+        "what are ",
+        "what's ",
+        "how is ",
+        "how are ",
+        "why is ",
+        "why are ",
+        "where is ",
+        "where are ",
+        "when is ",
+        "when are ",
+        "who is ",
+        "who are ",
+        "which is ",
+        "which are ",
+    )):
+        return "question"
     if cmd in {"/review"} or any(k in t for k in (
         "review queue", "owner review", "proposal queue", "owner only",
         "owner queue", "batch close", "cluster close", "close cluster",
@@ -547,6 +702,16 @@ def classify_request_kind(
         return "owner_review"
     if any(k in t for k in ("debug", "bug", "error", "broken", "crash", "stack trace")):
         return "debug"
+    if any(k in t for k in (
+        "analyze", "analyse", "inspect", "compare", "diagnose", "explain", "understand",
+        "summarize", "summary", "rewrite", "convert", "normalize", "extract",
+        "make ", "make a", "build ", "create ", "draft ", "design ", "prepare ", "outline ", "generate ",
+        "review", "audit", "validate", "test", "verify", "check",
+        "deploy", "restart", "sync", "monitor", "recover", "status",
+        "research", "triage", "batch", "cluster", "delegate", "prioritize",
+        "learn", "improve", "update rules", "memory", "pattern",
+    )):
+        return "task"
     if intent in ("task_execution",):
         return "task"
     if intent in ("conversation", "greeting"):
@@ -565,12 +730,22 @@ def initial_request_profile(msg) -> Dict[str, Any]:
         route=msg.route,
         attachments=getattr(msg, "attachments", []),
     )
+    task_mode_packet = build_task_mode_packet(
+        text=msg.text,
+        goal=msg.text,
+        source=getattr(msg, "source", ""),
+        message_type=getattr(msg, "message_type", "message"),
+        route=getattr(msg, "route", "conversation"),
+        attachments=getattr(msg, "attachments", []),
+        input_profile=input_profile,
+    )
     return {
         "request_kind": input_profile.get("request_kind", "question"),
         "response_mode": input_profile.get("response_mode", "tool"),
         "route_reason": "initial_profile",
         "clarification_needed": bool(input_profile.get("requires_clarification", False)),
         "input_profile": input_profile,
+        "task_mode_packet": task_mode_packet,
         "speech_act_packet": {
             "top_level_class": input_profile.get("top_level_class", "ask"),
             "primary_class": input_profile.get("primary_class", "ask"),
@@ -588,6 +763,7 @@ def initial_request_profile(msg) -> Dict[str, Any]:
 def build_decision_packet(msg) -> Dict[str, Any]:
     classification = msg.context.get("intent_classification", {}) if hasattr(msg, "context") else {}
     input_profile = msg.context.get("input_profile", {}) if hasattr(msg, "context") else {}
+    task_mode_packet = msg.context.get("task_mode_packet", {}) if hasattr(msg, "context") else {}
     intent = classification.get("intent") or msg.intent or "general_query"
     confidence = float(classification.get("confidence", 0.0) or 0.0)
     cmd = msg.context.get("command", "") if hasattr(msg, "context") else ""
@@ -610,6 +786,24 @@ def build_decision_packet(msg) -> Dict[str, Any]:
         "task": "task",
         "conversation": "conversation",
     }.get(request_kind, "tool")
+
+    if isinstance(task_mode_packet, dict) and task_mode_packet.get("work_intent"):
+        work_intent = task_mode_packet.get("work_intent")
+        if work_intent in {"analyze", "transform", "create", "inspect", "operate", "coordinate", "learn", "decide"}:
+            if request_kind in {"question", "conversation", "general_query", "command"}:
+                if not (
+                    work_intent == "analyze"
+                    and task_mode_packet.get("work_subintent") == "semantic_analysis"
+                    and not task_mode_packet.get("agentic_recommended")
+                ):
+                    request_kind = "task" if work_intent not in {"inspect"} else "owner_review"
+                    if response_mode in {"tool", "conversation"}:
+                        response_mode = "task"
+
+    if isinstance(task_mode_packet, dict) and task_mode_packet.get("needs_clarification"):
+        if request_kind in {"question", "conversation", "general_query"}:
+            request_kind = "task" if task_mode_packet.get("work_intent") not in {"clarify", "interrupt"} else request_kind
+        response_mode = "clarify" if task_mode_packet.get("work_intent") == "clarify" else response_mode
 
     explicit_agentic = any(
         trigger in (msg.text or "").lower()
@@ -662,6 +856,11 @@ def build_decision_packet(msg) -> Dict[str, Any]:
         clarification_needed = False
         clarification_prompt = ""
 
+    if isinstance(task_mode_packet, dict) and task_mode_packet.get("agentic_recommended"):
+        if task_mode_packet.get("work_intent") not in {"clarify", "interrupt"}:
+            if response_mode in {"tool", "task", "conversation"} or request_kind == "task":
+                response_mode = "agentic"
+
     tool_policy_packet = build_tool_policy_packet(msg)
 
     return {
@@ -678,6 +877,7 @@ def build_decision_packet(msg) -> Dict[str, Any]:
         "command": cmd,
         "input_profile": input_profile,
         "primary_class": primary_class,
+        "task_mode_packet": task_mode_packet if isinstance(task_mode_packet, dict) else {},
         "tool_policy_packet": tool_policy_packet,
         "response_style_packet": build_response_style_packet(
             msg,
@@ -697,10 +897,13 @@ def build_response_style_packet(
     """Turn structured human input into output-shaping instructions for L9/L10."""
     ctx = msg.context if hasattr(msg, "context") else {}
     input_profile = ctx.get("input_profile", {}) or {}
+    task_mode_packet = ctx.get("task_mode_packet", {}) or {}
     decision = ctx.get("decision_packet", {}) or {}
     delivery_channel = getattr(msg, "source", "telegram") or "telegram"
     request_kind = request_kind or decision.get("request_kind") or input_profile.get("request_kind") or "question"
     primary_class = primary_class or input_profile.get("primary_class") or input_profile.get("top_level_class") or ""
+    work_intent = task_mode_packet.get("work_intent", "")
+    work_subintent = task_mode_packet.get("work_subintent", "")
     explicit_agentic = bool(agentic_hint or decision.get("agentic_hint", False))
     if primary_class not in {"interrupt", "correct", "constrain", "inform"}:
         if not explicit_agentic and request_kind in {"task", "owner_review", "command"}:
@@ -722,18 +925,81 @@ def build_response_style_packet(
         verbosity = "medium"
         structure = ["direct_answer", "strengths", "gaps", "confidence"]
         must_include = ["current capability", "strengths", "gaps", "what is safe to trust"]
-    elif request_kind in {"debug"} or primary_class == "correct":
-        mode = "debug"
-        lead = "root_cause"
+    elif work_intent == "analyze":
+        mode = "analysis"
+        lead = "evidence_first"
         verbosity = "medium"
-        structure = ["root_cause", "evidence", "fix_path"]
-        must_include = ["what failed", "why", "fix path", "evidence"]
+        structure = ["findings", "evidence", "interpretation", "next_steps"]
+        must_include = ["evidence", "findings", "interpretation", "next steps"]
+        if work_subintent in {"spreadsheet_analysis", "document_analysis", "code_analysis", "incident_analysis"}:
+            must_include.append("artifact-specific details")
+    elif work_intent == "transform":
+        mode = "transform"
+        lead = "transformed_output"
+        verbosity = "medium"
+        structure = ["transformed_output", "key_changes", "verification"]
+        must_include = ["what changed", "verification"]
+    elif work_intent == "create":
+        mode = "deliverable"
+        lead = "deliverable_first"
+        verbosity = "medium"
+        structure = ["deliverable", "decisions", "next_steps", "verification"]
+        must_include = ["deliverable", "verification", "next steps"]
+    elif work_intent == "inspect":
+        mode = "review"
+        lead = "verdict"
+        verbosity = "short"
+        structure = ["verdict", "evidence", "gaps", "next_action"]
+        must_include = ["verdict", "evidence", "next action"]
+    elif work_intent == "operate":
+        mode = "ops"
+        lead = "state_first"
+        verbosity = "short"
+        structure = ["state", "action", "verification"]
+        must_include = ["state", "action", "verification"]
+    elif work_intent == "research":
+        if request_kind in {"question", "conversation", "general_query"} and not explicit_agentic:
+            mode = "answer"
+            lead = "evidence_summary"
+            verbosity = "medium"
+            structure = ["answer_first", "sources", "uncertainty", "next_steps"]
+            must_include = ["sources", "uncertainty"]
+        else:
+            mode = "research"
+            lead = "evidence_summary"
+            verbosity = "medium"
+            structure = ["sources", "synthesis", "uncertainty", "next_steps"]
+            must_include = ["sources", "synthesis", "uncertainty"]
+    elif work_intent == "coordinate":
+        mode = "coordination"
+        lead = "cluster_summary"
+        verbosity = "short"
+        structure = ["clusters", "routing", "next_actions"]
+        must_include = ["cluster", "routing", "next actions"]
+    elif work_intent == "learn":
+        mode = "learning"
+        lead = "pattern_summary"
+        verbosity = "medium"
+        structure = ["pattern", "lesson", "policy_update"]
+        must_include = ["pattern", "lesson", "policy update"]
+    elif work_intent == "decide":
+        mode = "decision"
+        lead = "recommendation"
+        verbosity = "short"
+        structure = ["recommendation", "rationale", "tradeoffs"]
+        must_include = ["recommendation", "tradeoffs"]
     elif request_kind in {"owner_review"} or primary_class == "evaluate":
         mode = "review"
         lead = "verdict"
         verbosity = "short"
         structure = ["verdict", "reason", "next_action"]
         must_include = ["verdict first", "short reasons", "next step"]
+    elif request_kind in {"debug"} or primary_class == "correct":
+        mode = "debug"
+        lead = "root_cause"
+        verbosity = "medium"
+        structure = ["root_cause", "evidence", "fix_path"]
+        must_include = ["what failed", "why", "fix path", "evidence"]
     elif request_kind in {"task"} or primary_class == "act":
         mode = "task"
         lead = "action_summary"
@@ -797,8 +1063,11 @@ def build_response_style_packet(
             structure = ["summary", "evidence", "action", "risk"] if mode != "interrupt" else structure
 
     if explicit_agentic:
-        mode = "agentic" if mode in {"task", "conversation", "answer"} else mode
-        structure = ["answer_first", "evidence", "steps"] if mode != "review" else structure
+        if mode not in {"capability", "interrupt"}:
+            mode = "agentic"
+            if "steps" not in structure:
+                if mode == "agentic":
+                    structure = ["answer_first", "evidence", "steps"] if structure == ["answer_first"] else structure + ["steps"]
         if verbosity == "short":
             verbosity = "medium"
 
@@ -823,6 +1092,7 @@ def should_use_agentic_mode(msg) -> bool:
     """Hard gate for agentic escalation based on structured input."""
     decision = msg.context.get("decision_packet", {}) if hasattr(msg, "context") else {}
     input_profile = msg.context.get("input_profile", {}) if hasattr(msg, "context") else {}
+    task_mode_packet = msg.context.get("task_mode_packet", {}) if hasattr(msg, "context") else {}
     primary_class = input_profile.get("primary_class") or input_profile.get("top_level_class") or ""
     request_kind = decision.get("request_kind") or input_profile.get("request_kind") or classify_request_kind(
         msg.text,
@@ -835,8 +1105,13 @@ def should_use_agentic_mode(msg) -> bool:
     # Pure control / correction / acknowledgment inputs should not escalate.
     if primary_class in {"interrupt", "correct", "constrain", "inform"}:
         return False
+    if request_kind in {"owner_review"}:
+        return False
     if input_profile.get("route_hint") == "stop":
         return False
+    if isinstance(task_mode_packet, dict) and task_mode_packet.get("execution_mode") == "agentic":
+        if task_mode_packet.get("work_intent") not in {"clarify", "interrupt"}:
+            return True
 
     text = (msg.text or "").lower()
     explicit_agentic = any(
@@ -891,6 +1166,7 @@ def build_evidence_packet(msg) -> Dict[str, Any]:
             "route": msg.route,
             "input_profile": ctx.get("input_profile", {}),
             "speech_act_packet": ctx.get("speech_act_packet", {}),
+            "task_mode_packet": ctx.get("task_mode_packet", {}),
         },
         "domain": ctx.get("current_domain", "general"),
         "session": ctx.get("session", {}),
