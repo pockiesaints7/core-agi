@@ -63,6 +63,7 @@ MATRIX: list[StressCase] = [
             "public_family": "public_general",
             "public_needed": False,
             "tool_best_fit_family": "state",
+            "tool_best_first_tool": "get_state",
             "tool_registry_size_min": 1,
         },
     ),
@@ -83,6 +84,7 @@ MATRIX: list[StressCase] = [
             "public_family": "public_general",
             "public_needed": False,
             "tool_best_fit_family": "state",
+            "tool_best_first_tool": "get_state",
             "tool_registry_size_min": 1,
         },
     ),
@@ -101,6 +103,7 @@ MATRIX: list[StressCase] = [
             "gate_mode": "code",
             "repo_map_needed": True,
             "tool_best_fit_family": "task",
+            "tool_best_first_tool": "repo_component_packet",
             "tool_registry_size_min": 1,
         },
     ),
@@ -116,6 +119,7 @@ MATRIX: list[StressCase] = [
             "style_mode": "review",
             "agentic": False,
             "tool_best_fit_family": "review",
+            "tool_best_first_tool": "owner_review_cluster_packet",
         },
     ),
     StressCase(
@@ -130,6 +134,7 @@ MATRIX: list[StressCase] = [
             "repo_map_needed": True,
             "public_needed": False,
             "tool_best_fit_family": "repo_code",
+            "tool_best_first_tool": "repo_component_packet",
         },
         repo_path="core_orch_layer9.py",
     ),
@@ -146,6 +151,7 @@ MATRIX: list[StressCase] = [
             "public_needed": True,
             "gate_mode": "public_research_then_web",
             "tool_best_fit_family": "knowledge",
+            "tool_best_first_tool": "search_kb",
         },
     ),
     StressCase(
@@ -160,6 +166,7 @@ MATRIX: list[StressCase] = [
             "public_needed": True,
             "gate_mode": "public_research_then_web",
             "tool_best_fit_family": "knowledge",
+            "tool_best_first_tool": "search_kb",
         },
     ),
     StressCase(
@@ -290,6 +297,7 @@ def run_case(case: StressCase) -> tuple[dict[str, Any], list[str]]:
         "tool_policy": tool_policy,
         "tool_registry_size": tool_policy.get("registry_size"),
         "tool_best_fit_family": tool_policy.get("best_fit_family"),
+        "tool_best_first_tool": tool_policy.get("best_first_tool"),
         "tool_preferred_families": tool_policy.get("preferred_families", []),
         "tool_avoid_first": tool_policy.get("avoid_first", []),
         "route_hint": profile.get("route_hint"),
@@ -317,6 +325,9 @@ def run_case(case: StressCase) -> tuple[dict[str, Any], list[str]]:
             continue
         if key == "tool_best_fit_family":
             _assert_equals(case, actual, "tool_best_fit_family", expected, failures)
+            continue
+        if key == "tool_best_first_tool":
+            _assert_equals(case, actual, "tool_best_first_tool", expected, failures)
             continue
         if key == "tool_registry_size_min":
             if int(actual.get("tool_registry_size", 0)) < int(expected):

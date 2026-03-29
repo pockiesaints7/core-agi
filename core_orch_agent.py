@@ -492,16 +492,24 @@ def _build_prompt(
         preferred_families = tool_policy.get("preferred_families") or []
         preferred_tools = tool_policy.get("preferred_tools") or []
         avoid_first = tool_policy.get("avoid_first") or []
+        best_first_tool = tool_policy.get("best_first_tool") or ""
+        best_first_args = tool_policy.get("best_first_args") or {}
+        best_first_reason = tool_policy.get("best_first_reason") or ""
         if preferred_families:
             parts.append("TOOL FAMILY ORDER (preferred first):")
             parts.append(", ".join(str(x) for x in preferred_families[:8]))
         if preferred_tools:
             parts.append("TOP TOOL START POINTS:")
             parts.append(", ".join(str(x) for x in preferred_tools[:12]))
+        if best_first_tool:
+            parts.append("RECOMMENDED FIRST TOOL:")
+            parts.append(f"{best_first_tool}({ _j.dumps(best_first_args, default=str) })")
+            if best_first_reason:
+                parts.append(f"Reason: {best_first_reason}")
         if avoid_first:
             parts.append("AVOID FIRST:")
             parts.append(", ".join(str(x) for x in avoid_first[:8]))
-        parts.append("Instruction: choose the smallest tool family that can fill the current evidence gap. If a tool family has zero matching tools in the registry, skip it and move to the next family. Recompute your choice from the live tool policy packet when the registry changes.")
+        parts.append("Instruction: use the recommended first tool if it exists and is relevant. Otherwise choose the smallest tool family that can fill the current evidence gap. If a tool family has zero matching tools in the registry, skip it and move to the next family. Recompute your choice from the live tool policy packet when the registry changes.")
         parts.append("")
     if history:
         parts.append("STEP HISTORY (most recent last):")

@@ -354,6 +354,18 @@ def build_tool_policy_packet(msg) -> Dict[str, Any]:
     request_kind = getattr(msg, "request_kind", "") or decision.get("request_kind") or input_profile.get("request_kind") or "question"
     response_mode = getattr(msg, "response_mode", "") or decision.get("response_mode") or input_profile.get("response_mode") or "tool"
     primary_class = input_profile.get("primary_class") or input_profile.get("top_level_class") or ""
+    lower_text = (msg.text or "").lower()
+    cluster_query = any(marker in lower_text for marker in (
+        "owner-review cluster",
+        "owner review cluster",
+        "cluster packet",
+        "batch-close cluster",
+        "batch close cluster",
+        "cluster close",
+        "cluster_id",
+        "cluster_key",
+        "cluster member",
+    )) or ("cluster" in lower_text and ("owner" in lower_text or "review" in lower_text))
 
     tool_rows = []
     for name in sorted(TOOLS):
@@ -416,6 +428,48 @@ def build_tool_policy_packet(msg) -> Dict[str, Any]:
 
     family_examples = {family: names[:5] for family, names in family_map.items() if names}
     best_fit_family = preferred_families[0] if preferred_families else "other"
+    best_first_tool = ""
+    best_first_args: Dict[str, Any] = {}
+    best_first_reason = ""
+
+    query = _safe_text((msg.text or ""), 240)
+    if request_kind in {"owner_review"} or best_fit_family == "review" or cluster_query:
+        if "owner_review_cluster_packet" in registry_names:
+            best_first_tool = "owner_review_cluster_packet"
+            best_first_args = {"query": query, "limit": 8}
+            best_first_reason = "owner-review cluster inspection is the safest first action."
+    elif request_kind in {"debug", "status"} and (evidence_gate.get("repo_map_needed") or evidence_gate.get("code_targets") or any(k in lower_text for k in ("code", "repo", "file", "commit", "git", "patch", ".py"))):
+        if "repo_component_packet" in registry_names:
+            best_first_tool = "repo_component_packet"
+            best_first_args = {"query": query, "limit": 8}
+            best_first_reason = "repo/component evidence is the best first grounding for code/status checks."
+    elif request_kind in {"task"} and (evidence_gate.get("repo_map_needed") or evidence_gate.get("code_targets") or any(k in lower_text for k in ("code", "repo", "file", "commit", "git", "patch", ".py"))):
+        if "repo_component_packet" in registry_names:
+            best_first_tool = "repo_component_packet"
+            best_first_args = {"query": query, "limit": 8}
+            best_first_reason = "task investigation should start from the repo map before generic discovery."
+    elif best_fit_family == "state":
+        if "get_state" in registry_names:
+            best_first_tool = "get_state"
+            best_first_args = {}
+            best_first_reason = "state queries should start from live CORE state."
+    elif best_fit_family == "knowledge":
+        if "search_kb" in registry_names:
+            best_first_tool = "search_kb"
+            best_first_args = {"query": query, "limit": 5}
+            best_first_reason = "knowledge queries should start from the KB."
+    elif best_fit_family == "web" and "web_search" in registry_names:
+        best_first_tool = "web_search"
+        best_first_args = {"query": query, "max_results": 5}
+        best_first_reason = "public questions should start from web research."
+    elif best_fit_family == "task" and "repo_component_packet" in registry_names:
+        best_first_tool = "repo_component_packet"
+        best_first_args = {"query": query, "limit": 8}
+        best_first_reason = "task work should start from repo evidence."
+    if not best_first_tool and gate_tools:
+        best_first_tool = gate_tools[0]
+        best_first_args = {}
+        best_first_reason = "preferred by current evidence gate."
     growth_hint = "updates automatically when TOOLS changes"
 
     return {
@@ -433,6 +487,9 @@ def build_tool_policy_packet(msg) -> Dict[str, Any]:
         "preferred_tools": preferred_tools[:16],
         "avoid_first": avoid_first,
         "best_fit_family": best_fit_family,
+        "best_first_tool": best_first_tool,
+        "best_first_args": best_first_args,
+        "best_first_reason": best_first_reason,
         "gate_families": gate_families,
         "growth_hint": growth_hint,
         "capability_summary": (
