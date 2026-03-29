@@ -1,0 +1,16 @@
+[Unit]
+Description=CORE VM git autosync
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/core-agi
+ExecStart=/usr/bin/python3 /home/ubuntu/core-agi/tools/vm_autosync.py
+Restart=always
+RestartSec=5
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target
