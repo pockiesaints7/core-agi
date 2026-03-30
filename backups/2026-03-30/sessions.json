@@ -1,0 +1,32 @@
+[
+  {
+    "id": 5,
+    "summary": "[state_update] last_public_source_ts: 1774905479.6730614",
+    "domain": null,
+    "created_at": "2026-03-30T21:18:01.029785+00:00"
+  },
+  {
+    "id": 4,
+    "summary": "[state_update] task_autonomy_last_run: 2026-03-30T21:17:59.829178",
+    "domain": null,
+    "created_at": "2026-03-30T21:18:00.23092+00:00"
+  },
+  {
+    "id": 3,
+    "summary": "[state_update] last_research_ts: 1774905479.6730614",
+    "domain": null,
+    "created_at": "2026-03-30T21:17:59.778287+00:00"
+  },
+  {
+    "id": 2,
+    "summary": "[state_update] integration_autonomy_last_run: 2026-03-30T21:17:59.364011",
+    "domain": null,
+    "created_at": "2026-03-30T21:17:59.483289+00:00"
+  },
+  {
+    "id": 1,
+    "summary": "[state_update] code_autonomy_last_run: 2026-03-30T21:17:59.054661",
+    "domain": null,
+    "created_at": "2026-03-30T21:17:59.175212+00:00"
+  }
+]
