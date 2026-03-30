@@ -257,7 +257,7 @@ def _table_count(ref: str, pat: str) -> int:
     rows = _query(
         ref,
         pat,
-        'SELECT COUNT(*)::int AS count FROM information_schema.tables WHERE table_schema = ''public'' AND table_type = ''BASE TABLE'';',
+        "SELECT COUNT(*)::int AS count FROM information_schema.tables WHERE table_schema = 'public' AND table_type = 'BASE TABLE';",
         timeout=60,
     )
     if rows and isinstance(rows, list):
