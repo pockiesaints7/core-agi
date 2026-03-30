@@ -254,6 +254,63 @@ def _run_script(script: Path) -> None:
 
 
 
+def bootstrap_supabase() -> dict:
+    env = _load_env()
+    supabase_url = (env.get('SUPABASE_URL') or '').strip()
+    if not supabase_url:
+        return {'ok': False, 'error': 'SUPABASE_URL is missing'}
+    ref = _project_ref(supabase_url)
+    pat = _management_pat(env)
+
+    table_count = _table_count(ref, pat)
+    print(f'[bootstrap] {ref} public base tables: {table_count}')
+
+    results = []
+    errors = []
+
+    if table_count == 0:
+        manifest = json.loads(FULL_SCHEMA_MANIFEST.read_text(encoding='utf-8'))
+        chunks = manifest.get('chunks') or []
+        labels = manifest.get('chunk_labels') or ['chunk'] * len(chunks)
+        print(f'[bootstrap] applying {FULL_SCHEMA_MANIFEST.name} with {len(chunks)} chunks')
+        for idx, chunk in enumerate(chunks, start=1):
+            label = labels[idx - 1] if idx - 1 < len(labels) else 'chunk'
+            print(f'[bootstrap] {label} {idx}/{len(chunks)}')
+            try:
+                _query(ref, pat, chunk, timeout=120)
+            except Exception as exc:
+                if label == 'indexes':
+                    print(f'[bootstrap] skipping index chunk {idx}: {exc}')
+                    continue
+                errors.append(f'{label}: {exc}')
+                raise
+            time.sleep(1.5)
+        _query(ref, pat, "SELECT pg_notify('pgrst', 'reload schema');", timeout=30)
+        time.sleep(3)
+        _query(ref, pat, "SELECT pg_notify('pgrst', 'reload schema');", timeout=30)
+
+    for script in (
+        ROOT / 'run_reflection_audit_ddl.py',
+        ROOT / 'run_repo_map_ddl.py',
+        ROOT / 'run_semantic_ddl.py',
+    ):
+        _run_script(script)
+
+    results.append(_apply_statements(ref, pat, CORE_EXTRA_DDL, 'core-extra-ddl'))
+    try:
+        _query(ref, pat, "SELECT pg_notify('pgrst', 'reload schema');", timeout=30)
+    except Exception as exc:
+        errors.append(f'reload_schema: {exc}')
+        print(f'[BOOTSTRAP] schema reload failed: {exc}')
+
+    return {
+        'ok': not errors,
+        'ref': ref,
+        'results': results[:20],
+        'errors': errors[:20],
+    }
+
+
 def main() -> int:
     result = bootstrap_supabase()
     print(json.dumps(result, indent=2, default=str))
