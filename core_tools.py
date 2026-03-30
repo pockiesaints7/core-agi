@@ -104,7 +104,7 @@ def get_current_step() -> str:
 _SB_SCHEMA = {
     # --- TOMBSTONE: never query these ---
     "_tombstone": {
-        "playbook", "memory", "master_prompt", "patterns", "training_sessions",
+        "master_prompt", "patterns", "training_sessions",
         "training_sessions_v2", "training_flags", "session_learning", "agent_registry",
         "knowledge_blocks", "agi_mistakes", "stack_registry", "vault_logs", "vault"
     },
@@ -1740,6 +1740,136 @@ def t_notify(message, level="info"):
 # Legacy reference kept as alias for any internal code still using it.
 _TABLE_SCHEMAS = _SB_SCHEMA["tables"]  # type: ignore
 # A.4: _TABLE_SCHEMAS_REMOVED deleted -- was ~100 lines of orphaned dead code, never referenced.
+
+_SB_SCHEMA["tables"].update({
+    "memory": {
+        "pk": "key", "pk_type": "text",
+        "columns": {
+            "key": "text", "category": "text", "value": "text",
+            "created_at": "timestamptz", "updated_at": "timestamptz",
+        },
+        "required": ["key"],
+        "enums": {},
+        "fat_columns": ["value"],
+        "safe_select": "key,category,value,created_at,updated_at",
+        "on_conflict": "key",
+        "notes": "Personal memory key/value store used by brain and task-state helpers.",
+    },
+    "playbook": {
+        "pk": "id", "pk_type": "bigserial",
+        "columns": {
+            "id": "bigint", "topic": "text", "method": "text", "why_best": "text",
+            "supersedes": "text", "previous_method": "text", "version": "integer",
+            "tags": "text[]", "created_at": "timestamptz", "updated_at": "timestamptz",
+        },
+        "required": ["topic"],
+        "enums": {},
+        "fat_columns": ["method", "why_best", "supersedes", "previous_method", "tags"],
+        "safe_select": "id,topic,method,version,created_at,updated_at",
+        "on_conflict": "topic",
+        "notes": "Procedure playbook used by brain-first routing and memory export tools.",
+    },
+    "output_reflections": {
+        "pk": "id", "pk_type": "bigserial",
+        "columns": {
+            "id": "bigint", "session_id": "bigint", "source": "text",
+            "critique_score": "float8", "verdict": "text", "gap": "text",
+            "gap_domain": "text", "new_behavior": "text", "evo_worthy": "boolean",
+            "prompt_patch": "text", "created_at": "timestamptz",
+        },
+        "required": [],
+        "enums": {},
+        "fat_columns": ["gap", "new_behavior", "prompt_patch"],
+        "safe_select": "id,session_id,source,critique_score,verdict,gap_domain,created_at",
+        "notes": "Reflection output ledger produced by reviewer/critic flows.",
+    },
+    "agentic_sessions": {
+        "pk": "id", "pk_type": "bigserial",
+        "columns": {
+            "id": "bigint", "session_id": "text", "state": "jsonb", "step_index": "integer",
+            "current_step": "text", "completed_steps": "jsonb", "action_log": "jsonb",
+            "last_updated": "timestamptz", "goal": "text", "status": "text",
+            "chat_id": "text", "created_at": "timestamptz",
+        },
+        "required": ["session_id"],
+        "enums": {},
+        "fat_columns": ["state", "completed_steps", "action_log"],
+        "safe_select": "id,session_id,step_index,current_step,last_updated,status,created_at",
+        "notes": "Resumable agentic session state for loop tracking and action logs.",
+    },
+    "project_context": {
+        "pk": "id", "pk_type": "bigserial",
+        "columns": {
+            "id": "bigint", "project_id": "text", "prepared_by": "text",
+            "context_md": "text", "consumed": "boolean", "prepared_at": "timestamptz",
+            "consumed_at": "timestamptz", "created_at": "timestamptz",
+        },
+        "required": ["project_id"],
+        "enums": {},
+        "fat_columns": ["context_md"],
+        "safe_select": "id,project_id,prepared_by,consumed,prepared_at,consumed_at",
+        "notes": "Prepared project context waiting for Claude Desktop to consume.",
+    },
+    "backlog": {
+        "pk": "id", "pk_type": "bigserial",
+        "columns": {
+            "id": "bigint", "title": "text", "type": "text", "priority": "integer",
+            "description": "text", "domain": "text", "effort": "text", "impact": "text",
+            "status": "text", "discovered_at": "timestamptz",
+            "created_at": "timestamptz", "updated_at": "timestamptz",
+        },
+        "required": ["title"],
+        "enums": {},
+        "fat_columns": ["description", "impact"],
+        "safe_select": "id,title,type,priority,domain,status,created_at,updated_at",
+        "on_conflict": "title",
+        "notes": "Core backlog used by the maintenance and research loops.",
+    },
+    "reasoning_log": {
+        "pk": "id", "pk_type": "bigserial",
+        "columns": {
+            "id": "bigint", "session_id": "text", "domain": "text",
+            "action_planned": "text", "preflight_result": "text",
+            "assumptions_caught": "integer", "queries_triggered": "integer",
+            "owner_confirm_needed": "boolean", "behavioral_rule_proposed": "boolean",
+            "outcome": "text", "reasoning": "text", "created_at": "timestamptz",
+        },
+        "required": ["action_planned"],
+        "enums": {},
+        "fat_columns": ["preflight_result", "outcome", "reasoning"],
+        "safe_select": "id,session_id,domain,action_planned,created_at",
+        "notes": "Cognitive pre-flight log written by agentic reasoning tools.",
+    },
+    "projects": {
+        "pk": "project_id", "pk_type": "text",
+        "columns": {
+            "project_id": "text", "name": "text", "folder_path": "text",
+            "index_path": "text", "status": "text", "last_indexed": "timestamptz",
+            "created_at": "timestamptz", "updated_at": "timestamptz",
+        },
+        "required": ["project_id", "name"],
+        "enums": {"status": ["active", "degraded", "tombstone"]},
+        "fat_columns": ["folder_path", "index_path"],
+        "safe_select": "project_id,name,status,last_indexed,folder_path",
+        "on_conflict": "project_id",
+        "notes": "Project registry used by Telegram project tools and desktop context prep.",
+    },
+    "changelog": {
+        "pk": "id", "pk_type": "bigserial",
+        "columns": {
+            "id": "bigint", "action": "text", "detail": "text", "domain": "text",
+            "version": "text", "change_type": "text", "component": "text", "title": "text",
+            "description": "text", "triggered_by": "text", "growth_flag_type": "text",
+            "before_state": "text", "after_state": "text", "files_changed": "text[]",
+            "session_id": "bigint", "created_at": "timestamptz",
+        },
+        "required": ["action"],
+        "enums": {},
+        "fat_columns": ["detail", "description", "before_state", "after_state", "files_changed"],
+        "safe_select": "id,action,domain,version,change_type,component,created_at",
+        "notes": "Changelog ledger written after deploys and major configuration changes.",
+    },
+})
 
 def t_sb_query(table, filters="", limit=20, order="", select="*"):
     """Schema-aware Supabase read. Auto-blocks tombstone tables, auto-downgrades
