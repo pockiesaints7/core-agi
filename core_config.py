@@ -224,32 +224,57 @@ def _sb_bootstrap_schema_once(reason: str) -> None:
         print(f"[SB] bootstrap ({reason}) error: {exc}")
 
 
+def _sb_schema_cache_response(response) -> bool:
+    status = getattr(response, "status_code", None)
+    if status != 503:
+        return False
+    try:
+        text = (response.text or "").lower()
+    except Exception:
+        text = ""
+    return "schema cache" in text or "pgrst002" in text
+
+
+def _sb_retry_delay(attempt: int) -> float:
+    # Short backoff keeps startup responsive but gives PostgREST time to warm its schema cache.
+    return min(0.25 * (2 ** attempt), 1.5)
+
+
 def sb_get(t, qs="", svc=False):
     if _sb_circuit_open():
         return []
     try:
-        r = httpx.get(f"{SUPABASE_URL}/rest/v1/{t}?{qs}", headers=_sbh(svc), timeout=15)
-        if r.is_success:
-            _sb_circuit_reset()
-            return r.json()
-        if _sb_schema_missing_response(r):
-            print(f"[SB GET] {t} missing schema: {r.status_code} {r.text[:200]}")
-            _sb_bootstrap_schema_once(f"get:{t}")
-            try:
-                r = httpx.get(f"{SUPABASE_URL}/rest/v1/{t}?{qs}", headers=_sbh(svc), timeout=15)
-                if r.is_success:
-                    _sb_circuit_reset()
-                    return r.json()
-            except Exception as retry_exc:
-                print(f"[SB GET] {t} retry error after bootstrap: {retry_exc}")
-        print(f"[SB GET] {t} failed: {r.status_code} {r.text[:200]}")
-        _sb_circuit_note(r)
+        last_response = None
+        for attempt in range(3):
+            r = httpx.get(f"{SUPABASE_URL}/rest/v1/{t}?{qs}", headers=_sbh(svc), timeout=15)
+            last_response = r
+            if r.is_success:
+                _sb_circuit_reset()
+                return r.json()
+            if _sb_schema_missing_response(r):
+                print(f"[SB GET] {t} missing schema: {r.status_code} {r.text[:200]}")
+                _sb_bootstrap_schema_once(f"get:{t}")
+                try:
+                    r = httpx.get(f"{SUPABASE_URL}/rest/v1/{t}?{qs}", headers=_sbh(svc), timeout=15)
+                    last_response = r
+                    if r.is_success:
+                        _sb_circuit_reset()
+                        return r.json()
+                except Exception as retry_exc:
+                    print(f"[SB GET] {t} retry error after bootstrap: {retry_exc}")
+            if _sb_schema_cache_response(r) and attempt < 2:
+                delay = _sb_retry_delay(attempt)
+                print(f"[SB GET] {t} schema cache warming; retry {attempt + 2}/3 in {delay:.2f}s")
+                time.sleep(delay)
+                continue
+            break
+        print(f"[SB GET] {t} failed: {last_response.status_code} {last_response.text[:200]}")
+        _sb_circuit_note(last_response)
         return []
     except Exception as e:
         print(f"[SB GET] {t} error: {e}")
         _sb_circuit_note()
         return []
-
 
 def sb_post(t, d):
     if not L.sbw() or _sb_circuit_open(): return False
