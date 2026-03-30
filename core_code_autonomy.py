@@ -17,12 +17,6 @@ from collections import Counter
 from datetime import datetime
 from pathlib import Path
 from typing import Any
-
- param($m)
-        $line = $m.Groups[1].Value
-        if ($line -match '_env_int' -or $line -match '_env_float') { return $m.Value }
-        return 'from core_config import ' + $line + ', _env_int, _env_float'
-    
 from core_github import notify
 from core_queue_cursor import build_seek_filter, cursor_from_row
 from core_reflection_audit import (
@@ -1205,4 +1199,6 @@ def register_tools() -> None:
 
 
 register_tools()
+
+
 

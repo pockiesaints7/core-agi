@@ -1,4 +1,4 @@
-"""core_evolution_autonomy.py -- synthesize evolution_queue into task_queue.
+﻿"""core_evolution_autonomy.py -- synthesize evolution_queue into task_queue.
 
 This worker is the bridge between signal discovery and execution.
 It reads pending evolutions, turns each one into a concrete improvement task,
@@ -26,12 +26,6 @@ from datetime import datetime
 from typing import Any
 
 import httpx
-
- param($m)
-        $line = $m.Groups[1].Value
-        if ($line -match '_env_int' -or $line -match '_env_float') { return $m.Value }
-        return 'from core_config import ' + $line + ', _env_int, _env_float'
-    
 from core_github import notify
 from core_queue_cursor import build_seek_filter, cursor_from_row
 from core_work_taxonomy import build_autonomy_contract
@@ -39,17 +33,17 @@ from core_work_taxonomy import build_autonomy_contract
 AUTONOMY_ENABLED = os.getenv("CORE_EVOLUTION_AUTONOMY_ENABLED", "true").strip().lower() not in {
     "0", "false", "no", "off"
 }
-AUTONOMY_INTERVAL_S = max(120, _env_int("CORE_EVOLUTION_AUTONOMY_INTERVAL_S", "600")))
-AUTONOMY_BATCH_LIMIT = max(1, _env_int("CORE_EVOLUTION_AUTONOMY_BATCH_LIMIT", "3")))
+AUTONOMY_INTERVAL_S = max(120, _env_int("CORE_EVOLUTION_AUTONOMY_INTERVAL_S", "600"))
+AUTONOMY_BATCH_LIMIT = max(1, _env_int("CORE_EVOLUTION_AUTONOMY_BATCH_LIMIT", "3"))
 AUTONOMY_NOTIFY = os.getenv("CORE_EVOLUTION_AUTONOMY_NOTIFY", "true").strip().lower() in {
     "1", "true", "yes", "on"
 }
 AUTONOMY_BACKLOG_MONITOR = os.getenv("CORE_EVOLUTION_AUTONOMY_BACKLOG_MONITOR", "true").strip().lower() in {
     "1", "true", "yes", "on"
 }
-AUTONOMY_BACKLOG_WINDOW = max(3, _env_int("CORE_EVOLUTION_AUTONOMY_BACKLOG_WINDOW", "3")))
-AUTONOMY_BACKLOG_MIN_GROWTH = max(10, _env_int("CORE_EVOLUTION_AUTONOMY_BACKLOG_MIN_GROWTH", "25")))
-AUTONOMY_BACKLOG_ALERT_COOLDOWN_S = max(300, _env_int("CORE_EVOLUTION_AUTONOMY_BACKLOG_ALERT_COOLDOWN_S", "3600")))
+AUTONOMY_BACKLOG_WINDOW = max(3, _env_int("CORE_EVOLUTION_AUTONOMY_BACKLOG_WINDOW", "3"))
+AUTONOMY_BACKLOG_MIN_GROWTH = max(10, _env_int("CORE_EVOLUTION_AUTONOMY_BACKLOG_MIN_GROWTH", "25"))
+AUTONOMY_BACKLOG_ALERT_COOLDOWN_S = max(300, _env_int("CORE_EVOLUTION_AUTONOMY_BACKLOG_ALERT_COOLDOWN_S", "3600"))
 TASK_SOURCE = "improvement"
 
 _lock = threading.Lock()
@@ -675,3 +669,5 @@ def t_evolution_autonomy_status() -> dict:
 
 
 register_tools()
+
+
