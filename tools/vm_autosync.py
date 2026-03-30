@@ -31,6 +31,7 @@ DENY_DIRS = {
     "logs",
     "__pycache__",
     ".venv",
+    "venv",
     "node_modules",
 }
 
@@ -104,6 +105,11 @@ def path_is_safe(path: str) -> bool:
     return True
 
 
+def path_is_git_ignored(repo: Path, path: str) -> bool:
+    proc = run_git(["check-ignore", "-q", "--", path], cwd=repo, check=False)
+    return proc.returncode == 0
+
+
 def parse_porcelain_z(output: str) -> list[tuple[str, str]]:
     """Parse `git status --porcelain=v1 -z` into (status, path) tuples.
 
@@ -135,7 +141,11 @@ def safe_status_entries(repo: Path) -> list[tuple[str, str]]:
         check=True,
     )
     entries = parse_porcelain_z(proc.stdout)
-    return [(status, path) for status, path in entries if path_is_safe(path)]
+    return [
+        (status, path)
+        for status, path in entries
+        if path_is_safe(path) and not path_is_git_ignored(repo, path)
+    ]
 
 
 def status_signature(entries: Sequence[tuple[str, str]]) -> str:
@@ -144,7 +154,18 @@ def status_signature(entries: Sequence[tuple[str, str]]) -> str:
 
 def stage_entries(repo: Path, entries: Sequence[tuple[str, str]]) -> None:
     for _status, path in entries:
-        run_git(["add", "-A", "--", path], cwd=repo, check=True)
+        proc = run_git(["add", "-A", "--", path], cwd=repo, check=False)
+        if proc.returncode == 0:
+            continue
+        stderr = (proc.stderr or "").strip()
+        if "ignored by one of your .gitignore files" in stderr:
+            logging.warning("skipping ignored path %s in %s", path, repo)
+            continue
+        raise RuntimeError(
+            f"git add -A -- {path} failed in {repo}: {proc.returncode}\n"
+            f"stdout:\n{proc.stdout}\n"
+            f"stderr:\n{proc.stderr}"
+        )
 
 
 def commit_and_push(repo: Path, repo_name: str) -> bool:
@@ -252,3 +273,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
