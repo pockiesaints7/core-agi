@@ -5,15 +5,10 @@ Runs before everything else. Cannot be bypassed.
 Deployed on Oracle Ubuntu VM — no Railway dependency.
 """
 try:
-    try:
     from dotenv import load_dotenv
 except Exception:
     def load_dotenv(*args, **kwargs):
         return False
-except Exception:
-    def load_dotenv(*args, **kwargs):
-        return False
-
 import os
 import time
 import threading
@@ -136,5 +131,6 @@ def gate_check(msg: OrchestratorMessage) -> bool:
     print(f"[L0] PASS  tier={msg.tier}  source={msg.source}  route={msg.route}")
     msg.track_layer("L0-PASS")
     return True
+
 
 

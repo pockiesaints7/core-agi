@@ -12,15 +12,10 @@ import httpx
 import html
 
 try:
-    try:
     from dotenv import load_dotenv
 except Exception:
     def load_dotenv(*args, **kwargs):
         return False
-except Exception:
-    def load_dotenv(*args, **kwargs):
-        return False
-
 from core_config import (
     L,
     GITHUB_PAT, GITHUB_REPO,
@@ -193,5 +188,6 @@ def _gh_blob_write(path, content, message, repo=None):
     httpx.patch(f"https://api.github.com/repos/{repo}/git/refs/heads/main", headers=h,
                 json={"sha": new_commit_sha}, timeout=15).raise_for_status()
     return new_commit_sha
+
 
 
