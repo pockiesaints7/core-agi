@@ -437,24 +437,51 @@ def _scan_files(root: Path | None = None) -> list[Path]:
     return files
 
 
+
+
+
+def _is_transient_supabase_error(text: str) -> bool:
+    lowered = (text or '').lower()
+    return any(token in lowered for token in (
+        'recovery mode',
+        'not accepting connections',
+        'hot standby mode is disabled',
+        'econnreset',
+        'client network socket disconnected',
+        'could not connect',
+        'timed out',
+    ))
+
+
 def _mgmt_query(sql: str) -> dict:
     if not SUPABASE_PAT or not SUPABASE_REF:
         return {"ok": False, "error": "SUPABASE_PAT or SUPABASE_REF missing"}
-    try:
-        resp = httpx.post(
-            f"https://api.supabase.com/v1/projects/{SUPABASE_REF}/database/query",
-            headers={"Authorization": f"Bearer {SUPABASE_PAT}", "Content-Type": "application/json"},
-            json={"query": sql},
-            timeout=30,
-        )
-        if not resp.is_success:
-            return {"ok": False, "status_code": resp.status_code, "error": resp.text[:500]}
+    last_error = None
+    for attempt in range(1, 13):
         try:
-            return {"ok": True, "rows": resp.json()}
-        except Exception:
-            return {"ok": True, "rows": []}
-    except Exception as exc:
-        return {"ok": False, "error": str(exc)}
+            resp = httpx.post(
+                f"https://api.supabase.com/v1/projects/{SUPABASE_REF}/database/query",
+                headers={"Authorization": f"Bearer {SUPABASE_PAT}", "Content-Type": "application/json"},
+                json={"query": sql},
+                timeout=30,
+            )
+            if resp.is_success:
+                try:
+                    return {"ok": True, "rows": resp.json()}
+                except Exception:
+                    return {"ok": True, "rows": []}
+            last_error = resp.text[:500]
+            if _is_transient_supabase_error(last_error) and attempt < 12:
+                time.sleep(min(30, 2 ** attempt))
+                continue
+            return {"ok": False, "status_code": resp.status_code, "error": last_error}
+        except Exception as exc:
+            last_error = str(exc)
+            if _is_transient_supabase_error(last_error) and attempt < 12:
+                time.sleep(min(30, 2 ** attempt))
+                continue
+            return {"ok": False, "error": last_error}
+    return {"ok": False, "error": last_error or 'unknown error'}
 
 
 def _count_table(table: str, where: str = "") -> int:

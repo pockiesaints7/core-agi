@@ -455,6 +455,22 @@ def semantic_schema_ddl() -> list[str]:
     return [stmt.strip() for stmt in SEMANTIC_SCHEMA_DDL if stmt.strip()]
 
 
+
+
+
+def _is_transient_supabase_error(text: str) -> bool:
+    lowered = (text or '').lower()
+    return any(token in lowered for token in (
+        'recovery mode',
+        'not accepting connections',
+        'hot standby mode is disabled',
+        'econnreset',
+        'client network socket disconnected',
+        'could not connect',
+        'timed out',
+    ))
+
+
 def apply_semantic_schema() -> dict:
     """Apply the semantic-memory bootstrap through the Supabase management API."""
     if not SUPABASE_PAT:
@@ -463,33 +479,54 @@ def apply_semantic_schema() -> dict:
         results = []
         errors = []
         for stmt in semantic_schema_ddl():
-            resp = httpx.post(
+            attempts = 0
+            while True:
+                attempts += 1
+                resp = httpx.post(
+                    f"https://api.supabase.com/v1/projects/{SUPABASE_REF}/database/query",
+                    headers={
+                        "Authorization": f"Bearer {SUPABASE_PAT}",
+                        "Content-Type": "application/json",
+                    },
+                    json={"query": stmt if stmt.rstrip().endswith(';') else stmt + ';'},
+                    timeout=60,
+                )
+                ok = resp.status_code in (200, 201)
+                results.append({"ok": ok, "status_code": resp.status_code})
+                if ok:
+                    break
+                err = resp.text[:300]
+                if attempts < 12 and _is_transient_supabase_error(err):
+                    wait = min(30, 2 ** attempts)
+                    print(f"[SEMANTIC_SCHEMA] transient error, retrying in {wait}s: {resp.status_code} {err}")
+                    time.sleep(wait)
+                    continue
+                print(f"[SEMANTIC_SCHEMA] DDL failed: {resp.status_code} {err}")
+                errors.append(err)
+                break
+        reload_attempts = 0
+        while True:
+            reload_attempts += 1
+            reload_resp = httpx.post(
                 f"https://api.supabase.com/v1/projects/{SUPABASE_REF}/database/query",
                 headers={
                     "Authorization": f"Bearer {SUPABASE_PAT}",
                     "Content-Type": "application/json",
                 },
-                json={"query": stmt if stmt.rstrip().endswith(';') else stmt + ';'},
-                timeout=60,
+                json={"query": "SELECT pg_notify('pgrst', 'reload schema');"},
+                timeout=30,
             )
-            ok = resp.status_code in (200, 201)
-            results.append({"ok": ok, "status_code": resp.status_code})
-            if not ok:
-                err = resp.text[:300]
-                print(f"[SEMANTIC_SCHEMA] DDL failed: {resp.status_code} {err}")
-                errors.append(err)
-        reload_resp = httpx.post(
-            f"https://api.supabase.com/v1/projects/{SUPABASE_REF}/database/query",
-            headers={
-                "Authorization": f"Bearer {SUPABASE_PAT}",
-                "Content-Type": "application/json",
-            },
-            json={"query": "SELECT pg_notify('pgrst', 'reload schema');"},
-            timeout=30,
-        )
-        results.append({"ok": reload_resp.status_code in (200, 201), "status_code": reload_resp.status_code})
-        if reload_resp.status_code not in (200, 201):
-            errors.append(reload_resp.text[:300])
+            results.append({"ok": reload_resp.status_code in (200, 201), "status_code": reload_resp.status_code})
+            if reload_resp.status_code in (200, 201):
+                break
+            err = reload_resp.text[:300]
+            if reload_attempts < 12 and _is_transient_supabase_error(err):
+                wait = min(30, 2 ** reload_attempts)
+                print(f"[SEMANTIC_SCHEMA] transient reload error, retrying in {wait}s: {reload_resp.status_code} {err}")
+                time.sleep(wait)
+                continue
+            errors.append(err)
+            break
         return {
             "ok": not errors,
             "bootstrapped": not errors,

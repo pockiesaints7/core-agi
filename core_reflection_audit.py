@@ -127,6 +127,22 @@ def reflection_audit_ddl() -> str:
     return REFLECTION_AUDIT_DDL.strip()
 
 
+
+
+
+def _is_transient_supabase_error(text: str) -> bool:
+    lowered = (text or '').lower()
+    return any(token in lowered for token in (
+        'recovery mode',
+        'not accepting connections',
+        'hot standby mode is disabled',
+        'econnreset',
+        'client network socket disconnected',
+        'could not connect',
+        'timed out',
+    ))
+
+
 def apply_reflection_audit_schema() -> bool:
     """Apply the reflection audit DDL through the Supabase management API."""
     if not SUPABASE_PAT:
@@ -135,18 +151,30 @@ def apply_reflection_audit_schema() -> bool:
         stmts = [stmt.strip() for stmt in reflection_audit_ddl().split(";") if stmt.strip()]
         ok = True
         for stmt in stmts:
-            resp = httpx.post(
-                f"https://api.supabase.com/v1/projects/{SUPABASE_REF}/database/query",
-                headers={
-                    "Authorization": f"Bearer {SUPABASE_PAT}",
-                    "Content-Type": "application/json",
-                },
-                json={"query": stmt + ";"},
-                timeout=45,
-            )
-            if resp.status_code not in (200, 201):
-                print(f"[REFLECTION_AUDIT] DDL failed: {resp.status_code} {resp.text[:300]}")
+            attempts = 0
+            while True:
+                attempts += 1
+                resp = httpx.post(
+                    f"https://api.supabase.com/v1/projects/{SUPABASE_REF}/database/query",
+                    headers={
+                        "Authorization": f"Bearer {SUPABASE_PAT}",
+                        "Content-Type": "application/json",
+                    },
+                    json={"query": stmt + ";"},
+                    timeout=45,
+                )
+                if resp.status_code in (200, 201):
+                    break
+                text = resp.text[:300]
+                if attempts < 12 and _is_transient_supabase_error(text):
+                    wait = min(30, 2 ** attempts)
+                    print(f"[REFLECTION_AUDIT] transient error, retrying in {wait}s: {resp.status_code} {text}")
+                    time.sleep(wait)
+                    continue
+                print(f"[REFLECTION_AUDIT] DDL failed: {resp.status_code} {text}")
                 ok = False
+                break
+            if not ok:
                 break
         return ok
     except Exception as e:
