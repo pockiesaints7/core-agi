@@ -26,7 +26,7 @@ from core_config import (
     COLD_HOT_THRESHOLD, COLD_TIME_THRESHOLD, COLD_KB_GROWTH_THRESHOLD,
     PATTERN_EVO_THRESHOLD, KNOWLEDGE_AUTO_CONFIDENCE,
     KB_MINE_BATCH_SIZE, KB_MINE_RATIO_THRESHOLD,
-    sb_get, sb_post, sb_post_critical, sb_patch, sb_upsert, _sbh_count_svc,
+    sb_get, sb_post, sb_post_critical, sb_patch, sb_upsert, _sbh_count_svc, _env_int, _env_float,
     gemini_chat, groq_chat, GROQ_MODEL, GROQ_FAST,
 )
 from core_github import notify, gh_write
@@ -5678,6 +5678,7 @@ def proactive_surface_loop():
         except Exception as e:
             print(f"[PROACTIVE] loop error: {e}")
         time.sleep(_PROACTIVE_INTERVAL)
+
 
 
 
