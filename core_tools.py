@@ -287,10 +287,10 @@ _SB_SCHEMA = {
                         "before_state": "text", "after_state": "text",
                         "files_changed": "text[]", "session_id": "integer",
                         "domain": "text", "created_at": "timestamptz"},
-            "required": ["action"],
+            "required": ["change_type", "title"],
             "enums": {},
-            "fat_columns": ["detail"],
-            "safe_select": "id,action,domain,created_at",
+            "fat_columns": ["description", "before_state", "after_state"],
+            "safe_select": "id,version,change_type,component,title,created_at",
             "notes": "Use id=gt.1. PROTECTED -- no deletes."
         },
         "cold_reflections": {
