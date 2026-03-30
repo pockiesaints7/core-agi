@@ -1,4 +1,4 @@
-﻿"""core_code_autonomy.py -- code planning autonomy for CORE.
+"""core_code_autonomy.py -- code planning autonomy for CORE.
 
 This worker does not auto-edit code. It turns code-class tasks into a
 production-grade review packet, stores the packet as an evolution proposal,
@@ -1205,4 +1205,3 @@ def register_tools() -> None:
 
 
 register_tools()
-

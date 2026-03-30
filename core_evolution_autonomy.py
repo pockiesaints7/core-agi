@@ -1,4 +1,4 @@
-﻿"""core_evolution_autonomy.py -- synthesize evolution_queue into task_queue.
+"""core_evolution_autonomy.py -- synthesize evolution_queue into task_queue.
 
 This worker is the bridge between signal discovery and execution.
 It reads pending evolutions, turns each one into a concrete improvement task,
@@ -675,4 +675,3 @@ def t_evolution_autonomy_status() -> dict:
 
 
 register_tools()
-

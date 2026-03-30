@@ -1,4 +1,4 @@
-﻿"""core_repo_map.py -- CORE-native repository semantic map.
+"""core_repo_map.py -- CORE-native repository semantic map.
 
 This module scans the CORE repository, writes a semantic component graph to
 Supabase, and exposes read packets for the orchestrator. It is intentionally
@@ -1264,4 +1264,3 @@ def t_repo_graph_packet(path: str = "", query: str = "", depth: str = "2", limit
     except Exception:
         dep = 2
     return build_repo_graph_packet(path=path, query=query, depth=dep, limit=lim)
-

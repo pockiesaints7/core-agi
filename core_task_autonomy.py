@@ -1,4 +1,4 @@
-﻿"""core_task_autonomy.py -- autonomous task lifecycle for CORE.
+"""core_task_autonomy.py -- autonomous task lifecycle for CORE.
 
 This module turns task_queue rows into a bounded claim -> checkpoint -> verify ->
 complete loop. It is intentionally conservative:
@@ -1093,4 +1093,3 @@ def t_task_autonomy_status() -> dict:
 
 
 register_tools()
-

@@ -1,4 +1,4 @@
-﻿"""core_semantic_projection.py -- silent semantic projection for raw CORE tables.
+"""core_semantic_projection.py -- silent semantic projection for raw CORE tables.
 
 This worker mirrors important raw brain data into knowledge_base as a semantic
 read model. Raw tables remain canonical. The projection is best-effort,
@@ -412,4 +412,3 @@ def t_semantic_projection_status() -> dict:
 
 
 register_tools()
-

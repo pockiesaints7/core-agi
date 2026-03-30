@@ -1,4 +1,4 @@
-﻿"""
+"""
 core_orch_agent.py â€” CORE AGI Agentic Loop (ReAct Pattern)
 ===========================================================
 NO artificial step limit. Runs until a real termination condition:
@@ -942,4 +942,3 @@ def is_agentic_request(text: str, intent: str) -> bool:
     if lower.count(" then ") >= 2:
         return True
     return False
-

@@ -1,4 +1,4 @@
-﻿"""core_integration_autonomy.py -- specialized integration worker for CORE.
+"""core_integration_autonomy.py -- specialized integration worker for CORE.
 
 This worker handles wiring-class work: endpoint surface changes, module
 plumbing, and cross-repo contracts between core-agi and core-trading-bot.
@@ -1115,4 +1115,3 @@ def register_tools() -> None:
 
 
 register_tools()
-

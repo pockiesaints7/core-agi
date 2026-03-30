@@ -1,4 +1,4 @@
-﻿"""
+"""
 core_orch_layer1.py â€” L1: Input Reception & Triage
 Parses raw Telegram/MCP/system payloads into OrchestratorMessage.
 Entry point for all traffic.
@@ -369,4 +369,3 @@ async def layer_1_triage(
         from core_orch_layer10 import layer_10_output
         await layer_10_output(err_msg)
         return err_msg
-

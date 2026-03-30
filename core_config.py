@@ -1,4 +1,4 @@
-﻿"""core_config.py â€” CORE AGI shared configuration
+"""core_config.py â€” CORE AGI shared configuration
 All env vars, constants, RateLimiter, and Supabase helpers.
 Imported by all other core_* modules. Has NO imports from other core_* modules.
 
@@ -459,4 +459,3 @@ TOOL_ALWAYS_INCLUDE: set = {
     "search_kb", "get_mistakes", "list_tools", "get_tool_info",
     "get_behavioral_rules", "get_table_schema",
 }
-

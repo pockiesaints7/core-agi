@@ -1,4 +1,4 @@
-﻿"""core_train.py â€” CORE AGI Training Pipeline
+"""core_train.py â€” CORE AGI Training Pipeline
 Extracted from core.py. Contains:
   - auto_hot_reflection
   - run_cold_processor
@@ -5687,4 +5687,3 @@ def proactive_surface_loop():
         except Exception as e:
             print(f"[PROACTIVE] loop error: {e}")
         time.sleep(_PROACTIVE_INTERVAL)
-

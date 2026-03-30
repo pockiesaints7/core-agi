@@ -1,4 +1,4 @@
-﻿"""core_gap_audit.py â€” CORE-wide manual work detector.
+"""core_gap_audit.py â€” CORE-wide manual work detector.
 
 This module consolidates architectural and capability gap checks across CORE:
 - tool taxonomy drift
@@ -442,4 +442,3 @@ def core_gap_audit_loop() -> None:
             with _LOCK:
                 _STATE["last_error"] = str(exc)[:500]
         time.sleep(AUDIT_INTERVAL_S)
-

@@ -1,4 +1,4 @@
-﻿"""core_research_autonomy.py -- specialized research worker for CORE.
+"""core_research_autonomy.py -- specialized research worker for CORE.
 
 This worker consumes research-class tasks and turns them into durable memory.
 It does not patch code directly. It:
@@ -593,4 +593,3 @@ def register_tools() -> None:
 
 
 register_tools()
-
