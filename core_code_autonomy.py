@@ -1,4 +1,4 @@
-"""core_code_autonomy.py -- code planning autonomy for CORE.
+﻿"""core_code_autonomy.py -- code planning autonomy for CORE.
 
 This worker does not auto-edit code. It turns code-class tasks into a
 production-grade review packet, stores the packet as an evolution proposal,
@@ -36,8 +36,8 @@ from core_work_taxonomy import build_autonomy_contract
 AUTONOMY_ENABLED = os.getenv("CORE_CODE_AUTONOMY_ENABLED", "true").strip().lower() not in {
     "0", "false", "no", "off"
 }
-AUTONOMY_INTERVAL_S = max(300, _env_int("CORE_CODE_AUTONOMY_INTERVAL_S", "900")))
-AUTONOMY_BATCH_LIMIT = max(1, _env_int("CORE_CODE_AUTONOMY_BATCH_LIMIT", "1")))
+AUTONOMY_INTERVAL_S = max(300, _env_int("CORE_CODE_AUTONOMY_INTERVAL_S", "900"))
+AUTONOMY_BATCH_LIMIT = max(1, _env_int("CORE_CODE_AUTONOMY_BATCH_LIMIT", "1"))
 AUTONOMY_NOTIFY = os.getenv("CORE_CODE_AUTONOMY_NOTIFY", "true").strip().lower() in {
     "1", "true", "yes", "on"
 }
@@ -1205,3 +1205,4 @@ def register_tools() -> None:
 
 
 register_tools()
+
