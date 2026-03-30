@@ -1,10 +1,10 @@
-"""core_main.py — CORE AGI entry point
+﻿"""core_main.py â€” CORE AGI entry point
 FastAPI app, all routes, Pydantic models, Telegram handler, queue_poller, startup.
 Extracted from core.py as part of Task 2 architecture split.
 
 Import chain:
   core_main imports: core_config, core_github, core_train, core_tools
-  (no circular deps — core_config has no internal imports)
+  (no circular deps â€” core_config has no internal imports)
 
 NOTE: This IS the live entry point (Procfile: web: python core_main.py). core.py deleted.
 Activation: rename/swap after smoke test passes (Task 2.6).
@@ -100,7 +100,7 @@ from core_gap_audit import (
 )
 from core_work_taxonomy import build_autonomy_contract
 
-# ── Orchestrator v2 ───────────────────────────────────────────────────────────
+# â”€â”€ Orchestrator v2 â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 from core_orch_main import handle_telegram_message_v2, startup_v2
 
 CORE_TELEGRAM_COMMANDS = [
@@ -129,7 +129,7 @@ CORE_TELEGRAM_COMMANDS = [
 ]
 
 # ---------------------------------------------------------------------------
-# Shared helpers (used by routes + tools — defined here, imported by core_tools)
+# Shared helpers (used by routes + tools â€” defined here, imported by core_tools)
 # ---------------------------------------------------------------------------
 def get_resume_task() -> str:
     """Return title of highest-priority in_progress task from task_queue.
@@ -177,7 +177,7 @@ def get_latest_session():
 
 def get_system_counts():
     counts = {}
-    # Core brain tables — total counts
+    # Core brain tables â€” total counts
     table_filters = {
         "knowledge_base": "",
         "mistakes":       "",
@@ -193,7 +193,7 @@ def get_system_counts():
             counts[t] = int(cr.split("/")[-1]) if "/" in cr else 0
         except:
             counts[t] = -1
-    # task_queue — counts by status
+    # task_queue â€” counts by status
     for task_status in ("pending", "in_progress", "done", "failed"):
         try:
             r = httpx.get(
@@ -204,7 +204,7 @@ def get_system_counts():
             counts[f"task_queue_{task_status}"] = int(cr.split("/")[-1]) if "/" in cr else 0
         except:
             counts[f"task_queue_{task_status}"] = -1
-    # evolution_queue — counts by status
+    # evolution_queue â€” counts by status
     for evo_status in ("pending", "applied", "rejected"):
         try:
             r = httpx.get(
@@ -275,7 +275,7 @@ def _render_command_catalog() -> str:
             continue
         lines.append(f"\n<b>{group}</b>")
         for item in items:
-            lines.append(f"/{item['command']} — {_tg_escape(item['description'], 120)}")
+            lines.append(f"/{item['command']} â€” {_tg_escape(item['description'], 120)}")
     lines.append("\nUse /start for the current system snapshot.")
     return "\n".join(lines)
 
@@ -458,7 +458,7 @@ def _render_task_status_report(task_auto: dict) -> str:
             status = "done" if item.get("ok") else "failed"
             lines.append(
                 f"- #{item.get('task_id')} [{status}] {_tg_escape(item.get('title') or '', 80)} "
-                f"({_tg_escape(strategy.get('work_track') or 'unknown', 40)} → {_tg_escape(execution.get('artifact_type') or item.get('artifact_type') or 'unknown', 40)})"
+                f"({_tg_escape(strategy.get('work_track') or 'unknown', 40)} â†’ {_tg_escape(execution.get('artifact_type') or item.get('artifact_type') or 'unknown', 40)})"
             )
     return _render_section("Task Autonomy", lines)
 
@@ -583,10 +583,10 @@ def _render_autonomy_overview_report(counts: dict, task_auto: dict, evo_auto: di
         f"Semantic projection: {'enabled' if SEMANTIC_PROJECTION_ENABLED else 'disabled'} | last_run {_tg_escape(sem.get('last_run_at') or 'n/a', 40)}",
         "",
         "<b>Worker map</b>",
-        "research_autonomy — active: validates research proposals, writes knowledge, queues follow-up work",
-        "code_autonomy — active: generates code-change packets and queues owner review",
-        "integration_autonomy — active: generates integration packets for endpoint wiring, module plumbing, and cross-repo contracts",
-        "proposal_router — active: read-only owner-only proposal queue for manual review",
+        "research_autonomy â€” active: validates research proposals, writes knowledge, queues follow-up work",
+        "code_autonomy â€” active: generates code-change packets and queues owner review",
+        "integration_autonomy â€” active: generates integration packets for endpoint wiring, module plumbing, and cross-repo contracts",
+        "proposal_router â€” active: read-only owner-only proposal queue for manual review",
     ]
     if review_rows:
         lines.append("")
@@ -659,29 +659,66 @@ def _build_startup_brief(resume: str, counts: dict, orch: dict, task_auto: dict 
     evo_rejected = counts.get("evolution_rejected", 0)
     task_auto = task_auto or {}
     evo_auto = evo_auto or {}
-    proposal = proposal_router_status(limit=3)
+    proposal = {"enabled": False, "pending": 0, "route_counts": {}}
+    try:
+        proposal = proposal_router_status(limit=3) or proposal
+    except Exception as e:
+        print(f"[CORE] startup brief proposal router unavailable: {e}")
     task_sources = ", ".join(task_auto.get("sources") or ["self_assigned", "improvement"])
     evo_pending_count = evo_auto.get("pending_evolutions", evo_pending)
     evo_synthesized = evo_auto.get("synthesized_evolutions", 0)
     evo_task_pending = evo_auto.get("pending_improvement_tasks", 0)
-    code_auto = code_autonomy_status() if CODE_AUTONOMY_ENABLED else {}
-    integration_auto = integration_autonomy_status() if INTEGRATION_AUTONOMY_ENABLED else {}
-    sem_proj = semantic_projection_status() if SEMANTIC_PROJECTION_ENABLED else {}
-    audit_status = core_gap_audit_status()
-    state_packet = t_state_packet(session_id="default")
+    code_auto = {}
+    integration_auto = {}
+    sem_proj = {}
+    audit_status = {"enabled": False, "last_run_at": "n/a", "last_report": {}}
+    state_packet = {}
+    try:
+        if CODE_AUTONOMY_ENABLED:
+            code_auto = code_autonomy_status() or {}
+    except Exception as e:
+        print(f"[CORE] startup brief code autonomy unavailable: {e}")
+    try:
+        if INTEGRATION_AUTONOMY_ENABLED:
+            integration_auto = integration_autonomy_status() or {}
+    except Exception as e:
+        print(f"[CORE] startup brief integration autonomy unavailable: {e}")
+    try:
+        if SEMANTIC_PROJECTION_ENABLED:
+            sem_proj = semantic_projection_status() or {}
+    except Exception as e:
+        print(f"[CORE] startup brief semantic projection unavailable: {e}")
+    try:
+        audit_status = core_gap_audit_status() or audit_status
+    except Exception as e:
+        print(f"[CORE] startup brief manual audit unavailable: {e}")
+    try:
+        state_packet = t_state_packet(session_id="default") or {}
+    except Exception as e:
+        print(f"[CORE] startup brief state packet unavailable: {e}")
     state_verification = state_packet.get("verification") or {}
+    try:
+        research_pending = research_autonomy_status().get("pending", 0) if RESEARCH_AUTONOMY_ENABLED else 0
+    except Exception as e:
+        print(f"[CORE] startup brief research autonomy unavailable: {e}")
+        research_pending = 0
+    try:
+        audit_label = format_core_gap_audit_status(audit_status)
+    except Exception as e:
+        print(f"[CORE] startup brief audit formatting failed: {e}")
+        audit_label = "unavailable"
     return (
         f"🧠 <b>CORE Online</b>\n"
         f"Orchestrator: <b>{orch.get('model', 'unknown')}</b> | {orch.get('layers', 'L0-L9 active')} | {orch.get('blueprint', '')}\n\n"
         f"<b>State</b>\n"
         f"KB: {counts.get('knowledge_base', 0)} | Mistakes: {counts.get('mistakes', 0)} | Sessions: {counts.get('sessions', 0)}\n"
         f"Repo map: components {counts.get('repo_components', 0)} | chunks {counts.get('repo_component_chunks', 0)} | edges {counts.get('repo_component_edges', 0)} | scans {counts.get('repo_scan_runs', 0)}\n"
-        f"Manual work audit: {format_core_gap_audit_status(audit_status)}\n"
+        f"Manual work audit: {audit_label}\n"
         f"State continuity: {'verified' if state_verification.get('verified') else 'degraded'} | score {state_verification.get('verification_score', 0):.2f} | warnings {len(state_verification.get('warnings') or [])}\n"
         f"Task queue: pending {task_pending} | in_progress {task_in_progress} | done {task_done} | failed {task_failed} | {task_summary}\n"
         f"Evolutions: pending {evo_pending} | applied {evo_applied} | rejected {evo_rejected}\n"
         f"Task autonomy: {'enabled' if AUTONOMY_ENABLED else 'disabled'} | pending {task_auto.get('pending', 0)} | in_progress {task_auto.get('in_progress', 0)} | sources {task_sources}\n"
-        f"Research autonomy: {'enabled' if RESEARCH_AUTONOMY_ENABLED else 'disabled'} | pending {research_autonomy_status().get('pending', 0) if RESEARCH_AUTONOMY_ENABLED else 0}\n"
+        f"Research autonomy: {'enabled' if RESEARCH_AUTONOMY_ENABLED else 'disabled'} | pending {research_pending}\n"
         f"Code autonomy: {'enabled' if CODE_AUTONOMY_ENABLED else 'disabled'} | pending {code_auto.get('pending_code_tasks', 0)} | proposals {code_auto.get('pending_review_proposals', 0)}\n"
         f"Integration autonomy: {'enabled' if INTEGRATION_AUTONOMY_ENABLED else 'disabled'} | pending {integration_auto.get('pending_integration_tasks', 0)} | proposals {integration_auto.get('pending_review_proposals', 0)}\n"
         f"Evolution autonomy: {'enabled' if EVOLUTION_AUTONOMY_ENABLED else 'disabled'} | pending {evo_pending_count} | synthesized {evo_synthesized} | follow-up tasks {evo_task_pending}\n"
@@ -689,7 +726,6 @@ def _build_startup_brief(resume: str, counts: dict, orch: dict, task_auto: dict 
         f"Semantic projection: {'enabled' if SEMANTIC_PROJECTION_ENABLED else 'disabled'} | last_run {sem_proj.get('last_run_at', 'n/a')}\n"
         f"MCP: {len(TOOLS)} tools | Webhook: set | Loops: queue, cold, research, synthesis, diagnosis, autonomy, code-autonomy, integration-autonomy, research-autonomy, evolution-autonomy, semantic-projection, repo-map"
     )
-
 
 def self_sync_check():
     from core_config import CORE_SELF_STALE_DAYS
@@ -1133,7 +1169,7 @@ class TranslateRequest(BaseModel):
 @app.post("/api/translate-evolution")
 async def translate_evolution(body: TranslateRequest, _auth=Depends(require_mcp_secret)):
     """Server-side evolution translation using backend LLM (gemini_chat/groq_chat).
-    Called by /review widget — replaces broken client-side Anthropic API call."""
+    Called by /review widget â€” replaces broken client-side Anthropic API call."""
     try:
         from core_config import gemini_chat
         system = (
@@ -1858,16 +1894,16 @@ async def webhook(req: Request):
             cid = msg.get("chat", {}).get("id", "?")
             uname = msg.get("from", {}).get("username", "?")
             print(f"[WEBHOOK] message: chat_id={cid} user=@{uname} text={text!r:.80}")
-            # Fire-and-forget in a thread — webhook must return 200 immediately
+            # Fire-and-forget in a thread â€” webhook must return 200 immediately
             threading.Thread(target=handle_msg, args=(msg,), daemon=True).start()
         else:
-            # Non-message update (edited_message, callback_query, etc) — log and ignore
+            # Non-message update (edited_message, callback_query, etc) â€” log and ignore
             print(f"[WEBHOOK] non-message update ignored: keys={keys}")
     except HTTPException:
         raise
     except Exception as e:
         print(f"[WEBHOOK] error: {e}")
-    return {"ok": True}  # Always return 200 immediately — never block here
+    return {"ok": True}  # Always return 200 immediately â€” never block here
 
 
 # ---------------------------------------------------------------------------
@@ -2130,9 +2166,9 @@ def handle_msg(msg):
                 json={"status": "aborted"},
                 timeout=5
             )
-            notify("✅ Active sessions marked aborted. Use /restart if CORE is still stuck.", cid)
+            notify("âœ… Active sessions marked aborted. Use /restart if CORE is still stuck.", cid)
         except Exception as e:
-            notify(f"⚠️ Kill failed: {e}", cid)
+            notify(f"âš ï¸ Kill failed: {e}", cid)
 
     elif cmd == "/project":
         from core_tools import t_project_list, t_project_prepare
@@ -2141,7 +2177,7 @@ def handle_msg(msg):
             result = t_project_list()
             projects = result.get("projects", [])
             if projects:
-                lines = [f"- {_tg_escape(p['name'], 60)} ({_tg_escape(p['project_id'], 40)}) — {_tg_escape(p['status'], 40)}" for p in projects]
+                lines = [f"- {_tg_escape(p['name'], 60)} ({_tg_escape(p['project_id'], 40)}) â€” {_tg_escape(p['status'], 40)}" for p in projects]
                 notify(_render_section("Projects", lines), cid)
             else:
                 notify("No projects registered. Use Claude Desktop to register first.", cid)
@@ -2155,9 +2191,9 @@ def handle_msg(msg):
                 notify(f"Could not prepare: {ids}. Check project IDs with /project list.", cid)
 
     else:
-        # ── Orchestrator v2: all freeform messages routed through L0→L10 pipeline
-        # Pass raw msg dict — core_orch_main wraps it into {"message": msg} internally.
-        # Use sync wrapper (handle_telegram_message) — creates its own event loop safely.
+        # â”€â”€ Orchestrator v2: all freeform messages routed through L0â†’L10 pipeline
+        # Pass raw msg dict â€” core_orch_main wraps it into {"message": msg} internally.
+        # Use sync wrapper (handle_telegram_message) â€” creates its own event loop safely.
         from core_orch_main import handle_telegram_message
         threading.Thread(
             target=handle_telegram_message,
@@ -2170,7 +2206,7 @@ def handle_msg(msg):
 # Background pollers
 # ---------------------------------------------------------------------------
 def queue_poller():
-    """Notify-only mode — no auto-execution without owner approval.
+    """Notify-only mode â€” no auto-execution without owner approval.
     Polls task_queue for pending tasks and notifies owner via Telegram."""
     print("[QUEUE] Started - notify-only mode (no auto-execution)")
     notify_sources = ("core_v6_registry", "mcp_session")
@@ -2195,7 +2231,7 @@ def queue_poller():
                         f"Pending task (P{priority}) from {source}:\n"
                         f"`{task_text}`\n"
                         f"ID: `{tid}`\n"
-                        f"Review via Claude Desktop → task_queue"
+                        f"Review via Claude Desktop â†’ task_queue"
                     )
                     _notified.add(tid)
                     if len(_notified) > 200:
@@ -2206,14 +2242,14 @@ def queue_poller():
 
 
 # ---------------------------------------------------------------------------
-# Deploy webhook — triggered by GitHub push to auto-pull + restart
+# Deploy webhook â€” triggered by GitHub push to auto-pull + restart
 # ---------------------------------------------------------------------------
 @app.post("/deploy-webhook")
 async def deploy_webhook(req: Request):
     """Auto-deploy: git pull latest from GitHub then restart core-agi service.
     Auth: X-MCP-Secret header (same secret as MCP).
     Call from GitHub Actions or manually after pushing code.
-    Returns immediately — restart happens in background thread.
+    Returns immediately â€” restart happens in background thread.
     """
     secret = req.headers.get("X-MCP-Secret", "")
     if not secrets.compare_digest(str(secret), str(MCP_SECRET)):
@@ -2230,11 +2266,11 @@ async def deploy_webhook(req: Request):
             print(f"[DEPLOY] git pull: {pull.stdout.strip()} {pull.stderr.strip()}")
             if pull.returncode != 0:
                 notify(
-                    f"⚠️ <b>CORE Auto-Deploy Failed</b>\n"
+                    f"âš ï¸ <b>CORE Auto-Deploy Failed</b>\n"
                     f"git pull returned {pull.returncode}\n{(pull.stderr or pull.stdout)[:300]}"
                 )
                 return
-            notify(f"🚀 <b>CORE Auto-Deploy</b>\n{pull.stdout.strip() or 'already up to date'}")
+            notify(f"ðŸš€ <b>CORE Auto-Deploy</b>\n{pull.stdout.strip() or 'already up to date'}")
             if "Already up to date" not in pull.stdout:
                 restart = subprocess.run(
                     ["sudo", "-n", "systemctl", "restart", "core-agi.service"],
@@ -2242,7 +2278,7 @@ async def deploy_webhook(req: Request):
                 )
                 if restart.returncode != 0:
                     notify(
-                        f"⚠️ <b>CORE Auto-Deploy Restart Failed</b>\n"
+                        f"âš ï¸ <b>CORE Auto-Deploy Restart Failed</b>\n"
                         f"{(restart.stderr or restart.stdout)[:300]}"
                     )
                     return
@@ -2252,12 +2288,12 @@ async def deploy_webhook(req: Request):
                     capture_output=True, text=True, timeout=10
                 )
                 notify(
-                    f"✅ <b>CORE Auto-Deploy Restarted</b>\n"
+                    f"âœ… <b>CORE Auto-Deploy Restarted</b>\n"
                     f"commit={current.stdout.strip()[:12] if current.returncode == 0 else 'unknown'}"
                 )
         except Exception as e:
             print(f"[DEPLOY] error: {e}")
-            notify(f"⚠️ CORE Deploy error: {e}")
+            notify(f"âš ï¸ CORE Deploy error: {e}")
 
     threading.Thread(target=_do_deploy, daemon=True).start()
     return {"ok": True, "status": "deploy_started"}
@@ -2268,8 +2304,14 @@ async def deploy_webhook(req: Request):
 # ---------------------------------------------------------------------------
 @app.on_event("startup")
 def on_start():
-    set_webhook()
-    set_telegram_commands(CORE_TELEGRAM_COMMANDS)
+    try:
+        set_webhook()
+    except Exception as e:
+        print(f"[CORE] webhook setup failed (non-fatal): {e}")
+    try:
+        set_telegram_commands(CORE_TELEGRAM_COMMANDS)
+    except Exception as e:
+        print(f"[CORE] telegram command setup failed (non-fatal): {e}")
     orch = startup_v2() or {}
     # Auto-embed sync — patches sb_post to embed all semantic table inserts
     try:
@@ -2296,10 +2338,26 @@ def on_start():
         threading.Thread(target=evolution_autonomy_loop, daemon=True).start()
     if SEMANTIC_PROJECTION_ENABLED:
         threading.Thread(target=semantic_projection_loop, daemon=True).start()
-    counts = get_system_counts()
-    resume = get_resume_task()
-    task_auto = autonomy_status() if AUTONOMY_ENABLED else {}
-    evo_auto = evolution_autonomy_status() if EVOLUTION_AUTONOMY_ENABLED else {}
+    counts = {}
+    resume = "No active tasks"
+    task_auto = {}
+    evo_auto = {}
+    try:
+        counts = get_system_counts() or {}
+    except Exception as e:
+        print(f"[CORE] startup counts unavailable: {e}")
+    try:
+        resume = get_resume_task() or "No active tasks"
+    except Exception as e:
+        print(f"[CORE] startup resume unavailable: {e}")
+    try:
+        task_auto = autonomy_status() if AUTONOMY_ENABLED else {}
+    except Exception as e:
+        print(f"[CORE] startup task autonomy unavailable: {e}")
+    try:
+        evo_auto = evolution_autonomy_status() if EVOLUTION_AUTONOMY_ENABLED else {}
+    except Exception as e:
+        print(f"[CORE] startup evolution autonomy unavailable: {e}")
     # Show in_progress tasks brief
     try:
         in_progress = sb_get(
@@ -2336,9 +2394,20 @@ def on_start():
                 task_line = "No active tasks"
     except Exception as e:
         task_line = f"Tasks: unavailable ({e})"
-    brief = _build_startup_brief(resume if resume != "No active tasks" else task_line, counts, orch, task_auto, evo_auto)
-    notify_ok = notify(brief)
-    print(f"[CORE] startup notify sent={notify_ok}")
+    try:
+        brief = _build_startup_brief(resume if resume != "No active tasks" else task_line, counts, orch, task_auto, evo_auto)
+    except Exception as e:
+        print(f"[CORE] startup brief build failed: {e}")
+        brief = (
+            "🧠 <b>CORE Online</b>\n"
+            f"Orchestrator: <b>{orch.get('model', 'unknown')}</b>\n"
+            f"Startup note: brief rendering degraded ({e})"
+        )
+    try:
+        notify_ok = notify(brief)
+        print(f"[CORE] startup notify sent={notify_ok}")
+    except Exception as e:
+        print(f"[CORE] startup notify failed (non-fatal): {e}")
     print(f"[CORE] v6.0 online :{PORT} - {resume}")
 
 
@@ -2353,3 +2422,4 @@ if __name__ == "__main__":
         ssl_keyfile="/etc/letsencrypt/live/core-agi.duckdns.org/privkey.pem",
         ssl_certfile="/etc/letsencrypt/live/core-agi.duckdns.org/fullchain.pem"
     )
+
