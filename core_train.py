@@ -1,4 +1,4 @@
-"""core_train.py â€” CORE AGI Training Pipeline
+﻿"""core_train.py â€” CORE AGI Training Pipeline
 Extracted from core.py. Contains:
   - auto_hot_reflection
   - run_cold_processor
@@ -21,11 +21,7 @@ from datetime import datetime, timedelta, timezone
 
 import httpx
 
- param($m)
-        $line = $m.Groups[1].Value
-        if ($line -match '_env_int' -or $line -match '_env_float') { return $m.Value }
-        return 'from core_config import ' + $line + ', _env_int, _env_float'
-    
+from core_config import (
     SUPABASE_URL,
     COLD_HOT_THRESHOLD, COLD_TIME_THRESHOLD, COLD_KB_GROWTH_THRESHOLD,
     PATTERN_EVO_THRESHOLD, KNOWLEDGE_AUTO_CONFIDENCE,
@@ -4320,12 +4316,7 @@ def _maybe_eval_prompt(target: str, system: str, every: int) -> None:
     _PROMPT_CYCLE_COUNTERS[target] = _PROMPT_CYCLE_COUNTERS.get(target, 0) + 1
     if _PROMPT_CYCLE_COUNTERS[target] % every == 0:
         try:
-             param($m)
-        $line = $m.Groups[1].Value
-        if ($line -match '_env_int' -or $line -match '_env_float') { return $m.Value }
-        return 'from core_config import ' + $line + ', _env_int, _env_float'
-    
-            rows = _sbg(
+rows = _sbg(
                 "system_prompts",
                 f"select=version&target=eq.{target}&active=eq.true&order=version.desc&limit=1",
                 svc=True,
@@ -5687,3 +5678,5 @@ def proactive_surface_loop():
         except Exception as e:
             print(f"[PROACTIVE] loop error: {e}")
         time.sleep(_PROACTIVE_INTERVAL)
+
+

@@ -1,4 +1,4 @@
-"""core_research_autonomy.py -- specialized research worker for CORE.
+﻿"""core_research_autonomy.py -- specialized research worker for CORE.
 
 This worker consumes research-class tasks and turns them into durable memory.
 It does not patch code directly. It:
@@ -20,12 +20,7 @@ import uuid
 from collections import Counter
 from datetime import datetime
 from typing import Any
-
- param($m)
-        $line = $m.Groups[1].Value
-        if ($line -match '_env_int' -or $line -match '_env_float') { return $m.Value }
-        return 'from core_config import ' + $line + ', _env_int, _env_float'
-    
+from core_config import _env_int, sb_get, sb_patch, sb_post, groq_chat, GROQ_MODEL
 from core_github import notify
 from core_queue_cursor import build_seek_filter, cursor_from_row
 from core_tools import t_add_knowledge, t_reasoning_packet, t_agent_session_init, t_agent_state_set, t_agent_step_done
@@ -34,8 +29,8 @@ from core_work_taxonomy import build_autonomy_contract
 AUTONOMY_ENABLED = os.getenv("CORE_RESEARCH_AUTONOMY_ENABLED", "true").strip().lower() not in {
     "0", "false", "no", "off"
 }
-AUTONOMY_INTERVAL_S = max(300, _env_int("CORE_RESEARCH_AUTONOMY_INTERVAL_S", "600")))
-AUTONOMY_BATCH_LIMIT = max(1, _env_int("CORE_RESEARCH_AUTONOMY_BATCH_LIMIT", "3")))
+AUTONOMY_INTERVAL_S = max(300, _env_int("CORE_RESEARCH_AUTONOMY_INTERVAL_S", "600"))
+AUTONOMY_BATCH_LIMIT = max(1, _env_int("CORE_RESEARCH_AUTONOMY_BATCH_LIMIT", "3"))
 AUTONOMY_NOTIFY = os.getenv("CORE_RESEARCH_AUTONOMY_NOTIFY", "true").strip().lower() in {
     "1", "true", "yes", "on"
 }
@@ -593,3 +588,5 @@ def register_tools() -> None:
 
 
 register_tools()
+
+
