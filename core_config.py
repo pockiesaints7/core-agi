@@ -30,6 +30,30 @@ TELEGRAM_WEBHOOK_SECRET = os.environ.get("TELEGRAM_WEBHOOK_SECRET", MCP_SECRET)
 SUPABASE_PAT   = os.environ.get("SUPABASE_PAT", "")  # Management API PAT for DB introspection
 SUPABASE_REF   = "qbfaplqiakwjvrtwpbmr"  # Project ref
 PORT           = int(os.environ.get("PORT", 8081))
+# -- Env parsing helpers ------------------------------------------------------
+
+def _env_clean(name: str, default: str = "") -> str:
+    value = os.getenv(name, default)
+    if value is None:
+        return default
+    value = value.strip()
+    if "#" in value:
+        value = value.split("#", 1)[0].strip()
+    return value
+
+
+def _env_int(name: str, default: str | int) -> int:
+    try:
+        return int(_env_clean(name, str(default)))
+    except Exception:
+        return int(default)
+
+
+def _env_float(name: str, default: str | float) -> float:
+    try:
+        return float(_env_clean(name, str(default)))
+    except Exception:
+        return float(default)
 SESSION_TTL_H  = 8
 
 MCP_PROTOCOL_VERSION = "2024-11-05"
@@ -459,5 +483,6 @@ TOOL_ALWAYS_INCLUDE: set = {
     "search_kb", "get_mistakes", "list_tools", "get_tool_info",
     "get_behavioral_rules", "get_table_schema",
 }
+
 
 
