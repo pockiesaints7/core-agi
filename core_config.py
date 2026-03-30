@@ -14,8 +14,43 @@ import httpx
 try:
     from dotenv import load_dotenv
 except Exception:
-    def load_dotenv(*args, **kwargs):
-        return False
+    def load_dotenv(path=None, override=False):
+        from pathlib import Path as _Path
+
+        def _apply(candidate: _Path) -> bool:
+            if not candidate.exists():
+                return False
+            loaded = False
+            try:
+                for raw_line in candidate.read_text(encoding="utf-8").splitlines():
+                    line = raw_line.strip()
+                    if not line or line.startswith("#") or "=" not in line:
+                        continue
+                    key, value = line.split("=", 1)
+                    key = key.strip()
+                    value = value.strip()
+                    if (value.startswith('"') and value.endswith('"')) or (value.startswith("'") and value.endswith("'")):
+                        value = value[1:-1]
+                    if override or key not in os.environ:
+                        os.environ[key] = value
+                    loaded = True
+            except Exception:
+                return False
+            return loaded
+
+        loaded_any = False
+        if path is None:
+            roots = [
+                _Path.cwd() / ".env",
+                _Path(__file__).resolve().parent / ".env",
+                _Path(__file__).resolve().parent.parent / ".env",
+            ]
+        else:
+            candidate = _Path(path)
+            roots = [candidate if candidate.is_absolute() else _Path.cwd() / candidate, candidate]
+        for candidate in roots:
+            loaded_any = _apply(candidate) or loaded_any
+        return loaded_any
 # -- Env vars ------------------------------------------------------------------
 GROQ_API_KEY   = os.environ["GROQ_API_KEY"]
 GROQ_MODEL     = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
@@ -485,6 +520,7 @@ TOOL_ALWAYS_INCLUDE: set = {
     "search_kb", "get_mistakes", "list_tools", "get_tool_info",
     "get_behavioral_rules", "get_table_schema",
 }
+
 
 
 

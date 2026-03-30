@@ -9,8 +9,43 @@ from typing import Dict, Any
 try:
     from dotenv import load_dotenv
 except Exception:
-    def load_dotenv(*args, **kwargs):
-        return False`r`n`r`nfrom orchestrator_message import OrchestratorMessage
+    def load_dotenv(path=None, override=False):
+        from pathlib import Path as _Path
+
+        def _apply(candidate: _Path) -> bool:
+            if not candidate.exists():
+                return False
+            loaded = False
+            try:
+                for raw_line in candidate.read_text(encoding="utf-8").splitlines():
+                    line = raw_line.strip()
+                    if not line or line.startswith("#") or "=" not in line:
+                        continue
+                    key, value = line.split("=", 1)
+                    key = key.strip()
+                    value = value.strip()
+                    if (value.startswith('"') and value.endswith('"')) or (value.startswith("'") and value.endswith("'")):
+                        value = value[1:-1]
+                    if override or key not in os.environ:
+                        os.environ[key] = value
+                    loaded = True
+            except Exception:
+                return False
+            return loaded
+
+        loaded_any = False
+        if path is None:
+            roots = [
+                _Path.cwd() / ".env",
+                _Path(__file__).resolve().parent / ".env",
+                _Path(__file__).resolve().parent.parent / ".env",
+            ]
+        else:
+            candidate = _Path(path)
+            roots = [candidate if candidate.is_absolute() else _Path.cwd() / candidate, candidate]
+        for candidate in roots:
+            loaded_any = _apply(candidate) or loaded_any
+        return loaded_any`r`n`r`nfrom orchestrator_message import OrchestratorMessage
 from core_orch_context import initial_request_profile
 
 # ?? Dedup gate ???????????????????????????????????????????????????????????????
@@ -371,6 +406,8 @@ async def layer_1_triage(
         from core_orch_layer10 import layer_10_output
         await layer_10_output(err_msg)
         return err_msg
+
+
 
 
 
