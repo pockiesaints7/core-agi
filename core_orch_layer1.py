@@ -1,4 +1,4 @@
-"""
+﻿"""
 core_orch_layer1.py â€” L1: Input Reception & Triage
 Parses raw Telegram/MCP/system payloads into OrchestratorMessage.
 Entry point for all traffic.
@@ -245,7 +245,7 @@ async def _parse_mcp(request: Dict[str, Any]) -> OrchestratorMessage:
 
     msg = OrchestratorMessage(
         text=query,
-        chat_id=_env_int("TELEGRAM_CHAT_ID", os.getenv("TELEGRAM_CHAT", "0"))),
+        chat_id=_env_int("TELEGRAM_CHAT_ID", os.getenv("TELEGRAM_CHAT", "0")),
         user="claude_desktop",
         source="mcp",
         message_type="command",
@@ -281,7 +281,7 @@ async def _parse_system(event: Dict[str, Any]) -> OrchestratorMessage:
     """Background system events (cron, heartbeat, watchdog)."""
     msg = OrchestratorMessage(
         text=event.get("event_type", "system_event"),
-        chat_id=_env_int("TELEGRAM_CHAT_ID", os.getenv("TELEGRAM_CHAT", "0"))),
+        chat_id=_env_int("TELEGRAM_CHAT_ID", os.getenv("TELEGRAM_CHAT", "0")),
         user="system",
         source="system",
         message_type="event",
@@ -362,10 +362,11 @@ async def layer_1_triage(
         print(f"[L1] Traceback:\n{traceback.format_exc()}")
         err_msg = OrchestratorMessage(
             text=str(raw_input)[:200],
-            chat_id=_env_int("TELEGRAM_CHAT_ID", os.getenv("TELEGRAM_CHAT", "0"))),
+            chat_id=_env_int("TELEGRAM_CHAT_ID", os.getenv("TELEGRAM_CHAT", "0")),
             user="parse_error",
         )
         err_msg.add_error("L1", exc, "PARSE_ERROR")
         from core_orch_layer10 import layer_10_output
         await layer_10_output(err_msg)
         return err_msg
+
