@@ -58,13 +58,9 @@ def run_git(args: Sequence[str], cwd: Path, check: bool = True) -> subprocess.Co
     )
     if check and proc.returncode != 0:
         raise RuntimeError(
-            f"git {' '.join(args)} failed in {cwd}: {proc.returncode}
-"
-            f"stdout:
-{proc.stdout}
-"
-            f"stderr:
-{proc.stderr}"
+            f"git {' '.join(args)} failed in {cwd}: {proc.returncode}\n"
+            f"stdout:\n{proc.stdout}\n"
+            f"stderr:\n{proc.stderr}"
         )
     return proc
 
