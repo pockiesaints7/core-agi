@@ -44,6 +44,8 @@ except Exception:
         for candidate in roots:
             loaded_any = _apply(candidate) or loaded_any
         return loaded_any
+load_dotenv()
+
 import os
 import time
 import threading
@@ -166,6 +168,7 @@ def gate_check(msg: OrchestratorMessage) -> bool:
     print(f"[L0] PASS  tier={msg.tier}  source={msg.source}  route={msg.route}")
     msg.track_layer("L0-PASS")
     return True
+
 
 
 

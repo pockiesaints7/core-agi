@@ -51,6 +51,8 @@ except Exception:
         for candidate in roots:
             loaded_any = _apply(candidate) or loaded_any
         return loaded_any
+load_dotenv()
+
 # -- Env vars ------------------------------------------------------------------
 GROQ_API_KEY   = os.environ["GROQ_API_KEY"]
 GROQ_MODEL     = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
@@ -520,6 +522,7 @@ TOOL_ALWAYS_INCLUDE: set = {
     "search_kb", "get_mistakes", "list_tools", "get_tool_info",
     "get_behavioral_rules", "get_table_schema",
 }
+
 
 
 
