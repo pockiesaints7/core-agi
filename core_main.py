@@ -99,6 +99,7 @@ from core_gap_audit import (
     notify_core_gap_audit,
 )
 from core_work_taxonomy import build_autonomy_contract
+from core_supabase_bootstrap import bootstrap_supabase as bootstrap_core_supabase
 
 # â”€â”€ Orchestrator v2 â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 from core_orch_main import handle_telegram_message_v2, startup_v2
@@ -2304,6 +2305,12 @@ async def deploy_webhook(req: Request):
 # ---------------------------------------------------------------------------
 @app.on_event("startup")
 def on_start():
+    try:
+        bootstrap_result = bootstrap_core_supabase()
+        if isinstance(bootstrap_result, dict) and not bootstrap_result.get("ok", False):
+            print(f"[CORE] Supabase bootstrap warning: {bootstrap_result.get('errors') or bootstrap_result.get('error')}")
+    except Exception as e:
+        print(f"[CORE] Supabase bootstrap failed (non-fatal): {e}")
     try:
         set_webhook()
     except Exception as e:
