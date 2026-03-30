@@ -1,4 +1,4 @@
-"""core_integration_autonomy.py -- specialized integration worker for CORE.
+﻿"""core_integration_autonomy.py -- specialized integration worker for CORE.
 
 This worker handles wiring-class work: endpoint surface changes, module
 plumbing, and cross-repo contracts between core-agi and core-trading-bot.
@@ -23,7 +23,11 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from core_config import GROQ_MODEL, groq_chat, sb_get, sb_patch, sb_post
+ param($m)
+        $line = $m.Groups[1].Value
+        if ($line -match '_env_int' -or $line -match '_env_float') { return $m.Value }
+        return 'from core_config import ' + $line + ', _env_int, _env_float'
+    
 from core_github import notify
 from core_queue_cursor import build_seek_filter, cursor_from_row
 from core_reflection_audit import finalize_reflection_event, note_reflection_stage, register_reflection_event
@@ -33,8 +37,8 @@ from core_work_taxonomy import build_autonomy_contract
 AUTONOMY_ENABLED = os.getenv("CORE_INTEGRATION_AUTONOMY_ENABLED", "true").strip().lower() not in {
     "0", "false", "no", "off"
 }
-AUTONOMY_INTERVAL_S = max(300, int(os.getenv("CORE_INTEGRATION_AUTONOMY_INTERVAL_S", "1200")))
-AUTONOMY_BATCH_LIMIT = max(1, int(os.getenv("CORE_INTEGRATION_AUTONOMY_BATCH_LIMIT", "1")))
+AUTONOMY_INTERVAL_S = max(300, _env_int("CORE_INTEGRATION_AUTONOMY_INTERVAL_S", "1200")))
+AUTONOMY_BATCH_LIMIT = max(1, _env_int("CORE_INTEGRATION_AUTONOMY_BATCH_LIMIT", "1")))
 AUTONOMY_NOTIFY = os.getenv("CORE_INTEGRATION_AUTONOMY_NOTIFY", "true").strip().lower() in {
     "1", "true", "yes", "on"
 }
@@ -1111,3 +1115,4 @@ def register_tools() -> None:
 
 
 register_tools()
+

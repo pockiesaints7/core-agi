@@ -1,4 +1,4 @@
-"""core_config.py — CORE AGI shared configuration
+﻿"""core_config.py â€” CORE AGI shared configuration
 All env vars, constants, RateLimiter, and Supabase helpers.
 Imported by all other core_* modules. Has NO imports from other core_* modules.
 
@@ -29,7 +29,7 @@ MCP_SECRET     = os.environ["MCP_SECRET"]
 TELEGRAM_WEBHOOK_SECRET = os.environ.get("TELEGRAM_WEBHOOK_SECRET", MCP_SECRET)
 SUPABASE_PAT   = os.environ.get("SUPABASE_PAT", "")  # Management API PAT for DB introspection
 SUPABASE_REF   = "qbfaplqiakwjvrtwpbmr"  # Project ref
-PORT           = int(os.environ.get("PORT", 8081))
+PORT           = _env_int("PORT", 8081)
 SESSION_TTL_H  = 8
 
 MCP_PROTOCOL_VERSION = "2024-11-05"
@@ -134,10 +134,10 @@ def sb_delete(t, m):
 # -- Telegram notify helper ----------------------------------------------------
 def notify(text: str, chat_id: str = "") -> bool:
     """Send a Telegram message. Falls back to TELEGRAM_CHAT if chat_id not given.
-    Non-blocking on failure — always returns bool."""
+    Non-blocking on failure â€” always returns bool."""
     cid = chat_id or TELEGRAM_CHAT
     if not TELEGRAM_TOKEN or not cid:
-        print(f"[NOTIFY] Cannot send — TOKEN or chat_id missing")
+        print(f"[NOTIFY] Cannot send â€” TOKEN or chat_id missing")
         return False
     try:
         r = httpx.post(
@@ -184,7 +184,7 @@ def groq_chat(system: str, user: str, model: str = None, max_tokens: int = 1024)
                             {"role": "user", "content": user},
                         ],
                     },
-                    timeout=20,  # Hard 20s — Groq is fast, >20s means something is wrong
+                    timeout=20,  # Hard 20s â€” Groq is fast, >20s means something is wrong
                 )
                 elapsed = round(_time.monotonic() - t0, 2)
                 if elapsed > 5:
@@ -241,15 +241,15 @@ OPENROUTER_MODEL   = os.getenv("OPENROUTER_MODEL", "google/gemini-2.5-flash")
 
 def gemini_chat(system: str, user: str, max_tokens: int = 2048, json_mode: bool = False, model: str = "") -> str:
     """LLM chat with full fallback chain:
-    1. OpenRouter (model param or OPENROUTER_MODEL env — supports Gemini 2.5 Flash, Opus, any model)
-    2. Gemini direct API (round-robin across all GEMINI_KEYS — up to 11 keys)
-    3. Groq (strongest free model — final safety net)
+    1. OpenRouter (model param or OPENROUTER_MODEL env â€” supports Gemini 2.5 Flash, Opus, any model)
+    2. Gemini direct API (round-robin across all GEMINI_KEYS â€” up to 11 keys)
+    3. Groq (strongest free model â€” final safety net)
     model param: pass any OpenRouter model string to override (e.g. "anthropic/claude-opus-4-5")
     json_mode=True: instructs model to return valid JSON only.
     """
     active_model = model or OPENROUTER_MODEL
 
-    # ── Tier 1: OpenRouter ────────────────────────────────────────────────────
+    # â”€â”€ Tier 1: OpenRouter â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     if OPENROUTER_API_KEY:
         # Proper system/user separation for best reasoning quality
         messages = []
@@ -277,7 +277,7 @@ def gemini_chat(system: str, user: str, max_tokens: int = 2048, json_mode: bool 
                         "X-Title": "CORE AGI",
                     },
                     json=payload,
-                    timeout=60,  # 60s — supports long Opus/agentic calls
+                    timeout=60,  # 60s â€” supports long Opus/agentic calls
                 )
                 _elapsed = round(time.monotonic() - _t0, 2)
                 if _elapsed > 5:
@@ -291,10 +291,10 @@ def gemini_chat(system: str, user: str, max_tokens: int = 2048, json_mode: bool 
             except Exception as e:
                 last_err = str(e)
                 continue
-        # Don't raise — fall through to Gemini direct
-        print(f"[OPENROUTER] Failed after 3 attempts: {last_err} — trying Gemini direct")
+        # Don't raise â€” fall through to Gemini direct
+        print(f"[OPENROUTER] Failed after 3 attempts: {last_err} â€” trying Gemini direct")
 
-    # ── Tier 2: Gemini direct (round-robin all keys) ──────────────────────────
+    # â”€â”€ Tier 2: Gemini direct (round-robin all keys) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     global _GEMINI_KEY_INDEX
     if _GEMINI_KEYS:
         attempts = len(_GEMINI_KEYS)
@@ -337,10 +337,10 @@ def gemini_chat(system: str, user: str, max_tokens: int = 2048, json_mode: bool 
             except Exception as e:
                 last_err = str(e)
                 continue
-        # Don't raise — fall through to Groq
-        print(f"[GEMINI] All {attempts} keys exhausted: {last_err} — trying Groq")
+        # Don't raise â€” fall through to Groq
+        print(f"[GEMINI] All {attempts} keys exhausted: {last_err} â€” trying Groq")
 
-    # ── Tier 3: Groq (strongest free model — final safety net) ───────────────
+    # â”€â”€ Tier 3: Groq (strongest free model â€” final safety net) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     try:
         return groq_chat(system=system, user=user, model=GROQ_MODEL, max_tokens=max_tokens)
     except Exception as e:
@@ -367,10 +367,10 @@ def build_live_schema(supabase_ref: str = "", supabase_pat: str = "") -> dict:
         ref = supabase_ref or SUPABASE_REF
         pat = supabase_pat or SUPABASE_PAT
         if not pat:
-            print("[SCHEMA] build_live_schema: SUPABASE_PAT not set — skipping live fetch")
+            print("[SCHEMA] build_live_schema: SUPABASE_PAT not set â€” skipping live fetch")
             return {}
         if not ref:
-            print("[SCHEMA] build_live_schema: SUPABASE_REF not set — skipping live fetch")
+            print("[SCHEMA] build_live_schema: SUPABASE_REF not set â€” skipping live fetch")
             return {}
 
         resp = httpx.post(
@@ -414,15 +414,15 @@ def build_live_schema(supabase_ref: str = "", supabase_pat: str = "") -> dict:
         return {}
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# TOOL CATEGORY KEYWORDS — single source of truth
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# TOOL CATEGORY KEYWORDS â€” single source of truth
 # Used by: core_orchestrator._build_live_categories()
 #          core_web.t_list_tools()
 # Update here ONLY when adding a new tool category domain.
 # Keys are category names. Values are keyword fragments matched against tool names.
 # A tool is assigned to the first category whose keywords appear in the tool name.
 # Tools that match no keywords go to "misc" automatically.
-# ══════════════════════════════════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 TOOL_CATEGORY_KEYWORDS: dict = {
     "deploy":    ["redeploy", "deploy", "build_status", "validate_syntax",
                   "patch_file", "multi_patch", "gh_search_replace", "railway_logs",
@@ -454,8 +454,9 @@ TOOL_CATEGORY_KEYWORDS: dict = {
 }
 
 # Tools always included in every model call regardless of category routing.
-# These are the core brain tools — they should always be available.
+# These are the core brain tools â€” they should always be available.
 TOOL_ALWAYS_INCLUDE: set = {
     "search_kb", "get_mistakes", "list_tools", "get_tool_info",
     "get_behavioral_rules", "get_table_schema",
 }
+

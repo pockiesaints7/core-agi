@@ -1,4 +1,4 @@
-"""core_gap_audit.py — CORE-wide manual work detector.
+﻿"""core_gap_audit.py â€” CORE-wide manual work detector.
 
 This module consolidates architectural and capability gap checks across CORE:
 - tool taxonomy drift
@@ -21,7 +21,11 @@ from collections import Counter
 from datetime import datetime, timedelta
 from typing import Any
 
-from core_config import _sbh_count_svc, sb_get
+ param($m)
+        $line = $m.Groups[1].Value
+        if ($line -match '_env_int' -or $line -match '_env_float') { return $m.Value }
+        return 'from core_config import ' + $line + ', _env_int, _env_float'
+    
 from core_github import notify
 from core_repo_map import repo_map_status
 from core_orch_context import _tool_family_for_name
@@ -38,12 +42,12 @@ _STATE = {
 }
 
 AUDIT_ENABLED = os.getenv("CORE_GAP_AUDIT_ENABLED", "true").strip().lower() not in {"0", "false", "no", "off"}
-AUDIT_INTERVAL_S = max(300, int(os.getenv("CORE_GAP_AUDIT_INTERVAL_S", "3600")))
+AUDIT_INTERVAL_S = max(300, _env_int("CORE_GAP_AUDIT_INTERVAL_S", "3600")))
 AUDIT_NOTIFY_ON_WARNING = os.getenv("CORE_GAP_AUDIT_NOTIFY_ON_WARNING", "true").strip().lower() not in {"0", "false", "no", "off"}
-AUDIT_QUEUE_WARN_TASK = max(200, int(os.getenv("CORE_GAP_AUDIT_QUEUE_WARN_TASK", "1000")))
-AUDIT_QUEUE_WARN_EVO = max(50, int(os.getenv("CORE_GAP_AUDIT_QUEUE_WARN_EVO", "250")))
-AUDIT_QUEUE_WARN_OWNER = max(25, int(os.getenv("CORE_GAP_AUDIT_QUEUE_WARN_OWNER", "75")))
-AUDIT_REPO_STALE_HOURS = max(6, int(os.getenv("CORE_GAP_AUDIT_REPO_STALE_HOURS", "24")))
+AUDIT_QUEUE_WARN_TASK = max(200, _env_int("CORE_GAP_AUDIT_QUEUE_WARN_TASK", "1000")))
+AUDIT_QUEUE_WARN_EVO = max(50, _env_int("CORE_GAP_AUDIT_QUEUE_WARN_EVO", "250")))
+AUDIT_QUEUE_WARN_OWNER = max(25, _env_int("CORE_GAP_AUDIT_QUEUE_WARN_OWNER", "75")))
+AUDIT_REPO_STALE_HOURS = max(6, _env_int("CORE_GAP_AUDIT_REPO_STALE_HOURS", "24")))
 
 
 def _utcnow() -> str:
@@ -53,7 +57,11 @@ def _utcnow() -> str:
 def _count_table(table: str, extra: str = "") -> int:
     try:
         import httpx
-        from core_config import SUPABASE_URL
+         param($m)
+        $line = $m.Groups[1].Value
+        if ($line -match '_env_int' -or $line -match '_env_float') { return $m.Value }
+        return 'from core_config import ' + $line + ', _env_int, _env_float'
+    
         r = httpx.get(
             f"{SUPABASE_URL}/rest/v1/{table}?select=id&limit=1{extra}",
             headers=_sbh_count_svc(),
@@ -353,7 +361,7 @@ def format_core_gap_audit(report: dict[str, Any]) -> str:
         for gap in gaps[:8]:
             lines.append(
                 f"- <b>{gap.get('severity', 'info').upper()}</b> [{gap.get('source', 'unknown')}] "
-                f"{str(gap.get('title') or '')[:120]} — {_escape(str(gap.get('manual_action') or ''), 180)}"
+                f"{str(gap.get('title') or '')[:120]} â€” {_escape(str(gap.get('manual_action') or ''), 180)}"
             )
     else:
         lines.append("")
@@ -434,3 +442,4 @@ def core_gap_audit_loop() -> None:
             with _LOCK:
                 _STATE["last_error"] = str(exc)[:500]
         time.sleep(AUDIT_INTERVAL_S)
+

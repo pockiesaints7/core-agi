@@ -1,4 +1,4 @@
-"""core_evolution_autonomy.py -- synthesize evolution_queue into task_queue.
+﻿"""core_evolution_autonomy.py -- synthesize evolution_queue into task_queue.
 
 This worker is the bridge between signal discovery and execution.
 It reads pending evolutions, turns each one into a concrete improvement task,
@@ -27,7 +27,11 @@ from typing import Any
 
 import httpx
 
-from core_config import SUPABASE_URL, _sbh_count_svc, sb_get, sb_patch, sb_post
+ param($m)
+        $line = $m.Groups[1].Value
+        if ($line -match '_env_int' -or $line -match '_env_float') { return $m.Value }
+        return 'from core_config import ' + $line + ', _env_int, _env_float'
+    
 from core_github import notify
 from core_queue_cursor import build_seek_filter, cursor_from_row
 from core_work_taxonomy import build_autonomy_contract
@@ -35,17 +39,17 @@ from core_work_taxonomy import build_autonomy_contract
 AUTONOMY_ENABLED = os.getenv("CORE_EVOLUTION_AUTONOMY_ENABLED", "true").strip().lower() not in {
     "0", "false", "no", "off"
 }
-AUTONOMY_INTERVAL_S = max(120, int(os.getenv("CORE_EVOLUTION_AUTONOMY_INTERVAL_S", "600")))
-AUTONOMY_BATCH_LIMIT = max(1, int(os.getenv("CORE_EVOLUTION_AUTONOMY_BATCH_LIMIT", "3")))
+AUTONOMY_INTERVAL_S = max(120, _env_int("CORE_EVOLUTION_AUTONOMY_INTERVAL_S", "600")))
+AUTONOMY_BATCH_LIMIT = max(1, _env_int("CORE_EVOLUTION_AUTONOMY_BATCH_LIMIT", "3")))
 AUTONOMY_NOTIFY = os.getenv("CORE_EVOLUTION_AUTONOMY_NOTIFY", "true").strip().lower() in {
     "1", "true", "yes", "on"
 }
 AUTONOMY_BACKLOG_MONITOR = os.getenv("CORE_EVOLUTION_AUTONOMY_BACKLOG_MONITOR", "true").strip().lower() in {
     "1", "true", "yes", "on"
 }
-AUTONOMY_BACKLOG_WINDOW = max(3, int(os.getenv("CORE_EVOLUTION_AUTONOMY_BACKLOG_WINDOW", "3")))
-AUTONOMY_BACKLOG_MIN_GROWTH = max(10, int(os.getenv("CORE_EVOLUTION_AUTONOMY_BACKLOG_MIN_GROWTH", "25")))
-AUTONOMY_BACKLOG_ALERT_COOLDOWN_S = max(300, int(os.getenv("CORE_EVOLUTION_AUTONOMY_BACKLOG_ALERT_COOLDOWN_S", "3600")))
+AUTONOMY_BACKLOG_WINDOW = max(3, _env_int("CORE_EVOLUTION_AUTONOMY_BACKLOG_WINDOW", "3")))
+AUTONOMY_BACKLOG_MIN_GROWTH = max(10, _env_int("CORE_EVOLUTION_AUTONOMY_BACKLOG_MIN_GROWTH", "25")))
+AUTONOMY_BACKLOG_ALERT_COOLDOWN_S = max(300, _env_int("CORE_EVOLUTION_AUTONOMY_BACKLOG_ALERT_COOLDOWN_S", "3600")))
 TASK_SOURCE = "improvement"
 
 _lock = threading.Lock()
@@ -354,9 +358,9 @@ def _monitor_backlog(summary: dict) -> dict:
     if trend == "rising":
         alert = (
             f"Evolution backlog rising across {len(pending_series)} cycles: "
-            f"{pending_series[0]} -> {pending_series[-1]} (Δ{growth}); "
+            f"{pending_series[0]} -> {pending_series[-1]} (Î”{growth}); "
             f"follow-up tasks {task_series[0] if task_series else 0} -> {task_series[-1] if task_series else 0} "
-            f"(Δ{task_growth})."
+            f"(Î”{task_growth})."
         )
         last_alert = _state.get("last_backlog_alert_at") or ""
         cooldown_ok = True
@@ -370,8 +374,8 @@ def _monitor_backlog(summary: dict) -> dict:
                 notify(
                     "<b>EVOLUTION BACKLOG MONITOR</b>\n"
                     f"Window: {window_samples[0].get('ts', '?')} -> {window_samples[-1].get('ts', '?')}\n"
-                    f"Pending evolutions: {pending_series[0]} -> {pending_series[-1]} (Δ{growth})\n"
-                    f"Follow-up tasks: {task_series[0] if task_series else 0} -> {task_series[-1] if task_series else 0} (Δ{task_growth})\n"
+                    f"Pending evolutions: {pending_series[0]} -> {pending_series[-1]} (Î”{growth})\n"
+                    f"Follow-up tasks: {task_series[0] if task_series else 0} -> {task_series[-1] if task_series else 0} (Î”{task_growth})\n"
                     f"Action: keep current drain rate unless this trend persists after another window."
                 )
                 _state["last_backlog_alert_at"] = finished_at
@@ -671,3 +675,4 @@ def t_evolution_autonomy_status() -> dict:
 
 
 register_tools()
+

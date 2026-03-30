@@ -1,5 +1,5 @@
-"""
-core_orch_layer1.py — L1: Input Reception & Triage
+﻿"""
+core_orch_layer1.py â€” L1: Input Reception & Triage
 Parses raw Telegram/MCP/system payloads into OrchestratorMessage.
 Entry point for all traffic.
 """
@@ -55,8 +55,8 @@ _COMMAND_ROUTES = {
     "/ask", "/search", "/time", "/calc", "/weather", "/tools", "/run", "/do", "/log",
 }
 
-# ── L1 NLU Synonym Expansion ─────────────────────────────────────────────────
-# Maps natural-language phrases → canonical slash-commands.
+# â”€â”€ L1 NLU Synonym Expansion â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# Maps natural-language phrases â†’ canonical slash-commands.
 # Applied BEFORE route detection. Zero-latency, deterministic.
 # Keys are lowercase substrings. First match wins. Longer/more specific first.
 _NLU_SYNONYMS: list[tuple[str, str]] = [
@@ -122,8 +122,8 @@ _NLU_SYNONYMS: list[tuple[str, str]] = [
     ("what day is it",     "/time"),
     ("what date is it",    "/time"),
     ("time now",           "/time"),
-    # calc — only match when clearly followed by a math expression (trailing space required)
-    # DO NOT use bare "what is" — too greedy, matches "what is your health" etc.
+    # calc â€” only match when clearly followed by a math expression (trailing space required)
+    # DO NOT use bare "what is" â€” too greedy, matches "what is your health" etc.
     # weather
     ("what's the weather", "/weather"),
     ("weather today",      "/weather"),
@@ -153,7 +153,7 @@ def _nlu_expand(text: str) -> str:
     return text
 
 
-# ── Parsers ───────────────────────────────────────────────────────────────────
+# â”€â”€ Parsers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 async def _parse_telegram(update: Dict[str, Any]) -> OrchestratorMessage:
     # BUG-NEW-1: edited_message events are re-edits of past msgs ? skip them.
     if "edited_message" in update and "message" not in update:
@@ -174,11 +174,11 @@ async def _parse_telegram(update: Dict[str, Any]) -> OrchestratorMessage:
         or ""
     )
 
-    # NLU expansion: map natural phrases → slash-commands before routing
+    # NLU expansion: map natural phrases â†’ slash-commands before routing
     if text and not text.startswith("/"):
         expanded = _nlu_expand(text)
         if expanded != text:
-            print(f"[L1] NLU expand: {text!r} → {expanded!r}")
+            print(f"[L1] NLU expand: {text!r} â†’ {expanded!r}")
             text = expanded
 
     msg = OrchestratorMessage(
@@ -239,13 +239,13 @@ async def _parse_telegram(update: Dict[str, Any]) -> OrchestratorMessage:
 
 
 async def _parse_mcp(request: Dict[str, Any]) -> OrchestratorMessage:
-    """MCP tool-call from Claude Desktop → always owner tier, always command route."""
+    """MCP tool-call from Claude Desktop â†’ always owner tier, always command route."""
     params = request.get("params", {})
     query = params.get("query", "") or params.get("text", "") or str(params)
 
     msg = OrchestratorMessage(
         text=query,
-        chat_id=int(os.getenv("TELEGRAM_CHAT_ID", os.getenv("TELEGRAM_CHAT", "0"))),
+        chat_id=_env_int("TELEGRAM_CHAT_ID", os.getenv("TELEGRAM_CHAT", "0"))),
         user="claude_desktop",
         source="mcp",
         message_type="command",
@@ -281,7 +281,7 @@ async def _parse_system(event: Dict[str, Any]) -> OrchestratorMessage:
     """Background system events (cron, heartbeat, watchdog)."""
     msg = OrchestratorMessage(
         text=event.get("event_type", "system_event"),
-        chat_id=int(os.getenv("TELEGRAM_CHAT_ID", os.getenv("TELEGRAM_CHAT", "0"))),
+        chat_id=_env_int("TELEGRAM_CHAT_ID", os.getenv("TELEGRAM_CHAT", "0"))),
         user="system",
         source="system",
         message_type="event",
@@ -311,13 +311,13 @@ async def _parse_system(event: Dict[str, Any]) -> OrchestratorMessage:
     return msg
 
 
-# ── Entry point ───────────────────────────────────────────────────────────────
+# â”€â”€ Entry point â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 async def layer_1_triage(
     raw_input: Dict[str, Any],
     input_type: str = "telegram",
 ) -> OrchestratorMessage:
     """
-    Parse raw input → OrchestratorMessage → run through L0 gate → hand to L2.
+    Parse raw input â†’ OrchestratorMessage â†’ run through L0 gate â†’ hand to L2.
     Always returns an OrchestratorMessage (even on error, for traceability).
     """
     print(f"[L1] Received {input_type} input")
@@ -343,15 +343,15 @@ async def layer_1_triage(
         msg.track_layer("L1-PARSE")
         print(f"[L1] Parsed  type={msg.message_type}  route={msg.route}  user=@{msg.user}  text={msg.text[:60]!r}")
 
-        # ── L0 security gate ──────────────────────────────────────────────────
+        # â”€â”€ L0 security gate â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         from core_orch_layer0 import gate_check
         if not gate_check(msg):
-            print(f"[L1] L0 gate REJECTED — surfacing to output")
+            print(f"[L1] L0 gate REJECTED â€” surfacing to output")
             from core_orch_layer10 import layer_10_output
             await layer_10_output(msg)
             return msg
 
-        # ── Hand to L2 ────────────────────────────────────────────────────────
+        # â”€â”€ Hand to L2 â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         from core_orch_layer2 import layer_2_memory
         await layer_2_memory(msg)
         return msg
@@ -362,10 +362,11 @@ async def layer_1_triage(
         print(f"[L1] Traceback:\n{traceback.format_exc()}")
         err_msg = OrchestratorMessage(
             text=str(raw_input)[:200],
-            chat_id=int(os.getenv("TELEGRAM_CHAT_ID", os.getenv("TELEGRAM_CHAT", "0"))),
+            chat_id=_env_int("TELEGRAM_CHAT_ID", os.getenv("TELEGRAM_CHAT", "0"))),
             user="parse_error",
         )
         err_msg.add_error("L1", exc, "PARSE_ERROR")
         from core_orch_layer10 import layer_10_output
         await layer_10_output(err_msg)
         return err_msg
+

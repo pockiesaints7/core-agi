@@ -1,4 +1,4 @@
-"""core_train.py — CORE AGI Training Pipeline
+﻿"""core_train.py â€” CORE AGI Training Pipeline
 Extracted from core.py. Contains:
   - auto_hot_reflection
   - run_cold_processor
@@ -21,7 +21,11 @@ from datetime import datetime, timedelta, timezone
 
 import httpx
 
-from core_config import (
+ param($m)
+        $line = $m.Groups[1].Value
+        if ($line -match '_env_int' -or $line -match '_env_float') { return $m.Value }
+        return 'from core_config import ' + $line + ', _env_int, _env_float'
+    
     SUPABASE_URL,
     COLD_HOT_THRESHOLD, COLD_TIME_THRESHOLD, COLD_KB_GROWTH_THRESHOLD,
     PATTERN_EVO_THRESHOLD, KNOWLEDGE_AUTO_CONFIDENCE,
@@ -99,7 +103,7 @@ _ROUTER_POLICY_ENABLED = os.getenv("DYNAMIC_ROUTER_POLICY_ENABLED", "true").stri
 # Source confidence multipliers (Phase 3)
 _SRC_CONF = {"real": 1.0, "simulation": 0.7, "both": 1.3}
 
-# ── P2-01: Approval tier assignment helper ────────────────────────────────────
+# â”€â”€ P2-01: Approval tier assignment helper â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def _assign_approval_tier(confidence: float, change_type: str, src_key: str) -> str:
     """Assign approval tier for a new evolution queue entry.
@@ -389,7 +393,7 @@ _last_capability_report_run: float = 0.0
 _CAPABILITY_REPORT_INTERVAL = 6 * 24 * 3600  # 6 days
 _CAPABILITY_REPORT_DAY_UTC = 1               # Tuesday UTC (weekday=1)
 
-# ── P3-07: Weekly capability calibration ───────────────────────────────────────────────
+# â”€â”€ P3-07: Weekly capability calibration â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 _last_capability_calibration_run: float = 0.0
 _CAPABILITY_CALIBRATION_INTERVAL = 6 * 24 * 3600  # 6 days
 
@@ -439,10 +443,10 @@ _CAP_DESCRIPTIONS = {
 
 
 
-# ── TASK-4: Binance Price Monitor config ──────────────────────────────────────
+# â”€â”€ TASK-4: Binance Price Monitor config â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 _PRICE_MONITOR_SYMBOLS  = os.getenv("BINANCE_WATCH_SYMBOLS", "BTCUSDT,ETHUSDT,BNBUSDT").split(",")
-_PRICE_ALERT_THRESHOLD  = float(os.getenv("BINANCE_ALERT_THRESHOLD_PCT", "3.0"))
-_PRICE_MONITOR_INTERVAL = int(os.getenv("BINANCE_MONITOR_INTERVAL_S", "60"))
+_PRICE_ALERT_THRESHOLD  = _env_float("BINANCE_ALERT_THRESHOLD_PCT", "3.0"))
+_PRICE_MONITOR_INTERVAL = _env_int("BINANCE_MONITOR_INTERVAL_S", "60"))
 _price_monitor_last_prices: dict = {}
 _price_monitor_running = False
 
@@ -649,7 +653,7 @@ def _ingest_to_hot_reflection(topic: str, source_type: str, concept_clusters: li
                 new_patterns = [f"Community knowledge on {concept}: avg engagement {engagement_avg:.0f}/100"]
 
             ok = sb_post("hot_reflections", {
-                "task_summary":          f"Knowledge ingest: {topic} — concept: {concept}",
+                "task_summary":          f"Knowledge ingest: {topic} â€” concept: {concept}",
                 "domain":                "knowledge_ingestion",
                 "verify_rate":           0,
                 "mistake_consult_rate":  0,
@@ -1464,7 +1468,7 @@ def _auto_evolve_behavioral_rule(pattern_key: str, domain: str, confidence: floa
                     f"[P2-02] Behavioral rule updated\n"
                     f"Domain: {br_domain} | Trigger: {trigger}\n"
                     f"Pattern ({frequency}x): {pattern_key[:120]}\n"
-                    f"Confidence: {ex_conf:.2f} → {confidence:.2f}"
+                    f"Confidence: {ex_conf:.2f} â†’ {confidence:.2f}"
                 )
                 print(f"[P2-02] Rule updated id={ex_id} conf {ex_conf:.2f}->{confidence:.2f}: {pattern_key[:60]}")
                 return True
@@ -1472,7 +1476,7 @@ def _auto_evolve_behavioral_rule(pattern_key: str, domain: str, confidence: floa
                 print(f"[P2-02] Skipped: rule exists with conf={ex_conf:.2f}: {pattern_key[:60]}")
                 return False
 
-        # No existing rule — insert new
+        # No existing rule â€” insert new
         ok = sb_post("behavioral_rules", {
             "trigger":    trigger,
             "pointer":    pointer_slug,
@@ -1492,7 +1496,7 @@ def _auto_evolve_behavioral_rule(pattern_key: str, domain: str, confidence: floa
                 f"[P2-02] New behavioral rule auto-evolved\n"
                 f"Domain: {br_domain} | Trigger: {trigger}\n"
                 f"Pattern ({frequency}x, conf={confidence:.2f}): {pattern_key[:120]}\n"
-                f"Status: active=true, tested=false — review in next session"
+                f"Status: active=true, tested=false â€” review in next session"
             )
             print(f"[P2-02] New rule inserted: [{br_domain}/{trigger}] {pattern_key[:60]}")
         return bool(ok)
@@ -2573,7 +2577,7 @@ def _safe_recent_changelog_context(limit: int = 5) -> dict:
             text = "None yet."
         else:
             text = "\n".join(
-                "  [{ver}|{ctype}] {component} — {title}{missing}".format(
+                "  [{ver}|{ctype}] {component} â€” {title}{missing}".format(
                     ver=(r.get("version") or "?"),
                     ctype=(r.get("change_type") or "?"),
                     component=(r.get("component") or "general"),
@@ -2979,7 +2983,7 @@ def run_cold_processor():
                     sb_upsert("pattern_frequency",
                               {"pattern_key": key, "auto_applied": True},
                               on_conflict="pattern_key")
-                    # P2-01: Tier-aware auto-apply — 'auto' tier applied immediately
+                    # P2-01: Tier-aware auto-apply â€” 'auto' tier applied immediately
                     _safety = os.getenv("EVOLUTION_AUTO_TIER", "").strip().lower()
                     if _tier == "auto" and _safety not in ("notify_only", "disabled"):
                         new_evo = sb_get("evolution_queue",
@@ -3154,7 +3158,7 @@ def apply_evolution(evolution_id: int):
                 notify(f"[NEW TOOL] Evolution #{evolution_id} generated code for '{fn_name}'.\n"
                        f"Apply via Claude Desktop: add to core_tools.py + register in TOOLS dict.")
                 applied = True
-                note = f"New tool '{fn_name}' code generated — needs Desktop apply to core_tools.py"
+                note = f"New tool '{fn_name}' code generated â€” needs Desktop apply to core_tools.py"
                 sb_post("script_templates", {
                     "name": fn_name, "description": change_summary[:200],
                     "trigger_pattern": evo.get("recommendation", ""),
@@ -3217,9 +3221,9 @@ def apply_evolution(evolution_id: int):
             note = f"Behavioral rule inserted to behavioral_rules (domain={br_domain}, trigger={br_trigger}) + archived to BEHAVIOR_UPDATES.md"
 
         elif change_type == "backlog":
-            reject_evolution(evolution_id, reason="backlog change_type retired — owner decides backlog", silent=True)
+            reject_evolution(evolution_id, reason="backlog change_type retired â€” owner decides backlog", silent=True)
             return {"ok": False, "evolution_id": evolution_id, "change_type": change_type,
-                    "note": "backlog change_type retired — auto-rejected"}
+                    "note": "backlog change_type retired â€” auto-rejected"}
 
         if applied:
             sb_patch("evolution_queue", f"id=eq.{evolution_id}",
@@ -3804,13 +3808,13 @@ def _run_rarl_epoch() -> bool:
     except Exception:
         kb_total = 0
     try:
-        # P1-05: fetch richer mistake context — severity + root_cause, high/critical first
+        # P1-05: fetch richer mistake context â€” severity + root_cause, high/critical first
         recent_mistakes = sb_get(
             "mistakes",
             "select=domain,what_failed,severity,root_cause&order=severity.desc,id.desc&limit=15&id=gt.1",
             svc=True
         ) or []
-        # Prioritise high/critical — put them first in failure_block
+        # Prioritise high/critical â€” put them first in failure_block
         _high = [m for m in recent_mistakes if m.get("severity") in ("high", "critical")]
         _other = [m for m in recent_mistakes if m.get("severity") not in ("high", "critical")]
         recent_mistakes = _high + _other
@@ -3885,7 +3889,7 @@ def _run_rarl_epoch() -> bool:
     _maybe_eval_prompt("rarl_researcher", _sys, 10)
     _json_schema = (
         '{"research_goal":"<one sentence confirming goal>",'
-        '"rarl_benchmark_task":"<name one SPECIFIC real CORE failure from the mistakes list above that this architecture would prevent — be exact>",'
+        '"rarl_benchmark_task":"<name one SPECIFIC real CORE failure from the mistakes list above that this architecture would prevent â€” be exact>",'
         '"hypothesis":"<2-4 sentence architectural hypothesis>",'
         '"core_mechanism":"<4-6 sentence technical description>",'
         '"pseudocode":"<15-25 lines Python style>",'
@@ -3894,21 +3898,21 @@ def _run_rarl_epoch() -> bool:
         '"experiment_design":"<real benchmarks, compute estimate in GPU-hours, numeric success criteria>",'
         '"critic_failures":["<specific technical failure 1>","<specific technical failure 2>","<specific technical failure 3>"],'
         '"mitigation":"<how failures are addressed>",'
-        '"benchmark_score":<REAL float 0.0-3.0 — your estimate of benchmark performance>,'
-        '"transfer_score":<REAL float 0.0-3.0 — cross-domain transfer ability>,'
-        '"stability_score":<REAL float 0.0-3.0 — training stability>,'
-        '"sample_efficiency":<REAL float 0.0-3.0 — learning from limited data>,'
-        '"reasoning_depth":<REAL float 0.0-3.0 — multi-step reasoning depth>,'
-        '"planning_success_rate":<REAL float 0.0-3.0 — planning module success rate>,'
-        '"complexity_penalty":<REAL float 0.5-3.0 — implementation complexity cost>,'
-        '"compute_cost":<REAL float 0.5-3.0 — training/inference cost>,'
-        '"inference_latency":<REAL float 0.5-3.0 — response speed penalty>,'
-        '"discovery_score":<REAL float — compute DS = sum(numerators)/sum(denominators)>,'
+        '"benchmark_score":<REAL float 0.0-3.0 â€” your estimate of benchmark performance>,'
+        '"transfer_score":<REAL float 0.0-3.0 â€” cross-domain transfer ability>,'
+        '"stability_score":<REAL float 0.0-3.0 â€” training stability>,'
+        '"sample_efficiency":<REAL float 0.0-3.0 â€” learning from limited data>,'
+        '"reasoning_depth":<REAL float 0.0-3.0 â€” multi-step reasoning depth>,'
+        '"planning_success_rate":<REAL float 0.0-3.0 â€” planning module success rate>,'
+        '"complexity_penalty":<REAL float 0.5-3.0 â€” implementation complexity cost>,'
+        '"compute_cost":<REAL float 0.5-3.0 â€” training/inference cost>,'
+        '"inference_latency":<REAL float 0.5-3.0 â€” response speed penalty>,'
+        '"discovery_score":<REAL float â€” compute DS = sum(numerators)/sum(denominators)>,'
         '"beats_champion":<true if DS > ' + f'{ds_before:.3f}' + ', else false>,'
-        f'"arch_id":"<DescriptiveName_v{epoch_number} — e.g. SparseGating_MemAug_v{epoch_number}>",'
-        '"compressed_insight":"<one specific sentence distinct from prior KB — name the mechanism>",'
-        '"next_direction":"<specific next epoch direction — what mechanism to explore next>",'
-        '"insight_for_core":"<one actionable change to core_tools.py/core_train.py/behavioral_rules/schema — be specific>",'
+        f'"arch_id":"<DescriptiveName_v{epoch_number} â€” e.g. SparseGating_MemAug_v{epoch_number}>",'
+        '"compressed_insight":"<one specific sentence distinct from prior KB â€” name the mechanism>",'
+        '"next_direction":"<specific next epoch direction â€” what mechanism to explore next>",'
+        '"insight_for_core":"<one actionable change to core_tools.py/core_train.py/behavioral_rules/schema â€” be specific>",'
         '"meta_learning_note":"<one concrete RARL methodology improvement>",'
         '"prompt_evolution_note":"<one change to improve evolution_queue quality, or null>"}'
     )
@@ -4126,7 +4130,7 @@ def _run_rarl_epoch() -> bool:
     _benchmark_is_grounded = bool(_rarl_benchmark_task and len(_rarl_benchmark_task) > 10)
     if not _insight_is_specific or not _benchmark_is_grounded:
         quality = min(quality, 0.3)  # Cap quality for vague/ungrounded epochs
-        print(f"[RARL] Epoch {epoch_number} quality capped at 0.3 — insight_specific={_insight_is_specific} benchmark_grounded={_benchmark_is_grounded}")
+        print(f"[RARL] Epoch {epoch_number} quality capped at 0.3 â€” insight_specific={_insight_is_specific} benchmark_grounded={_benchmark_is_grounded}")
     if beats_champion and ds_improvement > 0.3:
         try:
             sb_post("evolution_queue", {
@@ -4186,7 +4190,7 @@ def _run_rarl_epoch() -> bool:
         except Exception as e:
             print(f"[RARL] evolution_queue error (non-fatal): {e}")
 
-    # Step 13: P2-07 — insight_for_core -> task_queue (research-to-implementation pipeline)
+    # Step 13: P2-07 â€” insight_for_core -> task_queue (research-to-implementation pipeline)
     # Only queue if insight is specific (already validated above) and not a duplicate
     if insight_for_core and _insight_is_specific and len(insight_for_core) > 20:
         try:
@@ -4294,7 +4298,7 @@ _SMAP_UPDATE_INTERVAL = 21600  # 6 hours -- sync system_map tool_count + reconci
 
 
 
-# ── Dynamic prompt loader (L11 self-improvement) ──────────────────────────────
+# â”€â”€ Dynamic prompt loader (L11 self-improvement) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 _PROMPT_CYCLE_COUNTERS: dict = {}
 
 def _load_prompt(target: str, default: str) -> str:
@@ -4316,7 +4320,11 @@ def _maybe_eval_prompt(target: str, system: str, every: int) -> None:
     _PROMPT_CYCLE_COUNTERS[target] = _PROMPT_CYCLE_COUNTERS.get(target, 0) + 1
     if _PROMPT_CYCLE_COUNTERS[target] % every == 0:
         try:
-            from core_config import sb_get as _sbg
+             param($m)
+        $line = $m.Groups[1].Value
+        if ($line -match '_env_int' -or $line -match '_env_float') { return $m.Value }
+        return 'from core_config import ' + $line + ', _env_int, _env_float'
+    
             rows = _sbg(
                 "system_prompts",
                 f"select=version&target=eq.{target}&active=eq.true&order=version.desc&limit=1",
@@ -4654,7 +4662,7 @@ def _groq_cluster_patterns(batch_counts: "Counter", batch_domain: dict, batch_so
         return batch_counts, batch_domain, batch_sources
 
 
-# ── P2-01: Evolution Tier Processor (background job) ─────────────────────────
+# â”€â”€ P2-01: Evolution Tier Processor (background job) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 _EVOLUTION_TIER_CHECK_INTERVAL = 21600  # 6 hours
 
@@ -4839,7 +4847,7 @@ def listen_stream():
     yield json.dumps({"type": "stop", "reason": "timeout", "cycle": cycle}) + "\n"
 
 
-# ── TASK-4: Binance Price Monitor ─────────────────────────────────────────────
+# â”€â”€ TASK-4: Binance Price Monitor â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def _fetch_price(symbol: str):
     """Fetch current Binance price for symbol. Returns None on error."""
@@ -5095,7 +5103,7 @@ def price_monitor_loop():
     """
     global _price_monitor_running, _price_monitor_last_prices
     _price_monitor_running = True
-    print(f"[PRICE] monitor started — symbols={_PRICE_MONITOR_SYMBOLS} threshold={_PRICE_ALERT_THRESHOLD}% interval={_PRICE_MONITOR_INTERVAL}s")
+    print(f"[PRICE] monitor started â€” symbols={_PRICE_MONITOR_SYMBOLS} threshold={_PRICE_ALERT_THRESHOLD}% interval={_PRICE_MONITOR_INTERVAL}s")
 
     while _price_monitor_running:
         for symbol in _PRICE_MONITOR_SYMBOLS:
@@ -5363,7 +5371,7 @@ def _run_self_diagnosis():
     except Exception as e:
         print(f"[DIAG] mistake analysis error: {e}")
 
-    # Analysis 2: Quality trend — flag if declining
+    # Analysis 2: Quality trend â€” flag if declining
     try:
         metrics = sb_get(
             "quality_metrics",
@@ -5385,7 +5393,7 @@ def _run_self_diagnosis():
     except Exception as e:
         print(f"[DIAG] quality analysis error: {e}")
 
-    # Analysis 3: KB domain coverage — flag domains with <10 entries
+    # Analysis 3: KB domain coverage â€” flag domains with <10 entries
     try:
         kb_rows = sb_get(
             "knowledge_base",
@@ -5405,7 +5413,7 @@ def _run_self_diagnosis():
     except Exception as e:
         print(f"[DIAG] KB coverage analysis error: {e}")
 
-    # Analysis 4: Stale tasks — pending >14 days with no checkpoint
+    # Analysis 4: Stale tasks â€” pending >14 days with no checkpoint
     try:
         stale_cutoff = (datetime.utcnow() - timedelta(days=14)).strftime("%Y-%m-%dT%H:%M:%SZ")
         stale_tasks = sb_get(
@@ -5522,14 +5530,14 @@ def _run_self_diagnosis():
         print(f"[DIAG] notify error: {e}")
 
 
-# ── P2-04: Proactive Intelligence Surface ─────────────────────────────────────
+# â”€â”€ P2-04: Proactive Intelligence Surface â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 _PROACTIVE_INTERVAL = 7200       # 2 hours between surface checks
 _proactive_last_run: float = 0.0
 
-# Dedup: map alert_key -> last_sent_ts (in-memory, resets on redeploy — fine)
+# Dedup: map alert_key -> last_sent_ts (in-memory, resets on redeploy â€” fine)
 _proactive_sent: dict = {}
-_PROACTIVE_DEDUP_TTL = 86400  # 24h — don't repeat same alert within a day
+_PROACTIVE_DEDUP_TTL = 86400  # 24h â€” don't repeat same alert within a day
 
 
 def _proactive_should_send(key: str) -> bool:
@@ -5549,7 +5557,7 @@ def _run_proactive_surface():
       3. Pattern milestone: any pattern hits frequency 10 or 25
       4. Evolution backlog: > 10 pending evolutions untouched > 48h
       5. Broken tools: tool_health_scan finds new broken tools
-    All alerts are deduplicated (24h TTL). Non-blocking — never raises.
+    All alerts are deduplicated (24h TTL). Non-blocking â€” never raises.
     """
     alerts = []
 
@@ -5563,7 +5571,7 @@ def _run_proactive_surface():
             avg = sum(float(r.get("quality_score", 0)) for r in recent_q) / 3
             if avg < 0.70 and _proactive_should_send("quality_drop"):
                 alerts.append(
-                    f"⚠️ <b>Quality Drop</b>\n"
+                    f"âš ï¸ <b>Quality Drop</b>\n"
                     f"Last 3 sessions avg quality: {avg:.2f} (threshold: 0.70)\n"
                     f"Use check_evolutions or review recent mistakes."
                 )
@@ -5589,7 +5597,7 @@ def _run_proactive_surface():
                     title = str(row.get("task", "?"))[:60]
                 pri = row.get("priority", "?")
                 alerts.append(
-                    f"📌 <b>Stale High-Priority Task (P{pri})</b>\n"
+                    f"ðŸ“Œ <b>Stale High-Priority Task (P{pri})</b>\n"
                     f"Pending >48h: {title[:100]}\n"
                     f"ID: {tid[:8]}"
                 )
@@ -5608,7 +5616,7 @@ def _run_proactive_surface():
             key = f"pattern_milestone_{row.get('pattern_key','')[:80]}_{freq}"
             if _proactive_should_send(key):
                 alerts.append(
-                    f"🔁 <b>Pattern Milestone: {freq}x</b>\n"
+                    f"ðŸ” <b>Pattern Milestone: {freq}x</b>\n"
                     f"[{row.get('domain','?')}] {row.get('pattern_key','')[:120]}\n"
                     f"Consider applying as behavioral rule."
                 )
@@ -5625,7 +5633,7 @@ def _run_proactive_surface():
         evo_count = len(evo_count_rows)
         if evo_count > 10 and _proactive_should_send("evo_backlog"):
             alerts.append(
-                f"📥 <b>Evolution Backlog</b>\n"
+                f"ðŸ“¥ <b>Evolution Backlog</b>\n"
                 f"{evo_count} pending evolutions untouched >48h.\n"
                 f"Use check_evolutions to review and act."
             )
@@ -5645,7 +5653,7 @@ def _run_proactive_surface():
             key = f"broken_tool_{name}"
             if _proactive_should_send(key):
                 alerts.append(
-                    f"🔴 <b>Broken Tool Detected</b>\n"
+                    f"ðŸ”´ <b>Broken Tool Detected</b>\n"
                     f"{name}: fail_rate={row.get('fail_rate',0):.0%}\n"
                     f"Use tool_improve(tool_name='{name}') to diagnose and fix."
                 )
@@ -5655,7 +5663,7 @@ def _run_proactive_surface():
 
     # Send combined alert if anything found
     if alerts:
-        header = f"🧠 <b>CORE Proactive Alert</b> ({len(alerts)} item{'s' if len(alerts)>1 else ''})\n\n"
+        header = f"ðŸ§  <b>CORE Proactive Alert</b> ({len(alerts)} item{'s' if len(alerts)>1 else ''})\n\n"
         body = "\n\n".join(alerts)
         try:
             notify(header + body)
@@ -5663,11 +5671,11 @@ def _run_proactive_surface():
         except Exception as e:
             print(f"[PROACTIVE] notify error: {e}")
     else:
-        print(f"[PROACTIVE] No alerts — all systems nominal")
+        print(f"[PROACTIVE] No alerts â€” all systems nominal")
 
 
 def proactive_surface_loop():
-    """P2-04: Background thread — checks every 2h for proactive alerts."""
+    """P2-04: Background thread â€” checks every 2h for proactive alerts."""
     global _proactive_last_run
     print("[PROACTIVE] Surface loop started")
     # Stagger start by 10 min to avoid all loops hitting Supabase at once on boot
@@ -5679,3 +5687,4 @@ def proactive_surface_loop():
         except Exception as e:
             print(f"[PROACTIVE] loop error: {e}")
         time.sleep(_PROACTIVE_INTERVAL)
+

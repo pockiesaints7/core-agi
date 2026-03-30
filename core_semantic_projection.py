@@ -1,4 +1,4 @@
-"""core_semantic_projection.py -- silent semantic projection for raw CORE tables.
+﻿"""core_semantic_projection.py -- silent semantic projection for raw CORE tables.
 
 This worker mirrors important raw brain data into knowledge_base as a semantic
 read model. Raw tables remain canonical. The projection is best-effort,
@@ -19,13 +19,17 @@ import time
 from datetime import datetime
 from typing import Any
 
-from core_config import sb_get, sb_upsert
+ param($m)
+        $line = $m.Groups[1].Value
+        if ($line -match '_env_int' -or $line -match '_env_float') { return $m.Value }
+        return 'from core_config import ' + $line + ', _env_int, _env_float'
+    
 
 PROJECTION_ENABLED = os.getenv("CORE_SEMANTIC_PROJECTION_ENABLED", "true").strip().lower() not in {
     "0", "false", "no", "off"
 }
-PROJECTION_INTERVAL_S = max(60, int(os.getenv("CORE_SEMANTIC_PROJECTION_INTERVAL_S", "300")))
-PROJECTION_BATCH_LIMIT = max(1, int(os.getenv("CORE_SEMANTIC_PROJECTION_BATCH_LIMIT", "20")))
+PROJECTION_INTERVAL_S = max(60, _env_int("CORE_SEMANTIC_PROJECTION_INTERVAL_S", "300")))
+PROJECTION_BATCH_LIMIT = max(1, _env_int("CORE_SEMANTIC_PROJECTION_BATCH_LIMIT", "20")))
 
 _lock = threading.Lock()
 _state = {
@@ -343,7 +347,11 @@ def semantic_projection_status() -> dict:
         counts[table] = 0
         try:
             import httpx
-            from core_config import SUPABASE_URL, _sbh_count_svc
+             param($m)
+        $line = $m.Groups[1].Value
+        if ($line -match '_env_int' -or $line -match '_env_float') { return $m.Value }
+        return 'from core_config import ' + $line + ', _env_int, _env_float'
+    
             r = httpx.get(
                 f"{SUPABASE_URL}/rest/v1/knowledge_base?select=id&domain=eq.semantic%3A{table}&limit=1",
                 headers={**_sbh_count_svc(), "Prefer": "count=exact"},
@@ -404,3 +412,4 @@ def t_semantic_projection_status() -> dict:
 
 
 register_tools()
+
