@@ -45,7 +45,9 @@ except Exception:
             roots = [candidate if candidate.is_absolute() else _Path.cwd() / candidate, candidate]
         for candidate in roots:
             loaded_any = _apply(candidate) or loaded_any
-        return loaded_any`r`n`r`nfrom orchestrator_message import OrchestratorMessage
+        return loaded_any
+
+from orchestrator_message import OrchestratorMessage
 from core_orch_context import initial_request_profile
 
 # ?? Dedup gate ???????????????????????????????????????????????????????????????
@@ -406,6 +408,7 @@ async def layer_1_triage(
         from core_orch_layer10 import layer_10_output
         await layer_10_output(err_msg)
         return err_msg
+
 
 
 
