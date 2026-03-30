@@ -53,11 +53,6 @@ def _utcnow() -> str:
 def _count_table(table: str, extra: str = "") -> int:
     try:
         import httpx
-         param($m)
-        $line = $m.Groups[1].Value
-        if ($line -match '_env_int' -or $line -match '_env_float') { return $m.Value }
-        return 'from core_config import ' + $line + ', _env_int, _env_float'
-    
         r = httpx.get(
             f"{SUPABASE_URL}/rest/v1/{table}?select=id&limit=1{extra}",
             headers=_sbh_count_svc(),
@@ -438,3 +433,5 @@ def core_gap_audit_loop() -> None:
             with _LOCK:
                 _STATE["last_error"] = str(exc)[:500]
         time.sleep(AUDIT_INTERVAL_S)
+
+
