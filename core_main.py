@@ -1638,8 +1638,9 @@ async def mcp_messages(req: Request, session_id: str = Query(...), _auth=Depends
             await _sse_sessions[session_id].put(response)
         return JSONResponse({"ok": True}, status_code=202)
     
-    return JSONResponse(response) if response else JSONResponse({}, status_code=204)
-
+    if response is None:
+        return Response(status_code=204)
+    return JSONResponse(response)
 @app.post("/mcp/tool")
 async def mcp_tool(body: ToolCall):
     # Keep using your custom mcp_ok check for session tokens
