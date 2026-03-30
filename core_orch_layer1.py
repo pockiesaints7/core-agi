@@ -6,8 +6,15 @@ Entry point for all traffic.
 import os
 import asyncio
 from typing import Dict, Any
-from dotenv import load_dotenv
-load_dotenv()
+try:
+    try:
+    from dotenv import load_dotenv
+except Exception:
+    def load_dotenv(*args, **kwargs):
+        return False
+except Exception:
+    def load_dotenv(*args, **kwargs):
+        return False
 from orchestrator_message import OrchestratorMessage
 from core_orch_context import initial_request_profile
 
@@ -369,4 +376,6 @@ async def layer_1_triage(
         from core_orch_layer10 import layer_10_output
         await layer_10_output(err_msg)
         return err_msg
+
+
 

@@ -11,8 +11,15 @@ import time
 from collections import defaultdict
 
 import httpx
-from dotenv import load_dotenv
-load_dotenv()  # loads ~/core-agi/.env automatically
+try:
+    try:
+    from dotenv import load_dotenv
+except Exception:
+    def load_dotenv(*args, **kwargs):
+        return False
+except Exception:
+    def load_dotenv(*args, **kwargs):
+        return False
 
 # -- Env vars ------------------------------------------------------------------
 GROQ_API_KEY   = os.environ["GROQ_API_KEY"]
@@ -483,6 +490,8 @@ TOOL_ALWAYS_INCLUDE: set = {
     "search_kb", "get_mistakes", "list_tools", "get_tool_info",
     "get_behavioral_rules", "get_table_schema",
 }
+
+
 
 
 

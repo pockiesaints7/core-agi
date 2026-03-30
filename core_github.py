@@ -1,4 +1,4 @@
-"""core_github.py — CORE AGI GitHub + Telegram helpers
+﻿"""core_github.py — CORE AGI GitHub + Telegram helpers
 Extracted from core.py lines 232-318 + notify/set_webhook.
 Imported by core_train.py, core_tools.py, core_main.py.
 
@@ -11,8 +11,15 @@ import json
 import httpx
 import html
 
-from dotenv import load_dotenv
-load_dotenv()  # loads ~/core-agi/.env automatically
+try:
+    try:
+    from dotenv import load_dotenv
+except Exception:
+    def load_dotenv(*args, **kwargs):
+        return False
+except Exception:
+    def load_dotenv(*args, **kwargs):
+        return False
 
 from core_config import (
     L,
@@ -186,3 +193,5 @@ def _gh_blob_write(path, content, message, repo=None):
     httpx.patch(f"https://api.github.com/repos/{repo}/git/refs/heads/main", headers=h,
                 json={"sha": new_commit_sha}, timeout=15).raise_for_status()
     return new_commit_sha
+
+
