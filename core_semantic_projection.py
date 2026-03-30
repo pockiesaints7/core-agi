@@ -343,11 +343,6 @@ def semantic_projection_status() -> dict:
         counts[table] = 0
         try:
             import httpx
-             param($m)
-        $line = $m.Groups[1].Value
-        if ($line -match '_env_int' -or $line -match '_env_float') { return $m.Value }
-        return 'from core_config import ' + $line + ', _env_int, _env_float'
-    
             r = httpx.get(
                 f"{SUPABASE_URL}/rest/v1/knowledge_base?select=id&domain=eq.semantic%3A{table}&limit=1",
                 headers={**_sbh_count_svc(), "Prefer": "count=exact"},
@@ -408,3 +403,4 @@ def t_semantic_projection_status() -> dict:
 
 
 register_tools()
+
