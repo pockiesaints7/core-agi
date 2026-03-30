@@ -1,12 +1,12 @@
-"""
-core_orch_agent.py â€” CORE AGI Agentic Loop (ReAct Pattern)
+﻿"""
+core_orch_agent.py Ã¢â‚¬â€ CORE AGI Agentic Loop (ReAct Pattern)
 ===========================================================
 NO artificial step limit. Runs until a real termination condition:
-  1. LLM returns type=done       â€” goal reached, full answer ready
-  2. LLM returns type=stuck      â€” cannot proceed, returns partial
-  3. Token budget exhausted      â€” compresses history, forces conclusion
-  4. Wall-clock timeout          â€” configurable, prevents runaway jobs
-  5. N consecutive errors        â€” something is broken, abort cleanly
+  1. LLM returns type=done       Ã¢â‚¬â€ goal reached, full answer ready
+  2. LLM returns type=stuck      Ã¢â‚¬â€ cannot proceed, returns partial
+  3. Token budget exhausted      Ã¢â‚¬â€ compresses history, forces conclusion
+  4. Wall-clock timeout          Ã¢â‚¬â€ configurable, prevents runaway jobs
+  5. N consecutive errors        Ã¢â‚¬â€ something is broken, abort cleanly
 
 DESIGNED FOR OPUS: model-agnostic via AGENT_MODEL env var.
 - Today:  AGENT_MODEL="" -> OPENROUTER_MODEL (google/gemini-2.5-flash)
@@ -22,17 +22,17 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from orchestrator_message import OrchestratorMessage
 
-# â”€â”€ Config â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# Ã¢â€â‚¬Ã¢â€â‚¬ Config Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
 AGENT_MODEL           = os.getenv("AGENT_MODEL", "")         # empty = OPENROUTER_MODEL
-AGENT_TOKEN_BUDGET    = _env_int("AGENT_TOKEN_BUDGET", "140000"))   # chars/4 â‰ˆ tokens
-AGENT_TOKEN_COMPRESS  = _env_float("AGENT_TOKEN_COMPRESS", "0.50")) # compress at 50% budget (was 75% â€” too late)
-AGENT_TOKEN_CONCLUDE  = _env_float("AGENT_TOKEN_CONCLUDE", "0.92")) # force conclusion at 92%
-AGENT_TIMEOUT_SEC     = _env_int("AGENT_TIMEOUT_SEC", "600"))       # 10min wall clock
-AGENT_ERROR_THRESHOLD = _env_int("AGENT_ERROR_THRESHOLD", "4"))     # consecutive failures
-AGENT_PROGRESS_EVERY  = _env_int("AGENT_PROGRESS_EVERY", "3"))      # telegram update interval
-AGENT_DISCOVERY_STEP_LIMIT = _env_int("AGENT_DISCOVERY_STEP_LIMIT", "6"))  # discovery budget
+AGENT_TOKEN_BUDGET    = _env_int("AGENT_TOKEN_BUDGET", 140000)   # chars/4 Ã¢â€°Ë† tokens
+AGENT_TOKEN_COMPRESS  = _env_float("AGENT_TOKEN_COMPRESS", 0.50) # compress at 50% budget (was 75% Ã¢â‚¬â€ too late)
+AGENT_TOKEN_CONCLUDE  = _env_float("AGENT_TOKEN_CONCLUDE", 0.92) # force conclusion at 92%
+AGENT_TIMEOUT_SEC     = _env_int("AGENT_TIMEOUT_SEC", 600)       # 10min wall clock
+AGENT_ERROR_THRESHOLD = _env_int("AGENT_ERROR_THRESHOLD", 4)     # consecutive failures
+AGENT_PROGRESS_EVERY  = _env_int("AGENT_PROGRESS_EVERY", 3)      # telegram update interval
+AGENT_DISCOVERY_STEP_LIMIT = _env_int("AGENT_DISCOVERY_STEP_LIMIT", 6)  # discovery budget
 
-# â”€â”€ Agentic trigger keywords â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# Ã¢â€â‚¬Ã¢â€â‚¬ Agentic trigger keywords Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
 AGENTIC_TRIGGERS = frozenset([
     "until", "keep trying", "keep going", "figure out", "research",
     "investigate", "build me", "create a full", "autonomously",
@@ -42,26 +42,26 @@ AGENTIC_TRIGGERS = frozenset([
     "as many as", "exhaustive", "complete guide", "full analysis",
 ])
 
-# â”€â”€ System prompt â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# Ã¢â€â‚¬Ã¢â€â‚¬ System prompt Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
 _AGENT_SYSTEM = (
-    "You are CORE â€” an autonomous AGI system on an Oracle Cloud Ubuntu VM. "
+    "You are CORE Ã¢â‚¬â€ an autonomous AGI system on an Oracle Cloud Ubuntu VM. "
     "You have 171+ tools: web_search, web_fetch, ingest_knowledge, run_python, shell, file_list, "
     "file_read, file_write, search_kb, add_knowledge, calc, weather, get_time, "
     "get_state, get_system_health, task_add, notify_owner, sb_query, sb_insert, "
     "deploy_status, railway_logs_live, get_mistakes, list_evolutions, and more.\n\n"
-    "You are in AGENTIC MODE â€” a ReAct loop: Think -> Act -> Observe -> repeat.\n\n"
+    "You are in AGENTIC MODE Ã¢â‚¬â€ a ReAct loop: Think -> Act -> Observe -> repeat.\n\n"
     "CRITICAL RULES:\n"
-    "1. Return EXACTLY one JSON object per iteration â€” no other text.\n"
+    "1. Return EXACTLY one JSON object per iteration Ã¢â‚¬â€ no other text.\n"
     "2. Use one of these response types:\n\n"
     "   ACTION: {\"type\": \"action\", \"thought\": \"why\", \"tool\": \"exact_tool_name\", \"args\": {}, \"progress\": \"brief status\"}\n"
     "   DONE:   {\"type\": \"done\", \"thought\": \"what was accomplished\", \"answer\": \"full response to user\"}\n"
     "   STUCK:  {\"type\": \"stuck\", \"reason\": \"what blocks\", \"partial_answer\": \"what was found\"}\n\n"
     "3. Tool names must EXACTLY match the registry.\n"
-    "4. EFFICIENCY â€” before each action ask: do I already have this data from a previous step? If YES â†’ do NOT call the tool again, use what you have.\n"
-    "5. CONVERGENCE â€” once you have gathered enough data to answer the goal, return type=done IMMEDIATELY. Do not keep collecting more data.\n"
+    "4. EFFICIENCY Ã¢â‚¬â€ before each action ask: do I already have this data from a previous step? If YES Ã¢â€ â€™ do NOT call the tool again, use what you have.\n"
+    "5. CONVERGENCE Ã¢â‚¬â€ once you have gathered enough data to answer the goal, return type=done IMMEDIATELY. Do not keep collecting more data.\n"
     "6. DONE threshold: if you have attempted every distinct subtask in the goal at least once, return type=done with a full synthesis of everything collected.\n"
     "7. If a tool fails once, try ONE alternative approach. If that also fails, skip it and note it in the answer.\n"
-    "8. EVIDENCE GATE â€” before answering, prefer the strongest evidence available in this order: Supabase memory, current state, repo-map/code tools, direct local repo/code reads, public-source research via ingest_knowledge and related public fetchers, then web search/fetch. Combine sources when that makes the evidence stronger. Do not guess when evidence is sparse. If you cannot ground the answer after retrieval, return type=stuck or ask for the missing file/path/URL/commit.\n"
+    "8. EVIDENCE GATE Ã¢â‚¬â€ before answering, prefer the strongest evidence available in this order: Supabase memory, current state, repo-map/code tools, direct local repo/code reads, public-source research via ingest_knowledge and related public fetchers, then web search/fetch. Combine sources when that makes the evidence stronger. Do not guess when evidence is sparse. If you cannot ground the answer after retrieval, return type=stuck or ask for the missing file/path/URL/commit.\n"
     "\nSUPABASE TOOL USAGE (exact param names):\n"
     "  sb_query(table, filters='col=eq.val', order='col.desc', select='col1,col2', limit=10)\n"
     "  sb_insert(table, data={'col': 'val'})\n"
@@ -76,16 +76,16 @@ _AGENT_SYSTEM = (
     "  order uses: 'created_at.desc' or 'id.asc' (NOT order_by or order_direction)\n"
     "8. When DONE: \"answer\" field rules:\n"
     "   - Include ACTUAL DATA from every tool result: real IDs, real values, real row contents, real error messages.\n"
-    "   - DO NOT summarize with vague phrases like 'successfully retrieved 3 entries' â€” show the actual entries.\n"
+    "   - DO NOT summarize with vague phrases like 'successfully retrieved 3 entries' Ã¢â‚¬â€ show the actual entries.\n"
     "   - For each step: state what was done, show key data returned (IDs, values, fields), state pass/fail.\n"
     "   - For errors: show the exact error message returned, not just 'an error occurred'.\n"
     "   - Format as a numbered list, one section per step. Be specific and data-rich.\n"
-    "   - Synthesise ALL gathered data â€” include every step result with its actual output.\n"
+    "   - Synthesise ALL gathered data Ã¢â‚¬â€ include every step result with its actual output.\n"
     "9. For list_evolutions results: ALWAYS report total_count (real DB count) first, then show items. Never truncate the count.\n"
     "   Example: 'There are 666 pending evolutions. Showing newest 20: ...'. Never say '8 pending' if total_count says 666.\n"
-    "10. PERSISTENT STATE â€” use agent_state_set/agent_state_get to remember data across steps:\n"
+    "10. PERSISTENT STATE Ã¢â‚¬â€ use agent_state_set/agent_state_get to remember data across steps:\n"
     "    - After inserting/creating anything: agent_state_set(key='kb_id', value='<id>')\n"
-    "    - Before re-querying: check PERSISTENT STATE section above â€” if the data is there, use it directly.\n"
+    "    - Before re-querying: check PERSISTENT STATE section above Ã¢â‚¬â€ if the data is there, use it directly.\n"
     "    - NEVER re-search for data you already have in PERSISTENT STATE.\n"
     "    - For multi-step tasks: call agent_session_init at start, agent_step_done after each step.\n"
     "    - agent_step_done: use a UNIQUE step_name per step ('step_1_query_tasks', 'step_2_kb_query', etc). NEVER reuse the same step_name.\n"
@@ -93,11 +93,11 @@ _AGENT_SYSTEM = (
     "11. STEP SEQUENCING for multi-step tasks:\n"
     "    - Execute steps IN ORDER: 1,2,3...10. Do not skip ahead or repeat a step.\n"
     "    - After completing ALL steps, return type=done with the full report.\n"
-    "    - If you see already_done=True from agent_step_done, that step is complete â€” move to NEXT step.\n"
+    "    - If you see already_done=True from agent_step_done, that step is complete Ã¢â‚¬â€ move to NEXT step.\n"
     "Return ONLY valid JSON. No markdown, no preamble."
 )
 
-# Injected when token budget is running low â€” tells LLM to wrap up
+# Injected when token budget is running low Ã¢â‚¬â€ tells LLM to wrap up
 _CONCLUDE_INSTRUCTION = (
     "\n\nIMPORTANT: Context budget is nearly full. "
     "You MUST return type=done on this step with a comprehensive answer using everything collected so far. "
@@ -115,9 +115,9 @@ _DISCOVERY_TOOLS = frozenset({
     "ingest_knowledge",
 })
 
-# â”€â”€ Token utilities â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# Ã¢â€â‚¬Ã¢â€â‚¬ Token utilities Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
 def _chars(text: str) -> int:
-    """Estimate token usage as char count (4 chars â‰ˆ 1 token)."""
+    """Estimate token usage as char count (4 chars Ã¢â€°Ë† 1 token)."""
     return len(text)
 
 def _compress_history(history: List[Dict], keep_last: int = 6) -> Tuple[str, List[Dict]]:
@@ -130,31 +130,31 @@ def _compress_history(history: List[Dict], keep_last: int = 6) -> Tuple[str, Lis
         return "", history
     old = history[:-keep_last]
     recent = history[-keep_last:]
-    parts = [f"[COMPRESSED HISTORY â€” {len(old)} earlier steps, key findings below]"]
+    parts = [f"[COMPRESSED HISTORY Ã¢â‚¬â€ {len(old)} earlier steps, key findings below]"]
     for h in old:
         if h.get("type") == "action":
             tool = h.get("tool", "?")
             ok = h.get("result", {}).get("ok", True) if isinstance(h.get("result"), dict) else True
             summary = h.get("summary", "")[:120]
-            status = "âœ“" if ok else "âœ—"
+            status = "Ã¢Å“â€œ" if ok else "Ã¢Å“â€”"
             parts.append(f"  {status} {tool}: {summary}")
     return "\n".join(parts), recent
 
-# â”€â”€ Context limit sentinel â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# Ã¢â€â‚¬Ã¢â€â‚¬ Context limit sentinel Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
 class ContextLimitError(Exception):
     """Raised when the API explicitly reports context length exceeded."""
     pass
 
-# â”€â”€ LLM think â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# Ã¢â€â‚¬Ã¢â€â‚¬ LLM think Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
 def _llm_think(system: str, prompt: str, max_tokens: int = 1500):
     """
     Returns (response_text, prompt_tokens_actually_used).
 
-    prompt_tokens comes from the REAL API response â€” not estimated, not hardcoded.
+    prompt_tokens comes from the REAL API response Ã¢â‚¬â€ not estimated, not hardcoded.
     This is the only correct way to track context: ask the API how much was used.
 
-    Chain: OpenRouter â†’ Gemini direct (11 keys) â†’ Groq
-    If context limit exceeded â†’ raises ContextLimitError (caller forces conclusion).
+    Chain: OpenRouter Ã¢â€ â€™ Gemini direct (11 keys) Ã¢â€ â€™ Groq
+    If context limit exceeded Ã¢â€ â€™ raises ContextLimitError (caller forces conclusion).
     """
     import httpx as _httpx
     import time as _time
@@ -162,7 +162,7 @@ def _llm_think(system: str, prompt: str, max_tokens: int = 1500):
 
     active_model = AGENT_MODEL or os.getenv("OPENROUTER_MODEL", "google/gemini-2.5-flash")
 
-    # â”€â”€ Tier 1: OpenRouter â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # Ã¢â€â‚¬Ã¢â€â‚¬ Tier 1: OpenRouter Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
     if OPENROUTER_API_KEY:
         messages = []
         if system:
@@ -194,7 +194,7 @@ def _llm_think(system: str, prompt: str, max_tokens: int = 1500):
                 if r.status_code == 429:
                     _time.sleep(3 * (attempt + 1))
                     continue
-                # Context length exceeded â€” API tells us explicitly
+                # Context length exceeded Ã¢â‚¬â€ API tells us explicitly
                 if r.status_code in (400, 413):
                     err_body = r.json().get("error", {})
                     err_str = str(err_body).lower()
@@ -203,7 +203,7 @@ def _llm_think(system: str, prompt: str, max_tokens: int = 1500):
                 r.raise_for_status()
                 data = r.json()
                 text = data["choices"][0]["message"]["content"].strip()
-                # â† Real token count from API. No guessing. No hardcoded limits.
+                # Ã¢â€ Â Real token count from API. No guessing. No hardcoded limits.
                 prompt_tokens = data.get("usage", {}).get("prompt_tokens", len(prompt) // 4)
                 return text, prompt_tokens
             except ContextLimitError:
@@ -211,9 +211,9 @@ def _llm_think(system: str, prompt: str, max_tokens: int = 1500):
             except Exception as e:
                 last_err = e
                 continue
-        print(f"[AGENT] OpenRouter failed ({last_err}) â€” trying Gemini direct")
+        print(f"[AGENT] OpenRouter failed ({last_err}) Ã¢â‚¬â€ trying Gemini direct")
 
-    # â”€â”€ Tier 2: Gemini direct â€” real promptTokenCount from usageMetadata â”€â”€â”€â”€â”€â”€â”€â”€
+    # Ã¢â€â‚¬Ã¢â€â‚¬ Tier 2: Gemini direct Ã¢â‚¬â€ real promptTokenCount from usageMetadata Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
     from core_config import _GEMINI_KEYS, _GEMINI_MODEL
     import core_config as _cc
     if _GEMINI_KEYS:
@@ -247,13 +247,13 @@ def _llm_think(system: str, prompt: str, max_tokens: int = 1500):
             r.raise_for_status()
             data = r.json()
             text = data["candidates"][0]["content"]["parts"][0]["text"].strip()
-            # Real token count â€” Gemini returns it in usageMetadata.promptTokenCount
+            # Real token count Ã¢â‚¬â€ Gemini returns it in usageMetadata.promptTokenCount
             prompt_tokens = data.get("usageMetadata", {}).get("promptTokenCount", len(prompt) // 4)
             return text, prompt_tokens
         except Exception as e:
-            print(f"[AGENT] Gemini direct failed ({e}) â€” trying Groq")
+            print(f"[AGENT] Gemini direct failed ({e}) Ã¢â‚¬â€ trying Groq")
 
-    # â”€â”€ Tier 3: Groq â€” also returns real prompt_tokens (same OpenAI format) â”€â”€â”€
+    # Ã¢â€â‚¬Ã¢â€â‚¬ Tier 3: Groq Ã¢â‚¬â€ also returns real prompt_tokens (same OpenAI format) Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
     from core_config import GROQ_MODEL
     import httpx as _hx2
     groq_key = os.getenv("GROQ_API_KEY", "")
@@ -278,7 +278,7 @@ def _llm_think(system: str, prompt: str, max_tokens: int = 1500):
         except Exception as e:
             raise RuntimeError(f"All LLM tiers failed. Groq: {e}")
 
-# â”€â”€ Tool executor â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# Ã¢â€â‚¬Ã¢â€â‚¬ Tool executor Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
 async def _run_tool(tool_name: str, args: Dict[str, Any], msg: OrchestratorMessage) -> Dict[str, Any]:
     """Execute a tool by name. Returns result dict. Missing ok key = success."""
     try:
@@ -288,7 +288,7 @@ async def _run_tool(tool_name: str, args: Dict[str, Any], msg: OrchestratorMessa
             return {"ok": False, "error": f"Unknown tool: {tool_name!r}. Check spelling."}
         entry = TOOLS[tool_name]
         fn = entry.get("fn") if isinstance(entry, dict) else entry
-        # Strip unknown kwargs gracefully â€” but warn LLM if args were silently dropped
+        # Strip unknown kwargs gracefully Ã¢â‚¬â€ but warn LLM if args were silently dropped
         sig = inspect.signature(fn)
         valid = set(sig.parameters.keys())
         filtered = {k: v for k, v in args.items() if k in valid}
@@ -308,7 +308,7 @@ async def _run_tool(tool_name: str, args: Dict[str, Any], msg: OrchestratorMessa
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
-# â”€â”€ Progress ping â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# Ã¢â€â‚¬Ã¢â€â‚¬ Progress ping Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
 async def _send_progress(msg: OrchestratorMessage, step: int, elapsed: float, progress: str) -> None:
     """Send Telegram progress update. Shows elapsed time, not artificial progress bar."""
     try:
@@ -317,14 +317,14 @@ async def _send_progress(msg: OrchestratorMessage, step: int, elapsed: float, pr
         secs = int(elapsed % 60)
         time_str = f"{mins}m{secs:02d}s" if mins else f"{secs}s"
         text = (
-            f"âš™ï¸ <b>CORE working...</b> step {step} ({time_str} elapsed)\n"
+            f"Ã¢Å¡â„¢Ã¯Â¸Â <b>CORE working...</b> step {step} ({time_str} elapsed)\n"
             f"<code>{progress[:120]}</code>"
         )
         notify(text, cid=str(msg.chat_id))
     except Exception as e:
         print(f"[AGENT] Progress notify failed: {e}")
 
-# â”€â”€ Tool summary (cached) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# Ã¢â€â‚¬Ã¢â€â‚¬ Tool summary (cached) Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
 _TOOLS_CACHE: str = ""
 
 def _get_tools_summary() -> str:
@@ -445,7 +445,7 @@ def _seed_repo_map_state(goal: str, agent_state: dict, evidence_gate: dict) -> N
         "goal": goal[:240],
     }
 
-# â”€â”€ Prompt builder â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# Ã¢â€â‚¬Ã¢â€â‚¬ Prompt builder Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
 def _build_prompt(
     goal: str,
     history: List[Dict],
@@ -455,18 +455,18 @@ def _build_prompt(
     agent_state: dict = None,
 ) -> str:
     parts = [f"GOAL: {goal}", ""]
-    # Inject persistent state scratchpad â€” survives across iterations
+    # Inject persistent state scratchpad Ã¢â‚¬â€ survives across iterations
     import json as _j
     effective_state = agent_state or {}
     state_str = _j.dumps(effective_state, default=str)
-    parts.append(f"PERSISTENT STATE (use these values â€” do NOT re-query for data already here):")
+    parts.append(f"PERSISTENT STATE (use these values Ã¢â‚¬â€ do NOT re-query for data already here):")
     parts.append(state_str)
     gate = effective_state.get("evidence_gate") or {}
     parts.append("EVIDENCE GATE (follow this before guessing):")
     parts.append(_j.dumps(gate, default=str))
     parts.append("If the gate says evidence is sparse, search Supabase first, then the repo map/local code state, then public-source research, then web. If still sparse, stop and ask for clarification or upload.")
     sid = effective_state.get("session_id", "default")
-    parts.append(f"YOUR SESSION_ID IS: {sid!r} â€” use this exact value for all agent_* tool calls.")
+    parts.append(f"YOUR SESSION_ID IS: {sid!r} Ã¢â‚¬â€ use this exact value for all agent_* tool calls.")
     parts.append("")
     task_mode = effective_state.get("task_mode_packet") or {}
     if task_mode:
@@ -528,11 +528,11 @@ def _build_prompt(
                     ok = result.get("ok", True)
                     err = result.get("error", "")
                     if not ok and err:
-                        parts.append(f"  [{step_num}] âœ— {tool}: ERROR: {err[:150]}")
+                        parts.append(f"  [{step_num}] Ã¢Å“â€” {tool}: ERROR: {err[:150]}")
                     else:
-                        parts.append(f"  [{step_num}] âœ“ {tool}: {summary}")
+                        parts.append(f"  [{step_num}] Ã¢Å“â€œ {tool}: {summary}")
                 else:
-                    parts.append(f"  [{step_num}] âœ“ {tool}: {str(result)[:150]}")
+                    parts.append(f"  [{step_num}] Ã¢Å“â€œ {tool}: {str(result)[:150]}")
             elif h.get("type") == "thought_only":
                 parts.append(f"  [{step_num}] [note] {h.get('thought', '')[:100]}")
         parts.append("")
@@ -545,7 +545,7 @@ def _build_prompt(
         parts.append("What is your next action? Return JSON only.")
     return "\n".join(parts)
 
-# â”€â”€ Main loop â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# Ã¢â€â‚¬Ã¢â€â‚¬ Main loop Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
 async def run_agent_loop(msg: OrchestratorMessage, goal: str) -> None:
     """
     ReAct agentic loop. No artificial step limit.
@@ -593,7 +593,7 @@ async def run_agent_loop(msg: OrchestratorMessage, goal: str) -> None:
     verification_goal = any(k in goal.lower() for k in ("git", "commit", "clean", "synced", "status", "verify"))
 
     # Token tracking: use real prompt_tokens from API response each step.
-    # No hardcoded model limits â€” the API tells us the truth.
+    # No hardcoded model limits Ã¢â‚¬â€ the API tells us the truth.
     last_prompt_tokens = 0   # updated every step from API response
     print(f"[AGENT] Budgets: prompt_compress={int(AGENT_TOKEN_COMPRESS*100)}% prompt_conclude={int(AGENT_TOKEN_CONCLUDE*100)}% timeout={AGENT_TIMEOUT_SEC}s")
 
@@ -639,7 +639,7 @@ async def run_agent_loop(msg: OrchestratorMessage, goal: str) -> None:
         step += 1
         elapsed = time.monotonic() - start_time
 
-        # â”€â”€ Early done: all steps completed THIS run (use _loop_start_ts to exclude stale steps)
+        # Ã¢â€â‚¬Ã¢â€â‚¬ Early done: all steps completed THIS run (use _loop_start_ts to exclude stale steps)
         try:
             from core_tools import TOOLS as _TED
             _sget = _TED.get("agent_state_get", {}).get("fn")
@@ -650,8 +650,8 @@ async def run_agent_loop(msg: OrchestratorMessage, goal: str) -> None:
                 _fresh = [s for s in _done_steps if isinstance(s, dict)
                           and s.get("ts", "") >= _loop_start_ts]
                 if len(_fresh) >= 10:
-                    print(f"[AGENT] step={step} auto-done: {len(_fresh)} fresh steps done â€” forcing LLM conclusion")
-                    # Don't build raw dict report â€” force the LLM to write the proper answer
+                    print(f"[AGENT] step={step} auto-done: {len(_fresh)} fresh steps done Ã¢â‚¬â€ forcing LLM conclusion")
+                    # Don't build raw dict report Ã¢â‚¬â€ force the LLM to write the proper answer
                     # with full 4000 token budget so it formats data correctly
                     force_conclude = True
                     # Inject a clear summary of what was done so LLM has it
@@ -670,14 +670,14 @@ async def run_agent_loop(msg: OrchestratorMessage, goal: str) -> None:
                         "step": step,
                     })
         except Exception:
-            pass  # non-fatal â€” never block loop on state read error
+            pass  # non-fatal Ã¢â‚¬â€ never block loop on state read error
 
-        # â”€â”€ Termination: wall-clock timeout â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        # Ã¢â€â‚¬Ã¢â€â‚¬ Termination: wall-clock timeout Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
         if elapsed > AGENT_TIMEOUT_SEC:
             print(f"[AGENT] Timeout after {elapsed:.0f}s at step {step}")
             force_conclude = True  # fall through to conclusion
 
-        # â”€â”€ Build prompt + check token budget â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        # Ã¢â€â‚¬Ã¢â€â‚¬ Build prompt + check token budget Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
         prompt = _build_prompt(goal, history, compressed_summary, tools_summary, conclude=force_conclude, agent_state=_agent_state)
         char_count = _chars(prompt)
 
@@ -695,13 +695,13 @@ async def run_agent_loop(msg: OrchestratorMessage, goal: str) -> None:
             char_count = _chars(prompt)
 
         if not force_conclude and effective_tokens > conclude_threshold:
-            print(f"[AGENT] step={step} token budget critical (tokens={effective_tokens} > {conclude_threshold}) â€” forcing conclusion")
+            print(f"[AGENT] step={step} token budget critical (tokens={effective_tokens} > {conclude_threshold}) Ã¢â‚¬â€ forcing conclusion")
             force_conclude = True
             prompt = _build_prompt(goal, history, compressed_summary, tools_summary, conclude=True, agent_state=_agent_state)
 
-        print(f"[AGENT] step={step} prompt_real={last_prompt_tokens}t prompt_estâ‰ˆ{char_count//4}t elapsed={elapsed:.1f}s")
+        print(f"[AGENT] step={step} prompt_real={last_prompt_tokens}t prompt_estÃ¢â€°Ë†{char_count//4}t elapsed={elapsed:.1f}s")
 
-        # â”€â”€ LLM think â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        # Ã¢â€â‚¬Ã¢â€â‚¬ LLM think Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
         try:
             # Scale output tokens: more room when forced to conclude or deep in loop
             _out_tokens = 4000 if (force_conclude or step > 30) else 1500
@@ -710,7 +710,7 @@ async def run_agent_loop(msg: OrchestratorMessage, goal: str) -> None:
             decision = json.loads(raw)
             consecutive_errors = 0
         except ContextLimitError as e:
-            # API explicitly told us context is exceeded â€” force conclusion immediately
+            # API explicitly told us context is exceeded Ã¢â‚¬â€ force conclusion immediately
             print(f"[AGENT] step={step} CONTEXT LIMIT from API: {e}")
             force_conclude = True
             history.append({"type": "thought_only", "thought": f"Context limit hit: {e}", "step": step})
@@ -730,7 +730,7 @@ async def run_agent_loop(msg: OrchestratorMessage, goal: str) -> None:
                 })
             if consecutive_errors >= AGENT_ERROR_THRESHOLD:
                 msg.styled_response = (
-                    f"âš ï¸ CORE agent halted after {step} steps ({elapsed:.0f}s): "
+                    f"Ã¢Å¡Â Ã¯Â¸Â CORE agent halted after {step} steps ({elapsed:.0f}s): "
                     f"repeated LLM errors. Last: {e}"
                 )
                 break
@@ -739,38 +739,38 @@ async def run_agent_loop(msg: OrchestratorMessage, goal: str) -> None:
 
         dtype = decision.get("type", "")
 
-        # â”€â”€ DONE â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        # Ã¢â€â‚¬Ã¢â€â‚¬ DONE Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
         if dtype == "done":
             print(f"[AGENT] DONE at step={step} elapsed={elapsed:.1f}s")
             msg.styled_response = decision.get("answer", "Goal reached.")
             msg.track_layer(f"AGENT-DONE-step{step}")
             break
 
-        # â”€â”€ STUCK â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        # Ã¢â€â‚¬Ã¢â€â‚¬ STUCK Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
         elif dtype == "stuck":
             reason = decision.get("reason", "Cannot proceed.")
             partial = decision.get("partial_answer", "")
             print(f"[AGENT] STUCK at step={step}: {reason[:80]}")
-            msg.styled_response = f"âš ï¸ CORE stuck: {reason}"
+            msg.styled_response = f"Ã¢Å¡Â Ã¯Â¸Â CORE stuck: {reason}"
             if partial:
                 msg.styled_response += f"\n\nPartial findings:\n{partial}"
             msg.track_layer(f"AGENT-STUCK-step{step}")
             break
 
-        # â”€â”€ ACTION â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        # Ã¢â€â‚¬Ã¢â€â‚¬ ACTION Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
         elif dtype == "action":
             tool_name = decision.get("tool", "")
             tool_args = decision.get("args", {}) or {}
             thought = decision.get("thought", "")
             progress = decision.get("progress", f"Running {tool_name}...")
 
-            print(f"[AGENT] step={step} â†’ {tool_name}({json.dumps(tool_args, default=str)[:80]})")
+            print(f"[AGENT] step={step} Ã¢â€ â€™ {tool_name}({json.dumps(tool_args, default=str)[:80]})")
 
             # Progress update every N steps
             if step % AGENT_PROGRESS_EVERY == 0:
                 asyncio.ensure_future(_send_progress(msg, step, elapsed, progress))
 
-            # Repeat guard: same tool + same args called recently â†’ skip
+            # Repeat guard: same tool + same args called recently Ã¢â€ â€™ skip
             # Catches both: repeated failures AND repeated successful calls (infinite loop)
             recent_calls = [(h.get("tool"), json.dumps(h.get("args",{}), sort_keys=True))
                             for h in history[-5:] if h.get("type") == "action"]
@@ -787,19 +787,19 @@ async def run_agent_loop(msg: OrchestratorMessage, goal: str) -> None:
                 if same_step_calls >= 2:
                     repeat_count = same_step_calls
             if repeat_count >= 2:
-                print(f"[AGENT] step={step} repeat-guard {tool_name} (Ã—{repeat_count}) â€” injecting cached result")
+                print(f"[AGENT] step={step} repeat-guard {tool_name} (Ãƒâ€”{repeat_count}) Ã¢â‚¬â€ injecting cached result")
                 # Find the last SUCCESSFUL result for this tool in history
                 cached_result = None
                 for h in reversed(history):
                     if h.get("tool") == tool_name and h.get("type") == "action" and h.get("result"):
                         cached_result = h.get("result")
                         break
-                # Inject as if tool ran successfully â€” LLM sees data and can move on
+                # Inject as if tool ran successfully Ã¢â‚¬â€ LLM sees data and can move on
                 synthetic = {
                     "type": "action", "tool": tool_name, "args": tool_args,
-                    "thought": f"[REPEAT-GUARD] Using cached result from earlier call â€” not re-executing.",
-                    "result": cached_result or {"ok": True, "note": "cached â€” already ran this step"},
-                    "summary": f"[CACHED] {tool_name} â€” data already retrieved, advancing",
+                    "thought": f"[REPEAT-GUARD] Using cached result from earlier call Ã¢â‚¬â€ not re-executing.",
+                    "result": cached_result or {"ok": True, "note": "cached Ã¢â‚¬â€ already ran this step"},
+                    "summary": f"[CACHED] {tool_name} Ã¢â‚¬â€ data already retrieved, advancing",
                     "step": step,
                 }
                 history.append(synthetic)
@@ -815,7 +815,7 @@ async def run_agent_loop(msg: OrchestratorMessage, goal: str) -> None:
                         _agent_state[f"auto_step_{step}_done"] = tool_name
                 except Exception:
                     pass
-                # Do NOT increment consecutive_errors â€” this is expected behavior
+                # Do NOT increment consecutive_errors Ã¢â‚¬â€ this is expected behavior
                 continue
 
             # Execute tool
@@ -829,7 +829,7 @@ async def run_agent_loop(msg: OrchestratorMessage, goal: str) -> None:
                     force_conclude = True
                     print(
                         f"[AGENT] step={step} discovery budget reached "
-                        f"({discovery_steps}/{AGENT_DISCOVERY_STEP_LIMIT}) â€” forcing conclusion"
+                        f"({discovery_steps}/{AGENT_DISCOVERY_STEP_LIMIT}) Ã¢â‚¬â€ forcing conclusion"
                     )
                     history.append({
                         "type": "thought_only",
@@ -844,7 +844,7 @@ async def run_agent_loop(msg: OrchestratorMessage, goal: str) -> None:
                 consecutive_errors += 1
                 if consecutive_errors >= AGENT_ERROR_THRESHOLD:
                     msg.styled_response = (
-                        f"âš ï¸ CORE agent halted: {consecutive_errors} consecutive tool failures "
+                        f"Ã¢Å¡Â Ã¯Â¸Â CORE agent halted: {consecutive_errors} consecutive tool failures "
                         f"at step {step}. Last failed: {tool_name}"
                     )
                     break
@@ -909,21 +909,21 @@ async def run_agent_loop(msg: OrchestratorMessage, goal: str) -> None:
                             _sdone(session_id=str(_agent_session_id), step_name=f"step_{step}_{tool_name}",
                                    result=str(result)[:200])
                 except Exception as _ae:
-                    pass  # state save is non-fatal â€” never block execution
+                    pass  # state save is non-fatal Ã¢â‚¬â€ never block execution
 
             # Token budget: checked at top of loop via last_prompt_tokens (real API value)
-            # No additional tracking needed here â€” the API response tells us truth each step
+            # No additional tracking needed here Ã¢â‚¬â€ the API response tells us truth each step
 
-        # â”€â”€ UNKNOWN â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        # Ã¢â€â‚¬Ã¢â€â‚¬ UNKNOWN Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
         else:
             consecutive_errors += 1
             print(f"[AGENT] step={step} unknown type: {dtype!r}")
             history.append({"type": "thought_only", "thought": f"Unknown response type: {dtype!r}", "step": step})
             if consecutive_errors >= AGENT_ERROR_THRESHOLD:
-                msg.styled_response = f"âš ï¸ CORE agent halted: repeated invalid responses."
+                msg.styled_response = f"Ã¢Å¡Â Ã¯Â¸Â CORE agent halted: repeated invalid responses."
                 break
 
-    # â”€â”€ Deliver via L10 â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # Ã¢â€â‚¬Ã¢â€â‚¬ Deliver via L10 Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
     msg.track_layer("AGENT-END")
     elapsed_total = time.monotonic() - start_time
     print(f"[AGENT] End. steps={step} elapsed={elapsed_total:.1f}s response_len={len(msg.styled_response or '')}")
@@ -931,7 +931,7 @@ async def run_agent_loop(msg: OrchestratorMessage, goal: str) -> None:
     await layer_10_output(msg)
 
 
-# â”€â”€ Trigger detection â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# Ã¢â€â‚¬Ã¢â€â‚¬ Trigger detection Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
 def is_agentic_request(text: str, intent: str) -> bool:
     """Returns True if this request should activate the agentic loop."""
     lower = text.lower()
@@ -942,3 +942,4 @@ def is_agentic_request(text: str, intent: str) -> bool:
     if lower.count(" then ") >= 2:
         return True
     return False
+
