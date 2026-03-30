@@ -453,18 +453,37 @@ _live = build_live_schema(SUPABASE_REF, SUPABASE_PAT)
 if _live:
     _tombstones = _SB_SCHEMA.get("_tombstone", set())
     _tables     = _SB_SCHEMA.get("tables", {})
+
+    def _safe_select_from_live(cols: dict) -> str:
+        preferred = [c for c in ("id", "created_at", "updated_at") if c in cols]
+        if preferred:
+            return ",".join(preferred)
+        return ",".join(list(cols.keys())[:5]) if cols else "*"
+
     for table, live_data in _live.items():
         if table in _tombstones:
             continue
+        live_cols = dict(live_data.get("columns") or {})
         if table in _tables:
-            _tables[table]["columns"] = live_data["columns"]
+            _tables[table]["columns"] = live_cols
             # Also update safe_select to only include columns that actually exist
             existing_safe = _tables[table].get("safe_select", "")
             if existing_safe:
-                valid_cols = [c for c in existing_safe.split(",") if c.strip() in live_data["columns"]]
+                valid_cols = [c for c in existing_safe.split(",") if c.strip() in live_cols]
                 if valid_cols:
                     _tables[table]["safe_select"] = ",".join(valid_cols)
-    print(f"[SCHEMA] Patched {len(_live)} tables in _SB_SCHEMA with live columns")
+        else:
+            _tables[table] = {
+                "pk": "id",
+                "pk_type": live_cols.get("id", "bigint"),
+                "columns": live_cols,
+                "required": [],
+                "enums": {},
+                "fat_columns": [],
+                "safe_select": _safe_select_from_live(live_cols),
+                "notes": "Merged from live Supabase schema at import time.",
+            }
+    print(f"[SCHEMA] Merged live Supabase tables into _SB_SCHEMA: {len(_live)} live / {len(_tables)} total")
 
 def _sb_schema(table: str) -> dict:
     """Return schema entry for a table, or empty dict if unknown."""
