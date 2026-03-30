@@ -184,82 +184,177 @@ def _sb_circuit_reset():
     _SUPABASE_CIRCUIT_UNTIL = 0.0
 
 
+_SB_SCHEMA_BOOTSTRAP_ATTEMPTED = False
+
+
+def _sb_schema_missing_response(response) -> bool:
+    status = getattr(response, "status_code", None)
+    if status not in {400, 404, 409, 422}:
+        return False
+    try:
+        text = (response.text or "").lower()
+    except Exception:
+        text = ""
+    if not text:
+        return False
+    needles = (
+        "does not exist",
+        "relation",
+        "column",
+        "pgrst",
+        "42p01",
+        "42703",
+        "unknown table",
+        "unknown column",
+    )
+    return any(n in text for n in needles)
+
+
+def _sb_bootstrap_schema_once(reason: str) -> None:
+    global _SB_SCHEMA_BOOTSTRAP_ATTEMPTED
+    if _SB_SCHEMA_BOOTSTRAP_ATTEMPTED:
+        return
+    _SB_SCHEMA_BOOTSTRAP_ATTEMPTED = True
+    try:
+        from core_supabase_bootstrap import bootstrap_supabase as _bootstrap_supabase
+        result = _bootstrap_supabase()
+        ok = bool(result.get("ok")) if isinstance(result, dict) else bool(result)
+        print(f"[SB] bootstrap ({reason}) -> {'ok' if ok else 'failed'}")
+    except Exception as exc:
+        print(f"[SB] bootstrap ({reason}) error: {exc}")
+
+
 def sb_get(t, qs="", svc=False):
     if _sb_circuit_open():
         return []
     try:
         r = httpx.get(f"{SUPABASE_URL}/rest/v1/{t}?{qs}", headers=_sbh(svc), timeout=15)
-        if not r.is_success:
-            print(f"[SB GET] {t} failed: {r.status_code} {r.text[:200]}")
-            _sb_circuit_note(r)
-            return []
-        _sb_circuit_reset()
-        return r.json()
+        if r.is_success:
+            _sb_circuit_reset()
+            return r.json()
+        if _sb_schema_missing_response(r):
+            print(f"[SB GET] {t} missing schema: {r.status_code} {r.text[:200]}")
+            _sb_bootstrap_schema_once(f"get:{t}")
+            try:
+                r = httpx.get(f"{SUPABASE_URL}/rest/v1/{t}?{qs}", headers=_sbh(svc), timeout=15)
+                if r.is_success:
+                    _sb_circuit_reset()
+                    return r.json()
+            except Exception as retry_exc:
+                print(f"[SB GET] {t} retry error after bootstrap: {retry_exc}")
+        print(f"[SB GET] {t} failed: {r.status_code} {r.text[:200]}")
+        _sb_circuit_note(r)
+        return []
     except Exception as e:
         print(f"[SB GET] {t} error: {e}")
         _sb_circuit_note()
         return []
 
+
 def sb_post(t, d):
     if not L.sbw() or _sb_circuit_open(): return False
     try:
         r = httpx.post(f"{SUPABASE_URL}/rest/v1/{t}", headers=_sbh(True), json=d, timeout=15)
-        if not r.is_success:
-            print(f"[SB POST] {t} failed: {r.status_code} {r.text[:200]}")
-            _sb_circuit_note(r)
-            return False
-        _sb_circuit_reset()
-        return True
+        if r.is_success:
+            _sb_circuit_reset()
+            return True
+        if _sb_schema_missing_response(r):
+            print(f"[SB POST] {t} missing schema: {r.status_code} {r.text[:200]}")
+            _sb_bootstrap_schema_once(f"post:{t}")
+            try:
+                r = httpx.post(f"{SUPABASE_URL}/rest/v1/{t}", headers=_sbh(True), json=d, timeout=15)
+                if r.is_success:
+                    _sb_circuit_reset()
+                    return True
+            except Exception as retry_exc:
+                print(f"[SB POST] {t} retry error after bootstrap: {retry_exc}")
+        print(f"[SB POST] {t} failed: {r.status_code} {r.text[:200]}")
+        _sb_circuit_note(r)
+        return False
     except Exception as e:
         print(f"[SB POST] {t} error: {e}")
         _sb_circuit_note()
         return False
 
+
 def sb_post_critical(t, d):
     if _sb_circuit_open(): return False
     try:
         r = httpx.post(f"{SUPABASE_URL}/rest/v1/{t}", headers=_sbh(True), json=d, timeout=15)
-        if not r.is_success:
-            print(f"[SB CRITICAL] {t} failed: {r.status_code} {r.text[:200]}")
-            _sb_circuit_note(r)
-            return False
-        _sb_circuit_reset()
-        return True
+        if r.is_success:
+            _sb_circuit_reset()
+            return True
+        if _sb_schema_missing_response(r):
+            print(f"[SB CRITICAL] {t} missing schema: {r.status_code} {r.text[:200]}")
+            _sb_bootstrap_schema_once(f"critical:{t}")
+            try:
+                r = httpx.post(f"{SUPABASE_URL}/rest/v1/{t}", headers=_sbh(True), json=d, timeout=15)
+                if r.is_success:
+                    _sb_circuit_reset()
+                    return True
+            except Exception as retry_exc:
+                print(f"[SB CRITICAL] {t} retry error after bootstrap: {retry_exc}")
+        print(f"[SB CRITICAL] {t} failed: {r.status_code} {r.text[:200]}")
+        _sb_circuit_note(r)
+        return False
     except Exception as e:
         print(f"[SB CRITICAL] {t} error: {e}")
         _sb_circuit_note()
         return False
 
+
 def sb_patch(t, m, d):
     if not L.sbw() or _sb_circuit_open(): return False
     try:
         r = httpx.patch(f"{SUPABASE_URL}/rest/v1/{t}?{m}", headers=_sbh(True), json=d, timeout=15)
-        if not r.is_success:
-            print(f"[SB PATCH] {t} failed: {r.status_code} {r.text[:200]}")
-            _sb_circuit_note(r)
-            return False
-        _sb_circuit_reset()
-        return True
+        if r.is_success:
+            _sb_circuit_reset()
+            return True
+        if _sb_schema_missing_response(r):
+            print(f"[SB PATCH] {t} missing schema: {r.status_code} {r.text[:200]}")
+            _sb_bootstrap_schema_once(f"patch:{t}")
+            try:
+                r = httpx.patch(f"{SUPABASE_URL}/rest/v1/{t}?{m}", headers=_sbh(True), json=d, timeout=15)
+                if r.is_success:
+                    _sb_circuit_reset()
+                    return True
+            except Exception as retry_exc:
+                print(f"[SB PATCH] {t} retry error after bootstrap: {retry_exc}")
+        print(f"[SB PATCH] {t} failed: {r.status_code} {r.text[:200]}")
+        _sb_circuit_note(r)
+        return False
     except Exception as e:
         print(f"[SB PATCH] {t} error: {e}")
         _sb_circuit_note()
         return False
+
 
 def sb_upsert(t, d, on_conflict):
     if not L.sbw() or _sb_circuit_open(): return False
     try:
         h = {**_sbh(True), "Prefer": "resolution=merge-duplicates,return=minimal"}
         r = httpx.post(f"{SUPABASE_URL}/rest/v1/{t}?on_conflict={on_conflict}", headers=h, json=d, timeout=15)
-        if not r.is_success:
-            print(f"[SB UPSERT] {t} failed: {r.status_code} {r.text[:200]}")
-            _sb_circuit_note(r)
-            return False
-        _sb_circuit_reset()
-        return True
+        if r.is_success:
+            _sb_circuit_reset()
+            return True
+        if _sb_schema_missing_response(r):
+            print(f"[SB UPSERT] {t} missing schema: {r.status_code} {r.text[:200]}")
+            _sb_bootstrap_schema_once(f"upsert:{t}")
+            try:
+                r = httpx.post(f"{SUPABASE_URL}/rest/v1/{t}?on_conflict={on_conflict}", headers=h, json=d, timeout=15)
+                if r.is_success:
+                    _sb_circuit_reset()
+                    return True
+            except Exception as retry_exc:
+                print(f"[SB UPSERT] {t} retry error after bootstrap: {retry_exc}")
+        print(f"[SB UPSERT] {t} failed: {r.status_code} {r.text[:200]}")
+        _sb_circuit_note(r)
+        return False
     except Exception as e:
         print(f"[SB UPSERT] {t} error: {e}")
         _sb_circuit_note()
         return False
+
 
 def sb_delete(t, m):
     """DELETE rows matching filter string m from table t.
@@ -271,12 +366,22 @@ def sb_delete(t, m):
     if not L.sbw() or _sb_circuit_open(): return False
     try:
         r = httpx.delete(f"{SUPABASE_URL}/rest/v1/{t}?{m}", headers=_sbh(True), timeout=15)
-        if not r.is_success:
-            print(f"[SB DELETE] {t} failed: {r.status_code} {r.text[:200]}")
-            _sb_circuit_note(r)
-            return False
-        _sb_circuit_reset()
-        return True
+        if r.is_success:
+            _sb_circuit_reset()
+            return True
+        if _sb_schema_missing_response(r):
+            print(f"[SB DELETE] {t} missing schema: {r.status_code} {r.text[:200]}")
+            _sb_bootstrap_schema_once(f"delete:{t}")
+            try:
+                r = httpx.delete(f"{SUPABASE_URL}/rest/v1/{t}?{m}", headers=_sbh(True), timeout=15)
+                if r.is_success:
+                    _sb_circuit_reset()
+                    return True
+            except Exception as retry_exc:
+                print(f"[SB DELETE] {t} retry error after bootstrap: {retry_exc}")
+        print(f"[SB DELETE] {t} failed: {r.status_code} {r.text[:200]}")
+        _sb_circuit_note(r)
+        return False
     except Exception as e:
         print(f"[SB DELETE] {t} error: {e}")
         _sb_circuit_note()
