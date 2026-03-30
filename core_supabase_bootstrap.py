@@ -313,13 +313,6 @@ def bootstrap_supabase() -> dict:
         time.sleep(3)
         _query(ref, pat, "SELECT pg_notify('pgrst', 'reload schema');", timeout=30)
 
-    for script in (
-        ROOT / 'run_reflection_audit_ddl.py',
-        ROOT / 'run_repo_map_ddl.py',
-        ROOT / 'run_semantic_ddl.py',
-    ):
-        _run_script(script)
-
     results.append(_apply_statements(ref, pat, CORE_EXTRA_DDL, 'core-extra-ddl'))
     try:
         _query(ref, pat, "SELECT pg_notify('pgrst', 'reload schema');", timeout=30)
