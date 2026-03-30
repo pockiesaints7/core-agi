@@ -30,6 +30,29 @@ from core_github import notify
 from core_queue_cursor import build_seek_filter, cursor_from_row
 from core_work_taxonomy import build_autonomy_contract
 
+
+def _env_clean(name: str, default: str = "") -> str:
+    value = os.getenv(name, default)
+    if value is None:
+        return default
+    value = value.strip()
+    if "#" in value:
+        value = value.split("#", 1)[0].strip()
+    return value
+
+
+def _env_int(name: str, default: str) -> int:
+    try:
+        return int(_env_clean(name, default))
+    except Exception:
+        return int(default)
+
+
+def _env_float(name: str, default: str) -> float:
+    try:
+        return float(_env_clean(name, default))
+    except Exception:
+        return float(default)
 AUTONOMY_ENABLED = os.getenv("CORE_EVOLUTION_AUTONOMY_ENABLED", "true").strip().lower() not in {
     "0", "false", "no", "off"
 }
@@ -669,5 +692,7 @@ def t_evolution_autonomy_status() -> dict:
 
 
 register_tools()
+
+
 
 

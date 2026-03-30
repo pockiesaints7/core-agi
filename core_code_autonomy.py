@@ -27,6 +27,29 @@ from core_reflection_audit import (
 from core_tools import t_agent_session_init, t_agent_state_set, t_agent_step_done, t_reasoning_packet
 from core_work_taxonomy import build_autonomy_contract
 
+
+def _env_clean(name: str, default: str = "") -> str:
+    value = os.getenv(name, default)
+    if value is None:
+        return default
+    value = value.strip()
+    if "#" in value:
+        value = value.split("#", 1)[0].strip()
+    return value
+
+
+def _env_int(name: str, default: str) -> int:
+    try:
+        return int(_env_clean(name, default))
+    except Exception:
+        return int(default)
+
+
+def _env_float(name: str, default: str) -> float:
+    try:
+        return float(_env_clean(name, default))
+    except Exception:
+        return float(default)
 AUTONOMY_ENABLED = os.getenv("CORE_CODE_AUTONOMY_ENABLED", "true").strip().lower() not in {
     "0", "false", "no", "off"
 }
@@ -1199,6 +1222,8 @@ def register_tools() -> None:
 
 
 register_tools()
+
+
 
 
 
