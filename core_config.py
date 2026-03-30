@@ -142,6 +142,12 @@ class RateLimiter:
 L = RateLimiter()
 
 # -- Supabase helpers ----------------------------------------------------------
+_SUPABASE_CIRCUIT_UNTIL = 0.0
+_SUPABASE_CIRCUIT_ERRORS = 0
+_SUPABASE_CIRCUIT_COOLDOWN_SECS = int(os.environ.get("SUPABASE_CIRCUIT_COOLDOWN_SECS", "180"))
+_SUPABASE_CIRCUIT_THRESHOLD = int(os.environ.get("SUPABASE_CIRCUIT_THRESHOLD", "3"))
+
+
 def _sbh(svc=False):
     k = SUPABASE_SVC if svc else SUPABASE_ANON
     return {"apikey": k, "Authorization": f"Bearer {k}",
@@ -151,35 +157,109 @@ def _sbh_count_svc():
     return {"apikey": SUPABASE_SVC, "Authorization": f"Bearer {SUPABASE_SVC}",
             "Prefer": "count=exact"}
 
+
+def _sb_circuit_open() -> bool:
+    return time.time() < _SUPABASE_CIRCUIT_UNTIL
+
+
+def _sb_circuit_note(response=None):
+    global _SUPABASE_CIRCUIT_ERRORS, _SUPABASE_CIRCUIT_UNTIL
+    _SUPABASE_CIRCUIT_ERRORS += 1
+    status = getattr(response, "status_code", None)
+    text = ""
+    if response is not None:
+        try:
+            text = (response.text or "")[:200]
+        except Exception:
+            text = ""
+    if status in {429, 500, 502, 503, 504} or "schema cache" in text.lower() or "timed out" in text.lower() or response is None:
+        if _SUPABASE_CIRCUIT_ERRORS >= _SUPABASE_CIRCUIT_THRESHOLD:
+            _SUPABASE_CIRCUIT_UNTIL = time.time() + _SUPABASE_CIRCUIT_COOLDOWN_SECS
+            print(f"[SB] circuit open for {_SUPABASE_CIRCUIT_COOLDOWN_SECS}s after repeated failures")
+
+
+def _sb_circuit_reset():
+    global _SUPABASE_CIRCUIT_ERRORS, _SUPABASE_CIRCUIT_UNTIL
+    _SUPABASE_CIRCUIT_ERRORS = 0
+    _SUPABASE_CIRCUIT_UNTIL = 0.0
+
+
 def sb_get(t, qs="", svc=False):
-    r = httpx.get(f"{SUPABASE_URL}/rest/v1/{t}?{qs}", headers=_sbh(svc), timeout=15)
-    r.raise_for_status()
-    return r.json()
+    if _sb_circuit_open():
+        return []
+    try:
+        r = httpx.get(f"{SUPABASE_URL}/rest/v1/{t}?{qs}", headers=_sbh(svc), timeout=15)
+        if not r.is_success:
+            print(f"[SB GET] {t} failed: {r.status_code} {r.text[:200]}")
+            _sb_circuit_note(r)
+            return []
+        _sb_circuit_reset()
+        return r.json()
+    except Exception as e:
+        print(f"[SB GET] {t} error: {e}")
+        _sb_circuit_note()
+        return []
 
 def sb_post(t, d):
-    if not L.sbw(): return False
-    r = httpx.post(f"{SUPABASE_URL}/rest/v1/{t}", headers=_sbh(True), json=d, timeout=15)
-    if not r.is_success:
-        print(f"[SB POST] {t} failed: {r.status_code} {r.text[:200]}")
-    return r.is_success
+    if not L.sbw() or _sb_circuit_open(): return False
+    try:
+        r = httpx.post(f"{SUPABASE_URL}/rest/v1/{t}", headers=_sbh(True), json=d, timeout=15)
+        if not r.is_success:
+            print(f"[SB POST] {t} failed: {r.status_code} {r.text[:200]}")
+            _sb_circuit_note(r)
+            return False
+        _sb_circuit_reset()
+        return True
+    except Exception as e:
+        print(f"[SB POST] {t} error: {e}")
+        _sb_circuit_note()
+        return False
 
 def sb_post_critical(t, d):
-    r = httpx.post(f"{SUPABASE_URL}/rest/v1/{t}", headers=_sbh(True), json=d, timeout=15)
-    if not r.is_success:
-        print(f"[SB CRITICAL] {t} failed: {r.status_code} {r.text[:200]}")
-    return r.is_success
+    if _sb_circuit_open(): return False
+    try:
+        r = httpx.post(f"{SUPABASE_URL}/rest/v1/{t}", headers=_sbh(True), json=d, timeout=15)
+        if not r.is_success:
+            print(f"[SB CRITICAL] {t} failed: {r.status_code} {r.text[:200]}")
+            _sb_circuit_note(r)
+            return False
+        _sb_circuit_reset()
+        return True
+    except Exception as e:
+        print(f"[SB CRITICAL] {t} error: {e}")
+        _sb_circuit_note()
+        return False
 
 def sb_patch(t, m, d):
-    if not L.sbw(): return False
-    return httpx.patch(f"{SUPABASE_URL}/rest/v1/{t}?{m}", headers=_sbh(True), json=d, timeout=15).is_success
+    if not L.sbw() or _sb_circuit_open(): return False
+    try:
+        r = httpx.patch(f"{SUPABASE_URL}/rest/v1/{t}?{m}", headers=_sbh(True), json=d, timeout=15)
+        if not r.is_success:
+            print(f"[SB PATCH] {t} failed: {r.status_code} {r.text[:200]}")
+            _sb_circuit_note(r)
+            return False
+        _sb_circuit_reset()
+        return True
+    except Exception as e:
+        print(f"[SB PATCH] {t} error: {e}")
+        _sb_circuit_note()
+        return False
 
 def sb_upsert(t, d, on_conflict):
-    if not L.sbw(): return False
-    h = {**_sbh(True), "Prefer": "resolution=merge-duplicates,return=minimal"}
-    r = httpx.post(f"{SUPABASE_URL}/rest/v1/{t}?on_conflict={on_conflict}", headers=h, json=d, timeout=15)
-    if not r.is_success:
-        print(f"[SB UPSERT] {t} failed: {r.status_code} {r.text[:200]}")
-    return r.is_success
+    if not L.sbw() or _sb_circuit_open(): return False
+    try:
+        h = {**_sbh(True), "Prefer": "resolution=merge-duplicates,return=minimal"}
+        r = httpx.post(f"{SUPABASE_URL}/rest/v1/{t}?on_conflict={on_conflict}", headers=h, json=d, timeout=15)
+        if not r.is_success:
+            print(f"[SB UPSERT] {t} failed: {r.status_code} {r.text[:200]}")
+            _sb_circuit_note(r)
+            return False
+        _sb_circuit_reset()
+        return True
+    except Exception as e:
+        print(f"[SB UPSERT] {t} error: {e}")
+        _sb_circuit_note()
+        return False
 
 def sb_delete(t, m):
     """DELETE rows matching filter string m from table t.
@@ -188,11 +268,19 @@ def sb_delete(t, m):
     if not m or not str(m).strip():
         print(f"[SB DELETE] BLOCKED: empty filter on table {t} -- full-table delete not allowed")
         return False
-    if not L.sbw(): return False
-    r = httpx.delete(f"{SUPABASE_URL}/rest/v1/{t}?{m}", headers=_sbh(True), timeout=15)
-    if not r.is_success:
-        print(f"[SB DELETE] {t} failed: {r.status_code} {r.text[:200]}")
-    return r.is_success
+    if not L.sbw() or _sb_circuit_open(): return False
+    try:
+        r = httpx.delete(f"{SUPABASE_URL}/rest/v1/{t}?{m}", headers=_sbh(True), timeout=15)
+        if not r.is_success:
+            print(f"[SB DELETE] {t} failed: {r.status_code} {r.text[:200]}")
+            _sb_circuit_note(r)
+            return False
+        _sb_circuit_reset()
+        return True
+    except Exception as e:
+        print(f"[SB DELETE] {t} error: {e}")
+        _sb_circuit_note()
+        return False
 
 # -- Telegram notify helper ----------------------------------------------------
 def notify(text: str, chat_id: str = "") -> bool:
