@@ -253,6 +253,30 @@ def _run_script(script: Path) -> None:
         print(f"[bootstrap] warning: {script.name} exited with {proc.returncode}")
 
 
+def _table_count(ref: str, pat: str) -> int:
+    rows = _query(
+        ref,
+        pat,
+        'SELECT COUNT(*)::int AS count FROM information_schema.tables WHERE table_schema = ''public'' AND table_type = ''BASE TABLE'';',
+        timeout=60,
+    )
+    if rows and isinstance(rows, list):
+        first = rows[0] if rows else {}
+        if isinstance(first, dict):
+            for key in ('count', 'count_int', 'count(*)', 'count::int'):
+                value = first.get(key)
+                if value is not None:
+                    try:
+                        return int(value)
+                    except Exception:
+                        pass
+            for value in first.values():
+                try:
+                    return int(value)
+                except Exception:
+                    continue
+    return 0
+
 
 def bootstrap_supabase() -> dict:
     env = _load_env()
