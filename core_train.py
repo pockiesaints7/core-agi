@@ -441,8 +441,8 @@ _CAP_DESCRIPTIONS = {
 
 # â”€â”€ TASK-4: Binance Price Monitor config â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 _PRICE_MONITOR_SYMBOLS  = os.getenv("BINANCE_WATCH_SYMBOLS", "BTCUSDT,ETHUSDT,BNBUSDT").split(",")
-_PRICE_ALERT_THRESHOLD  = _env_float("BINANCE_ALERT_THRESHOLD_PCT", "3.0"))
-_PRICE_MONITOR_INTERVAL = _env_int("BINANCE_MONITOR_INTERVAL_S", "60"))
+_PRICE_ALERT_THRESHOLD  = _env_float("BINANCE_ALERT_THRESHOLD_PCT", "3.0")
+_PRICE_MONITOR_INTERVAL = _env_int("BINANCE_MONITOR_INTERVAL_S", "60")
 _price_monitor_last_prices: dict = {}
 _price_monitor_running = False
 
@@ -4316,7 +4316,7 @@ def _maybe_eval_prompt(target: str, system: str, every: int) -> None:
     _PROMPT_CYCLE_COUNTERS[target] = _PROMPT_CYCLE_COUNTERS.get(target, 0) + 1
     if _PROMPT_CYCLE_COUNTERS[target] % every == 0:
         try:
-rows = _sbg(
+            rows = _sbg(
                 "system_prompts",
                 f"select=version&target=eq.{target}&active=eq.true&order=version.desc&limit=1",
                 svc=True,
@@ -5678,5 +5678,7 @@ def proactive_surface_loop():
         except Exception as e:
             print(f"[PROACTIVE] loop error: {e}")
         time.sleep(_PROACTIVE_INTERVAL)
+
+
 
 
