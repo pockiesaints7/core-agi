@@ -5,7 +5,7 @@ After=network-online.target
 
 [Service]
 Type=simple
-User=ubuntu
+User=root
 WorkingDirectory=/home/ubuntu/core-agi
 ExecStart=/usr/bin/python3 /home/ubuntu/core-agi/tools/vm_autosync.py
 Restart=always
