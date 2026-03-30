@@ -1,5 +1,5 @@
 [Unit]
-Description=CORE VM git autosync
+Description=CORE VM git mirror
 Wants=network-online.target
 After=network-online.target
 
