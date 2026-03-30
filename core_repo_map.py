@@ -1,4 +1,4 @@
-"""core_repo_map.py -- CORE-native repository semantic map.
+﻿"""core_repo_map.py -- CORE-native repository semantic map.
 
 This module scans the CORE repository, writes a semantic component graph to
 Supabase, and exposes read packets for the orchestrator. It is intentionally
@@ -21,11 +21,7 @@ from typing import Any
 
 import httpx
 
- param($m)
-        $line = $m.Groups[1].Value
-        if ($line -match '_env_int' -or $line -match '_env_float') { return $m.Value }
-        return 'from core_config import ' + $line + ', _env_int, _env_float'
-    
+from core_config import SUPABASE_PAT, SUPABASE_REF, SUPABASE_URL, _env_int, _sbh_count_svc, sb_get, sb_patch, sb_post, sb_upsert
 
 try:
     from core_semantic import embed_on_insert, search_many
@@ -36,8 +32,8 @@ except Exception:  # pragma: no cover - module still imports while semantic laye
 REPO_ROOT = Path(os.getenv("CORE_REPO_ROOT", Path(__file__).resolve().parent)).resolve()
 REPO_NAME = os.getenv("CORE_REPO_MAP_NAME", "core-agi")
 REPO_MAP_ENABLED = os.getenv("CORE_REPO_MAP_ENABLED", "true").strip().lower() not in {"0", "false", "no", "off"}
-REPO_MAP_INTERVAL_S = max(300, _env_int("CORE_REPO_MAP_INTERVAL_S", "1800")))
-REPO_MAP_BATCH_LIMIT = max(1, _env_int("CORE_REPO_MAP_BATCH_LIMIT", "400")))
+REPO_MAP_INTERVAL_S = max(300, _env_int("CORE_REPO_MAP_INTERVAL_S", 1800))
+REPO_MAP_BATCH_LIMIT = max(1, _env_int("CORE_REPO_MAP_BATCH_LIMIT", 400))
 REPO_MAP_PROJECT_TO_KB = os.getenv("CORE_REPO_MAP_PROJECT_TO_KB", "false").strip().lower() in {"1", "true", "yes", "on"}
 _MANAGED_TABLES = ("repo_components", "repo_component_chunks", "repo_component_edges", "repo_scan_runs")
 _EXCLUDED_DIRS = {
