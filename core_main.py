@@ -833,6 +833,21 @@ app = FastAPI(title="CORE v6.0", version="6.0")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 _sse_sessions: dict = {}
+_sse_shutdown = asyncio.Event()
+
+def _shutdown_sse_sessions() -> None:
+    """Wake all open SSE streams so shutdown can complete promptly."""
+    _sse_shutdown.set()
+    for queue in list(_sse_sessions.values()):
+        while queue.full():
+            try:
+                queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+        try:
+            queue.put_nowait(None)
+        except asyncio.QueueFull:
+            pass
 
 
 async def require_mcp_secret(
@@ -1603,13 +1618,17 @@ async def mcp_sse_get(req: Request, _auth=Depends(get_mcp_identity)):
             # Tell the client where to send POST messages
             yield f"event: endpoint\ndata: {json.dumps(f'/mcp/messages?session_id={session_id}')}\n\n"
             while True:
-                if await req.is_disconnected():
+                if _sse_shutdown.is_set() or await req.is_disconnected():
                     break
                 try:
                     # 25s heartbeat to keep Railway/Nginx connections alive
                     msg = await asyncio.wait_for(queue.get(), timeout=25.0)
+                    if msg is None or _sse_shutdown.is_set():
+                        break
                     yield f"data: {json.dumps(msg)}\n\n"
                 except asyncio.TimeoutError:
+                    if _sse_shutdown.is_set():
+                        break
                     yield ": ping\n\n"
         finally:
             _sse_sessions.pop(session_id, None)
@@ -1641,6 +1660,11 @@ async def mcp_messages(req: Request, session_id: str = Query(...), _auth=Depends
     if response is None:
         return Response(status_code=204)
     return JSONResponse(response)
+@app.on_event("shutdown")
+async def shutdown_sse_sessions() -> None:
+    _shutdown_sse_sessions()
+
+
 @app.post("/mcp/tool")
 async def mcp_tool(body: ToolCall):
     # Keep using your custom mcp_ok check for session tokens
