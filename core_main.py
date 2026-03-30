@@ -1576,7 +1576,7 @@ async def mcp_post(req: Request, _auth=Depends(get_mcp_identity)):
     )
     response = handle_jsonrpc(body, session_id=session_id)
     if response is None:
-        return JSONResponse({}, status_code=204)
+        return Response(status_code=204)
 
     # If client wants an SSE response for a single POST (standard MCP behavior)
     if "text/event-stream" in req.headers.get("accept", "").lower():
@@ -1592,7 +1592,6 @@ async def mcp_post(req: Request, _auth=Depends(get_mcp_identity)):
             }
         )
     return JSONResponse(response)
-
 @app.get("/mcp/sse")
 async def mcp_sse_get(req: Request, _auth=Depends(get_mcp_identity)):
     session_id = str(uuid.uuid4())
