@@ -1,4 +1,4 @@
-"""core_semantic_projection.py -- silent semantic projection for raw CORE tables.
+﻿"""core_semantic_projection.py -- silent semantic projection for raw CORE tables.
 
 This worker mirrors important raw brain data into knowledge_base as a semantic
 read model. Raw tables remain canonical. The projection is best-effort,
@@ -19,17 +19,13 @@ import time
 from datetime import datetime
 from typing import Any
 
- param($m)
-        $line = $m.Groups[1].Value
-        if ($line -match '_env_int' -or $line -match '_env_float') { return $m.Value }
-        return 'from core_config import ' + $line + ', _env_int, _env_float'
-    
+from core_config import _env_int, sb_get, sb_upsert
 
 PROJECTION_ENABLED = os.getenv("CORE_SEMANTIC_PROJECTION_ENABLED", "true").strip().lower() not in {
     "0", "false", "no", "off"
 }
-PROJECTION_INTERVAL_S = max(60, _env_int("CORE_SEMANTIC_PROJECTION_INTERVAL_S", "300")))
-PROJECTION_BATCH_LIMIT = max(1, _env_int("CORE_SEMANTIC_PROJECTION_BATCH_LIMIT", "20")))
+PROJECTION_INTERVAL_S = max(60, _env_int("CORE_SEMANTIC_PROJECTION_INTERVAL_S", 300))
+PROJECTION_BATCH_LIMIT = max(1, _env_int("CORE_SEMANTIC_PROJECTION_BATCH_LIMIT", 20))
 
 _lock = threading.Lock()
 _state = {

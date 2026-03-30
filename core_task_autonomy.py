@@ -1,4 +1,4 @@
-"""core_task_autonomy.py -- autonomous task lifecycle for CORE.
+﻿"""core_task_autonomy.py -- autonomous task lifecycle for CORE.
 
 This module turns task_queue rows into a bounded claim -> checkpoint -> verify ->
 complete loop. It is intentionally conservative:
@@ -23,11 +23,8 @@ import uuid
 from datetime import datetime
 from typing import Any
 
- param($m)
-        $line = $m.Groups[1].Value
-        if ($line -match '_env_int' -or $line -match '_env_float') { return $m.Value }
-        return 'from core_config import ' + $line + ', _env_int, _env_float'
-    
+from core_config import _env_int, sb_get, sb_patch, sb_post
+
 from core_github import notify
 from core_reflection_audit import (
     finalize_reflection_event,
@@ -48,8 +45,8 @@ from core_queue_cursor import build_seek_filter, cursor_from_row
 AUTONOMY_ENABLED = os.getenv("CORE_AUTONOMY_ENABLED", "true").strip().lower() not in {
     "0", "false", "no", "off"
 }
-AUTONOMY_INTERVAL_S = max(60, _env_int("CORE_AUTONOMY_INTERVAL_S", "60")))
-AUTONOMY_BATCH_LIMIT = max(1, _env_int("CORE_AUTONOMY_BATCH_LIMIT", "10")))
+AUTONOMY_INTERVAL_S = max(60, _env_int("CORE_AUTONOMY_INTERVAL_S", 60))
+AUTONOMY_BATCH_LIMIT = max(1, _env_int("CORE_AUTONOMY_BATCH_LIMIT", 10))
 AUTONOMY_SOURCES = tuple(
     s.strip() for s in os.getenv("CORE_AUTONOMY_SOURCES", "self_assigned,improvement").split(",") if s.strip()
 )
