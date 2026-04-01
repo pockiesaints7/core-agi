@@ -634,8 +634,11 @@ def _render_repo_report() -> str:
     return render_repo_map_status_report(status)
 
 
-def _build_startup_brief(resume: str, counts: dict, orch: dict, task_auto: dict | None = None, evo_auto: dict | None = None) -> str:
-    from core_tools import t_state_packet
+def _build_startup_brief(resume: str, counts: dict, orch: dict | None = None, task_auto: dict | None = None, evo_auto: dict | None = None) -> str:
+    orch = orch or {
+        "model": os.environ.get("OPENROUTER_MODEL", "unknown"),
+        "layers": "L0-L11 active",
+    }
     task_pending = counts.get("task_queue_pending", 0)
     task_in_progress = counts.get("task_queue_in_progress", 0)
     task_done = counts.get("task_queue_done", 0)
@@ -651,19 +654,12 @@ def _build_startup_brief(resume: str, counts: dict, orch: dict, task_auto: dict 
     evo_rejected = counts.get("evolution_rejected", 0)
     task_auto = task_auto or {}
     evo_auto = evo_auto or {}
-    proposal = {"enabled": False, "pending": 0, "route_counts": {}}
-    try:
-        proposal = proposal_router_status(limit=3) or proposal
-    except Exception as e:
-        print(f"[CORE] startup brief proposal router unavailable: {e}")
-    task_sources = ", ".join(task_auto.get("sources") or ["self_assigned", "improvement"])
     evo_pending_count = evo_auto.get("pending_evolutions", evo_pending)
     evo_synthesized = evo_auto.get("synthesized_evolutions", 0)
     evo_task_pending = evo_auto.get("pending_improvement_tasks", 0)
     code_auto = {}
     integration_auto = {}
     sem_proj = {}
-    audit_status = {"enabled": False, "last_run_at": "n/a", "last_report": {}}
     state_packet = {}
     try:
         if CODE_AUTONOMY_ENABLED:
@@ -681,10 +677,7 @@ def _build_startup_brief(resume: str, counts: dict, orch: dict, task_auto: dict 
     except Exception as e:
         print(f"[CORE] startup brief semantic projection unavailable: {e}")
     try:
-        audit_status = core_gap_audit_status() or audit_status
-    except Exception as e:
-        print(f"[CORE] startup brief manual audit unavailable: {e}")
-    try:
+        from core_tools import t_state_packet
         state_packet = t_state_packet(session_id="default") or {}
     except Exception as e:
         print(f"[CORE] startup brief state packet unavailable: {e}")
@@ -694,29 +687,21 @@ def _build_startup_brief(resume: str, counts: dict, orch: dict, task_auto: dict 
     except Exception as e:
         print(f"[CORE] startup brief research autonomy unavailable: {e}")
         research_pending = 0
-    try:
-        audit_label = format_core_gap_audit_status(audit_status)
-    except Exception as e:
-        print(f"[CORE] startup brief audit formatting failed: {e}")
-        audit_label = "unavailable"
     return (
         f"🧠 <b>CORE Online</b>\n"
-        f"Orchestrator: <b>{orch.get('model', 'unknown')}</b> | {orch.get('layers', 'L0-L9 active')} | {orch.get('blueprint', '')}\n\n"
+        f"Orchestrator: <b>{orch.get('model', 'unknown')}</b> | {orch.get('layers', 'L0-L9 active')}\n\n"
         f"<b>State</b>\n"
         f"KB: {counts.get('knowledge_base', 0)} | Mistakes: {counts.get('mistakes', 0)} | Sessions: {counts.get('sessions', 0)}\n"
-        f"Repo map: components {counts.get('repo_components', 0)} | chunks {counts.get('repo_component_chunks', 0)} | edges {counts.get('repo_component_edges', 0)} | scans {counts.get('repo_scan_runs', 0)}\n"
-        f"Manual work audit: {audit_label}\n"
         f"State continuity: {'verified' if state_verification.get('verified') else 'degraded'} | score {state_verification.get('verification_score', 0):.2f} | warnings {len(state_verification.get('warnings') or [])}\n"
         f"Task queue: pending {task_pending} | in_progress {task_in_progress} | done {task_done} | failed {task_failed} | {task_summary}\n"
         f"Evolutions: pending {evo_pending} | applied {evo_applied} | rejected {evo_rejected}\n"
-        f"Task autonomy: {'enabled' if AUTONOMY_ENABLED else 'disabled'} | pending {task_auto.get('pending', 0)} | in_progress {task_auto.get('in_progress', 0)} | sources {task_sources}\n"
+        f"Task autonomy: {'enabled' if AUTONOMY_ENABLED else 'disabled'} | pending {task_auto.get('pending', 0)} | in_progress {task_auto.get('in_progress', 0)}\n"
         f"Research autonomy: {'enabled' if RESEARCH_AUTONOMY_ENABLED else 'disabled'} | pending {research_pending}\n"
         f"Code autonomy: {'enabled' if CODE_AUTONOMY_ENABLED else 'disabled'} | pending {code_auto.get('pending_code_tasks', 0)} | proposals {code_auto.get('pending_review_proposals', 0)}\n"
         f"Integration autonomy: {'enabled' if INTEGRATION_AUTONOMY_ENABLED else 'disabled'} | pending {integration_auto.get('pending_integration_tasks', 0)} | proposals {integration_auto.get('pending_review_proposals', 0)}\n"
         f"Evolution autonomy: {'enabled' if EVOLUTION_AUTONOMY_ENABLED else 'disabled'} | pending {evo_pending_count} | synthesized {evo_synthesized} | follow-up tasks {evo_task_pending}\n"
-        f"Proposal router: {'enabled' if proposal.get('enabled') else 'disabled'} | pending {proposal.get('pending', 0)} | routes {', '.join(f'{k}={v}' for k, v in sorted((proposal.get('route_counts') or {}).items())) or 'none'}\n"
         f"Semantic projection: {'enabled' if SEMANTIC_PROJECTION_ENABLED else 'disabled'} | last_run {sem_proj.get('last_run_at', 'n/a')}\n"
-        f"MCP: {len(TOOLS)} tools | Webhook: set | Loops: queue, cold, research, synthesis, diagnosis, autonomy, code-autonomy, integration-autonomy, research-autonomy, evolution-autonomy, semantic-projection, repo-map"
+        f"Resume: {resume}"
     )
 
 def self_sync_check():
@@ -1944,32 +1929,8 @@ def handle_msg(msg):
         counts = get_system_counts()
         resume = get_resume_task()
         task_auto = autonomy_status() if AUTONOMY_ENABLED else {}
-        code_auto = code_autonomy_status() if CODE_AUTONOMY_ENABLED else {}
-        integration_auto = integration_autonomy_status() if INTEGRATION_AUTONOMY_ENABLED else {}
         evo_auto = evolution_autonomy_status() if EVOLUTION_AUTONOMY_ENABLED else {}
-        notify(
-            _render_section(
-                "CORE Online",
-                [
-                    f"Resume: {_tg_escape(resume or 'No active tasks', 180)}",
-        f"KB: {counts.get('knowledge_base', 0)} | Mistakes: {counts.get('mistakes', 0)} | Sessions: {counts.get('sessions', 0)}",
-        f"Repo map: components {counts.get('repo_components', 0)} | chunks {counts.get('repo_component_chunks', 0)} | edges {counts.get('repo_component_edges', 0)} | scans {counts.get('repo_scan_runs', 0)}",
-        f"Manual work audit: {'enabled' if core_gap_audit_status().get('enabled') else 'disabled'} | gaps {core_gap_audit_status().get('last_report', {}).get('summary', {}).get('gap_count', 0)} | last_run {_tg_escape(core_gap_audit_status().get('last_run_at') or 'n/a', 40)}",
-        f"Task queue: pending {counts.get('task_queue_pending', 0)} | in_progress {counts.get('task_queue_in_progress', 0)} | done {counts.get('task_queue_done', 0)} | failed {counts.get('task_queue_failed', 0)}",
-                    f"Evolution queue: pending {counts.get('evolution_pending', 0)} | applied {counts.get('evolution_applied', 0)} | rejected {counts.get('evolution_rejected', 0)}",
-                    f"Task autonomy: {'enabled' if task_auto.get('enabled') else 'disabled'} | pending {task_auto.get('pending', 0)}",
-                    f"Code autonomy: {'enabled' if code_auto.get('enabled') else 'disabled'} | pending {code_auto.get('pending_code_tasks', 0)}",
-                    f"Integration autonomy: {'enabled' if integration_auto.get('enabled') else 'disabled'} | pending {integration_auto.get('pending_integration_tasks', 0)}",
-                    f"Evolution autonomy: {'enabled' if evo_auto.get('enabled') else 'disabled'} | pending {evo_auto.get('pending_evolutions', 0)}",
-                    "",
-                    "<b>Quick actions</b>",
-                    "/status, /queues, /tasks, /code, /integration, /evolutions, /review, /audit",
-                    "/memory, /autonomy, /evolution, /semantic, /repo",
-                    "/health, /deploycheck, /project, /restart, /kill",
-                ],
-            ),
-            cid,
-        )
+        notify(_build_startup_brief(resume, counts, orch, task_auto, evo_auto), cid)
 
     elif cmd == "/help":
         notify(_render_command_catalog(), cid)
