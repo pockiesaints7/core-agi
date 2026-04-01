@@ -34,7 +34,7 @@ AUTONOMY_ENABLED = os.getenv("CORE_INTEGRATION_AUTONOMY_ENABLED", "true").strip(
 }
 AUTONOMY_INTERVAL_S = max(300, _env_int("CORE_INTEGRATION_AUTONOMY_INTERVAL_S", "1200"))
 AUTONOMY_BATCH_LIMIT = max(1, _env_int("CORE_INTEGRATION_AUTONOMY_BATCH_LIMIT", "1"))
-AUTONOMY_NOTIFY = os.getenv("CORE_INTEGRATION_AUTONOMY_NOTIFY", "true").strip().lower() in {
+AUTONOMY_NOTIFY = os.getenv("CORE_INTEGRATION_AUTONOMY_NOTIFY", "false").strip().lower() in {
     "1", "true", "yes", "on"
 }
 TASK_SOURCES = tuple(
@@ -994,7 +994,7 @@ def run_integration_autonomy_cycle(max_tasks: int = AUTONOMY_BATCH_LIMIT) -> dic
             sb_post("sessions", {
                 "summary": f"[state_update] integration_autonomy_last_run: {_state['last_run_at']}",
                 "actions": [
-                    f"integration_autonomy cycle processed={len(rows)} proposed={proposed} duplicates={duplicates} deferred={deferred} failures={failures}",
+                    json.dumps(summary, default=str),
                 ],
                 "interface": "integration_autonomy",
             })

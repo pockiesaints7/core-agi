@@ -58,7 +58,7 @@ AUTONOMY_ENABLED = os.getenv("CORE_EVOLUTION_AUTONOMY_ENABLED", "true").strip().
 }
 AUTONOMY_INTERVAL_S = max(120, _env_int("CORE_EVOLUTION_AUTONOMY_INTERVAL_S", "600"))
 AUTONOMY_BATCH_LIMIT = max(1, _env_int("CORE_EVOLUTION_AUTONOMY_BATCH_LIMIT", "3"))
-AUTONOMY_NOTIFY = os.getenv("CORE_EVOLUTION_AUTONOMY_NOTIFY", "true").strip().lower() in {
+AUTONOMY_NOTIFY = os.getenv("CORE_EVOLUTION_AUTONOMY_NOTIFY", "false").strip().lower() in {
     "1", "true", "yes", "on"
 }
 AUTONOMY_BACKLOG_MONITOR = os.getenv("CORE_EVOLUTION_AUTONOMY_BACKLOG_MONITOR", "true").strip().lower() in {
@@ -602,7 +602,7 @@ def run_evolution_autonomy_cycle(max_evolutions: int = AUTONOMY_BATCH_LIMIT) -> 
                 sb_post("sessions", {
                     "summary": f"[state_update] evolution_autonomy_last_run: {_state['last_run_at']}",
                     "actions": [
-                        f"evolution_autonomy cycle processed={len(rows)} created={queued} duplicates={duplicates} failures={failures}",
+                        json.dumps(summary, default=str),
                     ],
                     "interface": "evolution_autonomy",
                 })

@@ -51,7 +51,7 @@ AUTONOMY_SOURCES = tuple(
     s.strip() for s in os.getenv("CORE_AUTONOMY_SOURCES", "self_assigned,improvement").split(",") if s.strip()
 )
 AUTONOMY_SOURCE = ",".join(AUTONOMY_SOURCES) if AUTONOMY_SOURCES else "self_assigned"
-AUTONOMY_NOTIFY = os.getenv("CORE_AUTONOMY_NOTIFY", "true").strip().lower() in {
+AUTONOMY_NOTIFY = os.getenv("CORE_AUTONOMY_NOTIFY", "false").strip().lower() in {
     "1", "true", "yes", "on"
 }
 
@@ -987,7 +987,7 @@ def run_autonomy_cycle(max_tasks: int = AUTONOMY_BATCH_LIMIT, source: str = AUTO
             sb_post("sessions", {
                 "summary": f"[state_update] task_autonomy_last_run: {_state['last_run_at']}",
                 "actions": [
-                    f"task_autonomy cycle processed={len(processed)} errors={len(errors)} tracks={track_counts}",
+                    json.dumps(summary, default=str),
                 ],
                 "interface": "task_autonomy",
             })
