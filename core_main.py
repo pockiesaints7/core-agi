@@ -2237,10 +2237,9 @@ def handle_msg(msg):
 # ---------------------------------------------------------------------------
 def queue_poller():
     """Notify-only mode â€” no auto-execution without owner approval.
-    Polls task_queue for pending tasks and notifies owner via Telegram."""
-    print("[QUEUE] Started - notify-only mode (no auto-execution)")
+    Polls task_queue for pending tasks and logs them only."""
+    print("[QUEUE] Started - log-only mode (no auto-execution)")
     notify_sources = ("core_v6_registry", "mcp_session")
-    _notified: set = set()
     while True:
         try:
             tasks = sb_get(
@@ -2252,20 +2251,12 @@ def queue_poller():
             if tasks:
                 for t in tasks:
                     tid = t["id"]
-                    if tid in _notified:
-                        continue
                     task_text = t.get("task", "")[:200]
                     priority = t.get("priority", 0)
                     source = t.get("source", "unknown")
-                    notify(
-                        f"Pending task (P{priority}) from {source}:\n"
-                        f"`{task_text}`\n"
-                        f"ID: `{tid}`\n"
-                        f"Review via Claude Desktop â†’ task_queue"
+                    print(
+                        f"[QUEUE] Pending task (P{priority}) from {source}: {task_text} | ID={tid}"
                     )
-                    _notified.add(tid)
-                    if len(_notified) > 200:
-                        _notified.clear()
         except Exception as e:
             print(f"[QUEUE] {e}")
         time.sleep(60)
