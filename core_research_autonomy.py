@@ -474,9 +474,19 @@ def run_research_autonomy_cycle(max_tasks: int = AUTONOMY_BATCH_LIMIT) -> dict:
             "queue_cursor": _state.get("queue_cursor") or {},
         }
         with _lock:
-            _state["last_run_at"] = status["finished_at"]
+            _state['last_run_at'] = status["finished_at"]
             _state["last_summary"] = status
             _state["last_error"] = ""
+        try:
+            sb_post("sessions", {
+                "summary": f"[state_update] research_autonomy_last_run: {_state['last_run_at']}",
+                "actions": [
+                    json.dumps(status, default=str),
+                ],
+                "interface": "research_autonomy",
+            })
+        except Exception:
+            pass
         _notify_cycle(status)
         return status
     except Exception as e:

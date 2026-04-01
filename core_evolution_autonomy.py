@@ -597,7 +597,7 @@ def run_evolution_autonomy_cycle(max_evolutions: int = AUTONOMY_BATCH_LIMIT) -> 
         _state["last_run_at"] = summary["finished_at"]
         _state["last_summary"] = summary
         _state["last_error"] = ""
-        if queued or skipped:
+        if True:
             try:
                 sb_post("sessions", {
                     "summary": f"[state_update] evolution_autonomy_last_run: {_state['last_run_at']}",
