@@ -72,6 +72,11 @@ from core_research_autonomy import (
     research_autonomy_status,
     run_research_autonomy_cycle,
 )
+from core_autonomy_digest import (
+    AUTONOMY_DIGEST_ENABLED,
+    autonomy_digest_loop,
+    autonomy_digest_status,
+)
 from core_proposal_router import (
     proposal_router_summary,
     proposal_router_status,
@@ -2362,6 +2367,8 @@ def on_start():
         threading.Thread(target=research_autonomy_loop, daemon=True).start()
     if EVOLUTION_AUTONOMY_ENABLED:
         threading.Thread(target=evolution_autonomy_loop, daemon=True).start()
+    if AUTONOMY_DIGEST_ENABLED:
+        threading.Thread(target=autonomy_digest_loop, daemon=True).start()
     if SEMANTIC_PROJECTION_ENABLED:
         threading.Thread(target=semantic_projection_loop, daemon=True).start()
 
