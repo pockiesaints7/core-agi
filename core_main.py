@@ -2331,12 +2331,6 @@ async def deploy_webhook(req: Request):
 @app.on_event("startup")
 def on_start():
     try:
-        bootstrap_result = bootstrap_core_supabase()
-        if isinstance(bootstrap_result, dict) and not bootstrap_result.get("ok", False):
-            print(f"[CORE] Supabase bootstrap warning: {bootstrap_result.get('errors') or bootstrap_result.get('error')}")
-    except Exception as e:
-        print(f"[CORE] Supabase bootstrap failed (non-fatal): {e}")
-    try:
         set_webhook()
     except Exception as e:
         print(f"[CORE] webhook setup failed (non-fatal): {e}")
