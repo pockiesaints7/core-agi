@@ -423,15 +423,13 @@ def core_gap_audit_status() -> dict[str, Any]:
 
 
 def core_gap_audit_loop() -> None:
-    """Background loop that notifies owner when new manual work gaps appear."""
+    """Background loop that refreshes gap audit state without notifying Telegram."""
     if not AUDIT_ENABLED:
         return
     while True:
         try:
-            notify_core_gap_audit(force=False)
+            build_core_gap_audit(force=False)
         except Exception as exc:
             with _LOCK:
                 _STATE["last_error"] = str(exc)[:500]
         time.sleep(AUDIT_INTERVAL_S)
-
-
