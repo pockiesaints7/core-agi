@@ -450,8 +450,6 @@ def _render_task_status_report(task_auto: dict) -> str:
     ]
     if task_auto.get("track_counts"):
         lines.append("Tracks: " + ", ".join(f"{_tg_escape(k)}={v}" for k, v in sorted(task_auto["track_counts"].items())))
-    if task_auto.get("deferred"):
-        lines.append(f"Deferred tasks: {task_auto.get('deferred', 0)}")
     if last.get("last_run_at"):
         lines.append(f"Last run: {_tg_escape(last.get('finished_at') or task_auto.get('last_run_at'), 40)}")
     return _render_section("Task Autonomy", lines)
