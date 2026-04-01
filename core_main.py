@@ -2374,7 +2374,8 @@ def on_start():
 
     def _publish_startup_brief():
         try:
-            notify("🧠 <b>CORE Online</b>\nBooting status snapshot...")
+            ping_ok = notify("🧠 <b>CORE Online</b>\nBooting status snapshot...")
+            print(f"[CORE] startup ping sent={ping_ok}")
         except Exception as e:
             print(f"[CORE] startup ping failed (non-fatal): {e}")
         counts = {}
