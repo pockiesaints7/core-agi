@@ -934,7 +934,7 @@ def _run_capability_report():
             f"Transfer:      {avg('transfer')}\n"
             f"Composite:     {avg('composite_score')}"
         )
-        notify(report)
+        print(report)
         print(f"[CAP] Weekly report sent: composite={avg('composite_score')}")
     except Exception as e:
         print(f"[CAP] report error (non-fatal): {e}")
@@ -995,7 +995,7 @@ def _run_memory_consolidation(dry_run: bool = False):
         )
         print(summary)
         if not dry_run and (consolidated + archived) > 0:
-            notify(summary)
+            print(summary)
         return {"ok": True, "consolidated": consolidated, "archived": archived, "dry_run": dry_run}
     except Exception as e:
         print(f"[CONSOLIDATION] error: {e}")
@@ -1460,7 +1460,7 @@ def _auto_evolve_behavioral_rule(pattern_key: str, domain: str, confidence: floa
                     "tested":     False,
                     "source":     "cold_processor",
                 })
-                notify(
+                print(
                     f"[P2-02] Behavioral rule updated\n"
                     f"Domain: {br_domain} | Trigger: {trigger}\n"
                     f"Pattern ({frequency}x): {pattern_key[:120]}\n"
@@ -1488,7 +1488,7 @@ def _auto_evolve_behavioral_rule(pattern_key: str, domain: str, confidence: floa
             "confidence": round(confidence, 3),
         })
         if ok:
-            notify(
+            print(
                 f"[P2-02] New behavioral rule auto-evolved\n"
                 f"Domain: {br_domain} | Trigger: {trigger}\n"
                 f"Pattern ({frequency}x, conf={confidence:.2f}): {pattern_key[:120]}\n"
@@ -3040,7 +3040,7 @@ def run_cold_processor():
         for h in hots:
             sb_patch("hot_reflections", f"id=eq.{h['id']}", {"processed_by_cold": 1})
         if evolutions_queued > 0:
-            notify(f"Cold processor: {evolutions_queued} evolution(s) queued, {auto_applied_count} auto-applied.\n{groq_summary[:300]}\nPending owner review: {evolutions_queued - auto_applied_count}")
+            print(f"Cold processor: {evolutions_queued} evolution(s) queued, {auto_applied_count} auto-applied.\n{groq_summary[:300]}\nPending owner review: {evolutions_queued - auto_applied_count}")
         # AGI-03/S3: trigger causal quality analysis if recent quality is declining
         try:
             recent_scores = [float(h.get("quality_score") or 0.7) for h in hots[-10:]]
@@ -3151,7 +3151,7 @@ def apply_evolution(evolution_id: int):
                         break
             if fn_name and fn_code:
                 sb_patch("evolution_queue", f"id=eq.{evolution_id}", {"status": "pending_desktop"})
-                notify(f"[NEW TOOL] Evolution #{evolution_id} generated code for '{fn_name}'.\n"
+                print(f"[NEW TOOL] Evolution #{evolution_id} generated code for '{fn_name}'.\n"
                        f"Apply via Claude Desktop: add to core_tools.py + register in TOOLS dict.")
                 applied = True
                 note = f"New tool '{fn_name}' code generated â€” needs Desktop apply to core_tools.py"
@@ -3224,10 +3224,10 @@ def apply_evolution(evolution_id: int):
         if applied:
             sb_patch("evolution_queue", f"id=eq.{evolution_id}",
                      {"status": "applied", "applied_at": datetime.utcnow().isoformat()})
-            notify(f"Evolution #{evolution_id} applied\nType: {change_type}\n{note}")
+            print(f"Evolution #{evolution_id} applied\nType: {change_type}\n{note}")
         else:
             if change_type not in ("backlog",):
-                notify(f"Evolution #{evolution_id} apply failed\nType: {change_type}")
+                print(f"Evolution #{evolution_id} apply failed\nType: {change_type}")
             else:
                 print(f"[EVO] #{evolution_id} backlog apply failed silently")
         return {"ok": applied, "evolution_id": evolution_id, "change_type": change_type, "note": note}
@@ -3256,7 +3256,7 @@ def reject_evolution(evolution_id: int, reason: str = "", silent: bool = False):
                 "how_to_avoid": "Raise confidence threshold or improve pattern quality",
                 "severity": "low", "tags": ["evolution", "rejected"],
             })
-            notify(f"Evolution #{evolution_id} rejected.\nReason: {reason or 'No reason given'}")
+            print(f"Evolution #{evolution_id} rejected.\nReason: {reason or 'No reason given'}")
         return {"ok": True, "evolution_id": evolution_id}
     except Exception as e:
         return {"ok": False, "error": str(e)}
@@ -3282,7 +3282,7 @@ def bulk_reject_evolutions(change_type: str = "", ids: list = None, reason: str 
                 skipped += 1
         summary = f"Bulk rejected {rejected} evolutions (type={change_type or 'all'}, skipped={skipped}). Reason: {reason or 'none'}"
         print(f"[EVOLUTION] {summary}")
-        notify(summary)
+        print(summary)
         return {"ok": True, "rejected": rejected, "skipped": skipped}
     except Exception as e:
         return {"ok": False, "error": str(e)}
@@ -4176,7 +4176,7 @@ def _run_rarl_epoch() -> bool:
                 "impact": research_domain,
                 "recommendation": f"Review RARL discovery for {research_domain} and decide whether to promote it into tasks or tools.",
             })
-            notify(
+            print(
                 f"RARL New Champion\nEpoch {epoch_number} | {research_domain}\n"
                 f"Arch: {arch_id}\nDS: {ds_before:.2f} -> {ds:.2f} (+{ds_improvement:.2f})\n"
                 f"AuxLoss: {aux_loss:.3f} | Penalty: {aux_penalty:.3f}\n"
@@ -4563,7 +4563,7 @@ def background_researcher():
                         verification_note = (research_ctx.get("verification", {}) or {}).get("note")
                         if verification_note:
                             parts.append(f"data verification: {verification_note}")
-                        notify(f"[CORE] Researcher cycle #{_cycle_count}\n" + " | ".join(parts))
+                        print(f"[CORE] Researcher cycle #{_cycle_count}\n" + " | ".join(parts))
                         try:
                             sb_post("sessions", {
                                 "summary": f"[state_update] research_data_verification: {json.dumps(research_ctx.get('verification', {}), default=str)[:350]}",
@@ -4592,7 +4592,7 @@ def background_researcher():
                     upd = result.get("updates_applied", 0)
                     print(f"[SMAP] Auto-update: {upd} volatile updates, {len(ins)} inserted, {len(tomb)} tombstoned")
                     if ins or tomb:
-                        notify(f"[SMAP] system_map auto-reconciled\nInserted: {ins}\nTombstoned: {tomb}")
+                        print(f"[SMAP] system_map auto-reconciled\nInserted: {ins}\nTombstoned: {tomb}")
             except Exception as _sme:
                 print(f"[SMAP] auto-update error: {_sme}")
 
@@ -4732,7 +4732,7 @@ def evolution_tier_processor():
 
             total = notify_applied + auto_applied
             if total > 0:
-                notify(
+                print(
                     f"[TIER PROCESSOR] Applied {total} evolution(s) autonomously\n"
                     f"  notify-tier: {notify_applied} | auto-tier safety-net: {auto_applied}\n"
                     f"Safety valve: EVOLUTION_AUTO_TIER=notify_only or =disabled"
@@ -4958,13 +4958,13 @@ def _run_capability_calibration():
 
         _last_capability_calibration_run = time.time()
         if weak_domains:
-            notify(
+            print(
                 f"[CAP_CAL] Weekly calibration done. {len(updated)} domains updated.\n"
                 f"Weak domains (< 0.60): {', '.join(weak_domains)}\n"
                 f"Use tool_health_scan + tool_improve to address."
             )
         else:
-            notify(f"[CAP_CAL] Weekly calibration done. {len(updated)} domains. All above 0.60.")
+            print(f"[CAP_CAL] Weekly calibration done. {len(updated)} domains. All above 0.60.")
         print(f"[CAP_CAL] Done. {len(updated)} domains calibrated. Weak: {weak_domains}")
         return {"ok": True, "updated": len(updated), "weak_domains": weak_domains}
     except Exception as e:
@@ -5122,7 +5122,7 @@ def price_monitor_loop():
                     )
                     print(f"[PRICE] {msg}")
                     try:
-                        notify(msg)
+                        print(msg)
                     except Exception as ne:
                         print(f"[PRICE] notify error: {ne}")
                     try:
@@ -5315,13 +5315,13 @@ def _run_cross_domain_synthesis():
     try:
         if written > 0:
             summary_lines = [f"  {i+1}. {ins.get('insight','')[:80]}" for i, ins in enumerate(insights[:5])]
-            notify(
+            print(
                 f"[SYNTH] Weekly cross-domain synthesis complete.\n"
                 f"{written} insight(s) written to KB (domain=synthesis):\n"
                 + "\n".join(summary_lines)
             )
         else:
-            notify("[SYNTH] Weekly synthesis ran but produced no new insights.")
+            print("[SYNTH] Weekly synthesis ran but produced no new insights.")
         print(f"[SYNTH] Done. {written} insights written.")
     except Exception as e:
         print(f"[SYNTH] notify error: {e}")
@@ -5508,14 +5508,14 @@ def _run_self_diagnosis():
     try:
         if tasks_created:
             task_list = "\n".join(f"  - {t}" for t in tasks_created)
-            notify(
+            print(
                 f"[DIAG] Nightly self-diagnosis complete.\n"
                 f"{len(tasks_created)} gap(s) identified and queued (source=self_assigned, status=pending):\n"
                 f"{task_list}\n\n"
                 f"Queued for autonomous processing with checkpoint+verification gates."
             )
         else:
-            notify("[DIAG] Nightly self-diagnosis: no gaps found. All systems nominal.")
+            print("[DIAG] Nightly self-diagnosis: no gaps found. All systems nominal.")
         print(f"[DIAG] Done. {len(tasks_created)} self-assigned tasks created.")
     except Exception as e:
         print(f"[DIAG] notify error: {e}")
@@ -5657,7 +5657,7 @@ def _run_proactive_surface():
         header = f"ðŸ§  <b>CORE Proactive Alert</b> ({len(alerts)} item{'s' if len(alerts)>1 else ''})\n\n"
         body = "\n\n".join(alerts)
         try:
-            notify(header + body)
+            print(header + body)
             print(f"[PROACTIVE] Sent {len(alerts)} alert(s)")
         except Exception as e:
             print(f"[PROACTIVE] notify error: {e}")

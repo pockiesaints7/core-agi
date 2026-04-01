@@ -442,7 +442,7 @@ def owner_review_cluster_close(
     result["kb_persist_error"] = kb_persist_error
     if not dry and len(updated) > 0:
         try:
-            notify(
+            print(
                 f"Owner-review cluster closed: {cluster.get('cluster_id')} "
                 f"({target_outcome}) updated={len(updated)} failed={len(failed)}"
             )
