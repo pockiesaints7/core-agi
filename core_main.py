@@ -2437,6 +2437,7 @@ def on_start():
                 f"Orchestrator: <b>{orch.get('model', 'unknown')}</b>\n"
                 f"Startup note: brief rendering degraded ({e})"
             )
+        try:
             notify_ok = notify(brief)
             print(f"[CORE] startup notify sent={notify_ok}")
         except Exception as e:
@@ -2457,4 +2458,3 @@ if __name__ == "__main__":
         ssl_keyfile="/etc/letsencrypt/live/core-agi.duckdns.org/privkey.pem",
         ssl_certfile="/etc/letsencrypt/live/core-agi.duckdns.org/fullchain.pem"
     )
-
