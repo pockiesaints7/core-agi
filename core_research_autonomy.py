@@ -370,28 +370,7 @@ def _claim_task(task: dict, strategy: dict) -> dict:
 
 
 def _notify_cycle(summary: dict) -> None:
-    if not AUTONOMY_NOTIFY:
-        return
-    lines = [
-        "<b>RESEARCH AUTONOMY CYCLE</b>",
-        f"Window: {summary.get('started_at', '?')} -> {summary.get('finished_at', '?')}",
-        f"Processed: {summary.get('processed', 0)} | Completed: {summary.get('completed', 0)} | Failed: {summary.get('failed', 0)} | Skipped: {summary.get('skipped', 0)}",
-        f"Pending research tasks: {summary.get('pending', 0)} | Follow-up evolutions: {summary.get('follow_up_queued', 0)}",
-    ]
-    if summary.get("track_counts"):
-        lines.append("Tracks: " + ", ".join(f"{_escape(k)}={v}" for k, v in sorted(summary["track_counts"].items())))
-    for item in (summary.get("details") or [])[:5]:
-        status = "done" if item.get("ok") else "failed"
-        lines.append(
-            f"- #{item.get('task_id')} [{status}] {_escape(item.get('title') or '', 100)} "
-            f"({_escape(item.get('track') or 'research', 20)} -> kb:{'ok' if item.get('kb_ok') else 'fail'})"
-        )
-        if item.get("follow_up_queued"):
-            lines.append("  follow-up: queued")
-    try:
-        notify("\n".join(lines))
-    except Exception:
-        pass
+    return
 
 
 def run_research_autonomy_cycle(max_tasks: int = AUTONOMY_BATCH_LIMIT) -> dict:
@@ -598,5 +577,4 @@ def register_tools() -> None:
 
 
 register_tools()
-
 

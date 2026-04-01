@@ -294,39 +294,7 @@ def _build_task_payload(row: dict, strategy: dict) -> dict:
 
 
 def _notify_cycle(summary: dict) -> None:
-    if not AUTONOMY_NOTIFY:
-        return
-    processed = summary.get("processed", 0)
-    created = summary.get("queued", 0)
-    duplicates = summary.get("duplicates", 0)
-    failures = summary.get("failures", 0)
-    track_counts = summary.get("track_counts") or {}
-    parts = [
-        "<b>EVOLUTION AUTONOMY</b>",
-        "Cycle summary",
-        f"Window: {_safe_html(summary.get('started_at', '?'), 60)} -> {_safe_html(summary.get('finished_at', '?'), 60)}",
-        f"Processed: {processed} | Created: {created} | Duplicates: {duplicates} | Failures: {failures}",
-        f"Skipped total: {summary.get('skipped', 0)} | Pending evolutions remaining: {summary.get('pending_remaining', 0)}",
-        f"Task queue: pending {summary.get('pending_improvement_tasks', '?')}",
-    ]
-    if track_counts:
-        parts.append("Tracks: " + ", ".join(f"{k}={v}" for k, v in sorted(track_counts.items())))
-    details = summary.get("details") or []
-    for item in details[:5]:
-        outcome = item.get("outcome") or ("created" if item.get("task_created") else "duplicate")
-        task_label = _safe_html(item.get("task_title") or item.get("change_summary") or "", 180)
-        parts.append(
-            f"- #{item.get('evolution_id')} [{_safe_html(item.get('change_type') or 'unknown', 40)}] "
-            f"{_safe_html(outcome, 30)}: {task_label} "
-            f"({_safe_html(item.get('task_group') or '', 40)} / {_safe_html(item.get('work_track') or 'unknown', 40)})"
-        )
-        reason = _safe_html(item.get("reason") or item.get("error") or "", 220)
-        if reason:
-            parts.append(f"  reason: {reason}")
-    try:
-        notify("\n".join(parts))
-    except Exception as e:
-        print(f"[EVO_AUTONOMY] notify failed: {e}")
+    return
 
 
 def _monitor_backlog(summary: dict) -> dict:
@@ -387,17 +355,7 @@ def _monitor_backlog(summary: dict) -> dict:
             except Exception:
                 cooldown_ok = True
         if cooldown_ok:
-            try:
-                notify(
-                    "<b>EVOLUTION BACKLOG MONITOR</b>\n"
-                    f"Window: {window_samples[0].get('ts', '?')} -> {window_samples[-1].get('ts', '?')}\n"
-                    f"Pending evolutions: {pending_series[0]} -> {pending_series[-1]} (Î”{growth})\n"
-                    f"Follow-up tasks: {task_series[0] if task_series else 0} -> {task_series[-1] if task_series else 0} (Î”{task_growth})\n"
-                    f"Action: keep current drain rate unless this trend persists after another window."
-                )
-                _state["last_backlog_alert_at"] = finished_at
-            except Exception as e:
-                print(f"[EVO_AUTONOMY] backlog monitor notify failed: {e}")
+            _state["last_backlog_alert_at"] = finished_at
 
     monitor = {
         "enabled": True,
@@ -692,7 +650,6 @@ def t_evolution_autonomy_status() -> dict:
 
 
 register_tools()
-
 
 
 

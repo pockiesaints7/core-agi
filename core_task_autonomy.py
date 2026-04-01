@@ -733,9 +733,6 @@ def process_task_row(task_row: dict) -> dict:
         }, default=str),
     )
 
-    if AUTONOMY_NOTIFY and execution.get("ok"):
-        notify(f"[TASK-AUTONOMY] {title}\n{execution.get('summary', '')}")
-
     return {
         "ok": bool(final.get("ok")),
         "task_id": task_id,

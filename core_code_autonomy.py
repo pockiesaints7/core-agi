@@ -618,72 +618,11 @@ def _init_agentic_session(task_id: str, claim_id: str, title: str, strategy: dic
 
 
 def _notify_task_event(stage: str, task_id: str, title: str, claim_id: str, strategy: dict, detail: str = "") -> None:
-    if not AUTONOMY_NOTIFY:
-        return
-    kind = _safe_text(strategy.get("kind"), 80)
-    work_track = _safe_text(strategy.get("work_track") or "proposal_only", 40)
-    execution_mode = _safe_text(strategy.get("execution_mode") or "proposal", 40)
-    source = _safe_text(strategy.get("origin") or strategy.get("source") or "self_assigned", 40)
-    worker = _safe_text(strategy.get("specialized_worker") or strategy.get("route") or "proposal_router", 40)
-    stage_label = {
-        "claimed": "CLAIMED",
-        "plan": "PLANNED",
-        "proposed": "PROPOSED",
-        "verified": "VERIFIED",
-        "completed": "COMPLETED",
-        "failed": "FAILED",
-    }.get(stage, stage.upper())
-    message = (
-        f"<b>CODE AUTONOMY</b>\n"
-        f"State: {stage_label}\n"
-        f"Task: {title}\n"
-        f"Task ID: {task_id}\n"
-        f"Claim: {claim_id}\n"
-        f"Kind: {kind}\n"
-        f"Track: {work_track}\n"
-        f"Mode: {execution_mode}\n"
-        f"Worker: {worker}\n"
-        f"Source: {source}\n"
-    )
-    if detail:
-        message += f"Detail: {detail[:900]}\n"
-    try:
-        notify(message)
-    except Exception as e:
-        print(f"[CODE_AUTONOMY] notify failed: {e}")
+    return
 
 
 def _notify_cycle(summary: dict) -> None:
-    if not AUTONOMY_NOTIFY:
-        return
-    processed = summary.get("processed", 0)
-    proposed = summary.get("proposed", 0)
-    duplicates = summary.get("duplicates", 0)
-    failures = summary.get("failures", 0)
-    deferred = summary.get("deferred", 0)
-    track_counts = summary.get("track_counts") or {}
-    parts = [
-        "<b>CODE AUTONOMY CYCLE</b>",
-        f"Window: {summary.get('started_at', '?')} -> {summary.get('finished_at', '?')}",
-        f"Processed: {processed} | Proposed: {proposed} | Duplicates: {duplicates} | Deferred: {deferred} | Failures: {failures}",
-        f"Pending code tasks: {summary.get('pending_now', '?')} | Pending review proposals: {summary.get('pending_proposals_now', '?')}",
-    ]
-    if track_counts:
-        parts.append("Tracks: " + ", ".join(f"{k}={v}" for k, v in sorted(track_counts.items())))
-    details = summary.get("details") or []
-    for item in details[:5]:
-        outcome = item.get("outcome") or ("created" if item.get("proposal_created") else "duplicate")
-        label = _safe_text(item.get("task_title") or item.get("summary") or "", 180)
-        parts.append(
-            f"- #{item.get('task_id')} [{item.get('work_track') or 'unknown'}] {outcome}: {label}"
-        )
-        reason = _safe_text(item.get("reason") or item.get("error") or "", 220)
-        if reason:
-            parts.append(f"  reason: {reason}")
-    try:
-        notify("\n".join(parts))
-    except Exception as e:
-        print(f"[CODE_AUTONOMY] cycle notify failed: {e}")
+    return
 
 
 def _build_review_payload(task: dict, task_id: str, strategy: dict, memory_packet: dict, file_contexts: list[dict]) -> dict:
@@ -1223,7 +1162,6 @@ def register_tools() -> None:
 
 
 register_tools()
-
 
 
 
