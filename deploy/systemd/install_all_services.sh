@@ -24,11 +24,10 @@ install_unit() {
 install_unit "$REPO_ROOT/deploy/systemd/core-agi.service" "core-agi.service"
 install_unit "$REPO_ROOT/deploy/systemd/core-trading-bot.service" "core-trading-bot.service"
 install_unit "$REPO_ROOT/deploy/systemd/specter-alpha.service" "specter-alpha.service"
-install_unit "$REPO_ROOT/tools/vm_autosync.service" "vm_autosync.service"
 
 systemctl daemon-reload
-systemctl enable core-agi.service core-trading-bot.service specter-alpha.service vm_autosync.service
-systemctl restart core-agi.service core-trading-bot.service specter-alpha.service vm_autosync.service
+systemctl enable core-agi.service core-trading-bot.service specter-alpha.service
+systemctl restart core-agi.service core-trading-bot.service specter-alpha.service
 
 printf '\nInstalled services:\n'
-systemctl --no-pager --full status core-agi.service core-trading-bot.service specter-alpha.service vm_autosync.service | sed -n '1,120p'
+systemctl --no-pager --full status core-agi.service core-trading-bot.service specter-alpha.service | sed -n '1,120p'
