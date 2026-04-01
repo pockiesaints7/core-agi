@@ -1930,7 +1930,7 @@ def handle_msg(msg):
         resume = get_resume_task()
         task_auto = autonomy_status() if AUTONOMY_ENABLED else {}
         evo_auto = evolution_autonomy_status() if EVOLUTION_AUTONOMY_ENABLED else {}
-        notify(_build_startup_brief(resume, counts, orch, task_auto, evo_auto), cid)
+        notify(_build_startup_brief(resume, counts, None, task_auto, evo_auto), cid)
 
     elif cmd == "/help":
         notify(_render_command_catalog(), cid)
