@@ -1,0 +1,24 @@
+[Unit]
+Description=CORE Trading Bot
+Wants=network-online.target
+After=network-online.target
+RequiresMountsFor=/home/ubuntu/trading-bot
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/trading-bot
+Environment=PORT=8080
+Environment=PYTHONUNBUFFERED=1
+EnvironmentFile=/home/ubuntu/trading-bot/.env
+ExecStart=/bin/bash /home/ubuntu/trading-bot/run_testnet.sh
+Restart=always
+RestartSec=10
+TimeoutStopSec=30
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=core-trading-bot
+
+[Install]
+WantedBy=multi-user.target

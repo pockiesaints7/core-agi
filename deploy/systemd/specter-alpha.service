@@ -1,0 +1,25 @@
+[Unit]
+Description=Specter Alpha Copy Trade Service
+Wants=network-online.target
+After=network-online.target
+RequiresMountsFor=/home/ubuntu/specter-alpha
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/specter-alpha
+Environment=CORE_ENV=production
+Environment=TESTNET_MODE=false
+Environment=PYTHONUNBUFFERED=1
+EnvironmentFile=/home/ubuntu/specter-alpha/.env
+ExecStart=/bin/bash /home/ubuntu/specter-alpha/run_service.sh
+Restart=always
+RestartSec=5
+TimeoutStopSec=30
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=specter-alpha
+
+[Install]
+WantedBy=multi-user.target

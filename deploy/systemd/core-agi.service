@@ -1,0 +1,24 @@
+[Unit]
+Description=CORE AGI Orchestrator
+Wants=network-online.target
+After=network-online.target
+RequiresMountsFor=/home/ubuntu/core-agi
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/core-agi
+Environment=PORT=8081
+Environment=PYTHONUNBUFFERED=1
+EnvironmentFile=/home/ubuntu/core-agi/.env
+ExecStart=/bin/bash /home/ubuntu/core-agi/run_service.sh
+Restart=always
+RestartSec=5
+TimeoutStopSec=30
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=core-agi
+
+[Install]
+WantedBy=multi-user.target
