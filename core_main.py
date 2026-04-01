@@ -2344,6 +2344,16 @@ def on_start():
     except Exception as e:
         print(f"[CORE] telegram command setup failed (non-fatal): {e}")
     orch = startup_v2() or {}
+    try:
+        boot_msg = (
+            "🧠 <b>CORE Online</b>\n"
+            f"Orchestrator: <b>{orch.get('model', 'unknown')}</b> | {orch.get('layers', 'L0-L9 active')} | {orch.get('blueprint', '')}\n"
+            f"Startup: restart acknowledged, worker loops booting."
+        )
+        boot_ok = notify(boot_msg)
+        print(f"[CORE] startup boot notify sent={boot_ok}")
+    except Exception as e:
+        print(f"[CORE] startup boot notify failed (non-fatal): {e}")
     # Auto-embed sync — patches sb_post to embed all semantic table inserts
     try:
         from core_embed_sync import install, install_critical
@@ -2373,11 +2383,6 @@ def on_start():
         threading.Thread(target=semantic_projection_loop, daemon=True).start()
 
     def _publish_startup_brief():
-        try:
-            ping_ok = notify("🧠 <b>CORE Online</b>\nBooting status snapshot...")
-            print(f"[CORE] startup ping sent={ping_ok}")
-        except Exception as e:
-            print(f"[CORE] startup ping failed (non-fatal): {e}")
         counts = {}
         resume = "No active tasks"
         task_auto = {}
