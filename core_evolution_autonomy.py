@@ -26,7 +26,6 @@ from datetime import datetime
 from typing import Any
 
 import httpx
-from core_github import notify
 from core_queue_cursor import build_seek_filter, cursor_from_row
 from core_work_taxonomy import build_autonomy_contract
 
@@ -58,9 +57,6 @@ AUTONOMY_ENABLED = os.getenv("CORE_EVOLUTION_AUTONOMY_ENABLED", "true").strip().
 }
 AUTONOMY_INTERVAL_S = max(120, _env_int("CORE_EVOLUTION_AUTONOMY_INTERVAL_S", "600"))
 AUTONOMY_BATCH_LIMIT = max(1, _env_int("CORE_EVOLUTION_AUTONOMY_BATCH_LIMIT", "3"))
-AUTONOMY_NOTIFY = os.getenv("CORE_EVOLUTION_AUTONOMY_NOTIFY", "false").strip().lower() in {
-    "1", "true", "yes", "on"
-}
 AUTONOMY_BACKLOG_MONITOR = os.getenv("CORE_EVOLUTION_AUTONOMY_BACKLOG_MONITOR", "true").strip().lower() in {
     "1", "true", "yes", "on"
 }
@@ -291,10 +287,6 @@ def _build_task_payload(row: dict, strategy: dict) -> dict:
         "title": title,
         "strategy": strategy,
     }
-
-
-def _notify_cycle(summary: dict) -> None:
-    return
 
 
 def _monitor_backlog(summary: dict) -> dict:
@@ -566,7 +558,6 @@ def run_evolution_autonomy_cycle(max_evolutions: int = AUTONOMY_BATCH_LIMIT) -> 
                 })
             except Exception:
                 pass
-        _notify_cycle(summary)
         return {"ok": True, "enabled": True, **summary}
     except Exception as e:
         _state["last_error"] = str(e)
@@ -650,6 +641,5 @@ def t_evolution_autonomy_status() -> dict:
 
 
 register_tools()
-
 
 

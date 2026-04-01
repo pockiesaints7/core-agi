@@ -23,7 +23,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 from core_config import _env_int, sb_get, sb_patch, sb_post, groq_chat, GROQ_MODEL
-from core_github import notify
 from core_queue_cursor import build_seek_filter, cursor_from_row
 from core_reflection_audit import finalize_reflection_event, note_reflection_stage, register_reflection_event
 from core_tools import t_agent_session_init, t_agent_state_set, t_agent_step_done, t_reasoning_packet
@@ -34,9 +33,6 @@ AUTONOMY_ENABLED = os.getenv("CORE_INTEGRATION_AUTONOMY_ENABLED", "true").strip(
 }
 AUTONOMY_INTERVAL_S = max(300, _env_int("CORE_INTEGRATION_AUTONOMY_INTERVAL_S", "1200"))
 AUTONOMY_BATCH_LIMIT = max(1, _env_int("CORE_INTEGRATION_AUTONOMY_BATCH_LIMIT", "1"))
-AUTONOMY_NOTIFY = os.getenv("CORE_INTEGRATION_AUTONOMY_NOTIFY", "false").strip().lower() in {
-    "1", "true", "yes", "on"
-}
 TASK_SOURCES = tuple(
     s.strip()
     for s in os.getenv("CORE_INTEGRATION_TASK_SOURCES", "mcp_session,self_assigned,improvement").split(",")
@@ -520,14 +516,6 @@ def _init_agentic_session(task_id: str, claim_id: str, title: str, strategy: dic
         print(f"[INTEGRATION_AUTONOMY] agentic init failed: {e}")
 
 
-def _notify_task_event(stage: str, task_id: str, title: str, claim_id: str, strategy: dict, detail: str = "") -> None:
-    return
-
-
-def _notify_cycle(summary: dict) -> None:
-    return
-
-
 def _build_review_payload(task: dict, task_id: str, strategy: dict, memory_packet: dict, file_contexts: list[dict]) -> dict:
     title = _safe_text(task.get("title") or "", 200)
     description = _safe_text(task.get("description") or "", 1200)
@@ -592,12 +580,10 @@ def _claim_task(task_row: dict) -> dict:
         "updated_at": _utcnow(),
     }
     if not sb_patch("task_queue", f"id=eq.{task_id}", claim_patch):
-        _notify_task_event("failed", task_id, title, claim_id, strategy, detail="failed_to_claim")
         return {"ok": False, "task_id": task_id, "title": title, "error": "failed_to_claim"}
 
     _state["last_claimed_task_id"] = task_id
     _init_agentic_session(task_id, claim_id, title, strategy)
-    _notify_task_event("claimed", task_id, title, claim_id, strategy, detail="claim accepted")
 
     event_context = {
         "source": "core_autonomy",
@@ -636,7 +622,6 @@ def _claim_task(task_row: dict) -> dict:
             "result": json.dumps(fail, default=str)[:4000],
             "updated_at": _utcnow(),
         })
-        _notify_task_event("failed", task_id, title, claim_id, strategy, detail=json.dumps(fail, default=str))
         return fail
 
     event_id = ingress["event_id"]
@@ -650,7 +635,6 @@ def _claim_task(task_row: dict) -> dict:
     t_agent_state_set(session_id=claim_id, key="task_work_track", value=work_track)
     t_agent_state_set(session_id=claim_id, key="task_execution_mode", value=_safe_text(strategy.get("execution_mode") or "plan", 40))
     t_agent_state_set(session_id=claim_id, key="candidate_files", value=json.dumps(file_contexts, default=str)[:3500])
-    _notify_task_event("plan", task_id, title, claim_id, strategy, detail=json.dumps({"candidate_files": file_contexts[:4]}, default=str))
 
     memory_packet = _memory_context(query=f"{title}\n{description}", domain="integration")
     review_payload = _build_review_payload(task, task_id, strategy, memory_packet, file_contexts)
@@ -798,20 +782,6 @@ def _claim_task(task_row: dict) -> dict:
         t_agent_step_done(session_id=claim_id, step_name="complete", result="finalization_failed")
         status = "failed"
 
-    _notify_task_event(
-        "completed" if status == "done" and task_ok else "failed",
-        task_id,
-        title,
-        claim_id,
-        strategy,
-        detail=json.dumps({
-            "status": status if task_ok else "failed",
-            "proposal_id": proposal_id,
-            "pattern_key": pattern_key,
-            "summary": execution.get("summary"),
-        }, default=str),
-    )
-
     return {
         "ok": status == "done" and task_ok,
         "task_id": task_id,
@@ -942,7 +912,6 @@ def run_integration_autonomy_cycle(max_tasks: int = AUTONOMY_BATCH_LIMIT) -> dic
             })
         except Exception:
             pass
-        _notify_cycle(summary)
         return {"ok": True, "enabled": True, **summary}
     except Exception as e:
         _state["last_error"] = str(e)
@@ -1052,4 +1021,3 @@ def register_tools() -> None:
 
 
 register_tools()
-
