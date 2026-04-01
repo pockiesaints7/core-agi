@@ -2327,6 +2327,7 @@ async def deploy_webhook(req: Request):
 # ---------------------------------------------------------------------------
 # Startup
 # ---------------------------------------------------------------------------
+
 @app.on_event("startup")
 def on_start():
     try:
@@ -2369,77 +2370,79 @@ def on_start():
         threading.Thread(target=evolution_autonomy_loop, daemon=True).start()
     if SEMANTIC_PROJECTION_ENABLED:
         threading.Thread(target=semantic_projection_loop, daemon=True).start()
-    counts = {}
-    resume = "No active tasks"
-    task_auto = {}
-    evo_auto = {}
-    try:
-        counts = get_system_counts() or {}
-    except Exception as e:
-        print(f"[CORE] startup counts unavailable: {e}")
-    try:
-        resume = get_resume_task() or "No active tasks"
-    except Exception as e:
-        print(f"[CORE] startup resume unavailable: {e}")
-    try:
-        task_auto = autonomy_status() if AUTONOMY_ENABLED else {}
-    except Exception as e:
-        print(f"[CORE] startup task autonomy unavailable: {e}")
-    try:
-        evo_auto = evolution_autonomy_status() if EVOLUTION_AUTONOMY_ENABLED else {}
-    except Exception as e:
-        print(f"[CORE] startup evolution autonomy unavailable: {e}")
-    # Show in_progress tasks brief
-    try:
-        in_progress = sb_get(
-            "task_queue",
-            "select=task,priority,status&source=in.(core_v6_registry,mcp_session)"
-            "&status=eq.in_progress&order=priority.desc&limit=3"
-        ) or []
-        if in_progress:
-            lines = []
-            for t in in_progress:
-                raw = t.get("task", "")
-                try:
-                    parsed = json.loads(raw) if isinstance(raw, str) else raw
-                    title = parsed.get("title") or str(parsed)[:60]
-                except Exception:
-                    title = str(raw)[:60]
-                lines.append(f"  ▶ {title} (P{t.get('priority','?')})")
-            task_line = "In progress:\n" + "\n".join(lines)
-        else:
-            pending = sb_get(
+
+    def _publish_startup_brief():
+        counts = {}
+        resume = "No active tasks"
+        task_auto = {}
+        evo_auto = {}
+        try:
+            counts = get_system_counts() or {}
+        except Exception as e:
+            print(f"[CORE] startup counts unavailable: {e}")
+        try:
+            resume = get_resume_task() or "No active tasks"
+        except Exception as e:
+            print(f"[CORE] startup resume unavailable: {e}")
+        try:
+            task_auto = autonomy_status() if AUTONOMY_ENABLED else {}
+        except Exception as e:
+            print(f"[CORE] startup task autonomy unavailable: {e}")
+        try:
+            evo_auto = evolution_autonomy_status() if EVOLUTION_AUTONOMY_ENABLED else {}
+        except Exception as e:
+            print(f"[CORE] startup evolution autonomy unavailable: {e}")
+        try:
+            in_progress = sb_get(
                 "task_queue",
-                "select=task,priority&source=in.(core_v6_registry,mcp_session)"
-                "&status=eq.pending&order=priority.desc&limit=1"
+                "select=task,priority,status&source=in.(core_v6_registry,mcp_session)"
+                "&status=eq.in_progress&order=priority.desc&limit=3"
             ) or []
-            if pending:
-                raw = pending[0].get("task", "")
-                try:
-                    parsed = json.loads(raw) if isinstance(raw, str) else raw
-                    title = parsed.get("title") or str(parsed)[:60]
-                except Exception:
-                    title = str(raw)[:60]
-                task_line = f"Next up: {title}"
+            if in_progress:
+                lines = []
+                for t in in_progress:
+                    raw = t.get("task", "")
+                    try:
+                        parsed = json.loads(raw) if isinstance(raw, str) else raw
+                        title = parsed.get("title") or str(parsed)[:60]
+                    except Exception:
+                        title = str(raw)[:60]
+                    lines.append(f"  ▶ {title} (P{t.get('priority','?')})")
+                task_line = "In progress:\n" + "\n".join(lines)
             else:
-                task_line = "No active tasks"
-    except Exception as e:
-        task_line = f"Tasks: unavailable ({e})"
-    try:
-        brief = _build_startup_brief(resume if resume != "No active tasks" else task_line, counts, orch, task_auto, evo_auto)
-    except Exception as e:
-        print(f"[CORE] startup brief build failed: {e}")
-        brief = (
-            "🧠 <b>CORE Online</b>\n"
-            f"Orchestrator: <b>{orch.get('model', 'unknown')}</b>\n"
-            f"Startup note: brief rendering degraded ({e})"
-        )
-    try:
-        notify_ok = notify(brief)
-        print(f"[CORE] startup notify sent={notify_ok}")
-    except Exception as e:
-        print(f"[CORE] startup notify failed (non-fatal): {e}")
-    print(f"[CORE] v6.0 online :{PORT} - {resume}")
+                pending = sb_get(
+                    "task_queue",
+                    "select=task,priority&source=in.(core_v6_registry,mcp_session)"
+                    "&status=eq.pending&order=priority.desc&limit=1"
+                ) or []
+                if pending:
+                    raw = pending[0].get("task", "")
+                    try:
+                        parsed = json.loads(raw) if isinstance(raw, str) else raw
+                        title = parsed.get("title") or str(parsed)[:60]
+                    except Exception:
+                        title = str(raw)[:60]
+                    task_line = f"Next up: {title}"
+                else:
+                    task_line = "No active tasks"
+        except Exception as e:
+            task_line = f"Tasks: unavailable ({e})"
+        try:
+            brief = _build_startup_brief(resume if resume != "No active tasks" else task_line, counts, orch, task_auto, evo_auto)
+        except Exception as e:
+            print(f"[CORE] startup brief build failed: {e}")
+            brief = (
+                "🧠 <b>CORE Online</b>\n"
+                f"Orchestrator: <b>{orch.get('model', 'unknown')}</b>\n"
+                f"Startup note: brief rendering degraded ({e})"
+            )
+            notify_ok = notify(brief)
+            print(f"[CORE] startup notify sent={notify_ok}")
+        except Exception as e:
+            print(f"[CORE] startup notify failed (non-fatal): {e}")
+        print(f"[CORE] v6.0 online :{PORT} - {resume}")
+
+    threading.Thread(target=_publish_startup_brief, daemon=True).start()
 
 
 if __name__ == "__main__":
