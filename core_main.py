@@ -2373,6 +2373,10 @@ def on_start():
         threading.Thread(target=semantic_projection_loop, daemon=True).start()
 
     def _publish_startup_brief():
+        try:
+            notify("🧠 <b>CORE Online</b>\nBooting status snapshot...")
+        except Exception as e:
+            print(f"[CORE] startup ping failed (non-fatal): {e}")
         counts = {}
         resume = "No active tasks"
         task_auto = {}
