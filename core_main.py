@@ -454,18 +454,6 @@ def _render_task_status_report(task_auto: dict) -> str:
         lines.append(f"Deferred tasks: {task_auto.get('deferred', 0)}")
     if last.get("last_run_at"):
         lines.append(f"Last run: {_tg_escape(last.get('finished_at') or task_auto.get('last_run_at'), 40)}")
-    processed = last.get("processed_tasks") or []
-    if processed:
-        lines.append("")
-        lines.append("<b>Recent cycle</b>")
-        for item in processed[:3]:
-            strategy = item.get("strategy") or {}
-            execution = item.get("execution") or {}
-            status = "done" if item.get("ok") else "failed"
-            lines.append(
-                f"- #{item.get('task_id')} [{status}] {_tg_escape(item.get('title') or '', 80)} "
-                f"({_tg_escape(strategy.get('work_track') or 'unknown', 40)} â†’ {_tg_escape(execution.get('artifact_type') or item.get('artifact_type') or 'unknown', 40)})"
-            )
     return _render_section("Task Autonomy", lines)
 
 
