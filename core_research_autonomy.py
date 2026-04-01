@@ -21,7 +21,6 @@ from collections import Counter
 from datetime import datetime
 from typing import Any
 from core_config import _env_int, sb_get, sb_patch, sb_post, groq_chat, GROQ_MODEL
-from core_github import notify
 from core_queue_cursor import build_seek_filter, cursor_from_row
 from core_tools import t_add_knowledge, t_reasoning_packet, t_agent_session_init, t_agent_state_set, t_agent_step_done
 from core_work_taxonomy import build_autonomy_contract
@@ -31,9 +30,6 @@ AUTONOMY_ENABLED = os.getenv("CORE_RESEARCH_AUTONOMY_ENABLED", "true").strip().l
 }
 AUTONOMY_INTERVAL_S = max(300, _env_int("CORE_RESEARCH_AUTONOMY_INTERVAL_S", "600"))
 AUTONOMY_BATCH_LIMIT = max(1, _env_int("CORE_RESEARCH_AUTONOMY_BATCH_LIMIT", "3"))
-AUTONOMY_NOTIFY = os.getenv("CORE_RESEARCH_AUTONOMY_NOTIFY", "false").strip().lower() in {
-    "1", "true", "yes", "on"
-}
 TASK_SOURCES = tuple(
     s.strip() for s in os.getenv("CORE_RESEARCH_TASK_SOURCES", "mcp_session,self_assigned,improvement").split(",") if s.strip()
 )
@@ -369,10 +365,6 @@ def _claim_task(task: dict, strategy: dict) -> dict:
     }
 
 
-def _notify_cycle(summary: dict) -> None:
-    return
-
-
 def run_research_autonomy_cycle(max_tasks: int = AUTONOMY_BATCH_LIMIT) -> dict:
     started_at = _utcnow()
     with _lock:
@@ -466,7 +458,6 @@ def run_research_autonomy_cycle(max_tasks: int = AUTONOMY_BATCH_LIMIT) -> dict:
             })
         except Exception:
             pass
-        _notify_cycle(status)
         return status
     except Exception as e:
         with _lock:
@@ -577,4 +568,3 @@ def register_tools() -> None:
 
 
 register_tools()
-

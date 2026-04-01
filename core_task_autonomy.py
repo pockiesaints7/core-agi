@@ -25,7 +25,6 @@ from typing import Any
 
 from core_config import _env_int, sb_get, sb_patch, sb_post
 
-from core_github import notify
 from core_reflection_audit import (
     finalize_reflection_event,
     note_reflection_stage,
@@ -51,9 +50,6 @@ AUTONOMY_SOURCES = tuple(
     s.strip() for s in os.getenv("CORE_AUTONOMY_SOURCES", "self_assigned,improvement").split(",") if s.strip()
 )
 AUTONOMY_SOURCE = ",".join(AUTONOMY_SOURCES) if AUTONOMY_SOURCES else "self_assigned"
-AUTONOMY_NOTIFY = os.getenv("CORE_AUTONOMY_NOTIFY", "false").strip().lower() in {
-    "1", "true", "yes", "on"
-}
 
 _lock = threading.Lock()
 _state = {
@@ -346,14 +342,6 @@ def _init_agentic_session(task_id: str, claim_id: str, title: str, strategy: dic
         print(f"[TASK_AUTONOMY] agentic init failed: {e}")
 
 
-def _notify_task_event(stage: str, task_id: str, title: str, claim_id: str, strategy: dict, detail: str = "") -> None:
-    return
-
-
-def _notify_cycle(summary: dict) -> None:
-    return
-
-
 def _build_rule_text(title: str, description: str, kind: str) -> str:
     track = ""
     try:
@@ -610,7 +598,6 @@ def process_task_row(task_row: dict) -> dict:
             retryable="true",
             next_step="owner_review",
         )
-        _notify_task_event("failed", task_id, title, claim_id, strategy, detail=json.dumps(failure, default=str))
         return {
             "ok": False,
             "task_id": task_id,
@@ -621,19 +608,6 @@ def process_task_row(task_row: dict) -> dict:
 
     _state["last_claimed_task_id"] = task_id
     _task_checkpoint(task_id, claim_id, "claimed", title, strategy, {"row": task_row}, "plan", "task claimed")
-    _notify_task_event(
-        "claimed",
-        task_id,
-        title,
-        claim_id,
-        strategy,
-        detail=json.dumps({
-            "stage": "claimed",
-            "next_step": "plan",
-            "strategy": strategy,
-        }, default=str),
-    )
-
     event_context = {
         "source": "core_autonomy",
         "source_domain": "core",
@@ -675,7 +649,6 @@ def process_task_row(task_row: dict) -> dict:
             next_step="owner_review",
             checkpoint=fail,
         )
-        _notify_task_event("failed", task_id, title, claim_id, strategy, detail=json.dumps(failure, default=str))
         return {**fail, "error_packet": failure}
 
     event_id = ingress["event_id"]
@@ -718,20 +691,6 @@ def process_task_row(task_row: dict) -> dict:
     else:
         finalize_reflection_event(event_id, status="error", current_stage="meta", current_stage_status="failed", last_error="task finalization failed")
         t_agent_step_done(session_id=claim_id, step_name="complete", result="finalization_failed")
-
-    _notify_task_event(
-        "completed" if final.get("ok") else "failed",
-        task_id,
-        title,
-        claim_id,
-        strategy,
-        detail=json.dumps({
-            "status": final.get("status"),
-            "artifact_type": execution.get("artifact_type"),
-            "verification": execution.get("verification", {}),
-            "summary": execution.get("summary"),
-        }, default=str),
-    )
 
     return {
         "ok": bool(final.get("ok")),
@@ -878,7 +837,6 @@ def run_autonomy_cycle(max_tasks: int = AUTONOMY_BATCH_LIMIT, source: str = AUTO
             })
         except Exception:
             pass
-        _notify_cycle(summary)
         return {"ok": True, "enabled": True, **summary}
     except Exception as e:
         _state["last_error"] = str(e)

@@ -18,7 +18,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 from core_config import sb_get, sb_post, sb_patch
-from core_github import notify
 from core_queue_cursor import build_seek_filter, cursor_from_row
 from core_reflection_audit import (
     finalize_reflection_event,
@@ -56,9 +55,6 @@ AUTONOMY_ENABLED = os.getenv("CORE_CODE_AUTONOMY_ENABLED", "true").strip().lower
 }
 AUTONOMY_INTERVAL_S = max(300, _env_int("CORE_CODE_AUTONOMY_INTERVAL_S", "900"))
 AUTONOMY_BATCH_LIMIT = max(1, _env_int("CORE_CODE_AUTONOMY_BATCH_LIMIT", "1"))
-AUTONOMY_NOTIFY = os.getenv("CORE_CODE_AUTONOMY_NOTIFY", "false").strip().lower() in {
-    "1", "true", "yes", "on"
-}
 TASK_SOURCES = tuple(
     s.strip() for s in os.getenv("CORE_CODE_TASK_SOURCES", "mcp_session,self_assigned,improvement").split(",") if s.strip()
 )
@@ -617,14 +613,6 @@ def _init_agentic_session(task_id: str, claim_id: str, title: str, strategy: dic
         print(f"[CODE_AUTONOMY] agentic init failed: {e}")
 
 
-def _notify_task_event(stage: str, task_id: str, title: str, claim_id: str, strategy: dict, detail: str = "") -> None:
-    return
-
-
-def _notify_cycle(summary: dict) -> None:
-    return
-
-
 def _build_review_payload(task: dict, task_id: str, strategy: dict, memory_packet: dict, file_contexts: list[dict]) -> dict:
     title = _safe_text(task.get("title") or "", 200)
     description = _safe_text(task.get("description") or "", 1200)
@@ -694,12 +682,10 @@ def process_code_row(task_row: dict) -> dict:
         "updated_at": _utcnow(),
     }
     if not _patch_task(task_id, claim_patch):
-        _notify_task_event("failed", task_id, title, claim_id, strategy, detail="failed_to_claim")
         return {"ok": False, "task_id": task_id, "title": title, "error": "failed_to_claim"}
 
     _state["last_claimed_task_id"] = task_id
     _init_agentic_session(task_id, claim_id, title, strategy)
-    _notify_task_event("claimed", task_id, title, claim_id, strategy, detail="claim accepted")
 
     event_context = {
         "source": "core_autonomy",
@@ -737,7 +723,6 @@ def process_code_row(task_row: dict) -> dict:
             "error": fail["summary"],
             "result": json.dumps(fail, default=str)[:4000],
         })
-        _notify_task_event("failed", task_id, title, claim_id, strategy, detail=json.dumps(fail, default=str))
         return fail
 
     event_id = ingress["event_id"]
@@ -751,14 +736,6 @@ def process_code_row(task_row: dict) -> dict:
     t_agent_state_set(session_id=claim_id, key="task_work_track", value=work_track)
     t_agent_state_set(session_id=claim_id, key="task_execution_mode", value=_safe_text(strategy.get("execution_mode") or "plan", 40))
     t_agent_state_set(session_id=claim_id, key="candidate_files", value=json.dumps(file_contexts, default=str)[:3500])
-    _notify_task_event(
-        "plan",
-        task_id,
-        title,
-        claim_id,
-        strategy,
-        detail=json.dumps({"candidate_files": file_contexts[:4]}, default=str),
-    )
 
     memory_packet = _memory_context(query=f"{title}\n{description}", domain=strategy.get("domain") or "code")
     review_payload = _build_review_payload(task, task_id, strategy, memory_packet, file_contexts)
@@ -911,20 +888,6 @@ def process_code_row(task_row: dict) -> dict:
         t_agent_step_done(session_id=claim_id, step_name="complete", result="finalization_failed")
         status = "failed"
 
-    _notify_task_event(
-        "completed" if status == "done" and task_ok else "failed",
-        task_id,
-        title,
-        claim_id,
-        strategy,
-        detail=json.dumps({
-            "status": status if task_ok else "failed",
-            "proposal_id": proposal_id,
-            "pattern_key": pattern_key,
-            "summary": execution.get("summary"),
-        }, default=str),
-    )
-
     return {
         "ok": status == "done" and task_ok,
         "task_id": task_id,
@@ -1055,7 +1018,6 @@ def run_code_autonomy_cycle(max_tasks: int = AUTONOMY_BATCH_LIMIT) -> dict:
             })
         except Exception:
             pass
-        _notify_cycle(summary)
         return {"ok": True, "enabled": True, **summary}
     except Exception as e:
         _state["last_error"] = str(e)
@@ -1162,7 +1124,6 @@ def register_tools() -> None:
 
 
 register_tools()
-
 
 
 
