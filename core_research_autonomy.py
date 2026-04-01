@@ -31,7 +31,7 @@ AUTONOMY_ENABLED = os.getenv("CORE_RESEARCH_AUTONOMY_ENABLED", "true").strip().l
 }
 AUTONOMY_INTERVAL_S = max(300, _env_int("CORE_RESEARCH_AUTONOMY_INTERVAL_S", "600"))
 AUTONOMY_BATCH_LIMIT = max(1, _env_int("CORE_RESEARCH_AUTONOMY_BATCH_LIMIT", "3"))
-AUTONOMY_NOTIFY = os.getenv("CORE_RESEARCH_AUTONOMY_NOTIFY", "true").strip().lower() in {
+AUTONOMY_NOTIFY = os.getenv("CORE_RESEARCH_AUTONOMY_NOTIFY", "false").strip().lower() in {
     "1", "true", "yes", "on"
 }
 TASK_SOURCES = tuple(
