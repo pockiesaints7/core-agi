@@ -1039,8 +1039,8 @@ def root():
 
 @app.api_route("/health", methods=["GET", "HEAD"])
 def health_ep():
-    from core_tools import t_health
-    return t_health()
+    from core_tools import t_ping_health
+    return t_ping_health()
 
 
 @app.get("/ping")

@@ -4038,9 +4038,17 @@ def t_railway_service_info() -> dict:
 
 
 def t_ping_health() -> dict:
-    """Direct health check - calls t_health() internally without HTTP."""
+    """Fast liveness check for HTTP /health and quick operator probes."""
     try:
-        return t_health()
+        return {
+            "ok": True,
+            "ts": datetime.utcnow().isoformat(),
+            "service": "CORE v6.0",
+            "overall": "ok",
+            "components": {
+                "local": "ok",
+            },
+        }
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
