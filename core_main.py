@@ -2289,6 +2289,7 @@ def on_start():
             f"Orchestrator: {orch.get('model', 'unknown')} | {orch.get('layers', 'L0-L11 active')}\n"
             f"Status: startup complete"
         )
+        print("[CORE] startup notify sent")
     except Exception as e:
         print(f"[CORE] startup notify failed (non-fatal): {e}")
     # Auto-embed sync — patches sb_post to embed all semantic table inserts
