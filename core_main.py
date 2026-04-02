@@ -1,4 +1,4 @@
-﻿"""core_main.py â€” CORE AGI entry point
+"""core_main.py â€” CORE AGI entry point
 FastAPI app, all routes, Pydantic models, Telegram handler, queue_poller, startup.
 Extracted from core.py as part of Task 2 architecture split.
 
@@ -2283,6 +2283,14 @@ def on_start():
         print(f"[CORE] telegram command setup failed (non-fatal): {e}")
     orch = startup_v2() or {}
     print(f"[CORE] orchestrator online: {orch.get('model', 'unknown')} | {orch.get('layers', 'L0-L9 active')}")
+    try:
+        notify(
+            f"<b>CORE Online</b>\n"
+            f"Orchestrator: {orch.get('model', 'unknown')} | {orch.get('layers', 'L0-L11 active')}\n"
+            f"Status: startup complete"
+        )
+    except Exception as e:
+        print(f"[CORE] startup notify failed (non-fatal): {e}")
     # Auto-embed sync — patches sb_post to embed all semantic table inserts
     try:
         from core_embed_sync import install, install_critical
