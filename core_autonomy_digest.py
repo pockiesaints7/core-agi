@@ -374,8 +374,10 @@ def run_autonomy_digest(force: bool = False) -> dict:
             }
 
         agg = _aggregate_sessions()
-        message, summary = _build_message(agg)
-        if not force and _safe_int(summary.get("activity_total")) <= 0:
+        raw_activity_total = 0
+        for section in agg.values():
+            raw_activity_total += sum(_safe_int(v) for v in section.values())
+        if not force and raw_activity_total <= 0:
             checked_at = _utcnow()
             _save_local_digest_state({
                 "last_checked_at": checked_at,
@@ -385,7 +387,16 @@ def run_autonomy_digest(force: bool = False) -> dict:
             })
             _state["last_run_at"] = checked_at
             _state["last_error"] = ""
-            _state["last_summary"] = summary
+            _state["last_summary"] = {
+                "window_hours": AUTONOMY_DIGEST_WINDOW_HOURS,
+                "activity_total": 0,
+                "task": {},
+                "research": {},
+                "code": {},
+                "integration": {},
+                "evolution": {},
+                "owner_review": {"in_queue": 0, "approved": 0, "rejected": 0},
+            }
             return {
                 "ok": True,
                 "enabled": True,
@@ -393,8 +404,9 @@ def run_autonomy_digest(force: bool = False) -> dict:
                 "due": False,
                 "reason": "no_activity",
                 "last_digest_at": checked_at,
-                "summary": summary,
+                "summary": _state["last_summary"],
             }
+        message, summary = _build_message(agg)
         notify(message)
         try:
             sb_post(
