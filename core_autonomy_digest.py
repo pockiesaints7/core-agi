@@ -8,6 +8,7 @@ import time
 from collections import Counter, defaultdict
 from datetime import datetime, timedelta
 from typing import Any
+from pathlib import Path
 
 from core_config import _env_int, sb_get, sb_post
 from core_github import notify
@@ -41,6 +42,7 @@ _state = {
     "last_error": "",
     "last_summary": {},
 }
+_STATE_FILE = Path(__file__).resolve().parent / ".runtime" / "autonomy_digest_state.json"
 
 _NUMERIC_KEYS = {
     "processed",
@@ -127,6 +129,25 @@ def _sum_field(rows: list[dict], field: str) -> int:
     return total
 
 
+def _load_local_digest_state() -> dict[str, Any]:
+    try:
+        raw = _STATE_FILE.read_text(encoding="utf-8")
+        data = json.loads(raw)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _save_local_digest_state(payload: dict[str, Any]) -> None:
+    try:
+        _STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        tmp = _STATE_FILE.with_suffix(".tmp")
+        tmp.write_text(json.dumps(payload, default=str, indent=2, sort_keys=True), encoding="utf-8")
+        tmp.replace(_STATE_FILE)
+    except Exception:
+        pass
+
+
 def _aggregate_sessions() -> dict[str, dict[str, int]]:
     window_start = _window_start(AUTONOMY_DIGEST_WINDOW_HOURS)
     rows = sb_get(
@@ -162,6 +183,10 @@ def _count_rows(table: str, qs: str) -> int:
 
 
 def _current_last_digest_at() -> str:
+    local_state = _load_local_digest_state()
+    local_last = str(local_state.get("last_digest_at") or "").strip()
+    if local_last:
+        return local_last
     try:
         rows = sb_get(
             "sessions",
@@ -251,6 +276,26 @@ def _build_message(agg: dict[str, dict[str, int]]) -> tuple[str, dict]:
         f"select=id&status=eq.rejected&updated_at=gte.{_window_start(AUTONOMY_DIGEST_WINDOW_HOURS)}",
     )
     owner_in_queue = int(proposal_status.get("pending_owner_only", 0) or 0)
+    activity_total = (
+        sum(_safe_int(v) for v in task.values())
+        + sum(_safe_int(v) for v in research.values())
+        + sum(_safe_int(v) for v in code.values())
+        + sum(_safe_int(v) for v in integration.values())
+        + sum(_safe_int(v) for v in evolution.values())
+        + _safe_int(task_status.get("pending", 0))
+        + _safe_int(task_status.get("in_progress", 0))
+        + _safe_int(research_status.get("pending", 0))
+        + _safe_int(research_status.get("follow_up_queued", 0))
+        + _safe_int(code_status.get("pending_code_tasks", 0))
+        + _safe_int(code_status.get("pending_review_proposals", 0))
+        + _safe_int(integration_status.get("pending_integration_tasks", 0))
+        + _safe_int(integration_status.get("pending_review_proposals", 0))
+        + _safe_int(evolution_status.get("pending_evolutions", 0))
+        + _safe_int(evolution_status.get("pending_improvement_tasks", 0))
+        + approved
+        + rejected
+        + owner_in_queue
+    )
 
     message = "\n".join([
         "AUTONOMY WORKER SUMMARY:",
@@ -288,6 +333,7 @@ def _build_message(agg: dict[str, dict[str, int]]) -> tuple[str, dict]:
     ])
     summary = {
         "window_hours": AUTONOMY_DIGEST_WINDOW_HOURS,
+        "activity_total": activity_total,
         "task": {**task, **{k: _safe_int(v) for k, v in task.items()}},
         "research": {**research, **{k: _safe_int(v) for k, v in research.items()}},
         "code": {**code, **{k: _safe_int(v) for k, v in code.items()}},
@@ -329,6 +375,25 @@ def run_autonomy_digest(force: bool = False) -> dict:
 
         agg = _aggregate_sessions()
         message, summary = _build_message(agg)
+        if not force and _safe_int(summary.get("activity_total")) <= 0:
+            _save_local_digest_state({
+                "last_checked_at": _utcnow(),
+                "last_digest_at": last_digest_at,
+                "last_empty_at": _utcnow(),
+                "last_activity_total": 0,
+            })
+            _state["last_run_at"] = _utcnow()
+            _state["last_error"] = ""
+            _state["last_summary"] = summary
+            return {
+                "ok": True,
+                "enabled": True,
+                "sent": False,
+                "due": False,
+                "reason": "no_activity",
+                "last_digest_at": last_digest_at,
+                "summary": summary,
+            }
         notify(message)
         try:
             sb_post(
@@ -342,6 +407,13 @@ def run_autonomy_digest(force: bool = False) -> dict:
         except Exception:
             pass
         finished_at = _utcnow()
+        _save_local_digest_state({
+            "last_checked_at": finished_at,
+            "last_digest_at": finished_at,
+            "last_empty_at": "",
+            "last_activity_total": _safe_int(summary.get("activity_total")),
+            "summary": summary,
+        })
         _state["last_run_at"] = finished_at
         _state["last_error"] = ""
         _state["last_summary"] = summary
