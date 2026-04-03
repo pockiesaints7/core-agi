@@ -1,1 +1,32 @@
-[]
+[
+  {
+    "id": 2,
+    "trigger": "matrix_gate",
+    "pointer": "matrix_gate_range",
+    "full_rule": "Matrix gate for RANGE: action=range_carry_reversion | preferred=['carry', 'range_reversion', 'mean_reversion'] | conditional=[] | blocked=['carry', 'expansion_scalp', 'mean_reversion', 'range_reversion', 'trend_breakout', 'trend_pullback'] | reason=range regime should favor carry and reversion families",
+    "domain": "trading",
+    "priority": 4,
+    "active": true,
+    "confidence": 0.8
+  },
+  {
+    "id": 3,
+    "trigger": "matrix_gate",
+    "pointer": "matrix_gate_trend",
+    "full_rule": "Matrix gate for TREND: action=trend_continuation | preferred=['trend_breakout', 'trend_pullback'] | conditional=['mean_reversion'] | blocked=['carry', 'expansion_scalp', 'mean_reversion', 'range_reversion', 'trend_breakout', 'trend_pullback'] | reason=trend regime should favor continuation families first",
+    "domain": "trading",
+    "priority": 4,
+    "active": true,
+    "confidence": 0.8
+  },
+  {
+    "id": 4,
+    "trigger": "matrix_gate",
+    "pointer": "matrix_gate_expansion",
+    "full_rule": "Matrix gate for EXPANSION: action=expansion_scalp | preferred=['expansion_scalp', 'trend_breakout'] | conditional=[] | blocked=['carry', 'expansion_scalp', 'mean_reversion', 'range_reversion', 'trend_breakout', 'trend_pullback', 'funding_harvest'] | reason=expansion regime should prioritize burst capture and avoid carry",
+    "domain": "trading",
+    "priority": 3,
+    "active": true,
+    "confidence": 0.8
+  }
+]
