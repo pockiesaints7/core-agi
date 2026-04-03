@@ -68,7 +68,7 @@ GITHUB_REPO    = os.environ.get("GITHUB_USERNAME", "pockiesaints7") + "/core-agi
 MCP_SECRET     = os.environ["MCP_SECRET"]
 TELEGRAM_WEBHOOK_SECRET = os.environ.get("TELEGRAM_WEBHOOK_SECRET", MCP_SECRET)
 SUPABASE_PAT   = os.environ.get("SUPABASE_PAT", "")  # Management API PAT for DB introspection
-SUPABASE_REF   = "qbfaplqiakwjvrtwpbmr"  # Project ref
+SUPABASE_REF   = os.environ.get("SUPABASE_REF", "bwywfbiprbdkhlbwyprw")  # Project ref
 PORT           = int(os.environ.get("PORT", 8081))
 # -- Env parsing helpers ------------------------------------------------------
 
