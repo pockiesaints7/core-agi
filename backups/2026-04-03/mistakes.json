@@ -1,1 +1,425 @@
-[]
+[
+  {
+    "id": 48,
+    "domain": "auto_detected",
+    "what_failed": "Outputting a string directly without encapsulating it in a valid JSON structure, leading to a format error.",
+    "correct_approach": "The output should have been a valid JSON object or array, for example: {\"message\": \"new patterns extracted | data verification: fallback_used=true\"} or [\"new patterns extracted | data verification: fallback_used=true\"].",
+    "severity": "high",
+    "root_cause": "Misinterpretation of 'Return ONLY valid JSON' as allowing raw strings if they are the intended content, rather than requiring strict JSON encapsulation.",
+    "created_at": "2026-04-03T18:05:23.190856+00:00"
+  },
+  {
+    "id": 47,
+    "domain": "rarl",
+    "what_failed": "The coarse-grained consistency check might miss subtle but critical inconsistencies that only FGCC could detect, leading to false positives for consistency.",
+    "correct_approach": "To address the difficulty in defining 'critical phases' and 'uncertainty', the meta-learning component will be designed to learn these triggers implicitly from successful and failed reasoning trajectories, using a reinforcement learning approach. For slow meta-learning, we will employ transfer learn",
+    "severity": "medium",
+    "root_cause": "The coarse-grained consistency check might miss subtle but critical inconsistencies that only FGCC could detect, leading to false positives for consistency.",
+    "created_at": "2026-04-03T17:01:05.793623+00:00"
+  },
+  {
+    "id": 46,
+    "domain": "rarl",
+    "what_failed": "The ATM's meta-learning process might be slow and require significant data to accurately learn optimal triggering thresholds.",
+    "correct_approach": "To address the difficulty in defining 'critical phases' and 'uncertainty', the meta-learning component will be designed to learn these triggers implicitly from successful and failed reasoning trajectories, using a reinforcement learning approach. For slow meta-learning, we will employ transfer learn",
+    "severity": "medium",
+    "root_cause": "The ATM's meta-learning process might be slow and require significant data to accurately learn optimal triggering thresholds.",
+    "created_at": "2026-04-03T17:01:05.441753+00:00"
+  },
+  {
+    "id": 45,
+    "domain": "rarl",
+    "what_failed": "Defining 'critical phases' or 'high uncertainty' for triggering FGCC could be difficult and task-specific, leading to suboptimal triggering.",
+    "correct_approach": "To address the difficulty in defining 'critical phases' and 'uncertainty', the meta-learning component will be designed to learn these triggers implicitly from successful and failed reasoning trajectories, using a reinforcement learning approach. For slow meta-learning, we will employ transfer learn",
+    "severity": "medium",
+    "root_cause": "Defining 'critical phases' or 'high uncertainty' for triggering FGCC could be difficult and task-specific, leading to suboptimal triggering.",
+    "created_at": "2026-04-03T17:01:04.956364+00:00"
+  },
+  {
+    "id": 44,
+    "domain": "rarl",
+    "what_failed": "The coarse-grained consistency check might miss subtle but critical inconsistencies, leading to cascading errors that are only caught much later by FGCC, negating efficiency gains.",
+    "correct_approach": "To address slow meta-learning, we will employ transfer learning from pre-trained consistency models and use active learning to prioritize data collection for ambiguous cases. For defining critical phases, we will use a combination of learned confidence scores, entropy of predicted outcomes, and expl",
+    "severity": "medium",
+    "root_cause": "The coarse-grained consistency check might miss subtle but critical inconsistencies, leading to cascading errors that are only caught much later by FGCC, negating efficiency gains.",
+    "created_at": "2026-04-03T17:00:17.67793+00:00"
+  },
+  {
+    "id": 43,
+    "domain": "rarl",
+    "what_failed": "Defining 'critical phases' or 'high uncertainty' for triggering FGCC could be difficult and task-specific, leading to suboptimal performance.",
+    "correct_approach": "To address slow meta-learning, we will employ transfer learning from pre-trained consistency models and use active learning to prioritize data collection for ambiguous cases. For defining critical phases, we will use a combination of learned confidence scores, entropy of predicted outcomes, and expl",
+    "severity": "medium",
+    "root_cause": "Defining 'critical phases' or 'high uncertainty' for triggering FGCC could be difficult and task-specific, leading to suboptimal performance.",
+    "created_at": "2026-04-03T17:00:17.556957+00:00"
+  },
+  {
+    "id": 42,
+    "domain": "rarl",
+    "what_failed": "The ATM's meta-learning process might be slow and require significant data to accurately learn optimal thresholds and trigger conditions.",
+    "correct_approach": "To address slow meta-learning, we will employ transfer learning from pre-trained consistency models and use active learning to prioritize data collection for ambiguous cases. For defining critical phases, we will use a combination of learned confidence scores, entropy of predicted outcomes, and expl",
+    "severity": "medium",
+    "root_cause": "The ATM's meta-learning process might be slow and require significant data to accurately learn optimal thresholds and trigger conditions.",
+    "created_at": "2026-04-03T17:00:17.264778+00:00"
+  },
+  {
+    "id": 41,
+    "domain": "rarl",
+    "what_failed": "The ACT might oscillate between high and low thresholds, leading to unstable behavior.",
+    "correct_approach": "Task complexity will be initially defined by a combination of input token length, number of entities, and explicit problem constraints. The meta-learning process will use a curriculum learning approach, starting with simpler tasks. A moving average or exponential decay will be applied to threshold u",
+    "severity": "medium",
+    "root_cause": "The ACT might oscillate between high and low thresholds, leading to unstable behavior.",
+    "created_at": "2026-04-03T16:01:00.33047+00:00"
+  },
+  {
+    "id": 40,
+    "domain": "rarl",
+    "what_failed": "The meta-learning process for the ACT could be slow and require significant data.",
+    "correct_approach": "Task complexity will be initially defined by a combination of input token length, number of entities, and explicit problem constraints. The meta-learning process will use a curriculum learning approach, starting with simpler tasks. A moving average or exponential decay will be applied to threshold u",
+    "severity": "medium",
+    "root_cause": "The meta-learning process for the ACT could be slow and require significant data.",
+    "created_at": "2026-04-03T16:00:59.753456+00:00"
+  },
+  {
+    "id": 39,
+    "domain": "rarl",
+    "what_failed": "Defining 'task complexity' for the ACT module might be difficult and task-specific.",
+    "correct_approach": "Task complexity will be initially defined by a combination of input token length, number of entities, and explicit problem constraints. The meta-learning process will use a curriculum learning approach, starting with simpler tasks. A moving average or exponential decay will be applied to threshold u",
+    "severity": "medium",
+    "root_cause": "Defining 'task complexity' for the ACT module might be difficult and task-specific.",
+    "created_at": "2026-04-03T16:00:59.164056+00:00"
+  },
+  {
+    "id": 38,
+    "domain": "rarl",
+    "what_failed": "The 'ConsistencyAdaptationModule' could overfit to specific task contexts, leading to poor generalization to unseen domains.",
+    "correct_approach": "To mitigate slow meta-learning, we will employ few-shot learning techniques and pre-train the context encoder on a large corpus of diverse reasoning problems. For ground truth consistency, we will use a combination of expert-labeled data for initial training and a reward-based signal from downstream",
+    "severity": "medium",
+    "root_cause": "The 'ConsistencyAdaptationModule' could overfit to specific task contexts, leading to poor generalization to unseen domains.",
+    "created_at": "2026-04-03T15:59:35.636496+00:00"
+  },
+  {
+    "id": 37,
+    "domain": "rarl",
+    "what_failed": "Defining the 'ground truth' for consistency during meta-training, particularly for novel or ambiguous reasoning tasks, remains challenging.",
+    "correct_approach": "To mitigate slow meta-learning, we will employ few-shot learning techniques and pre-train the context encoder on a large corpus of diverse reasoning problems. For ground truth consistency, we will use a combination of expert-labeled data for initial training and a reward-based signal from downstream",
+    "severity": "medium",
+    "root_cause": "Defining the 'ground truth' for consistency during meta-training, particularly for novel or ambiguous reasoning tasks, remains challenging.",
+    "created_at": "2026-04-03T15:59:35.549138+00:00"
+  },
+  {
+    "id": 36,
+    "domain": "rarl",
+    "what_failed": "The meta-learning process for the ACM might be slow and data-intensive, especially for diverse reasoning domains.",
+    "correct_approach": "To mitigate slow meta-learning, we will employ few-shot learning techniques and pre-train the context encoder on a large corpus of diverse reasoning problems. For ground truth consistency, we will use a combination of expert-labeled data for initial training and a reward-based signal from downstream",
+    "severity": "medium",
+    "root_cause": "The meta-learning process for the ACM might be slow and data-intensive, especially for diverse reasoning domains.",
+    "created_at": "2026-04-03T15:59:35.416146+00:00"
+  },
+  {
+    "id": 35,
+    "domain": "rarl",
+    "what_failed": "The computational cost of running the ACO's consistency evaluation at every step of reasoning could be prohibitive for very long chains or real-time applications.",
+    "correct_approach": "To address initial training, we can pre-train the ACO on a large corpus of human-annotated logical entailment pairs and common sense reasoning examples. The 'consistency_threshold' will be dynamically adjusted based on the overall success rate and consistency of recent reasoning chains, using a simp",
+    "severity": "medium",
+    "root_cause": "The computational cost of running the ACO's consistency evaluation at every step of reasoning could be prohibitive for very long chains or real-time applications.",
+    "created_at": "2026-04-03T15:00:07.398643+00:00"
+  },
+  {
+    "id": 34,
+    "domain": "rarl",
+    "what_failed": "The ACO's 'consistency_threshold' might still be a hyperparameter requiring careful tuning, or its dynamic adjustment mechanism could be unstable.",
+    "correct_approach": "To address initial training, we can pre-train the ACO on a large corpus of human-annotated logical entailment pairs and common sense reasoning examples. The 'consistency_threshold' will be dynamically adjusted based on the overall success rate and consistency of recent reasoning chains, using a simp",
+    "severity": "medium",
+    "root_cause": "The ACO's 'consistency_threshold' might still be a hyperparameter requiring careful tuning, or its dynamic adjustment mechanism could be unstable.",
+    "created_at": "2026-04-03T15:00:06.893785+00:00"
+  },
+  {
+    "id": 33,
+    "domain": "rarl",
+    "what_failed": "The initial training of the AdaptiveConsistencyOracle (ACO) without sufficient 'successful' and 'failed' reasoning paths could lead to a poorly calibrated consistency metric.",
+    "correct_approach": "To address initial training, we can pre-train the ACO on a large corpus of human-annotated logical entailment pairs and common sense reasoning examples. The 'consistency_threshold' will be dynamically adjusted based on the overall success rate and consistency of recent reasoning chains, using a simp",
+    "severity": "medium",
+    "root_cause": "The initial training of the AdaptiveConsistencyOracle (ACO) without sufficient 'successful' and 'failed' reasoning paths could lead to a poorly calibrated consistency metric.",
+    "created_at": "2026-04-03T15:00:06.439656+00:00"
+  },
+  {
+    "id": 32,
+    "domain": "rarl",
+    "what_failed": "The 'ConfidenceThreshold' for confidence-based backtracking is a hyperparameter that could be difficult to tune.",
+    "correct_approach": "The 'ProgressMetric' will be task-specific, initially defined by domain experts and then refined via meta-learning on successful reasoning paths. The 'DiversificationStrategy' will incorporate a 'NoveltyScore' based on embedding similarity to previously explored states, penalizing redundant or irrel",
+    "severity": "medium",
+    "root_cause": "The 'ConfidenceThreshold' for confidence-based backtracking is a hyperparameter that could be difficult to tune.",
+    "created_at": "2026-04-03T14:59:04.548319+00:00"
+  },
+  {
+    "id": 31,
+    "domain": "rarl",
+    "what_failed": "The 'DiversificationStrategy' could introduce irrelevant or computationally expensive paths.",
+    "correct_approach": "The 'ProgressMetric' will be task-specific, initially defined by domain experts and then refined via meta-learning on successful reasoning paths. The 'DiversificationStrategy' will incorporate a 'NoveltyScore' based on embedding similarity to previously explored states, penalizing redundant or irrel",
+    "severity": "medium",
+    "root_cause": "The 'DiversificationStrategy' could introduce irrelevant or computationally expensive paths.",
+    "created_at": "2026-04-03T14:59:04.451472+00:00"
+  },
+  {
+    "id": 30,
+    "domain": "rarl",
+    "what_failed": "Defining a universally applicable 'ProgressMetric' for diverse reasoning tasks is challenging.",
+    "correct_approach": "The 'ProgressMetric' will be task-specific, initially defined by domain experts and then refined via meta-learning on successful reasoning paths. The 'DiversificationStrategy' will incorporate a 'NoveltyScore' based on embedding similarity to previously explored states, penalizing redundant or irrel",
+    "severity": "medium",
+    "root_cause": "Defining a universally applicable 'ProgressMetric' for diverse reasoning tasks is challenging.",
+    "created_at": "2026-04-03T14:59:04.328426+00:00"
+  },
+  {
+    "id": 29,
+    "domain": "rarl",
+    "what_failed": "Potential for infinite loops during re-evaluation if no better path is found, or if the Oracle itself becomes inconsistent.",
+    "correct_approach": "To address slow meta-learning, we will employ curriculum learning for the ACO, starting with simpler consistency tasks and gradually increasing complexity. For generalizability, the ACO will be trained on a diverse set of reasoning tasks and leverage transfer learning from pre-trained language model",
+    "severity": "medium",
+    "root_cause": "Potential for infinite loops during re-evaluation if no better path is found, or if the Oracle itself becomes inconsistent.",
+    "created_at": "2026-04-03T13:58:29.205413+00:00"
+  },
+  {
+    "id": 28,
+    "domain": "rarl",
+    "what_failed": "Defining robust and generalizable 'consistency' metrics for open-ended reasoning remains a challenge, even with an adaptive oracle.",
+    "correct_approach": "To address slow meta-learning, we will employ curriculum learning for the ACO, starting with simpler consistency tasks and gradually increasing complexity. For generalizability, the ACO will be trained on a diverse set of reasoning tasks and leverage transfer learning from pre-trained language model",
+    "severity": "medium",
+    "root_cause": "Defining robust and generalizable 'consistency' metrics for open-ended reasoning remains a challenge, even with an adaptive oracle.",
+    "created_at": "2026-04-03T13:58:29.110719+00:00"
+  },
+  {
+    "id": 27,
+    "domain": "rarl",
+    "what_failed": "The meta-learning process for the Oracle might be slow and data-intensive, especially for complex consistency models.",
+    "correct_approach": "To address slow meta-learning, we will employ curriculum learning for the ACO, starting with simpler consistency tasks and gradually increasing complexity. For generalizability, the ACO will be trained on a diverse set of reasoning tasks and leverage transfer learning from pre-trained language model",
+    "severity": "medium",
+    "root_cause": "The meta-learning process for the Oracle might be slow and data-intensive, especially for complex consistency models.",
+    "created_at": "2026-04-03T13:58:29.004728+00:00"
+  },
+  {
+    "id": 26,
+    "domain": "rarl",
+    "what_failed": "The 'THRESHOLD' for confidence-based backtracking is a hyperparameter that could be difficult to tune and might lead to over-cautious or under-cautious behavior.",
+    "correct_approach": "To mitigate data intensity, we will explore few-shot meta-learning techniques and transfer learning from related domains. For defining successful paths, we will initially use expert-labeled examples and then transition to self-supervised methods based on task completion signals. The 'THRESHOLD' will",
+    "severity": "medium",
+    "root_cause": "The 'THRESHOLD' for confidence-based backtracking is a hyperparameter that could be difficult to tune and might lead to over-cautious or under-cautious behavior.",
+    "created_at": "2026-04-03T12:57:58.281586+00:00"
+  },
+  {
+    "id": 25,
+    "domain": "rarl",
+    "what_failed": "Defining the 'successful_reasoning_paths' for the Oracle's training could be ambiguous or require human supervision.",
+    "correct_approach": "To mitigate data intensity, we will explore few-shot meta-learning techniques and transfer learning from related domains. For defining successful paths, we will initially use expert-labeled examples and then transition to self-supervised methods based on task completion signals. The 'THRESHOLD' will",
+    "severity": "medium",
+    "root_cause": "Defining the 'successful_reasoning_paths' for the Oracle's training could be ambiguous or require human supervision.",
+    "created_at": "2026-04-03T12:57:58.17472+00:00"
+  },
+  {
+    "id": 24,
+    "domain": "rarl",
+    "what_failed": "The meta-learning process for the Oracle might be slow and data-intensive, especially for novel domains.",
+    "correct_approach": "To mitigate data intensity, we will explore few-shot meta-learning techniques and transfer learning from related domains. For defining successful paths, we will initially use expert-labeled examples and then transition to self-supervised methods based on task completion signals. The 'THRESHOLD' will",
+    "severity": "medium",
+    "root_cause": "The meta-learning process for the Oracle might be slow and data-intensive, especially for novel domains.",
+    "created_at": "2026-04-03T12:57:58.096428+00:00"
+  },
+  {
+    "id": 23,
+    "domain": "rarl",
+    "what_failed": "The 'DiversificationStrategy' could introduce irrelevant or computationally expensive operations if not carefully constrained.",
+    "correct_approach": "The 'ProgressMetric' will be a composite score, dynamically weighted based on task type (e.g., higher weight for logical consistency in ProofWriter, higher for information gain in QA). The lookahead depth will be adaptive, increasing in complexity-dense regions of the ReasoningGraph. The 'Diversific",
+    "severity": "medium",
+    "root_cause": "The 'DiversificationStrategy' could introduce irrelevant or computationally expensive operations if not carefully constrained.",
+    "created_at": "2026-04-03T11:57:23.368295+00:00"
+  },
+  {
+    "id": 22,
+    "domain": "rarl",
+    "what_failed": "The 'limited-depth lookahead' might miss optimal paths that require a deeper, initially less promising, sequence of steps.",
+    "correct_approach": "The 'ProgressMetric' will be a composite score, dynamically weighted based on task type (e.g., higher weight for logical consistency in ProofWriter, higher for information gain in QA). The lookahead depth will be adaptive, increasing in complexity-dense regions of the ReasoningGraph. The 'Diversific",
+    "severity": "medium",
+    "root_cause": "The 'limited-depth lookahead' might miss optimal paths that require a deeper, initially less promising, sequence of steps.",
+    "created_at": "2026-04-03T11:57:23.271976+00:00"
+  },
+  {
+    "id": 21,
+    "domain": "rarl",
+    "what_failed": "Defining a universally applicable 'ProgressMetric' for diverse reasoning tasks is extremely challenging and prone to bias.",
+    "correct_approach": "The 'ProgressMetric' will be a composite score, dynamically weighted based on task type (e.g., higher weight for logical consistency in ProofWriter, higher for information gain in QA). The lookahead depth will be adaptive, increasing in complexity-dense regions of the ReasoningGraph. The 'Diversific",
+    "severity": "medium",
+    "root_cause": "Defining a universally applicable 'ProgressMetric' for diverse reasoning tasks is extremely challenging and prone to bias.",
+    "created_at": "2026-04-03T11:57:23.178104+00:00"
+  },
+  {
+    "id": 20,
+    "domain": "auto_detected",
+    "what_failed": "The output was plain text instead of valid JSON, despite the 'Return JSON only' instruction.",
+    "correct_approach": "The output should have been a valid JSON object or array, encapsulating the information provided.",
+    "severity": "high",
+    "root_cause": "CORE did not prioritize or strictly enforce the explicit output format constraint, leading to a non-parseable response.",
+    "created_at": "2026-04-03T10:57:05.268762+00:00"
+  },
+  {
+    "id": 19,
+    "domain": "rarl",
+    "what_failed": "Potential for infinite loops during re-evaluation if no better path is found.",
+    "correct_approach": "Robust consistency metrics will be developed through a combination of symbolic rules for explicit constraints and a fine-tuned, smaller LLM for semantic consistency, trained on diverse examples of consistent/inconsistent reasoning. The Consistency Checker will be rigorously tested and its outputs au",
+    "severity": "medium",
+    "root_cause": "Potential for infinite loops during re-evaluation if no better path is found.",
+    "created_at": "2026-04-03T10:56:51.811126+00:00"
+  },
+  {
+    "id": 18,
+    "domain": "rarl",
+    "what_failed": "The 'ConsistencyChecker' itself could introduce biases or errors, potentially le",
+    "correct_approach": "Robust consistency metrics will be developed through a combination of symbolic rules for explicit constraints and a fine-tuned, smaller LLM for semantic consistency, trained on diverse examples of consistent/inconsistent reasoning. The Consistency Checker will be rigorously tested and its outputs au",
+    "severity": "medium",
+    "root_cause": "The 'ConsistencyChecker' itself could introduce biases or errors, potentially le",
+    "created_at": "2026-04-03T10:56:51.693582+00:00"
+  },
+  {
+    "id": 17,
+    "domain": "rarl",
+    "what_failed": "Defining robust and generalizable 'consistency' metrics for open-ended reasoning",
+    "correct_approach": "Robust consistency metrics will be developed through a combination of symbolic rules for explicit constraints and a fine-tuned, smaller LLM for semantic consistency, trained on diverse examples of consistent/inconsistent reasoning. The Consistency Checker will be rigorously tested and its outputs au",
+    "severity": "medium",
+    "root_cause": "Defining robust and generalizable 'consistency' metrics for open-ended reasoning",
+    "created_at": "2026-04-03T10:56:51.576939+00:00"
+  },
+  {
+    "id": 16,
+    "domain": "auto_detected",
+    "what_failed": "The output was plain text instead of valid JSON, directly violating the prompt's explicit instruction.",
+    "correct_approach": "The output should have been a valid JSON object or array, containing the information 'new patterns extracted', 'rarl epoch complete', and 'data verification: fallback_used=true' as values within the JSON structure.",
+    "severity": "high",
+    "root_cause": "CORE failed to prioritize and strictly adhere to the explicit output format instruction in the prompt.",
+    "created_at": "2026-04-03T09:56:31.392428+00:00"
+  },
+  {
+    "id": 15,
+    "domain": "rarl",
+    "what_failed": "Backtracking or re-prompting upon inconsistency could lead to infinite loops or",
+    "correct_approach": "Generalizable consistency metrics will be addressed by allowing rule sets to be dynamically generated or refined based on the specific reasoning task, potentially using a meta-learning approach. To prevent infinite loops, a maximum re-evaluation attempt limit will be implemented, after which the sys",
+    "severity": "medium",
+    "root_cause": "Backtracking or re-prompting upon inconsistency could lead to infinite loops or",
+    "created_at": "2026-04-03T09:56:18.979533+00:00"
+  },
+  {
+    "id": 14,
+    "domain": "rarl",
+    "what_failed": "Potential for infinite loops during re-evaluation if no better path is found.",
+    "correct_approach": "Generalizable consistency metrics will be addressed by allowing rule sets to be dynamically generated or refined based on the specific reasoning task, potentially using a meta-learning approach. To prevent infinite loops, a maximum re-evaluation attempt limit will be implemented, after which the sys",
+    "severity": "medium",
+    "root_cause": "Potential for infinite loops during re-evaluation if no better path is found.",
+    "created_at": "2026-04-03T09:56:18.895934+00:00"
+  },
+  {
+    "id": 13,
+    "domain": "rarl",
+    "what_failed": "Defining robust and generalizable 'consistency' metrics for open-ended reasoning",
+    "correct_approach": "Generalizable consistency metrics will be addressed by allowing rule sets to be dynamically generated or refined based on the specific reasoning task, potentially using a meta-learning approach. To prevent infinite loops, a maximum re-evaluation attempt limit will be implemented, after which the sys",
+    "severity": "medium",
+    "root_cause": "Defining robust and generalizable 'consistency' metrics for open-ended reasoning",
+    "created_at": "2026-04-03T09:56:18.789325+00:00"
+  },
+  {
+    "id": 12,
+    "domain": "auto_detected",
+    "what_failed": "The output was not valid JSON and contained plain text.",
+    "correct_approach": "The output should have been a single, valid JSON object or array, with no additional text.",
+    "severity": "high",
+    "root_cause": "CORE failed to adhere to the strict JSON output format requirement, including extraneous text.",
+    "created_at": "2026-04-03T08:55:27.666609+00:00"
+  },
+  {
+    "id": 11,
+    "domain": "rarl",
+    "what_failed": "The 'ConsistencyChecker' itself could introduce biases or errors, potentially le",
+    "correct_approach": "Robust consistency metrics will be defined using a combination of semantic similarity, logical entailment checks (for structured reasoning), and a learned consistency model trained on human-annotated consistent/inconsistent reasoning chains. Infinite loops will be mitigated by setting a strict `max_",
+    "severity": "medium",
+    "root_cause": "The 'ConsistencyChecker' itself could introduce biases or errors, potentially le",
+    "created_at": "2026-04-03T08:55:15.954714+00:00"
+  },
+  {
+    "id": 10,
+    "domain": "rarl",
+    "what_failed": "Potential for infinite loops during re-evaluation if no better path is found.",
+    "correct_approach": "Robust consistency metrics will be defined using a combination of semantic similarity, logical entailment checks (for structured reasoning), and a learned consistency model trained on human-annotated consistent/inconsistent reasoning chains. Infinite loops will be mitigated by setting a strict `max_",
+    "severity": "medium",
+    "root_cause": "Potential for infinite loops during re-evaluation if no better path is found.",
+    "created_at": "2026-04-03T08:55:15.821219+00:00"
+  },
+  {
+    "id": 9,
+    "domain": "rarl",
+    "what_failed": "Defining robust and generalizable 'consistency' metrics for open-ended reasoning",
+    "correct_approach": "Robust consistency metrics will be defined using a combination of semantic similarity, logical entailment checks (for structured reasoning), and a learned consistency model trained on human-annotated consistent/inconsistent reasoning chains. Infinite loops will be mitigated by setting a strict `max_",
+    "severity": "medium",
+    "root_cause": "Defining robust and generalizable 'consistency' metrics for open-ended reasoning",
+    "created_at": "2026-04-03T08:55:15.593209+00:00"
+  },
+  {
+    "id": 8,
+    "domain": "auto_detected",
+    "what_failed": "The output was an uninterpretable, jargon-filled status update.",
+    "correct_approach": "The output should have been a clear, concise, natural language summary of the background research status, e.g., 'Background research complete. New patterns identified. Data verified, with some minor fallbacks used for consistency.'",
+    "severity": "medium",
+    "root_cause": "CORE failed to apply principles of human-centric communication, instead outputting internal process jargon.",
+    "created_at": "2026-04-03T07:54:58.18151+00:00"
+  },
+  {
+    "id": 7,
+    "domain": "rarl",
+    "what_failed": "Backtracking or re-prompting upon inconsistency could lead to infinite loops or significant computational overhead.",
+    "correct_approach": "For consistency metrics, we will start with rule-based checks (e.g., negation detection, entity tracking) and gradually introduce a fine-tuned, smaller language model for semantic consistency. The 'ConsistencyChecker' will be designed with a confidence score, allowing for 'soft' rejections and a lim",
+    "severity": "medium",
+    "root_cause": "Backtracking or re-prompting upon inconsistency could lead to infinite loops or significant computational overhead.",
+    "created_at": "2026-04-03T07:54:46.28894+00:00"
+  },
+  {
+    "id": 6,
+    "domain": "rarl",
+    "what_failed": "The 'ConsistencyChecker' itself could introduce biases or errors, potentially leading to false negatives or positives.",
+    "correct_approach": "For consistency metrics, we will start with rule-based checks (e.g., negation detection, entity tracking) and gradually introduce a fine-tuned, smaller language model for semantic consistency. The 'ConsistencyChecker' will be designed with a confidence score, allowing for 'soft' rejections and a lim",
+    "severity": "medium",
+    "root_cause": "The 'ConsistencyChecker' itself could introduce biases or errors, potentially leading to false negatives or positives.",
+    "created_at": "2026-04-03T07:54:46.212981+00:00"
+  },
+  {
+    "id": 5,
+    "domain": "rarl",
+    "what_failed": "Defining robust and generalizable 'consistency' metrics for open-ended reasoning is extremely challenging.",
+    "correct_approach": "For consistency metrics, we will start with rule-based checks (e.g., negation detection, entity tracking) and gradually introduce a fine-tuned, smaller language model for semantic consistency. The 'ConsistencyChecker' will be designed with a confidence score, allowing for 'soft' rejections and a lim",
+    "severity": "medium",
+    "root_cause": "Defining robust and generalizable 'consistency' metrics for open-ended reasoning is extremely challenging.",
+    "created_at": "2026-04-03T07:54:46.107305+00:00"
+  },
+  {
+    "id": 4,
+    "domain": "auto_detected",
+    "what_failed": "The output was a single, unstructured string of concatenated phrases instead of a JSON object.",
+    "correct_approach": "The output should have been a JSON object, likely with each phrase as a value associated with a key, or an array of strings if the intent was a list of statuses.",
+    "severity": "high",
+    "root_cause": "CORE failed to interpret 'valid, parseable JSON' as requiring a structured object/array, instead treating it as a general text output.",
+    "created_at": "2026-04-03T06:54:45.124363+00:00"
+  },
+  {
+    "id": 3,
+    "domain": "rarl",
+    "what_failed": "Potential for infinite loops during re-evaluation if no better path is found.",
+    "correct_approach": "To mitigate computational overhead, consistency checks will be performed asynchronously or on a sampled basis. Robust consistency metrics will be developed using a combination of symbolic logic rules and learned semantic similarity. Infinite loops will be prevented by implementing a re-evaluation bu",
+    "severity": "medium",
+    "root_cause": "Potential for infinite loops during re-evaluation if no better path is found.",
+    "created_at": "2026-04-03T06:54:34.011028+00:00"
+  },
+  {
+    "id": 2,
+    "domain": "rarl",
+    "what_failed": "Difficulty in defining robust 'consistency' metrics for complex, open-ended reasoning.",
+    "correct_approach": "To mitigate computational overhead, consistency checks will be performed asynchronously or on a sampled basis. Robust consistency metrics will be developed using a combination of symbolic logic rules and learned semantic similarity. Infinite loops will be prevented by implementing a re-evaluation bu",
+    "severity": "medium",
+    "root_cause": "Difficulty in defining robust 'consistency' metrics for complex, open-ended reasoning.",
+    "created_at": "2026-04-03T06:54:33.932721+00:00"
+  }
+]
