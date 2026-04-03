@@ -3450,26 +3450,9 @@ def cold_processor_loop():
                     _run_capability_calibration()
             except Exception as _cale:
                 print(f"[CAP_CAL] trigger error: {_cale}")
-            # GAP-DATA-01: Weekly backup check -- runs if last backup > 6 days ago
-            try:
-                _BACKUP_INTERVAL = 6 * 24 * 3600  # 6 days in seconds
-                last_backup_rows = sb_get("sessions",
-                    "select=summary&summary=like.*last_backup_ts*&order=created_at.desc&limit=1",
-                    svc=True)
-                last_backup_ts = 0
-                if last_backup_rows:
-                    import re as _re2
-                    m = _re2.search(r'last_backup_ts: ([\d\-T:.]+)', last_backup_rows[0].get("summary", ""))
-                    if m:
-                        from datetime import datetime as _dt2
-                        try: last_backup_ts = _dt2.fromisoformat(m.group(1)).timestamp()
-                        except Exception: last_backup_ts = 0
-                if time.time() - last_backup_ts >= _BACKUP_INTERVAL:
-                    print("[COLD] Weekly backup triggered")
-                    from core_tools import TOOLS as _T
-                    _T["backup_brain"]["fn"]()
-            except Exception as _be:
-                print(f"[COLD] backup check error: {_be}")
+            # GAP-DATA-01 retired: backup export is permanently disabled.
+            # Keep the cold loop silent and avoid any backup retries or writes.
+            pass
         except Exception as e:
             print(f"[COLD] loop error: {e}")
         time.sleep(1800)

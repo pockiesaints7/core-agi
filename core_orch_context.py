@@ -388,7 +388,7 @@ def _tool_family_for_name(tool_name: str, tool_desc: str = "") -> str:
     if has(
         "tool_metrics_summary", "update_state", "stats", "logs", "session_start",
         "session_end", "get_infrastructure", "update_infrastructure_status",
-        "add_infrastructure", "backup_brain", "progress_model", "cognitive_load",
+        "add_infrastructure", "progress_model", "cognitive_load",
         "sync_system_map", "scope_tracker",
     ):
         return "state"
