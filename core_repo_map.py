@@ -555,6 +555,21 @@ def repo_map_ddl() -> list[str]:
         """,
         "CREATE UNIQUE INDEX IF NOT EXISTS repo_component_chunks_idx ON repo_component_chunks(component_path, chunk_index);",
         "CREATE INDEX IF NOT EXISTS repo_component_chunks_path_idx ON repo_component_chunks(component_path);",
+        "ALTER TABLE IF EXISTS repo_component_chunks ADD COLUMN IF NOT EXISTS repo TEXT NOT NULL DEFAULT 'core-agi';",
+        "ALTER TABLE IF EXISTS repo_component_chunks ADD COLUMN IF NOT EXISTS component_path TEXT NOT NULL DEFAULT '';",
+        "ALTER TABLE IF EXISTS repo_component_chunks ADD COLUMN IF NOT EXISTS chunk_index INTEGER NOT NULL DEFAULT 0;",
+        "ALTER TABLE IF EXISTS repo_component_chunks ADD COLUMN IF NOT EXISTS chunk_type TEXT NOT NULL DEFAULT 'text';",
+        "ALTER TABLE IF EXISTS repo_component_chunks ADD COLUMN IF NOT EXISTS start_line INTEGER NOT NULL DEFAULT 1;",
+        "ALTER TABLE IF EXISTS repo_component_chunks ADD COLUMN IF NOT EXISTS end_line INTEGER NOT NULL DEFAULT 1;",
+        "ALTER TABLE IF EXISTS repo_component_chunks ADD COLUMN IF NOT EXISTS summary TEXT NOT NULL DEFAULT '';",
+        "ALTER TABLE IF EXISTS repo_component_chunks ADD COLUMN IF NOT EXISTS content TEXT NOT NULL DEFAULT '';",
+        "ALTER TABLE IF EXISTS repo_component_chunks ADD COLUMN IF NOT EXISTS chunk_hash TEXT NOT NULL DEFAULT '';",
+        "ALTER TABLE IF EXISTS repo_component_chunks ADD COLUMN IF NOT EXISTS token_estimate INTEGER NOT NULL DEFAULT 0;",
+        "ALTER TABLE IF EXISTS repo_component_chunks ADD COLUMN IF NOT EXISTS active BOOLEAN NOT NULL DEFAULT TRUE;",
+        "ALTER TABLE IF EXISTS repo_component_chunks ADD COLUMN IF NOT EXISTS embedding VECTOR(1024);",
+        "ALTER TABLE IF EXISTS repo_component_chunks ADD COLUMN IF NOT EXISTS last_scanned_at TIMESTAMPTZ;",
+        "ALTER TABLE IF EXISTS repo_component_chunks ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW();",
+        "ALTER TABLE IF EXISTS repo_component_chunks ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();",
         """
         CREATE TABLE IF NOT EXISTS repo_component_edges (
             id BIGSERIAL PRIMARY KEY,
@@ -576,6 +591,19 @@ def repo_map_ddl() -> list[str]:
         "CREATE UNIQUE INDEX IF NOT EXISTS repo_component_edges_idx ON repo_component_edges(source_path, target_path, relation, source_symbol, target_symbol);",
         "CREATE INDEX IF NOT EXISTS repo_component_edges_source_idx ON repo_component_edges(source_path);",
         "CREATE INDEX IF NOT EXISTS repo_component_edges_target_idx ON repo_component_edges(target_path);",
+        "ALTER TABLE IF EXISTS repo_component_edges ADD COLUMN IF NOT EXISTS repo TEXT NOT NULL DEFAULT 'core-agi';",
+        "ALTER TABLE IF EXISTS repo_component_edges ADD COLUMN IF NOT EXISTS source_path TEXT NOT NULL DEFAULT '';",
+        "ALTER TABLE IF EXISTS repo_component_edges ADD COLUMN IF NOT EXISTS target_path TEXT NOT NULL DEFAULT '';",
+        "ALTER TABLE IF EXISTS repo_component_edges ADD COLUMN IF NOT EXISTS relation TEXT NOT NULL DEFAULT 'references';",
+        "ALTER TABLE IF EXISTS repo_component_edges ADD COLUMN IF NOT EXISTS source_symbol TEXT NOT NULL DEFAULT '';",
+        "ALTER TABLE IF EXISTS repo_component_edges ADD COLUMN IF NOT EXISTS target_symbol TEXT NOT NULL DEFAULT '';",
+        "ALTER TABLE IF EXISTS repo_component_edges ADD COLUMN IF NOT EXISTS evidence TEXT NOT NULL DEFAULT '';",
+        "ALTER TABLE IF EXISTS repo_component_edges ADD COLUMN IF NOT EXISTS weight FLOAT8 NOT NULL DEFAULT 0.5;",
+        "ALTER TABLE IF EXISTS repo_component_edges ADD COLUMN IF NOT EXISTS active BOOLEAN NOT NULL DEFAULT TRUE;",
+        "ALTER TABLE IF EXISTS repo_component_edges ADD COLUMN IF NOT EXISTS embedding VECTOR(1024);",
+        "ALTER TABLE IF EXISTS repo_component_edges ADD COLUMN IF NOT EXISTS last_scanned_at TIMESTAMPTZ;",
+        "ALTER TABLE IF EXISTS repo_component_edges ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW();",
+        "ALTER TABLE IF EXISTS repo_component_edges ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();",
         """
         CREATE TABLE IF NOT EXISTS repo_scan_runs (
             id BIGSERIAL PRIMARY KEY,
@@ -654,7 +682,7 @@ def _existing_children_map(table: str, field: str, value: str) -> list[dict]:
         elif table == "repo_component_edges":
             select = "select=id,source_path,target_path,relation,source_symbol,target_symbol,active"
         else:
-            select = "select=id,component_path,source_path,target_path,chunk_index,relation,active,chunk_hash"
+            select = "select=id"
         return sb_get(
             table,
             f"{select}&{field}=eq.{value}&order=id.asc&limit=2000",
