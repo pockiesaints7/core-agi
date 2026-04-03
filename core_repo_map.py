@@ -649,9 +649,15 @@ def _existing_components_map() -> dict[str, dict]:
 
 def _existing_children_map(table: str, field: str, value: str) -> list[dict]:
     try:
+        if table == "repo_component_chunks":
+            select = "select=id,component_path,chunk_index,active,chunk_hash"
+        elif table == "repo_component_edges":
+            select = "select=id,source_path,target_path,relation,source_symbol,target_symbol,active"
+        else:
+            select = "select=id,component_path,source_path,target_path,chunk_index,relation,active,chunk_hash"
         return sb_get(
             table,
-            f"select=id,component_path,source_path,target_path,chunk_index,relation,active,chunk_hash&{field}=eq.{value}&order=id.asc&limit=2000",
+            f"{select}&{field}=eq.{value}&order=id.asc&limit=2000",
             svc=True,
         ) or []
     except Exception:
@@ -677,24 +683,54 @@ def _upsert_chunk(row: dict, text: str) -> dict:
     ok = sb_upsert("repo_component_chunks", row, on_conflict="component_path,chunk_index")
     if not ok:
         return {"ok": False, "error": f"failed_upsert:{row.get('component_path')}#{row.get('chunk_index')}"}
-    if row.get("id") and text and embed_on_insert:
+    chunk_id = row.get("id")
+    if not chunk_id:
         try:
-            embed_on_insert("repo_component_chunks", row["id"], text)
+            matches = sb_get(
+                "repo_component_chunks",
+                f"select=id&component_path=eq.{row.get('component_path')}&chunk_index=eq.{row.get('chunk_index')}&limit=1",
+                svc=True,
+            ) or []
+            chunk_id = matches[0].get("id") if matches else None
+        except Exception:
+            chunk_id = None
+    if chunk_id and text and embed_on_insert:
+        try:
+            embed_on_insert("repo_component_chunks", chunk_id, text)
         except Exception:
             pass
-    return {"ok": True}
+    return {"ok": True, "id": chunk_id}
 
 
 def _upsert_edge(row: dict, text: str) -> dict:
     ok = sb_upsert("repo_component_edges", row, on_conflict="source_path,target_path,relation,source_symbol,target_symbol")
     if not ok:
         return {"ok": False, "error": f"failed_upsert:{row.get('source_path')}->{row.get('target_path')}"}
-    if row.get("id") and text and embed_on_insert:
+    edge_id = row.get("id")
+    if not edge_id:
         try:
-            embed_on_insert("repo_component_edges", row["id"], text)
+            matches = sb_get(
+                "repo_component_edges",
+                (
+                    "select=id"
+                    f"&source_path=eq.{row.get('source_path')}"
+                    f"&target_path=eq.{row.get('target_path')}"
+                    f"&relation=eq.{row.get('relation')}"
+                    f"&source_symbol=eq.{row.get('source_symbol', '')}"
+                    f"&target_symbol=eq.{row.get('target_symbol', '')}"
+                    "&limit=1"
+                ),
+                svc=True,
+            ) or []
+            edge_id = matches[0].get("id") if matches else None
+        except Exception:
+            edge_id = None
+    if edge_id and text and embed_on_insert:
+        try:
+            embed_on_insert("repo_component_edges", edge_id, text)
         except Exception:
             pass
-    return {"ok": True}
+    return {"ok": True, "id": edge_id}
 
 
 def _component_row(path: Path, text: str, meta: dict[str, Any], root: Path | None = None) -> dict:
