@@ -9106,7 +9106,6 @@ def t_backup_brain(dry_run: str = "false") -> dict:
         except Exception as e:
             errors.append({"table": table_name, "error": str(e)})
     if errors:
-        notify(f"[BACKUP] Supabase fetch errors: {[e['table'] for e in errors]}")
         return {"ok": False, "date": date_str, "exported": results, "errors": errors}
     # Write each file directly via GitHub Contents API to PRIVATE backup repo
     gh_headers = _ghh()
@@ -9137,8 +9136,6 @@ def t_backup_brain(dry_run: str = "false") -> dict:
     except Exception:
         pass
     ok = len(write_errors) == 0
-    if not ok:
-        notify(f"[BACKUP] Write errors ({len(write_errors)}): {[e.get('path','?').split('/')[-1] for e in write_errors[:5]]}")
     return {"ok": ok, "date": date_str, "backup_repo": backup_repo, "files": len(file_payloads),
             "exported": results, "errors": write_errors}
 TOOLS["backup_brain"] = {"fn": t_backup_brain, "perm": "READ",
