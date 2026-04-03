@@ -386,7 +386,23 @@ def record_reflection_stage(
         "completed_at": completed_at or (now if status in {"done", "complete", "completed", "skipped", "error", "failed"} else None),
         "updated_at": now,
     }
-    ok = sb_upsert(REFLECTION_EVENT_STAGES_TABLE, stage_row, on_conflict="event_id,stage_name")
+    ok = True
+    try:
+        existing = sb_get(
+            REFLECTION_EVENT_STAGES_TABLE,
+            f"select=id&event_id=eq.{event_id}&stage_name=eq.{stage}&limit=1",
+            svc=True,
+        ) or []
+        if existing and existing[0].get("id"):
+            ok = sb_patch(
+                REFLECTION_EVENT_STAGES_TABLE,
+                f"id=eq.{existing[0].get('id')}",
+                stage_row,
+            )
+        else:
+            ok = sb_post(REFLECTION_EVENT_STAGES_TABLE, stage_row)
+    except Exception:
+        ok = False
 
     event_patch = {"updated_at": now}
     if stage == "ingress":
