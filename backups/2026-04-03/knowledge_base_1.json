@@ -1,0 +1,20 @@
+[
+  {
+    "id": 2,
+    "domain": "semantic:sessions",
+    "topic": "sessions:2",
+    "instruction": "Semantic projection of sessions row 2. Use this as retrieval memory for CORE autonomy.",
+    "content": "[state_update] research_autonomy_last_run: 2026-04-03T06:54:09.661370 | ['{\"ok\": true, \"enabled\": true, \"running\": false, \"started_at\": \"2026-04-03T06:54:07.604303\", \"finished_at\": \"2026-04-03T06:54:09.661370\", \"processed\": 0, \"inspected\": 0, \"completed\": 0, \"failed\": 0, \"skipped\": 0, \"follow_up_queued\": 0, \"pending\": 0, \"track_counts\": {}, \"details\": [], \"queue_cursor\": {}}'] | interface=research_autonomy",
+    "confidence": "proven",
+    "active": true
+  },
+  {
+    "id": 3,
+    "domain": "semantic:sessions",
+    "topic": "sessions:1",
+    "instruction": "Semantic projection of sessions row 1. Use this as retrieval memory for CORE autonomy.",
+    "content": "[state_update] code_autonomy_last_run: 2026-04-03T06:54:09.141540 | ['{\"started_at\": \"2026-04-03T06:54:07.600282\", \"finished_at\": \"2026-04-03T06:54:09.141540\", \"processed\": 0, \"inspected\": 0, \"proposed\": 0, \"duplicates\": 0, \"deferred\": 0, \"failures\": 0, \"pending_now\": 0, \"pending_proposals_now\": 0, \"track_counts\": {}, \"details\": [], \"errors\": [], \"queue_cursor\": {}}'] | interface=code_autonomy",
+    "confidence": "proven",
+    "active": true
+  }
+]
