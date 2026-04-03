@@ -9137,9 +9137,7 @@ def t_backup_brain(dry_run: str = "false") -> dict:
     except Exception:
         pass
     ok = len(write_errors) == 0
-    if ok:
-        print(f"[BACKUP] Complete: {len(file_payloads)} files ({kb_total} KB rows) -> {backup_repo}/backups/{date_str}/")
-    else:
+    if not ok:
         notify(f"[BACKUP] Write errors ({len(write_errors)}): {[e.get('path','?').split('/')[-1] for e in write_errors[:5]]}")
     return {"ok": ok, "date": date_str, "backup_repo": backup_repo, "files": len(file_payloads),
             "exported": results, "errors": write_errors}
