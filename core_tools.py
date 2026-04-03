@@ -9050,97 +9050,35 @@ TOOLS["log_reasoning"] = {"fn": t_log_reasoning, "perm": "WRITE",
 
 
 # -- GAP-DATA-01: Weekly brain backup -----------------------------------------
+# Disabled permanently. The backup exporter is retired and must not write
+# backups or emit Telegram/session notifications.
 
 def t_backup_brain(dry_run: str = "false") -> dict:
-    """Export critical Supabase tables to private GitHub backup repo (no secret scanning).
-    Uses BACKUP_REPO env var (pockiesaints7/core-agi-backups). Bypasses L.gh() rate limiter.
-    dry_run=true lists what would be exported without writing."""
+    """Disabled backup hook.
+
+    Returns a stable no-op response so any lingering call sites fail closed
+    without writing GitHub backups or sending notifications.
+    """
     import os as _os
     from datetime import datetime as _dt
-    import json as _json
-    import base64 as _b64
-    dry = str(dry_run).strip().lower() in ("true", "1", "yes")
+
+    _ = dry_run
     date_str = _dt.utcnow().strftime("%Y-%m-%d")
     backup_repo = _os.environ.get("BACKUP_REPO", GITHUB_REPO)
-    # UUID-PK tables: no id=gt.1. Bigserial tables: use id=gt.1.
-    tables = [
-        ("behavioral_rules", "select=id,trigger,pointer,full_rule,domain,priority,active,confidence&order=id.asc&limit=500&id=gt.1"),
-        ("task_queue",       "select=id,task,status,priority,source,created_at&order=priority.desc&limit=50"),
-        ("sessions",         "select=id,summary,domain,created_at&order=created_at.desc&limit=30"),
-        ("mistakes",         "select=id,domain,what_failed,correct_approach,severity,root_cause,created_at&order=id.desc&limit=500&id=gt.1"),
-        ("infrastructure_map", "select=*&order=id.asc&id=gt.1"),
-        ("credentials_index",  "select=id,service,key_name,location,env_var_name,required_for&order=id.asc&id=gt.1"),
-    ]
-    if dry:
-        return {"ok": True, "dry_run": True, "date": date_str, "backup_repo": backup_repo,
-                "tables": ["knowledge_base (paginated 200/chunk)"] + [t[0] for t in tables],
-                "message": f"Would write all tables to {backup_repo}/backups/{date_str}/"}
-    results = []
-    errors  = []
-    # Collect all payloads (Supabase reads)
-    file_payloads = {}
-    KB_CHUNK = 200
-    kb_offset = 1
-    kb_chunk_num = 1
-    kb_total = 0
-    try:
-        while True:
-            qs = f"select=id,domain,topic,instruction,content,confidence,active&order=id.asc&limit={KB_CHUNK}&id=gt.{kb_offset}"
-            chunk = sb_get("knowledge_base", qs, svc=True) or []
-            if not chunk:
-                break
-            file_payloads[f"backups/{date_str}/knowledge_base_{kb_chunk_num}.json"] = _json.dumps(chunk, default=str, indent=2)
-            kb_total += len(chunk)
-            kb_chunk_num += 1
-            kb_offset = chunk[-1]["id"]
-            if len(chunk) < KB_CHUNK:
-                break
-        results.append({"table": "knowledge_base", "rows": kb_total, "chunks": kb_chunk_num - 1})
-    except Exception as e:
-        errors.append({"table": "knowledge_base", "error": str(e)})
-    for table_name, qs in tables:
-        try:
-            rows = sb_get(table_name, qs, svc=True) or []
-            file_payloads[f"backups/{date_str}/{table_name}.json"] = _json.dumps(rows, default=str, indent=2)
-            results.append({"table": table_name, "rows": len(rows)})
-        except Exception as e:
-            errors.append({"table": table_name, "error": str(e)})
-    if errors:
-        return {"ok": False, "date": date_str, "exported": results, "errors": errors}
-    # Write each file directly via GitHub Contents API to PRIVATE backup repo
-    gh_headers = _ghh()
-    write_errors = []
-    for path, content in file_payloads.items():
-        try:
-            sha = None
-            r = httpx.get(f"https://api.github.com/repos/{backup_repo}/contents/{path}",
-                          headers=gh_headers, timeout=10)
-            if r.is_success:
-                sha = r.json().get("sha")
-            payload = {"message": f"[backup] {date_str}: {path.split('/')[-1]}",
-                       "content": _b64.b64encode(content.encode("utf-8")).decode("ascii")}
-            if sha:
-                payload["sha"] = sha
-            put = httpx.put(f"https://api.github.com/repos/{backup_repo}/contents/{path}",
-                            headers=gh_headers, json=payload, timeout=30)
-            if not put.is_success:
-                write_errors.append({"path": path, "status": put.status_code, "body": put.text[:200]})
-        except Exception as e:
-            write_errors.append({"path": path, "error": str(e)})
-    for r in results:
-        r["ok"] = len(write_errors) == 0
-    try:
-        sb_post("sessions", {"summary": f"[state_update] last_backup_ts: {_dt.utcnow().isoformat()}",
-                             "actions": [f"backup_brain: {len(file_payloads)} files -> {backup_repo}/backups/{date_str}/"],
-                             "interface": "mcp"})
-    except Exception:
-        pass
-    ok = len(write_errors) == 0
-    return {"ok": ok, "date": date_str, "backup_repo": backup_repo, "files": len(file_payloads),
-            "exported": results, "errors": write_errors}
+    return {
+        "ok": True,
+        "disabled": True,
+        "date": date_str,
+        "backup_repo": backup_repo,
+        "files": 0,
+        "exported": [],
+        "errors": [],
+        "message": "Backup feature disabled; no files exported and no notifications sent.",
+    }
+
 TOOLS["backup_brain"] = {"fn": t_backup_brain, "perm": "READ",
-    "args": [{"name": "dry_run", "type": "string", "description": "true=list what would be exported without writing (default false)"}],
-    "desc": "GAP-DATA-01: Export critical Supabase tables to GitHub /backups/YYYY-MM-DD/. Runs weekly. dry_run=true for safe preview."}
+    "args": [{"name": "dry_run", "type": "string", "description": "disabled: retained only for compatibility"}],
+    "desc": "DISABLED: backup exporter retired. Returns a no-op response and performs no writes."}
 
 
 def t_maintenance_purge(table: str = "hot_reflections", older_than_days: int = 14, dry_run: bool = True):
