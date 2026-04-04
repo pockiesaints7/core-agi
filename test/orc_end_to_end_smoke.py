@@ -190,6 +190,12 @@ async def _run_case(case) -> tuple[dict, list[str]]:
     gate = msg.context.get("evidence_gate", {}) or {}
     style = msg.context.get("response_style_packet", {}) or {}
     profile = msg.context.get("input_profile", {}) or {}
+    tool_policy = msg.context.get("tool_policy_packet", {}) or {}
+    task_mode = (
+        msg.context.get("task_mode_packet", {})
+        or getattr(msg, "task_mode_packet", {})
+        or {}
+    )
     actual = {
         "primary_class": profile.get("primary_class"),
         "request_kind": msg.request_kind,
@@ -204,12 +210,26 @@ async def _run_case(case) -> tuple[dict, list[str]]:
         "repo_map_needed": bool(gate.get("repo_map_needed", False)),
         "public_family": gate.get("public_family"),
         "public_needed": bool(gate.get("public_research_needed", False)),
+        "tool_best_fit_family": tool_policy.get("best_fit_family"),
+        "tool_best_first_tool": tool_policy.get("best_first_tool"),
+        "tool_registry_size_min": tool_policy.get("registry_size"),
+        "work_intent": task_mode.get("work_intent"),
+        "work_subintent": task_mode.get("work_subintent"),
+        "task_agentic": bool(task_mode.get("agentic_recommended", False)),
+        "artifact_expected": task_mode.get("artifact_expected"),
+        "task_best_fit_family": tool_policy.get("best_fit_family"),
+        "task_best_first_tool": tool_policy.get("best_first_tool"),
         "final_output": msg.final_output or "",
         "styled_response": msg.styled_response or "",
         "has_errors": msg.has_errors,
     }
     failures: list[str] = []
     for key, expected in case.expect.items():
+        if key == "tool_registry_size_min":
+            actual_size = int(actual.get("tool_registry_size_min") or 0)
+            if actual_size < int(expected):
+                failures.append(f"{case.case_id}: {key} expected >= {expected!r} got {actual_size!r}")
+            continue
         if actual.get(key) != expected:
             failures.append(f"{case.case_id}: {key} expected {expected!r} got {actual.get(key)!r}")
 

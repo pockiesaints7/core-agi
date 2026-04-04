@@ -8,6 +8,7 @@ smoke test passes on all modules.
 import hashlib
 import json
 import os
+import sys
 import time
 import threading
 from collections import defaultdict
@@ -57,13 +58,27 @@ except Exception:
 _REPO_ENV = Path(__file__).resolve().parent / ".env"
 load_dotenv(_REPO_ENV)
 
+
+def _configure_stdio() -> None:
+    for stream_name in ("stdout", "stderr"):
+        stream = getattr(sys, stream_name, None)
+        if stream is None or not hasattr(stream, "reconfigure"):
+            continue
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
+
+_configure_stdio()
+
 # -- Env vars ------------------------------------------------------------------
 GROQ_API_KEY   = os.environ["GROQ_API_KEY"]
 GROQ_MODEL     = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
 GROQ_FAST      = os.environ.get("GROQ_MODEL_FAST", "llama-3.1-8b-instant")
 SUPABASE_URL   = os.environ["SUPABASE_URL"]
 SUPABASE_SVC   = os.environ["SUPABASE_SERVICE_KEY"]
-SUPABASE_ANON  = os.environ["SUPABASE_ANON_KEY"]
+SUPABASE_ANON  = os.environ.get("SUPABASE_ANON_KEY", "")
 TELEGRAM_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 TELEGRAM_CHAT  = os.environ["TELEGRAM_CHAT_ID"]
 GITHUB_PAT     = os.environ["GITHUB_PAT"]
@@ -71,7 +86,7 @@ GITHUB_REPO    = os.environ.get("GITHUB_USERNAME", "pockiesaints7") + "/core-agi
 MCP_SECRET     = os.environ["MCP_SECRET"]
 TELEGRAM_WEBHOOK_SECRET = os.environ.get("TELEGRAM_WEBHOOK_SECRET", MCP_SECRET)
 SUPABASE_PAT   = os.environ.get("SUPABASE_PAT", "")  # Management API PAT for DB introspection
-SUPABASE_REF   = os.environ.get("SUPABASE_REF", "bwywfbiprbdkhlbwyprw")  # Project ref
+SUPABASE_REF   = os.environ.get("SUPABASE_REF", "lwoddulnzpzkfgifsekl")  # Project ref
 PORT           = int(os.environ.get("PORT", 8081))
 # -- Env parsing helpers ------------------------------------------------------
 
@@ -119,6 +134,12 @@ _validate_telegram_token_layout()
 SESSION_TTL_H  = 8
 
 MCP_PROTOCOL_VERSION = "2024-11-05"
+
+# Trading specialization config
+CORE_SPECIALIZATION = _env_clean("CORE_SPECIALIZATION", "trading").lower()
+CORE_TRAINING_MODE = _env_clean("CORE_TRAINING_MODE", "trading_only").lower()
+CORE_ENABLE_GENERIC_PUBLIC_INGEST = _env_clean("CORE_ENABLE_GENERIC_PUBLIC_INGEST", "0").lower() in {"1", "true", "yes", "on"}
+CORE_ENABLE_GENERIC_RESEARCH_AUTONOMY = _env_clean("CORE_ENABLE_GENERIC_RESEARCH_AUTONOMY", "0").lower() in {"1", "true", "yes", "on"}
 
 # Training config
 COLD_HOT_THRESHOLD        = 5   # lowered from 10 -- faster signal processing
@@ -173,9 +194,11 @@ _SB_SCHEMA_CACHE_UNTIL = 0.0
 _SB_SCHEMA_CACHE_LOCK = threading.Lock()
 
 
-def _sbh(svc=False):
-    k = SUPABASE_SVC if svc else SUPABASE_ANON
-    return {"apikey": k, "Authorization": f"Bearer {k}",
+# The hardened Supabase project is service-role-only for public tables.
+# Keep the svc flag only for call-site compatibility; all DB traffic uses the service key.
+def _sbh(svc=True):
+    _ = svc
+    return {"apikey": SUPABASE_SVC, "Authorization": f"Bearer {SUPABASE_SVC}",
             "Content-Type": "application/json", "Prefer": "return=minimal"}
 
 def _sbh_count_svc():
@@ -275,7 +298,7 @@ def _sb_schema_cache_cooldown(delay: float, table: str) -> None:
     print(f"[SB GET] {table} schema cache warming; retrying in {delay:.2f}s")
 
 
-def sb_get(t, qs="", svc=False):
+def sb_get(t, qs="", svc=True):
     if _sb_circuit_open() or _sb_schema_cache_cooldown_open():
         return []
     with _SB_SCHEMA_CACHE_LOCK:

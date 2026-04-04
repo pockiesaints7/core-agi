@@ -1158,6 +1158,85 @@ def _component_lookup(path: str) -> dict:
     return {}
 
 
+def _normalize_component_path(path: str) -> str:
+    raw = str(path or "").strip().strip('"').strip("'").replace("\\", "/")
+    if not raw:
+        return ""
+    repo_root_norm = str(REPO_ROOT).replace("\\", "/").rstrip("/")
+    if raw.startswith(repo_root_norm + "/"):
+        return raw[len(repo_root_norm) + 1:]
+    repo_marker = f"/{REPO_NAME}/"
+    if repo_marker in raw:
+        return raw.split(repo_marker, 1)[1]
+    drive_marker = "/mnt/"
+    if raw.startswith(drive_marker) and len(raw) > 6 and raw[6] == "/":
+        raw = f"{raw[5].upper()}:/{raw[7:]}"
+        if raw.replace("\\", "/").startswith(repo_root_norm + "/"):
+            return raw[len(repo_root_norm) + 1:]
+    return raw.lstrip("./")
+
+
+def _local_component_packet(path: str, limit: int = 10) -> dict:
+    normalized = _normalize_component_path(path)
+    if not normalized:
+        return {"ok": False, "error": "path required"}
+    candidates: list[Path] = []
+    raw_path = Path(normalized)
+    if raw_path.is_absolute():
+        candidates.append(raw_path)
+    candidates.append(REPO_ROOT / normalized)
+    candidates.append(REPO_ROOT / Path(normalized).name)
+    seen: set[str] = set()
+    for candidate in candidates:
+        try:
+            resolved = candidate.resolve()
+        except Exception:
+            continue
+        key = str(resolved).lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        try:
+            if not resolved.exists() or not resolved.is_file():
+                continue
+            if resolved != REPO_ROOT and REPO_ROOT not in resolved.parents:
+                continue
+            if not _is_text_file(resolved):
+                continue
+            text = _read_text(resolved)
+            if not text:
+                continue
+            meta = _file_metadata(resolved, text)
+            component = _component_row(resolved, text, meta)
+            chunks = []
+            for chunk in _chunk_text(text)[:max(1, min(limit, 50))]:
+                chunks.append({
+                    "component_path": component["path"],
+                    "chunk_index": chunk["chunk_index"],
+                    "chunk_type": _component_type(resolved),
+                    "start_line": chunk["start_line"],
+                    "end_line": chunk["end_line"],
+                    "summary": chunk["content"].splitlines()[0][:220] if chunk["content"].splitlines() else component["path"],
+                    "content": chunk["content"],
+                    "chunk_hash": _file_hash(chunk["content"]),
+                    "active": True,
+                })
+            edges = _build_edges(resolved, text, meta)[: max(1, min(limit * 3, 150))]
+            return {
+                "ok": True,
+                "query": path,
+                "focus_path": component["path"],
+                "components": [component],
+                "chunks": chunks,
+                "edges": edges,
+                "summary": component.get("summary", ""),
+                "source": "local_fallback",
+            }
+        except Exception:
+            continue
+    return {"ok": False, "error": f"component not found: {path}"}
+
+
 def build_repo_component_packet(path: str = "", query: str = "", limit: int = 10) -> dict:
     try:
         lim = max(1, min(int(limit or 10), 50))
@@ -1169,6 +1248,9 @@ def build_repo_component_packet(path: str = "", query: str = "", limit: int = 10
         if path:
             component = _component_lookup(path)
             if not component:
+                fallback = _local_component_packet(path, limit=lim)
+                if fallback.get("ok"):
+                    return fallback
                 return {"ok": False, "error": f"component not found: {path}"}
             chunks = sb_get(
                 "repo_component_chunks",
@@ -1234,6 +1316,10 @@ def build_repo_graph_packet(path: str = "", query: str = "", depth: int = 2, lim
         comp = _component_lookup(path)
         if comp:
             roots.append(comp)
+        else:
+            fallback = _local_component_packet(path, limit=lim)
+            if fallback.get("ok"):
+                roots.extend(fallback.get("components") or [])
     if not roots and query:
         packet = build_repo_component_packet(query=query, limit=lim)
         if packet.get("ok"):
@@ -1351,4 +1437,3 @@ def t_repo_graph_packet(path: str = "", query: str = "", depth: str = "2", limit
     except Exception:
         dep = 2
     return build_repo_graph_packet(path=path, query=query, depth=dep, limit=lim)
-

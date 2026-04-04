@@ -7,16 +7,23 @@ from __future__ import annotations
 
 import re
 import hashlib
+import time
 from dataclasses import asdict
 from typing import Any, Dict, Iterable, List
 from datetime import datetime
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor
 
 import httpx
 
 from core_config import SUPABASE_URL, _sbh_count_svc
 from core_public_evidence import classify_public_evidence
 from core_task_taxonomy import build_task_mode_packet
+
+
+_COUNT_CACHE_TTL_SECS = 30
+_COUNT_CACHE: Dict[tuple[str, str], tuple[float, int]] = {}
+_CAPABILITY_PACKET_CACHE: Dict[str, Any] = {"ts": 0.0, "packet": None}
 
 
 # ── Basic helpers ────────────────────────────────────────────────────────────
@@ -718,13 +725,20 @@ def build_tool_policy_packet(msg) -> Dict[str, Any]:
 
 
 def _count_table(table: str, where: str = "") -> int:
+    cache_key = (table, where or "")
+    now = time.time()
+    cached = _COUNT_CACHE.get(cache_key)
+    if cached and (now - cached[0]) < _COUNT_CACHE_TTL_SECS:
+        return cached[1]
     try:
         url = f"{SUPABASE_URL}/rest/v1/{table}?select=id&limit=1"
         if where:
             url += f"&{where}"
         r = httpx.get(url, headers=_sbh_count_svc(), timeout=10)
         cr = r.headers.get("content-range", "*/0")
-        return int(cr.split("/")[-1]) if "/" in cr else 0
+        count = int(cr.split("/")[-1]) if "/" in cr else 0
+        _COUNT_CACHE[cache_key] = (now, count)
+        return count
     except Exception:
         return -1
 
@@ -1235,11 +1249,12 @@ def should_use_agentic_mode(msg) -> bool:
 # ── Evidence / capability packets ────────────────────────────────────────────
 def build_evidence_packet(msg) -> Dict[str, Any]:
     ctx = msg.context or {}
+    request_kind = getattr(msg, "request_kind", "") or ctx.get("request_kind", "")
     packet = {
         "request": {
             "text": _safe_text(msg.text, 800),
             "intent": msg.intent,
-            "request_kind": getattr(msg, "request_kind", ""),
+            "request_kind": request_kind,
             "response_mode": getattr(msg, "response_mode", ""),
             "source": msg.source,
             "message_type": msg.message_type,
@@ -1259,8 +1274,44 @@ def build_evidence_packet(msg) -> Dict[str, Any]:
     }
     try:
         from core_reasoning_packet import build_reasoning_packet
-        if msg.text and len(msg.text.strip()) > 2:
-            sem = build_reasoning_packet(msg.text, domain=ctx.get("current_domain", "general"))
+        lower_text = (msg.text or "").lower()
+        reasoning_tables = None
+        if request_kind in {"status", "self_assessment", "conversation"}:
+            reasoning_tables = []
+        elif request_kind in {"owner_review"}:
+            reasoning_tables = [
+                "knowledge_base",
+                "mistakes",
+                "behavioral_rules",
+                "output_reflections",
+                "evolution_queue",
+                "repo_components",
+            ]
+        elif request_kind in {"task", "debug"} or any(token in lower_text for token in ("code", "repo", "file", "commit", "git", ".py")):
+            reasoning_tables = [
+                "knowledge_base",
+                "mistakes",
+                "behavioral_rules",
+                "repo_components",
+                "repo_component_chunks",
+                "repo_component_edges",
+            ]
+        else:
+            reasoning_tables = [
+                "knowledge_base",
+                "mistakes",
+                "behavioral_rules",
+                "hot_reflections",
+                "conversation_episodes",
+            ]
+
+        if reasoning_tables and msg.text and len(msg.text.strip()) > 2:
+            sem = build_reasoning_packet(
+                msg.text,
+                domain=ctx.get("current_domain", "general"),
+                tables=reasoning_tables,
+                limit=8,
+            )
             if isinstance(sem, dict) and sem.get("ok"):
                 packet["semantic"] = sem.get("packet", {})
                 repo_counts = (packet["semantic"].get("memory_by_table") or {})
@@ -1279,23 +1330,40 @@ def build_evidence_packet(msg) -> Dict[str, Any]:
 
 
 def build_capability_packet(msg) -> Dict[str, Any]:
-    # Counts
-    counts = {
-        "knowledge_base": _count_table("knowledge_base"),
-        "mistakes": _count_table("mistakes"),
-        "sessions": _count_table("sessions"),
-        "task_pending": _count_table("task_queue", "status=eq.pending"),
-        "task_in_progress": _count_table("task_queue", "status=eq.in_progress"),
-        "task_done": _count_table("task_queue", "status=eq.done"),
-        "task_failed": _count_table("task_queue", "status=eq.failed"),
-        "evo_pending": _count_table("evolution_queue", "status=eq.pending"),
-        "evo_applied": _count_table("evolution_queue", "status=eq.applied"),
-        "evo_rejected": _count_table("evolution_queue", "status=eq.rejected"),
-        "repo_components": _count_table("repo_components", "active=eq.true"),
-        "repo_component_chunks": _count_table("repo_component_chunks", "active=eq.true"),
-        "repo_component_edges": _count_table("repo_component_edges", "active=eq.true"),
-        "repo_scan_runs": _count_table("repo_scan_runs"),
+    now = time.time()
+    cached_packet = _CAPABILITY_PACKET_CACHE.get("packet")
+    cached_ts = float(_CAPABILITY_PACKET_CACHE.get("ts") or 0.0)
+    if cached_packet and (now - cached_ts) < _COUNT_CACHE_TTL_SECS:
+        return dict(cached_packet)
+
+    count_queries = {
+        "knowledge_base": ("knowledge_base", ""),
+        "mistakes": ("mistakes", ""),
+        "sessions": ("sessions", ""),
+        "task_pending": ("task_queue", "status=eq.pending"),
+        "task_in_progress": ("task_queue", "status=eq.in_progress"),
+        "task_done": ("task_queue", "status=eq.done"),
+        "task_failed": ("task_queue", "status=eq.failed"),
+        "evo_pending": ("evolution_queue", "status=eq.pending"),
+        "evo_applied": ("evolution_queue", "status=eq.applied"),
+        "evo_rejected": ("evolution_queue", "status=eq.rejected"),
+        "repo_components": ("repo_components", "active=eq.true"),
+        "repo_component_chunks": ("repo_component_chunks", "active=eq.true"),
+        "repo_component_edges": ("repo_component_edges", "active=eq.true"),
+        "repo_scan_runs": ("repo_scan_runs", ""),
     }
+    counts = {}
+    with ThreadPoolExecutor(max_workers=min(8, len(count_queries) or 1)) as pool:
+        future_map = {
+            key: pool.submit(_count_table, table, where)
+            for key, (table, where) in count_queries.items()
+        }
+        for key, future in future_map.items():
+            try:
+                counts[key] = future.result()
+            except Exception:
+                counts[key] = -1
+
     owner_only = _count_table("evolution_queue", "status=eq.pending&review_scope=eq.owner_only")
     if owner_only >= 0:
         counts["owner_review_pending"] = owner_only
@@ -1354,7 +1422,7 @@ def build_capability_packet(msg) -> Dict[str, Any]:
     if counts.get("evo_pending", 0) and counts.get("evo_pending", 0) > 0:
         gaps.append(f"evolution queue still has {counts['evo_pending']} pending rows")
 
-    return {
+    packet = {
         "counts": counts,
         "workers": workers,
         "headline": (
@@ -1365,6 +1433,9 @@ def build_capability_packet(msg) -> Dict[str, Any]:
         "gaps": gaps,
         "timestamp": datetime.utcnow().isoformat(),
     }
+    _CAPABILITY_PACKET_CACHE["ts"] = now
+    _CAPABILITY_PACKET_CACHE["packet"] = packet
+    return packet
 
 
 def build_evidence_gate(msg) -> Dict[str, Any]:

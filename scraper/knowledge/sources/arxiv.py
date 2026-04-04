@@ -2,15 +2,15 @@
 Fetch papers from ArXiv public API + Semantic Scholar citation counts.
 No API key required.
 
-API: http://export.arxiv.org/api/query
+API: https://export.arxiv.org/api/query
 Enrichment: https://api.semanticscholar.org/graph/v1/paper/arXiv:{id}
 """
 import httpx
 import xml.etree.ElementTree as ET
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 from ..scorer import compute_engagement_score
 
-ARXIV_API = "http://export.arxiv.org/api/query"
+ARXIV_API = "https://export.arxiv.org/api/query"
 SS_API    = "https://api.semanticscholar.org/graph/v1/paper/arXiv:{arxiv_id}"
 SS_FIELDS = "citationCount,influentialCitationCount,year"
 
@@ -76,7 +76,7 @@ async def fetch(topic: str, max_results: int = 50, since_days: int = 7) -> list:
 
     results = []
     try:
-        async with httpx.AsyncClient(timeout=30) as client:
+        async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
             r = await client.get(ARXIV_API, params=params)
             r.raise_for_status()
             root = ET.fromstring(r.text)

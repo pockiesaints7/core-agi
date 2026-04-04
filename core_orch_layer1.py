@@ -51,6 +51,7 @@ load_dotenv()
 
 from orchestrator_message import OrchestratorMessage
 from core_orch_context import initial_request_profile
+from core_config import _env_int
 
 # ?? Dedup gate ???????????????????????????????????????????????????????????????
 # Prevents Telegram webhook retries from processing the same message twice.
@@ -215,11 +216,11 @@ async def _parse_telegram(update: Dict[str, Any]) -> OrchestratorMessage:
         or ""
     )
 
-    # NLU expansion: map natural phrases â†’ slash-commands before routing
+    # NLU expansion: map natural phrases -> slash-commands before routing
     if text and not text.startswith("/"):
         expanded = _nlu_expand(text)
         if expanded != text:
-            print(f"[L1] NLU expand: {text!r} â†’ {expanded!r}")
+            print(f"[L1] NLU expand: {text!r} -> {expanded!r}")
             text = expanded
 
     msg = OrchestratorMessage(
@@ -387,7 +388,7 @@ async def layer_1_triage(
         # â”€â”€ L0 security gate â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         from core_orch_layer0 import gate_check
         if not gate_check(msg):
-            print(f"[L1] L0 gate REJECTED â€” surfacing to output")
+            print("[L1] L0 gate REJECTED - surfacing to output")
             from core_orch_layer10 import layer_10_output
             await layer_10_output(msg)
             return msg
@@ -410,8 +411,6 @@ async def layer_1_triage(
         from core_orch_layer10 import layer_10_output
         await layer_10_output(err_msg)
         return err_msg
-
-
 
 
 

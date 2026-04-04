@@ -266,21 +266,25 @@ def fire_system_prompt(prompt_text: str, target: str, version: int) -> None:
     E.g. after background_researcher completes N cycles on this prompt.
     """
     try:
-        loop = asyncio.get_event_loop()
-        if loop.is_running():
-            asyncio.create_task(layer11_post_output(
+        try:
+            loop = asyncio.get_running_loop()
+            loop.create_task(layer11_post_output(
                 output_text=prompt_text,
                 source="system_prompt",
                 prompt_target=target,
                 prompt_version=version,
             ))
-        else:
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
             loop.run_until_complete(layer11_post_output(
                 output_text=prompt_text,
                 source="system_prompt",
                 prompt_target=target,
                 prompt_version=version,
             ))
+            loop.close()
+            asyncio.set_event_loop(None)
     except Exception as e:
         print(f"[L11] fire_system_prompt error: {e}")
 

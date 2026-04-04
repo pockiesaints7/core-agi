@@ -224,4 +224,4 @@ async def layer_10_output(msg: OrchestratorMessage):
         msg.add_error("L10", exc, "OUTPUT_FAILED")
 
     msg.track_layer("L10-COMPLETE")
-    print(f"[L10] Pipeline complete. Layers: {' → '.join(msg.layer_stack)}")
+    print(f"[L10] Pipeline complete. Layers: {' -> '.join(msg.layer_stack)}")

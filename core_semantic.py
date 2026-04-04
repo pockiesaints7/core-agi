@@ -33,6 +33,8 @@ _EMBED_DIM        = 1024
 _DEFAULT_THRESHOLD = 0.20
 _MGMT_URL         = f"https://api.supabase.com/v1/projects/{SUPABASE_REF}/database/query"
 _MGMT_HEADERS     = {"Authorization": f"Bearer {SUPABASE_PAT}", "Content-Type": "application/json"}
+_SEMANTIC_RPC_DISABLED = False
+_SEMANTIC_RPC_DISABLED_REASON = ""
 
 # ══════════════════════════════════════════════════════════════════════════════
 # EMBEDDING — delegate to core_embeddings (battle-tested, env-aware)
@@ -129,36 +131,42 @@ SEMANTIC_TABLES = {
         "rpc":       "match_knowledge_base",
         "select":    "id,domain,topic,instruction,content,confidence",
         "threshold": 0.20,
+        "domain_column": "domain",
     },
     "mistakes": {
         "text_fn":   _mistake_text,
         "rpc":       "match_mistakes",
         "select":    "id,domain,context,what_failed,correct_approach,root_cause,how_to_avoid,severity",
         "threshold": 0.20,
+        "domain_column": "domain",
     },
     "behavioral_rules": {
         "text_fn":   _rule_text,
         "rpc":       "match_behavioral_rules",
         "select":    "id,trigger,pointer,full_rule,domain,priority,confidence",
         "threshold": 0.20,
+        "domain_column": "domain",
     },
     "pattern_frequency": {
         "text_fn":   _pattern_text,
         "rpc":       "match_patterns",
         "select":    "id,pattern_key,frequency,domain,description",
         "threshold": 0.20,
+        "domain_column": "domain",
     },
     "hot_reflections": {
         "text_fn":   _hot_text,
         "rpc":       "match_hot_reflections",
         "select":    "id,domain,task_summary,reflection_text,gaps_identified,quality_score",
         "threshold": 0.20,
+        "domain_column": "domain",
     },
     "output_reflections": {
         "text_fn":   _reflect_text,
         "rpc":       "match_output_reflections",
         "select":    "id,source,gap,gap_domain,new_behavior,verdict",
         "threshold": 0.20,
+        "domain_column": "gap_domain",
     },
     "evolution_queue": {
         "text_fn":   _evo_text,
@@ -191,6 +199,88 @@ SEMANTIC_TABLES = {
         "threshold": 0.20,
     },
 }
+
+
+def _domain_filter(table: str, domain: str) -> str:
+    cfg = SEMANTIC_TABLES.get(table, {})
+    column = cfg.get("domain_column", "")
+    if not column or not domain or domain in ("", "all"):
+        return ""
+    return f"&{column}=eq.{domain}"
+
+
+def _merge_filters(*parts: str) -> str:
+    return "".join(part for part in parts if part)
+
+
+def _should_disable_rpc(status_code: int | None, text: str) -> bool:
+    lowered = (text or "").lower()
+    if status_code not in {400, 404, 500}:
+        return False
+    return any(token in lowered for token in (
+        "operator does not exist",
+        "vector <=>",
+        "pgrst202",
+        "function public.match_",
+        "no operator matches the given name",
+    ))
+
+
+def _disable_rpc(reason: str) -> None:
+    global _SEMANTIC_RPC_DISABLED, _SEMANTIC_RPC_DISABLED_REASON
+    if not _SEMANTIC_RPC_DISABLED:
+        print(f"[SEMANTIC] disabling RPC fan-out: {reason[:200]}")
+    _SEMANTIC_RPC_DISABLED = True
+    _SEMANTIC_RPC_DISABLED_REASON = reason[:200]
+
+
+def _search_with_embedding(
+    table: str,
+    query: str,
+    query_embedding: list | None,
+    limit: int = 10,
+    threshold: float = None,
+    filters: str = "",
+) -> list:
+    """Shared search path so fan-out callers can reuse one embedding."""
+    if table not in SEMANTIC_TABLES:
+        raise ValueError(f"Table '{table}' not in SEMANTIC_TABLES")
+
+    cfg = SEMANTIC_TABLES[table]
+    thresh = threshold if threshold is not None else cfg["threshold"]
+    vec = query_embedding or []
+
+    if _SEMANTIC_RPC_DISABLED:
+        return _ilike_fallback(table, query, limit, filters)
+
+    if vec:
+        try:
+            payload = {
+                "query_embedding": vec,
+                "match_threshold": thresh,
+                "match_count": limit,
+            }
+            r = httpx.post(
+                f"{SUPABASE_URL}/rest/v1/rpc/{cfg['rpc']}",
+                headers={**_sbh(True), "Prefer": "return=representation"},
+                json=payload,
+                timeout=15,
+            )
+            if r.is_success:
+                results = r.json() or []
+                if results:
+                    print(f"[SEMANTIC] {table}: {len(results)} results for '{query[:50]}'")
+                return results[:limit]
+            if _should_disable_rpc(r.status_code, r.text):
+                _disable_rpc(f"{table}: {r.status_code} {r.text[:200]}")
+            print(f"[SEMANTIC] {table} RPC failed: {r.status_code} {r.text[:200]}")
+        except Exception as e:
+            print(f"[SEMANTIC] {table} RPC failed: {e}")
+        print(f"[SEMANTIC] WARNING: falling back to ilike for {table} - RPC unavailable")
+    else:
+        print(f"[SEMANTIC] WARNING: falling back to ilike for {table} - embed failed")
+
+    return _ilike_fallback(table, query, limit, filters)
 
 # ══════════════════════════════════════════════════════════════════════════════
 # CORE SEARCH — single entry point
@@ -287,6 +377,89 @@ def search_many(
             item["semantic_query"] = query
             item["semantic_score"] = row.get("score") or row.get("similarity") or row.get("match_score") or row.get("_score") or 0
             merged.append(item)
+    merged.sort(key=lambda r: float(r.get("semantic_score") or 0), reverse=True)
+    return merged[:limit]
+
+
+def search(
+    table: str,
+    query: str,
+    limit: int = 10,
+    threshold: float = None,
+    filters: str = "",
+) -> list:
+    """
+    Semantic search against any registered table.
+    Replaces ALL ilike searches. Emergency ilike fallback only if Voyage is down.
+    """
+    if table not in SEMANTIC_TABLES:
+        raise ValueError(f"Table '{table}' not in SEMANTIC_TABLES")
+
+    cfg = SEMANTIC_TABLES[table]
+    thresh = threshold if threshold is not None else cfg["threshold"]
+
+    if not query or len(query.strip()) < 2:
+        return []
+
+    vec = _embed_safe(query.strip())
+    return _search_with_embedding(
+        table=table,
+        query=query.strip(),
+        query_embedding=vec,
+        limit=limit,
+        threshold=thresh,
+        filters=filters,
+    )
+
+
+def search_many(
+    query: str,
+    tables: list[str] | None = None,
+    limit: int = 10,
+    domain: str = "",
+    filters_by_table: dict[str, str] | None = None,
+) -> list:
+    """Fan out one semantic query across multiple registered tables and merge the results."""
+    if not query or len(query.strip()) < 2:
+        return []
+
+    tables = tables or list(SEMANTIC_TABLES.keys())
+    filters_by_table = filters_by_table or {}
+    per_table_limit = max(1, min(limit, 5))
+    query_text = query.strip()
+    query_embedding = _embed_safe(query_text)
+    merged = []
+    seen = set()
+
+    for table in tables:
+        if table not in SEMANTIC_TABLES:
+            continue
+        table_filters = _merge_filters(
+            filters_by_table.get(table, ""),
+            _domain_filter(table, domain),
+        )
+        try:
+            rows = _search_with_embedding(
+                table=table,
+                query=query_text,
+                query_embedding=query_embedding,
+                limit=per_table_limit,
+                filters=table_filters,
+            ) or []
+        except Exception:
+            rows = []
+        for row in rows:
+            rid = row.get("id") or row.get("event_id") or row.get("topic") or row.get("pattern_key") or row.get("change_summary") or row.get("summary")
+            key = (table, str(rid))
+            if key in seen:
+                continue
+            seen.add(key)
+            item = dict(row)
+            item["semantic_table"] = table
+            item["semantic_query"] = query_text
+            item["semantic_score"] = row.get("score") or row.get("similarity") or row.get("match_score") or row.get("_score") or 0
+            merged.append(item)
+
     merged.sort(key=lambda r: float(r.get("semantic_score") or 0), reverse=True)
     return merged[:limit]
 

@@ -1,25 +1,24 @@
-"""scraper/knowledge/__init__.py
-Knowledge ingestion pipeline — multi-source ingestion feeding hot_reflections.
-Exports: ingest_knowledge
+"""Knowledge ingestion pipeline entry point.
+
+Imports are intentionally lazy so optional source adapters do not break callers
+that only need shared storage/helpers.
 """
-from .router import route
-from .storage import write_sources
-from .deduplicator import deduplicate
-from .concept_extractor import extract_concepts
+from __future__ import annotations
 
 
 async def ingest_knowledge(
     topic: str,
-    sources: list = None,
+    sources: list | None = None,
     max_per_source: int = 50,
     since_days: int = 7,
     full_refresh: bool = False,
 ) -> dict:
-    """Main entry point. Fetches topic from all requested sources,
-    deduplicates, scores, extracts concepts, writes to kb_* tables,
-    injects hot_reflections for cold processor pickup.
-    Returns summary dict: {topic, sources_used, records_inserted, records_updated, concepts_found}
-    """
+    """Fetch a topic from public sources and persist the distilled artifacts."""
+    from .concept_extractor import extract_concepts
+    from .deduplicator import deduplicate
+    from .router import route
+    from .storage import write_sources
+
     if sources is None:
         sources = ["arxiv", "docs", "medium", "reddit", "hackernews", "stackoverflow"]
 

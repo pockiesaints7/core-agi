@@ -10,26 +10,24 @@ export default {
       });
     }
 
-    // Mirrors core.py os.environ reads exactly — nothing more, nothing less
     const config = {
       version: "5.0",
       service: "CORE v5.0 Step 0",
 
-      // Required — core.py crashes without these
-      GROQ_API_KEY:         env.GROQ_API_KEY,
-      SUPABASE_URL:         env.SUPABASE_URL,
+      // Required for the current core-agi runtime
+      GROQ_API_KEY: env.GROQ_API_KEY,
+      SUPABASE_URL: env.SUPABASE_URL,
       SUPABASE_SERVICE_KEY: env.SUPABASE_SERVICE_KEY,
-      SUPABASE_ANON_KEY:    env.SUPABASE_ANON_KEY,
-      TELEGRAM_BOT_TOKEN:   env.TELEGRAM_BOT_TOKEN,
-      TELEGRAM_CHAT_ID:     env.TELEGRAM_CHAT_ID,
-      GITHUB_PAT:           env.GITHUB_PAT,
-      MCP_SECRET:           env.MCP_SECRET,
+      TELEGRAM_BOT_TOKEN: env.TELEGRAM_BOT_TOKEN,
+      TELEGRAM_CHAT_ID: env.TELEGRAM_CHAT_ID,
+      GITHUB_PAT: env.GITHUB_PAT,
+      MCP_SECRET: env.MCP_SECRET,
 
-      // Optional — have defaults in core.py
-      GROQ_MODEL:           env.GROQ_MODEL,
-      GROQ_MODEL_FAST:      env.GROQ_MODEL_FAST,
-      GITHUB_USERNAME:      env.GITHUB_USERNAME,
-      PORT:                 env.PORT,
+      // Optional keys with runtime defaults
+      GROQ_MODEL: env.GROQ_MODEL,
+      GROQ_MODEL_FAST: env.GROQ_MODEL_FAST,
+      GITHUB_USERNAME: env.GITHUB_USERNAME,
+      PORT: env.PORT,
     };
 
     return new Response(JSON.stringify(config, null, 2), {

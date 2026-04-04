@@ -120,7 +120,7 @@ _CLASSIFY_SYSTEM = (
     "looking something up, performing an action, checking status, fetching data, running code, "
     "time/date queries, calculations, web searches, system operations, or ANY non-trivial request. "
     "requires_tools is FALSE ONLY for pure greetings (hi/hello/thanks) and simple acknowledgements. "
-    "When in doubt → set requires_tools=true. "
+    "When in doubt -> set requires_tools=true. "
     "Return ONLY valid JSON. No preamble, no markdown, no extra keys."
 )
 
@@ -277,7 +277,7 @@ async def _fast_classify(msg: OrchestratorMessage) -> Dict[str, Any]:
     fuzzy = _fuzzy_match(msg.text)
     if fuzzy:
         src = fuzzy.pop("_source", "fuzzy")
-        print(f"[L3] Fuzzy match ({src}) → intent={fuzzy['intent']}")
+        print(f"[L3] Fuzzy match ({src}) -> intent={fuzzy['intent']}")
         fuzzy["domain"] = msg.context.get("current_domain", "general")
         return fuzzy
 
@@ -290,18 +290,18 @@ async def layer_3_classify(msg: OrchestratorMessage):
     Mutates msg.intent and msg.context['intent_classification'].
     """
     msg.track_layer("L3-START")
-    print(f"[L3] Classifying intent …")
+    print("[L3] Classifying intent ...")
 
-    # Guard: empty text → skip pipeline, send gentle prompt
+    # Guard: empty text -> skip pipeline, send gentle prompt
     if not msg.text or not msg.text.strip():
-        print("[L3] Empty text — skipping pipeline")
+        print("[L3] Empty text - skipping pipeline")
         msg.intent = "empty"
-        msg.styled_response = "I didn't catch anything — try sending a message!"
+        msg.styled_response = "I didn't catch anything - try sending a message!"
         from core_orch_layer10 import layer_10_output
         await layer_10_output(msg)
         return
 
-    # 1. Fast deterministic path (slash-cmd → greeting → fuzzy clusters)
+    # 1. Fast deterministic path (slash-cmd -> greeting -> fuzzy clusters)
     classification = await _fast_classify(msg)
 
     # 2. Gemini classification (only if no fast-path hit)

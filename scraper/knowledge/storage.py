@@ -25,6 +25,11 @@ async def write_sources(sources: list, topic: str) -> tuple:
     for source in sources:
         content = source.get("full_content", "") or ""
         chash = _content_hash(content)
+        source_topics = [
+            str(item).strip()
+            for item in (source.get("topics") or [topic])
+            if str(item).strip()
+        ] or [topic]
 
         # Upsert kb_sources on url conflict
         kb_source_row = {
@@ -34,12 +39,13 @@ async def write_sources(sources: list, topic: str) -> tuple:
             "title":            source.get("title", ""),
             "author":           source.get("author", ""),
             "published_at":     source.get("published_at"),
+            "ingested_at":      source.get("ingested_at") or now,
             "last_refreshed":   now,
             "content_hash":     chash,
             "engagement_score": source.get("engagement_score", 0),
             "raw_engagement":   source.get("raw_engagement", {}),
             "trust_level":      source.get("trust_level", 1),
-            "topics":           [topic],
+            "topics":           list(dict.fromkeys(source_topics)),
             "status":           "active",
         }
 
@@ -74,8 +80,9 @@ async def write_sources(sources: list, topic: str) -> tuple:
                 }
                 httpx.post(
                     f"{SUPABASE_URL}/rest/v1/kb_articles",
-                    headers={**_sbh(svc=True), "Prefer": "resolution=ignore-duplicates"},
+                    headers={**_sbh(svc=True), "Prefer": "resolution=merge-duplicates,return=minimal"},
                     json=article_row,
+                    params={"on_conflict": "source_id"},
                     timeout=15,
                 )
         else:

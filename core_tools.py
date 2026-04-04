@@ -31,6 +31,13 @@ from core_config import (
 from core_config import _sbh, _sbh_count_svc
 from core_github import _ghh, _gh_blob_read, _gh_blob_write, gh_read, gh_write, notify
 from core_train import apply_evolution, reject_evolution, bulk_reject_evolutions, run_cold_processor
+from core_trading_specialization import (
+    TRADING_DOMAIN,
+    TRADING_META_DOMAIN,
+    build_trading_readiness,
+    detect_trading_task_domain,
+    trading_specialization_enabled,
+)
 from core_task_taxonomy import (
     t_task_mode_packet,
     t_spreadsheet_work_packet,
@@ -143,7 +150,7 @@ _SB_SCHEMA = {
             "required": ["trigger", "domain"],
             "enums": {"domain": ["auth","code","failure_recovery","github","groq","local_pc",
                                   "postgres","powershell","project","railway","reasoning",
-                                  "supabase","telegram","universal","zapier"]},
+                                  "supabase","telegram","trading","trading_meta","universal","zapier"]},
             "fat_columns": ["full_rule", "pointer"],
             "safe_select": "id,domain,trigger,confidence,active,source,created_at",
             "notes": "Use id=gt.1. 120+ active rules -- always paginate."
@@ -2198,14 +2205,31 @@ def t_get_training_pipeline() -> dict:
         unprocessed = [h for h in all_hots if not h.get("processed_by_cold")]
         last_real = next((h for h in all_hots if h.get("source") == "real"), None)
         last_sim  = next((h for h in all_hots if h.get("source") == "simulation"), None)
+        last_rarl = next((h for h in all_hots if h.get("source") == "rarl"), None)
 
         # Total counts
         total_hots_rows = sb_get("hot_reflections", "select=id&order=id.desc&limit=1", svc=True) or []
         total_hots = total_hots_rows[0]["id"] if total_hots_rows else 0
         total_sim  = len(sb_get("hot_reflections", "select=id&source=eq.simulation", svc=True) or [])
+        total_real = len(sb_get("hot_reflections", f"select=id&source=eq.real&domain=eq.{TRADING_DOMAIN}", svc=True) or [])
+        total_rarl = len(sb_get("hot_reflections", f"select=id&source=eq.rarl&domain=eq.{TRADING_META_DOMAIN}", svc=True) or [])
+        trading_seed = build_trading_readiness(limit=8) if trading_specialization_enabled() else {}
+        trading_seed_counts = trading_seed.get("counts", {}) if isinstance(trading_seed, dict) else {}
+        total_seed_sources = int(trading_seed_counts.get("seed_sources", 0) or 0)
+        total_seed_concepts = int(trading_seed_counts.get("seed_concepts", 0) or 0)
 
-        # Simulation health flag
-        if total_sim == 0:
+        if trading_specialization_enabled():
+            if total_real == 0:
+                health_flags.append("trading_real_signal_idle")
+            if total_rarl == 0:
+                health_flags.append("trading_rarl_idle")
+            if total_seed_sources == 0:
+                health_flags.append("trading_seed_sources_idle")
+            if total_seed_concepts == 0:
+                health_flags.append("trading_seed_concepts_idle")
+            if trading_seed and not trading_seed.get("ready", False):
+                health_flags.append("trading_seed_incomplete")
+        elif total_sim == 0:
             health_flags.append("simulation_dead")
 
         # --- Cold processor ---
@@ -2273,6 +2297,14 @@ def t_get_training_pipeline() -> dict:
                 "unprocessed": unprocessed_count,
                 "total_simulation": total_sim,
                 "simulation_ok": total_sim > 0,
+                "total_trading_real": total_real,
+                "trading_real_ok": total_real > 0,
+                "total_trading_rarl": total_rarl,
+                "trading_rarl_ok": total_rarl > 0,
+                "total_trading_seed_sources": total_seed_sources,
+                "trading_seed_sources_ok": total_seed_sources > 0,
+                "total_trading_seed_concepts": total_seed_concepts,
+                "trading_seed_concepts_ok": total_seed_concepts > 0,
                 "last_real": {
                     "id": last_real["id"], "ts": last_real["created_at"][:16],
                     "domain": last_real["domain"], "quality": last_real["quality_score"]
@@ -2281,6 +2313,11 @@ def t_get_training_pipeline() -> dict:
                     "id": last_sim["id"], "ts": last_sim["created_at"][:16],
                     "domain": last_sim["domain"], "quality": last_sim["quality_score"]
                 } if last_sim else None,
+                "last_rarl": {
+                    "id": last_rarl["id"], "ts": last_rarl["created_at"][:16],
+                    "domain": last_rarl["domain"], "quality": last_rarl["quality_score"]
+                } if last_rarl else None,
+                "trading_seed_ready": bool(trading_seed.get("ready", False)) if trading_specialization_enabled() else None,
             },
             "cold": {
                 "last_run_ts": last_cold["created_at"][:16] if last_cold else None,
@@ -2426,6 +2463,15 @@ def t_ingest_knowledge(topic: str, sources: str = "all", max_per_source: int = 2
     except Exception as e:
         print(f"[t_ingest_knowledge] error: {e}")
         return {"ok": False, "error": str(e)}
+
+
+def t_get_trading_readiness(limit: str = "12") -> dict:
+    """Return trading specialization readiness based on seed coverage and live trading memory."""
+    try:
+        parsed_limit = max(4, min(40, int(limit or "12")))
+        return build_trading_readiness(limit=parsed_limit)
+    except Exception as e:
+        return {"ok": False, "ready": False, "error": str(e)}
 
 
 def t_listen() -> dict:
@@ -3024,6 +3070,9 @@ def _get_task_domain(task_json: str = "") -> str:
     Used by t_session_start to inject domain-scoped mistakes at boot."""
     try:
         t = task_json.lower()
+        trading_domain = detect_trading_task_domain(t)
+        if trading_domain:
+            return trading_domain
         if any(k in t for k in ["patch_file", "core_tools", "core_train", "gh_search_replace", "multi_patch", "old_str"]):
             return "core_agi.patching"
         if any(k in t for k in ["cold_processor", "hot_reflection", "cold_reflection", "training", "evolution"]):
@@ -3036,8 +3085,12 @@ def _get_task_domain(task_json: str = "") -> str:
             return "zapier"
         if any(k in t for k in ["project", "jk1-2", "lsei", "equinix", "rmu", "mltx"]):
             return "project"
+        if trading_specialization_enabled():
+            return TRADING_DOMAIN
         return "core_agi"
     except Exception:
+        if trading_specialization_enabled():
+            return TRADING_DOMAIN
         return "core_agi"
 
 
@@ -3057,18 +3110,30 @@ def t_session_start() -> dict:
         resume_task_obj = next((t for t in pending_tasks_all if t.get("status") == "in_progress"), None)
         resume_task_json = resume_task_obj.get("task", "") if resume_task_obj else ""
         detected_domain = _get_task_domain(resume_task_json)
+        effective_domain = detected_domain
+        if trading_specialization_enabled() and detected_domain in {"core_agi", "core_train", "core_agi.session", "core_agi.patching", "core_agi.deploy"}:
+            effective_domain = TRADING_DOMAIN
+        rules_domain = TRADING_DOMAIN if effective_domain == TRADING_META_DOMAIN else effective_domain
         try:
-            domain_mistakes_raw = sb_get("mistakes",
-                f"select={_sel_force('mistakes', ['domain','context','what_failed','correct_approach','severity','root_cause','how_to_avoid'])}&id=gt.1&domain=like.{detected_domain}%&order=severity.desc,created_at.desc&limit=5",
-                svc=True) or []
+            if rules_domain.startswith(TRADING_DOMAIN):
+                domain_mistakes_raw = sb_get("mistakes",
+                    f"select={_sel_force('mistakes', ['domain','context','what_failed','correct_approach','severity','root_cause','how_to_avoid'])}&id=gt.1&domain=eq.{TRADING_DOMAIN}&order=severity.desc,created_at.desc&limit=5",
+                    svc=True) or []
+            else:
+                domain_mistakes_raw = sb_get("mistakes",
+                    f"select={_sel_force('mistakes', ['domain','context','what_failed','correct_approach','severity','root_cause','how_to_avoid'])}&id=gt.1&domain=like.{effective_domain}%&order=severity.desc,created_at.desc&limit=5",
+                    svc=True) or []
         except Exception:
             domain_mistakes_raw = []
         # Backfill: if domain-scoped returns <3, supplement with global recent (deduplicated)
         if len(domain_mistakes_raw) < 3:
             try:
-                global_mistakes = sb_get("mistakes",
-                    f"select={_sel_force('mistakes', ['domain','context','what_failed','correct_approach','severity','root_cause','how_to_avoid'])}&id=gt.1&order=created_at.desc&limit=10",
-                    svc=True) or []
+                global_query = (
+                    f"select={_sel_force('mistakes', ['domain','context','what_failed','correct_approach','severity','root_cause','how_to_avoid'])}&id=gt.1&domain=eq.{TRADING_DOMAIN}&order=created_at.desc&limit=10"
+                    if trading_specialization_enabled() and rules_domain.startswith(TRADING_DOMAIN)
+                    else f"select={_sel_force('mistakes', ['domain','context','what_failed','correct_approach','severity','root_cause','how_to_avoid'])}&id=gt.1&order=created_at.desc&limit=10"
+                )
+                global_mistakes = sb_get("mistakes", global_query, svc=True) or []
                 seen = {m.get("context", "")[:80] for m in domain_mistakes_raw}
                 for m in global_mistakes:
                     if m.get("context", "")[:80] not in seen and len(domain_mistakes_raw) < 5:
@@ -3163,7 +3228,7 @@ def t_session_start() -> dict:
         try:
             # P1-07: Load top-40 rules. confidence>=0.9 always included first,
             # then remaining by priority. Low-signal rules (<0.5) excluded at DB level.
-            br = t_get_behavioral_rules(domain=detected_domain, page="1", page_size="200")
+            br = t_get_behavioral_rules(domain=rules_domain, page="1", page_size="200")
             if br.get("migration_needed"):
                 migration_needed = True
                 migration_missing.append("behavioral_rules")
@@ -3201,32 +3266,40 @@ def t_session_start() -> dict:
         # AGI-05/S3: Associative bridge -- surface 3 cross-domain KB entries related to current domain
         associated_context = []
         try:
-            if detected_domain and detected_domain not in ("general", ""):
-                # Get top keywords from domain KB entries
-                domain_kb = sb_get("knowledge_base",
-                    f"select=topic,instruction&id=gt.1&domain=eq.{detected_domain}&order=access_count.desc&limit=5",
-                    svc=True) or []
-                # Build keyword set from topics
-                keywords = []
-                for entry in domain_kb:
-                    t = (entry.get("topic") or "").replace("_", " ").split()
-                    keywords.extend([w for w in t if len(w) > 4])
-                # Search OTHER domains for entries sharing those keywords
-                seen_ids = set()
-                for kw in keywords[:3]:  # top 3 keywords only -- keep it fast
-                    from core_semantic import search as _sem
-                    cross = _sem("knowledge_base", kw, limit=2,
-                        filters=f"&domain=neq.{detected_domain}") or []
-                    for r in cross:
-                        rid = r.get("id")
-                        if rid and rid not in seen_ids and len(associated_context) < 3:
-                            associated_context.append({
-                                "domain": r.get("domain", ""),
-                                "topic": r.get("topic", ""),
-                                "instruction": (r.get("instruction") or "")[:200],
-                                "bridge_keyword": kw,
-                            })
-                            seen_ids.add(rid)
+            if rules_domain and rules_domain not in ("general", ""):
+                if trading_specialization_enabled() and rules_domain.startswith(TRADING_DOMAIN):
+                    domain_kb = sb_get("knowledge_base",
+                        f"select=domain,topic,instruction,content&id=gt.1&domain=in.({TRADING_DOMAIN},{TRADING_META_DOMAIN})&order=updated_at.desc&limit=5",
+                        svc=True) or []
+                    associated_context = [{
+                        "domain": row.get("domain", ""),
+                        "topic": row.get("topic", ""),
+                        "instruction": ((row.get("instruction") or row.get("content") or "")[:200]),
+                        "bridge_keyword": "trading_specialization",
+                    } for row in domain_kb[:3]]
+                else:
+                    domain_kb = sb_get("knowledge_base",
+                        f"select=topic,instruction&id=gt.1&domain=eq.{rules_domain}&order=access_count.desc&limit=5",
+                        svc=True) or []
+                    keywords = []
+                    for entry in domain_kb:
+                        t = (entry.get("topic") or "").replace("_", " ").split()
+                        keywords.extend([w for w in t if len(w) > 4])
+                    seen_ids = set()
+                    for kw in keywords[:3]:
+                        from core_semantic import search as _sem
+                        cross = _sem("knowledge_base", kw, limit=2,
+                            filters=f"&domain=neq.{rules_domain}") or []
+                        for r in cross:
+                            rid = r.get("id")
+                            if rid and rid not in seen_ids and len(associated_context) < 3:
+                                associated_context.append({
+                                    "domain": r.get("domain", ""),
+                                    "topic": r.get("topic", ""),
+                                    "instruction": (r.get("instruction") or "")[:200],
+                                    "bridge_keyword": kw,
+                                })
+                                seen_ids.add(rid)
         except Exception:
             pass  # Non-fatal -- associative bridge is best-effort
 
@@ -3316,7 +3389,9 @@ def t_session_start() -> dict:
             "resume_task": resume_task_obj,
             "session_md": state.get("session_md", ""),  # full SESSION.md content for claude.ai bootstrap
             "domain_mistakes": domain_mistakes_raw,
-            "domain": detected_domain,
+            "domain": effective_domain,
+            "resume_task_domain": detected_domain,
+            "behavioral_rules_domain": rules_domain,
             "top_patterns": top_patterns,
             "quality_alert": quality_alert,
             "task_health_warning": task_health_warning,
@@ -4038,16 +4113,45 @@ def t_railway_service_info() -> dict:
 
 
 def t_ping_health() -> dict:
-    """Fast liveness check for HTTP /health and quick operator probes."""
+    """Operator-facing health packet for HTTP /health.
+
+    /ping remains the fast liveness check. This endpoint should reflect whether
+    CORE is actually ready to operate, not just whether the process is alive.
+    """
     try:
+        external = t_health()
+        training = t_get_training_pipeline()
+        readiness = build_trading_readiness(limit=8) if trading_specialization_enabled() else {}
+        components = dict(external.get("components", {}) or {})
+        health_flags = list(training.get("health_flags", []) or [])
+        blockers = list(readiness.get("blockers", []) or []) if isinstance(readiness, dict) else []
+        if blockers:
+            health_flags.extend(blockers)
+        deduped_flags = list(dict.fromkeys(str(flag) for flag in health_flags if str(flag).strip()))
+        informational_flags = []
+        blocking_flags = []
+        expected_idle_flags = {"trading_real_signal_idle"}
+        for flag in deduped_flags:
+            if flag in expected_idle_flags and isinstance(readiness, dict) and readiness.get("ready"):
+                informational_flags.append(flag)
+            else:
+                blocking_flags.append(flag)
+        overall = "ok"
+        if external.get("overall") != "ok" or blocking_flags:
+            overall = "degraded"
         return {
-            "ok": True,
+            "ok": overall == "ok",
             "ts": datetime.utcnow().isoformat(),
             "service": "CORE v6.0",
-            "overall": "ok",
-            "components": {
-                "local": "ok",
+            "overall": overall,
+            "components": components,
+            "training_pipeline": {
+                "pipeline_ok": bool(training.get("pipeline_ok")),
+                "health_flags": deduped_flags,
+                "blocking_flags": blocking_flags,
+                "informational_flags": informational_flags,
             },
+            "trading_readiness": readiness if trading_specialization_enabled() else None,
         }
     except Exception as e:
         return {"ok": False, "error": str(e)}
@@ -7736,6 +7840,8 @@ TOOLS = {
                                "desc": "TASK-20: Fire-and-forget backfill of pattern_frequency -> KB. Returns job_id immediately. Poll backfill_status for result. batch_size=max per run (default 20)."},
     "ingest_knowledge":       {"fn": t_ingest_knowledge,       "perm": "EXECUTE", "args": ["topic", "sources", "max_per_source", "since_days"],
                                "desc": "Trigger knowledge ingestion pipeline. Fetches topic from public sources (arxiv/docs/medium/reddit/hackernews/stackoverflow), scores by engagement, writes to kb_* tables, injects hot_reflections for CORE to evolve. sources=comma-separated or 'all'. max_per_source=cap per fetcher (default 20). since_days=recency filter (default 7)."},
+    "get_trading_readiness":  {"fn": t_get_trading_readiness,  "perm": "READ",    "args": ["limit"],
+                               "desc": "Trading specialization readiness packet. Confirms external seed coverage, trading KB density, rules, and mistake memory before live operation."},
     "listen":                 {"fn": t_listen,                 "perm": "EXECUTE", "args": [],
                                "desc": "LISTEN MODE: fire-and-forget. Starts background listen job, returns job_id immediately. Then call listen_result to fetch chunks once done."},
     "listen_result":           {"fn": t_listen_result,           "perm": "EXECUTE", "args": [],
@@ -8710,7 +8816,7 @@ def t_add_behavioral_rule(trigger: str = "", pointer: str = "", full_rule: str =
     }
     VALID_DOMAINS = {
         "universal","postgres","railway","github","supabase","groq","powershell","zapier",
-        "project","auth","code","reasoning","failure_recovery","local_pc","telegram",
+        "project","auth","code","reasoning","failure_recovery","local_pc","telegram","trading","trading_meta",
     }
     try:
         preflight = _require_external_service_preflight("supabase", "add_behavioral_rule")
@@ -9589,8 +9695,6 @@ def _validate_tool_output_packet(tool_name: str, result: Any, success: Any = Non
         # Treat these as valid evidence for the known list-returning tools
         # rather than failing the whole pipeline.
         if tool_name in {"search_kb"} and isinstance(result, list):
-            if not result:
-                warnings.append("empty_list_output")
             return {
                 "ok": True,
                 "tool": tool_name or "?",

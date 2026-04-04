@@ -30,6 +30,16 @@ from core_config import (
     gemini_chat, groq_chat, GROQ_MODEL, GROQ_FAST,
 )
 from core_github import notify, gh_write
+from core_trading_specialization import (
+    TRADING_DOMAIN,
+    TRADING_META_DOMAIN,
+    TRADING_RARL_GOALS,
+    allow_generic_public_ingest,
+    build_trading_curriculum,
+    build_trading_source_packet,
+    trading_specialization_enabled,
+    training_meta_domain,
+)
 from core_work_taxonomy import build_autonomy_contract
 
 # -- Schema helpers (mirrors core_tools._sel_force) ---------------------------
@@ -72,6 +82,32 @@ def _normalize_utc_timestamp(value: str, *, clamp_future: bool = True) -> tuple[
     if future and clamp_future:
         dt = now
     return dt.strftime("%Y-%m-%dT%H:%M:%SZ"), True, future
+
+
+def _training_kb_domain() -> str:
+    return training_meta_domain()
+
+
+def _phase_signal_packet(limit: int = 16) -> dict | None:
+    if not trading_specialization_enabled():
+        return None
+    packet = build_trading_source_packet(limit=max(40, limit * 3))
+    live_mistakes = packet.get("tables", {}).get("trading_mistakes", [])
+    memory_mistakes = packet.get("tables", {}).get("mistakes", [])
+    recent_mistakes = (live_mistakes + memory_mistakes)[:limit]
+    recent_hots = packet.get("tables", {}).get("hot_reflections", [])[:limit]
+    curriculum = build_trading_curriculum(limit=limit, packet=packet)
+    return {
+        "packet": packet,
+        "curriculum": curriculum,
+        "recent_hots": recent_hots,
+        "recent_mistakes": recent_mistakes,
+        "recent_evos": [],
+        "recent_sessions": (
+            packet.get("tables", {}).get("trading_decisions", [])[:limit] +
+            packet.get("tables", {}).get("closed_positions", [])[:limit]
+        ),
+    }
 
 
 # Training globals
@@ -1385,7 +1421,7 @@ def _run_causal_quality_analysis():
 
         today = datetime.utcnow().strftime("%Y-%m-%d")
         sb_post("knowledge_base", {
-            "domain": "meta",
+            "domain": _training_kb_domain(),
             "topic": f"quality_decline_causal_model_{today}",
             "content": (
                 f"Quality decline detected {today}. "
@@ -1413,14 +1449,14 @@ def _auto_evolve_behavioral_rule(pattern_key: str, domain: str, confidence: floa
         VALID_DOMAINS = {
             "auth", "code", "failure_recovery", "github", "groq", "local_pc",
             "postgres", "powershell", "project", "railway", "reasoning",
-            "supabase", "telegram", "universal", "zapier",
+            "supabase", "telegram", "trading", "trading_meta", "universal", "zapier",
         }
         _DOMAIN_MAP = {
             "db": "postgres", "code": "code", "bot": "telegram",
             "mcp": "reasoning", "training": "reasoning", "kb": "reasoning",
             "core_agi": "reasoning", "core_agi.patching": "code",
             "core_agi.deploy": "railway", "core_agi.session": "reasoning",
-            "core_agi.architecture": "reasoning", "rarl": "reasoning",
+            "core_agi.architecture": "reasoning", "rarl": "trading_meta", "trading": "trading",
         }
         br_domain = _DOMAIN_MAP.get(domain, domain if domain in VALID_DOMAINS else "universal")
 
@@ -1511,29 +1547,39 @@ def _run_meta_learning_loop() -> dict:
     - checkpoints the run timestamp in sessions for restart recovery
     """
     try:
-        recent_hots = sb_get(
-            "hot_reflections",
-            "select=domain,quality_score,task_summary,new_patterns,new_mistakes,gaps_identified,source,created_at"
-            "&order=created_at.desc&limit=10",
-            svc=True,
-        ) or []
-        recent_mistakes = sb_get(
-            "mistakes",
-            "select=domain,what_failed,severity,root_cause,how_to_avoid&order=created_at.desc&limit=10",
-            svc=True,
-        ) or []
-        recent_evos = sb_get(
-            "evolution_queue",
-            "select=change_type,change_summary,confidence,impact,recommendation,status,source"
-            "&status=in.(pending,applied,rejected)&order=created_at.desc&limit=10",
-            svc=True,
-        ) or []
+        phase_signal = _phase_signal_packet(limit=12)
+        if phase_signal:
+            recent_hots = phase_signal["recent_hots"]
+            recent_mistakes = phase_signal["recent_mistakes"]
+            recent_evos = phase_signal["recent_evos"]
+        else:
+            recent_hots = sb_get(
+                "hot_reflections",
+                "select=domain,quality_score,task_summary,new_patterns,new_mistakes,gaps_identified,source,created_at"
+                "&order=created_at.desc&limit=10",
+                svc=True,
+            ) or []
+            recent_mistakes = sb_get(
+                "mistakes",
+                "select=domain,what_failed,severity,root_cause,how_to_avoid&order=created_at.desc&limit=10",
+                svc=True,
+            ) or []
+            recent_evos = sb_get(
+                "evolution_queue",
+                "select=change_type,change_summary,confidence,impact,recommendation,status,source"
+                "&status=in.(pending,applied,rejected)&order=created_at.desc&limit=10",
+                svc=True,
+            ) or []
         recent_rules = sb_get(
             "behavioral_rules",
-            "select=trigger,pointer,domain,priority,confidence,active&active=eq.true&order=created_at.desc&limit=10",
+            (
+                f"select=trigger,pointer,domain,priority,confidence,active&active=eq.true&domain=in.(universal,{TRADING_DOMAIN})&order=created_at.desc&limit=10"
+                if trading_specialization_enabled()
+                else "select=trigger,pointer,domain,priority,confidence,active&active=eq.true&order=created_at.desc&limit=10"
+            ),
             svc=True,
         ) or []
-        task_curriculum = _build_task_embedding_curriculum(limit=12)
+        task_curriculum = phase_signal["curriculum"] if phase_signal else _build_task_embedding_curriculum(limit=12)
 
         if len(recent_hots) + len(recent_mistakes) < 4:
             return {"ok": False, "reason": "insufficient_recent_signal"}
@@ -1617,7 +1663,7 @@ def _run_meta_learning_loop() -> dict:
             f"Task curriculum counts: {task_curriculum.get('counts', {})}\n"
         )
         ok = sb_upsert("knowledge_base", {
-            "domain": "meta",
+            "domain": _training_kb_domain(),
             "topic": topic,
             "content": content[:4000],
             "instruction": content[:4000],
@@ -1661,26 +1707,35 @@ def _run_meta_training_phase(cycle_count: int = 0) -> dict:
     signals so the main training pass can follow a better curriculum.
     """
     try:
-        curriculum = _build_task_embedding_curriculum(limit=16)
-        counts = curriculum.get("counts", {}) or {}
-        items = curriculum.get("items", []) or []
-        recent_hots = sb_get(
-            "hot_reflections",
-            "select=domain,quality_score,task_summary,new_patterns,new_mistakes,gaps_identified,source,created_at"
-            "&order=created_at.desc&limit=8",
-            svc=True,
-        ) or []
-        recent_mistakes = sb_get(
-            "mistakes",
-            "select=domain,what_failed,severity,root_cause,how_to_avoid&order=created_at.desc&limit=8",
-            svc=True,
-        ) or []
-        recent_evos = sb_get(
-            "evolution_queue",
-            "select=change_type,change_summary,confidence,impact,recommendation,status,source"
-            "&status=in.(pending,applied,rejected,synthesized)&order=created_at.desc&limit=8",
-            svc=True,
-        ) or []
+        phase_signal = _phase_signal_packet(limit=16)
+        if phase_signal:
+            curriculum = phase_signal["curriculum"]
+            counts = curriculum.get("counts", {}) or {}
+            items = curriculum.get("items", []) or []
+            recent_hots = phase_signal["recent_hots"]
+            recent_mistakes = phase_signal["recent_mistakes"]
+            recent_evos = phase_signal["recent_evos"]
+        else:
+            curriculum = _build_task_embedding_curriculum(limit=16)
+            counts = curriculum.get("counts", {}) or {}
+            items = curriculum.get("items", []) or []
+            recent_hots = sb_get(
+                "hot_reflections",
+                "select=domain,quality_score,task_summary,new_patterns,new_mistakes,gaps_identified,source,created_at"
+                "&order=created_at.desc&limit=8",
+                svc=True,
+            ) or []
+            recent_mistakes = sb_get(
+                "mistakes",
+                "select=domain,what_failed,severity,root_cause,how_to_avoid&order=created_at.desc&limit=8",
+                svc=True,
+            ) or []
+            recent_evos = sb_get(
+                "evolution_queue",
+                "select=change_type,change_summary,confidence,impact,recommendation,status,source"
+                "&status=in.(pending,applied,rejected,synthesized)&order=created_at.desc&limit=8",
+                svc=True,
+            ) or []
 
         diverse_items = []
         seen_tracks = set()
@@ -1757,7 +1812,7 @@ def _run_meta_training_phase(cycle_count: int = 0) -> dict:
         topic = f"meta_training_phase_{today}"
         content = "Meta-training phase (bounded).\n" + json.dumps(phase_packet, ensure_ascii=True)[:5000]
         ok = sb_upsert("knowledge_base", {
-            "domain": "meta",
+            "domain": _training_kb_domain(),
             "topic": topic,
             "content": content,
             "instruction": content,
@@ -1794,26 +1849,35 @@ def _run_causal_discovery_phase(cycle_count: int = 0) -> dict:
     epoch can follow a better abstraction layer.
     """
     try:
-        curriculum = _build_task_embedding_curriculum(limit=16)
-        counts = curriculum.get("counts", {}) or {}
-        items = curriculum.get("items", []) or []
-        recent_hots = sb_get(
-            "hot_reflections",
-            "select=domain,quality_score,task_summary,new_patterns,new_mistakes,gaps_identified,source,created_at"
-            "&order=created_at.desc&limit=8",
-            svc=True,
-        ) or []
-        recent_mistakes = sb_get(
-            "mistakes",
-            "select=domain,what_failed,severity,root_cause,how_to_avoid&order=created_at.desc&limit=8",
-            svc=True,
-        ) or []
-        recent_evos = sb_get(
-            "evolution_queue",
-            "select=change_type,change_summary,confidence,impact,recommendation,status,source"
-            "&status=in.(pending,applied,rejected,synthesized)&order=created_at.desc&limit=8",
-            svc=True,
-        ) or []
+        phase_signal = _phase_signal_packet(limit=16)
+        if phase_signal:
+            curriculum = phase_signal["curriculum"]
+            counts = curriculum.get("counts", {}) or {}
+            items = curriculum.get("items", []) or []
+            recent_hots = phase_signal["recent_hots"]
+            recent_mistakes = phase_signal["recent_mistakes"]
+            recent_evos = phase_signal["recent_evos"]
+        else:
+            curriculum = _build_task_embedding_curriculum(limit=16)
+            counts = curriculum.get("counts", {}) or {}
+            items = curriculum.get("items", []) or []
+            recent_hots = sb_get(
+                "hot_reflections",
+                "select=domain,quality_score,task_summary,new_patterns,new_mistakes,gaps_identified,source,created_at"
+                "&order=created_at.desc&limit=8",
+                svc=True,
+            ) or []
+            recent_mistakes = sb_get(
+                "mistakes",
+                "select=domain,what_failed,severity,root_cause,how_to_avoid&order=created_at.desc&limit=8",
+                svc=True,
+            ) or []
+            recent_evos = sb_get(
+                "evolution_queue",
+                "select=change_type,change_summary,confidence,impact,recommendation,status,source"
+                "&status=in.(pending,applied,rejected,synthesized)&order=created_at.desc&limit=8",
+                svc=True,
+            ) or []
 
         diverse_items = []
         seen_tracks = set()
@@ -1905,7 +1969,7 @@ def _run_causal_discovery_phase(cycle_count: int = 0) -> dict:
         topic = f"causal_discovery_phase_{today}"
         content = "Causal discovery phase (bounded).\n" + json.dumps(phase_packet, ensure_ascii=True)[:5000]
         ok = sb_upsert("knowledge_base", {
-            "domain": "meta",
+            "domain": _training_kb_domain(),
             "topic": topic,
             "content": content,
             "instruction": content,
@@ -1939,31 +2003,41 @@ def _run_temporal_hierarchical_training_phase(cycle_count: int = 0) -> dict:
     summaries, and a training contract that future model code can consume.
     """
     try:
-        curriculum = _build_task_embedding_curriculum(limit=16)
-        counts = curriculum.get("counts", {}) or {}
-        items = curriculum.get("items", []) or []
-        recent_sessions = sb_get(
-            "sessions",
-            "select=summary,actions,interface,created_at&order=created_at.desc&limit=8",
-            svc=True,
-        ) or []
-        recent_hots = sb_get(
-            "hot_reflections",
-            "select=domain,quality_score,task_summary,new_patterns,new_mistakes,gaps_identified,source,created_at"
-            "&order=created_at.desc&limit=8",
-            svc=True,
-        ) or []
-        recent_mistakes = sb_get(
-            "mistakes",
-            "select=domain,what_failed,severity,root_cause,how_to_avoid&order=created_at.desc&limit=8",
-            svc=True,
-        ) or []
-        recent_evos = sb_get(
-            "evolution_queue",
-            "select=change_type,change_summary,confidence,impact,recommendation,status,source"
-            "&status=in.(pending,applied,rejected,synthesized)&order=created_at.desc&limit=8",
-            svc=True,
-        ) or []
+        phase_signal = _phase_signal_packet(limit=16)
+        if phase_signal:
+            curriculum = phase_signal["curriculum"]
+            counts = curriculum.get("counts", {}) or {}
+            items = curriculum.get("items", []) or []
+            recent_sessions = phase_signal["recent_sessions"]
+            recent_hots = phase_signal["recent_hots"]
+            recent_mistakes = phase_signal["recent_mistakes"]
+            recent_evos = phase_signal["recent_evos"]
+        else:
+            curriculum = _build_task_embedding_curriculum(limit=16)
+            counts = curriculum.get("counts", {}) or {}
+            items = curriculum.get("items", []) or []
+            recent_sessions = sb_get(
+                "sessions",
+                "select=summary,actions,interface,created_at&order=created_at.desc&limit=8",
+                svc=True,
+            ) or []
+            recent_hots = sb_get(
+                "hot_reflections",
+                "select=domain,quality_score,task_summary,new_patterns,new_mistakes,gaps_identified,source,created_at"
+                "&order=created_at.desc&limit=8",
+                svc=True,
+            ) or []
+            recent_mistakes = sb_get(
+                "mistakes",
+                "select=domain,what_failed,severity,root_cause,how_to_avoid&order=created_at.desc&limit=8",
+                svc=True,
+            ) or []
+            recent_evos = sb_get(
+                "evolution_queue",
+                "select=change_type,change_summary,confidence,impact,recommendation,status,source"
+                "&status=in.(pending,applied,rejected,synthesized)&order=created_at.desc&limit=8",
+                svc=True,
+            ) or []
 
         sequence_batches: list[list[str]] = []
         for item in items:
@@ -1979,14 +2053,20 @@ def _run_temporal_hierarchical_training_phase(cycle_count: int = 0) -> dict:
         if len(sequence_batches) < 8:
             for sess in recent_sessions:
                 batch = []
-                summary = sess.get("summary") or ""
-                if summary:
-                    batch.append(str(summary)[:180])
-                actions = sess.get("actions") or []
-                if isinstance(actions, list):
-                    batch.extend(str(a)[:180] for a in actions if a)
-                elif actions:
-                    batch.append(str(actions)[:180])
+                if phase_signal:
+                    for key in ("symbol", "strategy", "status", "direction", "market_regime", "action_taken", "close_reason", "reasoning", "notes"):
+                        value = sess.get(key)
+                        if value not in (None, ""):
+                            batch.append(str(value)[:180])
+                else:
+                    summary = sess.get("summary") or ""
+                    if summary:
+                        batch.append(str(summary)[:180])
+                    actions = sess.get("actions") or []
+                    if isinstance(actions, list):
+                        batch.extend(str(a)[:180] for a in actions if a)
+                    elif actions:
+                        batch.append(str(actions)[:180])
                 batch = [part for part in batch if part]
                 if batch:
                     sequence_batches.append(batch)
@@ -2069,7 +2149,7 @@ def _run_temporal_hierarchical_training_phase(cycle_count: int = 0) -> dict:
         topic = f"temporal_hierarchical_world_model_phase_{today}"
         content = "Temporal hierarchical world-model phase (bounded).\n" + json.dumps(phase_packet, ensure_ascii=True)[:5000]
         ok = sb_upsert("knowledge_base", {
-            "domain": "meta",
+            "domain": _training_kb_domain(),
             "topic": topic,
             "content": content,
             "instruction": content,
@@ -2169,7 +2249,7 @@ def _maybe_update_dynamic_router_policy(task_curriculum: dict, recent_mistakes: 
         topic = "dynamic_router_policy"
         content = "Dynamic router policy (bounded).\n" + json.dumps(policy, ensure_ascii=True)[:3500]
         ok = sb_upsert("knowledge_base", {
-            "domain": "meta",
+            "domain": _training_kb_domain(),
             "topic": topic,
             "content": content,
             "instruction": content,
@@ -2703,6 +2783,51 @@ def _collect_background_research_context() -> dict:
         },
     }
     try:
+        if trading_specialization_enabled():
+            state_rows = sb_get("sessions", "select=summary&summary=like.*last_real_signal_ts:*&order=created_at.desc&limit=1", svc=True)
+            if state_rows and state_rows[0].get("summary"):
+                raw = state_rows[0]["summary"].split("last_real_signal_ts:")[-1].strip().split()[0]
+                normalized, parsed, future = _normalize_utc_timestamp(raw, clamp_future=True)
+                if parsed and normalized:
+                    since_ts = normalized
+                    result["verification"]["anchor_source"] = "last_real_signal_ts"
+                    if future:
+                        print(f"[RESEARCH/TRADING] last_real_signal_ts was in the future; clamped to {since_ts}")
+                else:
+                    since_ts = (datetime.utcnow() - timedelta(days=7)).strftime("%Y-%m-%dT%H:%M:%SZ")
+                    result["verification"]["anchor_source"] = "soft_boot_7d"
+                    result["fallback_used"] = True
+            else:
+                since_ts = (datetime.utcnow() - timedelta(days=7)).strftime("%Y-%m-%dT%H:%M:%SZ")
+                result["verification"]["anchor_source"] = "soft_boot_7d"
+                result["fallback_used"] = True
+            result["since_ts"] = since_ts
+
+            packet = build_trading_source_packet(since_ts=since_ts, limit=40)
+            trading_sessions = (packet.get("tables", {}).get("trading_decisions", []) + packet.get("tables", {}).get("closed_positions", []))[:20]
+            trading_mistakes = (packet.get("tables", {}).get("trading_mistakes", []) + packet.get("tables", {}).get("mistakes", []))[:20]
+            result["sessions"] = trading_sessions
+            result["mistakes"] = trading_mistakes
+            result["source_context"] = packet
+            result["verification"]["sessions_count"] = len(trading_sessions)
+            result["verification"]["mistakes_count"] = len(trading_mistakes)
+            result["verification"]["source_context_available"] = True
+            result["verification"]["source_context_error"] = ""
+            result["verification"]["changelog_available"] = False
+            result["verification"]["changelog_error"] = "disabled_in_trading_specialization"
+            result["verification"]["data_ready"] = bool(packet.get("verified"))
+            notes = [
+                "trading_only",
+                packet.get("summary", ""),
+            ]
+            if result["fallback_used"]:
+                notes.append("fallback_used=true")
+            if not packet.get("fresh_signal_count"):
+                notes.append("no_fresh_trading_signal_yet")
+            result["verification"]["note"] = ", ".join([n for n in notes if n])
+            result["ok"] = bool(packet.get("verified"))
+            return result
+
         state_rows = sb_get("sessions", "select=summary&summary=like.*last_real_signal_ts:*&order=created_at.desc&limit=1", svc=True)
         if state_rows and state_rows[0].get("summary"):
             raw = state_rows[0]["summary"].split("last_real_signal_ts:")[-1].strip().split()[0]
@@ -2785,19 +2910,27 @@ def _run_joint_training_planner(cycle_count: int = 0) -> dict:
     training components (TMRF, DAM, world model) have a stable contract.
     """
     try:
-        curriculum = _build_task_embedding_curriculum(limit=16)
-        counts = curriculum.get("counts", {}) or {}
-        items = curriculum.get("items", []) or []
-        recent_mistakes = sb_get(
-            "mistakes",
-            "select=what_failed,root_cause,how_to_avoid&order=created_at.desc&limit=8&id=gt.1",
-            svc=True,
-        ) or []
-        recent_evos = sb_get(
-            "evolution_queue",
-            "select=change_type,change_summary,impact,status,source&status=in.(pending,pending_desktop,applied,rejected,synthesized)&order=created_at.desc&limit=8",
-            svc=True,
-        ) or []
+        phase_signal = _phase_signal_packet(limit=16)
+        if phase_signal:
+            curriculum = phase_signal["curriculum"]
+            counts = curriculum.get("counts", {}) or {}
+            items = curriculum.get("items", []) or []
+            recent_mistakes = phase_signal["recent_mistakes"]
+            recent_evos = phase_signal["recent_evos"]
+        else:
+            curriculum = _build_task_embedding_curriculum(limit=16)
+            counts = curriculum.get("counts", {}) or {}
+            items = curriculum.get("items", []) or []
+            recent_mistakes = sb_get(
+                "mistakes",
+                "select=what_failed,root_cause,how_to_avoid&order=created_at.desc&limit=8&id=gt.1",
+                svc=True,
+            ) or []
+            recent_evos = sb_get(
+                "evolution_queue",
+                "select=change_type,change_summary,impact,status,source&status=in.(pending,pending_desktop,applied,rejected,synthesized)&order=created_at.desc&limit=8",
+                svc=True,
+            ) or []
         # Emphasize transfer by focusing on the least-represented work_track.
         focus_track = None
         if counts:
@@ -2835,7 +2968,7 @@ def _run_joint_training_planner(cycle_count: int = 0) -> dict:
         }
         content = "Joint training planner (bounded).\n" + json.dumps(plan, ensure_ascii=True)[:5000]
         ok = sb_upsert("knowledge_base", {
-            "domain": "meta",
+            "domain": _training_kb_domain(),
             "topic": topic,
             "content": content,
             "instruction": content,
@@ -2853,6 +2986,7 @@ def _run_joint_training_planner(cycle_count: int = 0) -> dict:
 
 
 def run_cold_processor():
+    global _last_meta_learning_run
     try:
         hots = sb_get("hot_reflections",
                       f"select={_sel_force('hot_reflections', ['id','domain','new_patterns','new_mistakes','quality_score','source','task_summary','gaps_identified'])}&processed_by_cold=eq.0&id=gt.1&quality_score=gte.0.5&order=created_at.asc",
@@ -3511,6 +3645,110 @@ def run_kb_mining(max_batches: int = 50, force: bool = False) -> dict:
 # -- Real signal + simulation --------------------------------------------------
 def _extract_real_signal() -> bool:
     try:
+        if trading_specialization_enabled():
+            state_rows = sb_get("sessions",
+                "select=summary&summary=like.*last_real_signal_ts:*&order=created_at.desc&limit=1",
+                svc=True)
+            if state_rows and state_rows[0].get("summary"):
+                raw = state_rows[0]["summary"].split("last_real_signal_ts:")[-1].strip().split()[0]
+                normalized, parsed, future = _normalize_utc_timestamp(raw, clamp_future=True)
+                if parsed and normalized:
+                    since_ts = normalized
+                    if future:
+                        print(f"[RESEARCH/TRADING] last_real_signal_ts was in the future; clamped to {since_ts}")
+                else:
+                    since_ts = (datetime.utcnow() - timedelta(days=7)).strftime("%Y-%m-%dT%H:%M:%SZ")
+            else:
+                since_ts = (datetime.utcnow() - timedelta(days=7)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+            packet = build_trading_source_packet(since_ts=since_ts, limit=40)
+            if not packet.get("fresh_signal_count"):
+                note = f"verified_no_fresh_inputs {packet.get('summary', '')}"
+                sb_post("sessions", {
+                    "summary": f"[state_update] trading_real_signal_status: {note[:260]}",
+                    "actions": ["trading real signal verified with no fresh trading outcomes"],
+                    "interface": "mcp",
+                })
+                print(f"[RESEARCH/TRADING] No fresh trading inputs since {since_ts}; seeds are ready")
+                return False
+
+            tables = packet.get("tables", {})
+            decisions_text = "\n".join(
+                f"- decision {row.get('symbol','?')} {row.get('strategy','?')} action={row.get('action_taken','?')} regime={row.get('market_regime','?')} confidence={row.get('confidence','?')}"
+                for row in tables.get("trading_decisions", [])[:8]
+            ) or "No recent decisions."
+            positions_text = "\n".join(
+                f"- position {row.get('symbol','?')} {row.get('strategy','?')} status={row.get('status','?')} pnl={row.get('realized_pnl_usd', 0)} funding={row.get('total_funding_usd', 0)} reason={row.get('close_reason','')}"
+                for row in tables.get("closed_positions", [])[:8]
+            ) or "No recent closed positions."
+            live_mistakes_text = "\n".join(
+                f"- mistake {row.get('what_failed','')[:140]} | root={row.get('root_cause','')[:120]}"
+                for row in tables.get("trading_mistakes", [])[:8]
+            ) or "No live trading mistakes."
+            reflections_text = "\n".join(
+                f"- reflection {row.get('gap','')[:120]} | behavior={row.get('new_behavior','')[:120]}"
+                for row in tables.get("output_reflections", [])[:6]
+            ) or "No recent trading reflections."
+            rules_text = "\n".join(
+                f"- {row.get('pointer','')} :: {(row.get('full_rule') or '')[:180]}"
+                for row in tables.get("behavioral_rules", [])[:6]
+            ) or "No trading rules."
+            kb_text = "\n".join(
+                f"- {row.get('topic','')} :: {(row.get('instruction') or row.get('content') or '')[:180]}"
+                for row in tables.get("knowledge_base", [])[:6]
+            ) or "No trading KB."
+
+            system = _load_researcher_prompt("background_researcher") or (
+                "You are CORE's trading pattern extraction engine. "
+                "Read recent trading outcomes and output only actionable trading directives. "
+                "Return valid JSON with keys domain, patterns, gaps, summary. "
+                "domain must be trading."
+            )
+            user = (
+                f"Trading source packet since {since_ts}.\n"
+                f"Summary: {packet.get('summary', '')}\n\n"
+                f"Active trading rules:\n{rules_text}\n\n"
+                f"Trading knowledge base:\n{kb_text}\n\n"
+                f"Recent trading decisions:\n{decisions_text}\n\n"
+                f"Recent closed positions:\n{positions_text}\n\n"
+                f"Recent live trading mistakes:\n{live_mistakes_text}\n\n"
+                f"Recent trading reflections:\n{reflections_text}\n\n"
+                "Extract 2-5 behavioral directives that would improve the trading system. "
+                "Focus on regime gating, risk sizing, funding discipline, correlation control, "
+                "execution quality, and paper-to-live discipline. Output JSON only."
+            )
+
+            raw = gemini_chat(system, user, max_tokens=800, json_mode=True)
+            raw = raw.strip().lstrip("```json").lstrip("```").rstrip("```").strip()
+            result = json.loads(raw)
+            patterns = [p for p in (result.get("patterns") or []) if isinstance(p, str) and p.strip()]
+            if not patterns:
+                print("[RESEARCH/TRADING] Gemini returned no patterns")
+                return False
+
+            gaps_raw = result.get("gaps") or None
+            gaps_list = [gaps_raw] if isinstance(gaps_raw, str) and gaps_raw else gaps_raw
+            quality = round(min(1.0, max(0.45, 0.45 + len(patterns) * 0.08 + min(0.2, packet.get("fresh_signal_count", 0) * 0.01))), 2)
+            ok = sb_post("hot_reflections", {
+                "task_summary": f"Trading real signal extraction - {packet.get('summary', '')}",
+                "domain": TRADING_DOMAIN,
+                "new_patterns": patterns,
+                "gaps_identified": gaps_list,
+                "reflection_text": result.get("summary", ""),
+                "processed_by_cold": 0,
+                "source": "real",
+                "quality_score": quality,
+            })
+            if ok:
+                run_ts = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+                sb_post("sessions", {
+                    "summary": f"[state_update] last_real_signal_ts: {run_ts}",
+                    "actions": [f"last_real_signal_ts={run_ts}", "trading real signal extracted"],
+                    "interface": "mcp"
+                })
+                print(f"[RESEARCH/TRADING] ok={ok} patterns={len(patterns)} summary={packet.get('summary','')}")
+            return ok
+
         state_rows = sb_get("sessions",
             "select=summary&summary=like.*last_real_signal_ts:*&order=created_at.desc&limit=1",
             svc=True)
@@ -3753,6 +3991,417 @@ Output ONLY valid JSON, no preamble."""
 
 # -- RARL epoch ----------------------------------------------------------------
 
+def _run_trading_rarl_epoch() -> bool:
+    import time as _time
+    _start = _time.time()
+    try:
+        last = sb_get(
+            "rarl_epochs",
+            "select=epoch_number&id=gt.1&order=epoch_number.desc&limit=1",
+            svc=True
+        )
+        epoch_number = (last[0]["epoch_number"] + 1) if last else 1
+    except Exception as e:
+        print(f"[RARL/TRADING] epoch_number query error: {e}")
+        epoch_number = 1
+
+    packet = build_trading_source_packet(limit=50)
+    if not packet.get("seed_ready"):
+        print("[RARL/TRADING] seed memory is not ready - skipping epoch")
+        return False
+
+    try:
+        champion_rows = sb_get(
+            "rarl_architectures",
+            "select=arch_id,hypothesis,discovery_score,next_direction&role=eq.champion&id=gt.1&order=created_at.desc&limit=1",
+            svc=True,
+        ) or []
+        champion = champion_rows[0] if champion_rows else None
+    except Exception:
+        champion = None
+
+    try:
+        recent_kb = sb_get(
+            "knowledge_base",
+            f"select={_sel_force('knowledge_base', ['topic','instruction'])}&domain=eq.{TRADING_META_DOMAIN}&id=gt.1&order=updated_at.desc&limit=10",
+            svc=True,
+        ) or []
+    except Exception:
+        recent_kb = []
+
+    research_goal, research_domain = TRADING_RARL_GOALS[(epoch_number - 1) % len(TRADING_RARL_GOALS)]
+    ds_before = champion["discovery_score"] if champion else 0.0
+    tables = packet.get("tables", {})
+    recent_mistakes = (tables.get("trading_mistakes", []) + tables.get("mistakes", []))[:12]
+    decisions = tables.get("trading_decisions", [])[:8]
+    positions = tables.get("closed_positions", [])[:8]
+    patterns_rows = tables.get("trading_patterns", [])[:8]
+    reflections = tables.get("output_reflections", [])[:6]
+    rules = tables.get("behavioral_rules", [])[:6]
+    kb_rows = tables.get("knowledge_base", [])[:6]
+
+    failure_block = "\n".join(
+        f"  - [{row.get('severity','?')}] {row.get('what_failed','')[:100]}"
+        + (f" | root: {row.get('root_cause','')[:80]}" if row.get("root_cause") else "")
+        for row in recent_mistakes
+    ) or "  None yet."
+    decision_block = "\n".join(
+        f"  - {row.get('symbol','?')} {row.get('strategy','?')} action={row.get('action_taken','?')} regime={row.get('market_regime','?')} conf={row.get('confidence','?')}"
+        for row in decisions
+    ) or "  None yet."
+    position_block = "\n".join(
+        f"  - {row.get('symbol','?')} {row.get('strategy','?')} pnl={row.get('realized_pnl_usd', 0)} funding={row.get('total_funding_usd', 0)} reason={row.get('close_reason','')}"
+        for row in positions
+    ) or "  None yet."
+    pattern_block = "\n".join(
+        f"  - {row.get('pattern_key','')[:80]} | win_rate={row.get('win_rate', 0)} | avg_pnl={row.get('avg_pnl_usd', 0)}"
+        for row in patterns_rows
+    ) or "  None yet."
+    reflection_block = "\n".join(
+        f"  - gap={row.get('gap','')[:80]} | new_behavior={row.get('new_behavior','')[:80]}"
+        for row in reflections
+    ) or "  None yet."
+    rule_block = "\n".join(
+        f"  - {row.get('pointer','')} :: {(row.get('full_rule') or '')[:120]}"
+        for row in rules
+    ) or "  None yet."
+    kb_block = "\n".join(
+        f"  - {row.get('topic','')[:100]}"
+        for row in recent_kb or kb_rows
+    ) or "  None yet."
+    champion_block = (
+        f"Champion: {champion['arch_id']} | DS: {champion['discovery_score']:.3f}\n"
+        f"  Next direction: {champion.get('next_direction','not set')[:200]}"
+        if champion else "No champion yet - establish the first trading research baseline."
+    )
+    reward_schedule = _hierarchical_reward_schedule(epoch_number, research_domain, bool(champion))
+
+    system = _load_prompt(
+        "rarl_researcher",
+        "You are CORE's trading research laboratory. "
+        "Generate trading-system research proposals grounded in real trading outcomes, mistakes, rules, and reflections. "
+        "Output only valid JSON."
+    )
+    _maybe_eval_prompt("rarl_researcher", system, 10)
+    schema = (
+        '{"research_goal":"<confirm the trading goal>",'
+        '"rarl_benchmark_task":"<one specific trading failure from the list above>",'
+        '"hypothesis":"<2-4 sentence trading-system hypothesis>",'
+        '"core_mechanism":"<4-6 sentence technical mechanism>",'
+        '"pseudocode":"<15-25 lines python-style pseudocode>",'
+        '"mutation_applied":"<trading-system mutation label>",'
+        '"theory_analysis":"<2-3 sentences with [CONJECTURE] only where needed>",'
+        '"experiment_design":"<how to test this in paper/live review terms>",'
+        '"critic_failures":["<failure 1>","<failure 2>","<failure 3>"],'
+        '"mitigation":"<how failures are addressed>",'
+        '"benchmark_score":<float 0.0-3.0 regime classification quality>,'
+        '"transfer_score":<float 0.0-3.0 strategy-family gating quality>,'
+        '"stability_score":<float 0.0-3.0 risk sizing and stop logic quality>,'
+        '"sample_efficiency":<float 0.0-3.0 funding or carry decision quality>,'
+        '"reasoning_depth":<float 0.0-3.0 correlation and calibration quality>,'
+        '"planning_success_rate":<float 0.0-3.0 execution and paper-to-live discipline quality>,'
+        '"complexity_penalty":<float 0.5-3.0 implementation cost>,'
+        '"compute_cost":<float 0.5-3.0 operational cost>,'
+        '"inference_latency":<float 0.5-3.0 latency penalty>,'
+        '"discovery_score":<float>,'
+        '"beats_champion":<true or false>,'
+        f'"arch_id":"<TradingMechanism_v{epoch_number}>",'
+        '"compressed_insight":"<one compact trading lesson>",'
+        '"next_direction":"<next trading research direction>",'
+        '"insight_for_core":"<one actionable trading-system improvement>",'
+        '"meta_learning_note":"<one RARL process improvement>",'
+        '"rule_trigger":"<optional behavioral_rules trigger or empty string>",'
+        '"rule_pointer":"<optional behavioral_rules pointer or empty string>",'
+        '"behavioral_rule":"<optional trading rule text or empty string>"}'
+    )
+    user = (
+        f"EPOCH: {epoch_number}\n"
+        f"TRADING RESEARCH GOAL: {research_goal}\n"
+        f"DOMAIN: {research_domain}\n\n"
+        f"Trading source packet: {packet.get('summary','')}\n"
+        f"Recent trading rules:\n{rule_block}\n\n"
+        f"Recent trading KB:\n{kb_block}\n\n"
+        f"Recent decisions:\n{decision_block}\n\n"
+        f"Recent closed positions:\n{position_block}\n\n"
+        f"Recent trading patterns:\n{pattern_block}\n\n"
+        f"Recent trading reflections:\n{reflection_block}\n\n"
+        f"Recent mistakes:\n{failure_block}\n\n"
+        f"{champion_block}\n\n"
+        f"Reward phase: {reward_schedule['phase']}\n"
+        f"Reward weights: {json.dumps(reward_schedule['weights'], sort_keys=True)}\n"
+        f"Discovery Score threshold to beat champion: {ds_before:.3f}\n\n"
+        f"Output only this JSON:\n{schema}"
+    )
+
+    parsed = {}
+    try:
+        raw = gemini_chat(system, user, max_tokens=2048, json_mode=True)
+        raw = raw.strip().lstrip("```json").lstrip("```").rstrip("```").strip()
+        parsed = json.loads(raw)
+    except Exception as e_gem:
+        print(f"[RARL/TRADING] Gemini failed ({e_gem}), trying Groq fallback")
+        try:
+            raw = groq_chat(system, user, model=GROQ_MODEL, max_tokens=1500)
+            raw = raw.strip().lstrip("```json").lstrip("```").rstrip("```").strip()
+            parsed = json.loads(raw)
+        except Exception as e_grq:
+            print(f"[RARL/TRADING] both LLMs failed: {e_grq}")
+            sb_post("hot_reflections", {
+                "task_summary": f"Trading RARL Epoch {epoch_number} - LLM error",
+                "domain": TRADING_META_DOMAIN,
+                "new_patterns": [],
+                "quality_score": 0.1,
+                "gaps_identified": ["Gemini and Groq both failed"],
+                "reflection_text": f"Trading RARL failure. gem={e_gem} groq={e_grq}",
+                "processed_by_cold": 0,
+                "source": "rarl",
+            })
+            return False
+
+    arch_id = parsed.get("arch_id", f"TradingMechanism_v{epoch_number}")
+    hypothesis = parsed.get("hypothesis", "")[:1000]
+    core_mechanism = parsed.get("core_mechanism", "")[:1000]
+    pseudocode = parsed.get("pseudocode", "")[:2000]
+    mutation_applied = parsed.get("mutation_applied", "TradingMutation")
+    critic_failures = parsed.get("critic_failures", [])[:5]
+    mitigation = parsed.get("mitigation", "")[:500]
+    next_direction = parsed.get("next_direction", "")[:300]
+    insight_for_core = parsed.get("insight_for_core", "")[:300]
+    compressed = parsed.get("compressed_insight", "")[:400]
+    raw_ds = float(parsed.get("discovery_score", 0.0))
+    aux_loss, aux_stats = _hierarchical_auxiliary_loss([
+        hypothesis,
+        core_mechanism,
+        insight_for_core,
+        next_direction,
+        compressed,
+        pseudocode,
+    ])
+    aux_penalty = round(min(0.5, aux_loss * 0.25), 3)
+    try:
+        gating_weight = max(0.1, min(0.9, float(parsed.get("gating_weight", 0.58))))
+    except Exception:
+        gating_weight = 0.58
+    dual_loss_contract = _hierarchical_gated_dual_loss(
+        neural_prediction_loss=max(0.0, min(1.0, 1.0 - float(parsed.get("benchmark_score", 0)))),
+        symbolic_transition_loss=max(0.0, min(1.0, 1.0 - float(parsed.get("transfer_score", 0)))),
+        gating_weight=gating_weight,
+    )
+    dual_loss = float(dual_loss_contract.get("weighted_loss") or 0.0)
+    dual_penalty = round(min(0.45, dual_loss * 0.22), 3)
+    planning_success_rate = float(parsed.get("planning_success_rate", 0))
+    reward_inputs = {
+        "benchmark_score": float(parsed.get("benchmark_score", 0)),
+        "transfer_score": float(parsed.get("transfer_score", 0)),
+        "stability_score": max(0.0, float(parsed.get("stability_score", 0)) - (aux_loss * 0.4) - (dual_penalty * 0.5)),
+        "sample_efficiency": float(parsed.get("sample_efficiency", 0)),
+        "reasoning_depth": float(parsed.get("reasoning_depth", 0)),
+        "planning_success_rate": planning_success_rate,
+        "complexity_penalty": float(parsed.get("complexity_penalty", 1)),
+        "compute_cost": float(parsed.get("compute_cost", 1)),
+        "inference_latency": float(parsed.get("inference_latency", 1)),
+    }
+    scheduled_reward, reward_meta = _weighted_reward_score(reward_inputs, reward_schedule)
+    ds = max(0.0, round((raw_ds * 0.55) + (scheduled_reward * 0.45) - aux_penalty - dual_penalty, 3))
+    beats_champion = ds > ds_before
+    role = "champion" if beats_champion else "mutant"
+    duration = int(_time.time() - _start)
+
+    try:
+        if beats_champion and champion:
+            sb_patch("rarl_architectures", "role=eq.champion", {"role": "archived"})
+        sb_upsert("rarl_architectures", {
+            "arch_id": arch_id,
+            "epoch_created": epoch_number,
+            "role": role,
+            "hypothesis": hypothesis,
+            "core_mechanism": core_mechanism,
+            "pseudocode": pseudocode,
+            "discovery_score": ds,
+            "benchmark_score": reward_inputs["benchmark_score"],
+            "transfer_score": reward_inputs["transfer_score"],
+            "stability_score": reward_inputs["stability_score"],
+            "sample_efficiency": reward_inputs["sample_efficiency"],
+            "reasoning_depth": reward_inputs["reasoning_depth"],
+            "complexity_penalty": reward_inputs["complexity_penalty"],
+            "compute_cost": reward_inputs["compute_cost"],
+            "inference_latency": reward_inputs["inference_latency"],
+            "failure_modes": critic_failures,
+            "mitigation": mitigation,
+            "next_direction": next_direction,
+            "mutation_applied": mutation_applied,
+            "parent_arch_id": champion["arch_id"] if champion else None,
+            "insight_for_core": insight_for_core,
+            "research_branch": "main",
+        }, on_conflict="arch_id")
+    except Exception as e:
+        print(f"[RARL/TRADING] rarl_architectures error (non-fatal): {e}")
+
+    try:
+        sb_post("rarl_epochs", {
+            "epoch_number": epoch_number,
+            "research_goal": research_goal[:300],
+            "research_domain": research_domain,
+            "champion_before": champion["arch_id"] if champion else None,
+            "champion_after": arch_id if beats_champion else (champion["arch_id"] if champion else None),
+            "ds_before": ds_before,
+            "ds_after": ds if beats_champion else ds_before,
+            "ds_improvement": (ds - ds_before) if beats_champion else 0.0,
+            "new_champion": beats_champion,
+            "agents_active": ["Planner", "Critic", "Evaluation", "Archivist", "Meta-Learning"],
+            "insights_count": 1,
+            "branch": "main",
+            "groq_model_used": GROQ_MODEL,
+            "duration_seconds": duration,
+        })
+    except Exception as e:
+        print(f"[RARL/TRADING] rarl_epochs error (non-fatal): {e}")
+
+    quality = round(min(1.0, ds / 3.0), 3) if ds > 0 else 0.4
+    patterns = [p for p in [
+        core_mechanism[:120] if core_mechanism else None,
+        insight_for_core[:120] if insight_for_core else None,
+        next_direction[:120] if next_direction else None,
+        compressed[:120] if compressed else None,
+        parsed.get("meta_learning_note", "")[:120] or None,
+        f"aux_loss={aux_loss:.3f}",
+    ] if p]
+    ok = sb_post("hot_reflections", {
+        "task_summary": f"Trading RARL Epoch {epoch_number} [{research_domain}]: {research_goal[:150]}",
+        "domain": TRADING_META_DOMAIN,
+        "new_patterns": patterns[:5],
+        "new_mistakes": [f[:120] for f in critic_failures[:3]],
+        "quality_score": quality,
+        "gaps_identified": [next_direction] if next_direction else None,
+        "reflection_text": (
+            f"Arch: {arch_id} | DS: {ds:.3f} | Role: {role} | "
+            f"RawDS: {raw_ds:.3f} | AuxLoss: {aux_loss:.3f} | "
+            f"DualLoss: {dual_loss:.3f} | Phase: {reward_meta['phase']} | "
+            f"Reward: {scheduled_reward:.3f} | For trading: {insight_for_core[:150]}"
+        ),
+        "processed_by_cold": 0,
+        "source": "rarl",
+    })
+
+    for failure in critic_failures[:3]:
+        if failure and len(failure) > 5:
+            try:
+                sb_post("mistakes", {
+                    "domain": TRADING_META_DOMAIN,
+                    "context": f"Epoch {epoch_number}: {arch_id}",
+                    "what_failed": failure[:300],
+                    "correct_approach": mitigation[:300],
+                    "root_cause": failure[:200],
+                    "how_to_avoid": mitigation[:200],
+                    "severity": "medium",
+                })
+            except Exception as e:
+                print(f"[RARL/TRADING] mistake write error (non-fatal): {e}")
+
+    if compressed and len(compressed) > 10:
+        try:
+            sb_upsert("knowledge_base", {
+                "domain": TRADING_META_DOMAIN,
+                "topic": arch_id,
+                "instruction": compressed,
+                "content": core_mechanism[:500],
+                "confidence": "medium",
+                "source_type": "trading_rarl",
+                "source": "rarl",
+            }, on_conflict="domain,topic")
+            sb_upsert("knowledge_base", {
+                "domain": TRADING_DOMAIN,
+                "topic": f"trading_rarl_lesson_{epoch_number}",
+                "instruction": compressed,
+                "content": insight_for_core[:500] or core_mechanism[:500],
+                "confidence": "medium",
+                "source_type": "trading_rarl_lesson",
+                "source": "rarl",
+            }, on_conflict="domain,topic")
+        except Exception as e:
+            print(f"[RARL/TRADING] knowledge_base write error (non-fatal): {e}")
+
+    rule_trigger = (parsed.get("rule_trigger") or "").strip()
+    rule_pointer = (parsed.get("rule_pointer") or "").strip()
+    behavioral_rule = (parsed.get("behavioral_rule") or "").strip()
+    if rule_trigger and rule_pointer and behavioral_rule:
+        try:
+            existing = sb_get(
+                "behavioral_rules",
+                f"select=id&active=eq.true&pointer=eq.{rule_pointer}&limit=1",
+                svc=True,
+            ) or []
+            if not existing:
+                sb_post("behavioral_rules", {
+                    "trigger": rule_trigger[:120],
+                    "pointer": rule_pointer[:160],
+                    "full_rule": behavioral_rule[:600],
+                    "domain": TRADING_DOMAIN,
+                    "priority": 3,
+                    "active": True,
+                    "tested": False,
+                    "source": "trading_rarl",
+                    "confidence": round(max(0.55, min(0.95, quality)), 3),
+                })
+        except Exception as e:
+            print(f"[RARL/TRADING] behavioral_rules write error (non-fatal): {e}")
+
+    ds_improvement = ds - ds_before
+    specific_markers = ["regime", "risk", "funding", "correlation", "execution", "paper", "calibration", "stop", "sizing"]
+    insight_is_specific = any(marker in (insight_for_core or "").lower() for marker in specific_markers)
+    benchmark_is_grounded = bool(parsed.get("rarl_benchmark_task") and len(parsed.get("rarl_benchmark_task", "")) > 10)
+    if not insight_is_specific or not benchmark_is_grounded:
+        quality = min(quality, 0.3)
+    if beats_champion and ds_improvement > 0.3:
+        try:
+            sb_post("evolution_queue", {
+                "change_type": "trading_rarl_discovery",
+                "change_summary": (
+                    f"[Trading RARL] {arch_id} | DS: {ds_before:.2f} -> {ds:.2f} (+{ds_improvement:.2f}) | {compressed[:150]}"
+                ),
+                "confidence": round(quality, 3),
+                "pattern_key": f"trading_rarl_epoch_{epoch_number}",
+                "diff_content": json.dumps({
+                    "arch_id": arch_id,
+                    "hypothesis": hypothesis[:300],
+                    "core_mechanism": core_mechanism[:300],
+                    "insight_for_core": insight_for_core[:200],
+                    "reward_phase": reward_meta["phase"],
+                    "reward_weights": reward_meta["weights"],
+                    "reward_contributions": reward_meta["contributions"],
+                    "scheduled_reward": scheduled_reward,
+                    "hierarchical_loss": aux_stats,
+                    "discovery_score": ds,
+                    "trading_packet_summary": packet.get("summary", ""),
+                    "autonomy": build_autonomy_contract(
+                        f"Trading RARL discovery {arch_id}",
+                        description=insight_for_core[:500],
+                        source="rarl",
+                        autonomy={
+                            "kind": "trading_architecture_proposal",
+                            "origin": "rarl",
+                            "source": "rarl",
+                            "domain": research_domain,
+                            "artifact_domain": "trading",
+                            "arch_id": arch_id,
+                            "expected_artifact": "task_queue",
+                            "route": "evolution_autonomy",
+                        },
+                        context="trading",
+                    ),
+                }, indent=2),
+                "status": "pending",
+                "source": "rarl",
+                "impact": research_domain,
+                "recommendation": "Review the trading research proposal and decide whether to promote it into operating rules or implementation work.",
+            })
+        except Exception as e:
+            print(f"[RARL/TRADING] evolution_queue error (non-fatal): {e}")
+
+    print(f"[RARL/TRADING] Epoch {epoch_number} done. DS={ds:.3f} role={role} ok={ok} t={duration}s")
+    return ok
+
+
 def _run_rarl_epoch() -> bool:
     """Run one RARL research epoch via Gemini (Groq fallback).
     Replaces _run_simulation_batch() call in background_researcher().
@@ -3761,6 +4410,9 @@ def _run_rarl_epoch() -> bool:
     evolution_queue (significant discoveries > 0.3 DS improvement).
     Returns True if hot_reflection written successfully.
     """
+    if trading_specialization_enabled():
+        return _run_trading_rarl_epoch()
+
     import time as _time
     _start = _time.time()
 
@@ -4019,8 +4671,6 @@ def _run_rarl_epoch() -> bool:
             "next_direction": next_direction, "mutation_applied": mutation_applied,
             "parent_arch_id": champion["arch_id"] if champion else None,
             "insight_for_core": insight_for_core, "research_branch": "main",
-            "dual_loss": dual_loss,
-            "dual_penalty": dual_penalty,
         }, on_conflict="arch_id")
         print(f"[RARL] rarl_architectures: {arch_id} role={role}")
     except Exception as e:
@@ -4040,8 +4690,6 @@ def _run_rarl_epoch() -> bool:
                               "Critic","Evaluation","Archivist","Meta-Learning","Prompt Evolution"],
             "insights_count": 1, "branch": "main",
             "groq_model_used": GROQ_MODEL, "duration_seconds": duration,
-            "dual_loss": dual_loss,
-            "dual_penalty": dual_penalty,
         })
         print(f"[RARL] rarl_epochs: epoch={epoch_number}")
     except Exception as e:
@@ -4248,6 +4896,8 @@ def _run_rarl_epoch() -> bool:
 
 # -- Public source ingestion ---------------------------------------------------
 def _ingest_public_sources() -> str:
+    if trading_specialization_enabled() and not allow_generic_public_ingest():
+        return ""
     sources = [
         "https://raw.githubusercontent.com/langchain-ai/langchain/master/README.md",
         "https://raw.githubusercontent.com/openai/openai-cookbook/main/README.md",
@@ -4299,7 +4949,7 @@ def _maybe_eval_prompt(target: str, system: str, every: int) -> None:
     _PROMPT_CYCLE_COUNTERS[target] = _PROMPT_CYCLE_COUNTERS.get(target, 0) + 1
     if _PROMPT_CYCLE_COUNTERS[target] % every == 0:
         try:
-            rows = _sbg(
+            rows = sb_get(
                 "system_prompts",
                 f"select=version&target=eq.{target}&active=eq.true&order=version.desc&limit=1",
                 svc=True,
@@ -4326,7 +4976,10 @@ def _load_researcher_prompt(target: str):
 
 def background_researcher():
     global _last_research_run, _last_public_source_run, _last_smap_update, _last_meta_learning_run, _last_meta_training_run, _last_causal_discovery_run, _last_temporal_hwm_run, _last_joint_training_run, _last_router_policy_run
-    print("[RESEARCH] background researcher started - real signal + simulation + public source mode")
+    if trading_specialization_enabled():
+        print("[RESEARCH] background researcher started - trading-only mode")
+    else:
+        print("[RESEARCH] background researcher started - real signal + simulation + public source mode")
     _cycle_count = 0
 
   # Restore timestamps from Supabase to survive redeploys
@@ -4454,7 +5107,7 @@ def background_researcher():
                         print(f"[RESEARCH] system prompt eval non-fatal: {_spe}")
 
                 public_content = ""
-                if now - _last_public_source_run >= _PUBLIC_SOURCE_INTERVAL:
+                if allow_generic_public_ingest() and (now - _last_public_source_run >= _PUBLIC_SOURCE_INTERVAL):
                     print("[RESEARCH] Fetching public sources...")
                     public_content = _ingest_public_sources()
                     if public_content:
@@ -4465,7 +5118,7 @@ def background_researcher():
                         print("[RESEARCH] Public sources returned empty - skipping")
 
                 research_ctx = _collect_background_research_context()
-                real_ok = bool(research_ctx.get("ok"))
+                real_ok = _extract_real_signal() if research_ctx.get("verification", {}).get("data_ready") else False
                 time.sleep(3)
                 causal_discovery_ok = False
                 if now - _last_causal_discovery_run >= _CAUSAL_DISCOVERY_INTERVAL:
@@ -4543,6 +5196,8 @@ def background_researcher():
                             parts.append(f"{auto_applied} evolutions auto-applied")
                         if public_content:
                             parts.append("public sources ingested")
+                        elif trading_specialization_enabled():
+                            parts.append("generic public ingest disabled")
                         verification_note = (research_ctx.get("verification", {}) or {}).get("note")
                         if verification_note:
                             parts.append(f"data verification: {verification_note}")
@@ -5661,9 +6316,3 @@ def proactive_surface_loop():
         except Exception as e:
             print(f"[PROACTIVE] loop error: {e}")
         time.sleep(_PROACTIVE_INTERVAL)
-
-
-
-
-
-

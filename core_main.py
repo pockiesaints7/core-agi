@@ -1009,6 +1009,12 @@ async def ingest_status():
         return JSONResponse(status_code=500, content={"ok": False, "error": str(e)})
 
 
+@app.get("/trading/readiness")
+def trading_readiness_ep():
+    from core_tools import t_get_trading_readiness
+    return t_get_trading_readiness("12")
+
+
 @app.get("/")
 def root():
     counts = get_system_counts()
