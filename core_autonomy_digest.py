@@ -1,28 +1,34 @@
 from __future__ import annotations
 
+import html
 import json
 import os
 import re
 import threading
 import time
-from collections import Counter, defaultdict
+from collections import Counter
 from datetime import datetime, timedelta
-from typing import Any
 from pathlib import Path
+from typing import Any
 
-from core_config import _env_int, sb_get, sb_post
-from core_github import notify
-from core_proposal_router import proposal_router_status
-from core_task_autonomy import autonomy_status
-from core_research_autonomy import research_autonomy_status
 from core_code_autonomy import code_autonomy_status
-from core_integration_autonomy import integration_autonomy_status
+from core_config import _env_int, sb_get, sb_post
 from core_evolution_autonomy import evolution_autonomy_status
+from core_gap_audit import core_gap_audit_status
+from core_github import notify
+from core_integration_autonomy import integration_autonomy_status
+from core_proposal_router import proposal_router_status
+from core_repo_map import repo_map_status
+from core_research_autonomy import research_autonomy_status
+from core_semantic_projection import semantic_projection_status
+from core_task_autonomy import autonomy_status
+from core_tools import get_system_counts as tool_get_system_counts, t_ping_health, t_state_packet
+from core_trading_specialization import trading_specialization_enabled
 
 AUTONOMY_DIGEST_ENABLED = os.getenv("CORE_AUTONOMY_DIGEST_ENABLED", "true").strip().lower() not in {
     "0", "false", "no", "off"
 }
-AUTONOMY_DIGEST_INTERVAL_S = max(3600, _env_int("CORE_AUTONOMY_DIGEST_INTERVAL_S", "86400"))
+AUTONOMY_DIGEST_INTERVAL_S = max(3600, _env_int("CORE_AUTONOMY_DIGEST_INTERVAL_S", "43200"))
 AUTONOMY_DIGEST_CHECK_S = max(300, _env_int("CORE_AUTONOMY_DIGEST_CHECK_S", "900"))
 AUTONOMY_DIGEST_WINDOW_HOURS = max(1, _env_int("CORE_AUTONOMY_DIGEST_WINDOW_HOURS", "24"))
 AUTONOMY_DIGEST_LIMIT = max(1, _env_int("CORE_AUTONOMY_DIGEST_LIMIT", "5000"))
@@ -182,6 +188,32 @@ def _count_rows(table: str, qs: str) -> int:
         return 0
 
 
+def _count_recent_rows(table: str, ts_field: str = "created_at", extra_qs: str = "") -> int:
+    extra = extra_qs if extra_qs.startswith("&") or not extra_qs else f"&{extra_qs}"
+    return _count_rows(
+        table,
+        f"select=id&{ts_field}=gte.{_window_start(AUTONOMY_DIGEST_WINDOW_HOURS)}{extra}",
+    )
+
+
+def _escape(value: Any, limit: int = 220) -> str:
+    if value is None:
+        return ""
+    return html.escape(str(value).strip()[:limit], quote=False)
+
+
+def _worker_error_label(name: str, status: dict) -> str:
+    err = str(status.get("last_error") or "").strip()
+    if not err:
+        return ""
+    return f"{name}: {_escape(err, 160)}"
+
+
+def _render_flag_list(flags: list[str]) -> str:
+    items = [_escape(flag, 64) for flag in flags if str(flag).strip()]
+    return ", ".join(items) if items else "none"
+
+
 def _current_last_digest_at() -> str:
     local_state = _load_local_digest_state()
     local_last = str(local_state.get("last_digest_at") or "").strip()
@@ -210,12 +242,19 @@ def _parse_iso(ts: str) -> datetime | None:
 
 
 def _build_message(agg: dict[str, dict[str, int]]) -> tuple[str, dict]:
+    counts = tool_get_system_counts() or {}
+    health = t_ping_health() or {}
+    state_packet = t_state_packet(session_id="default") or {}
+    state_verification = state_packet.get("verification") or {}
     task_status = autonomy_status() if callable(autonomy_status) else {}
     research_status = research_autonomy_status() if callable(research_autonomy_status) else {}
     code_status = code_autonomy_status() if callable(code_autonomy_status) else {}
     integration_status = integration_autonomy_status() if callable(integration_autonomy_status) else {}
     evolution_status = evolution_autonomy_status() if callable(evolution_autonomy_status) else {}
     proposal_status = proposal_router_status(limit=5) or {}
+    repo_status = repo_map_status() or {}
+    semantic_status = semantic_projection_status() or {}
+    audit_status = core_gap_audit_status() or {}
 
     task = agg.get("task_autonomy", {})
     research = agg.get("research_autonomy", {})
@@ -223,129 +262,252 @@ def _build_message(agg: dict[str, dict[str, int]]) -> tuple[str, dict]:
     integration = agg.get("integration_autonomy", {})
     evolution = agg.get("evolution_autonomy", {})
 
-    task_line = (
-        f"Processed: {_safe_int(task.get('processed'))} | Completed: {_safe_int(task.get('completed'))} | "
-        f"Deferred: {_safe_int(task.get('deferred'))} | Failed: {_safe_int(task.get('failed'))} | "
-        f"Blocked: {_safe_int(task.get('blocked'))} | Errors: {_safe_int(task.get('errors'))}"
-    )
-    task_queue = (
-        f"Current queue: pending {task_status.get('pending', 0)} | in_progress {task_status.get('in_progress', 0)}"
-    )
+    training = health.get("training_pipeline", {}) or {}
+    readiness = health.get("trading_readiness", {}) or {}
+    blocking_flags = list(training.get("blocking_flags", []) or [])
+    informational_flags = list(training.get("informational_flags", []) or [])
+    components = health.get("components", {}) or {}
+    component_errors = [f"{name}={value}" for name, value in components.items() if str(value) != "ok"]
 
-    research_line = (
-        f"Processed: {_safe_int(research.get('processed'))} | Completed: {_safe_int(research.get('completed'))} | "
-        f"Failed: {_safe_int(research.get('failed'))} | Skipped: {_safe_int(research.get('skipped'))}"
-    )
-    research_queue = (
-        f"Pending research tasks: {research_status.get('pending', 0)} | Follow-up evolutions: {research_status.get('follow_up_queued', 0)}"
-    )
+    review_ready_rows = _safe_int(proposal_status.get("cluster_review_ready_rows"))
+    owner_in_queue = _safe_int(proposal_status.get("pending_owner_only"))
+    approved = _count_recent_rows("evolution_queue", "updated_at", "&status=eq.applied")
+    rejected = _count_recent_rows("evolution_queue", "updated_at", "&status=eq.rejected")
 
-    code_line = (
-        f"Processed: {_safe_int(code.get('processed'))} | Proposed: {_safe_int(code.get('proposed'))} | "
-        f"Duplicates: {_safe_int(code.get('duplicates'))} | Deferred: {_safe_int(code.get('deferred'))} | "
-        f"Failures: {_safe_int(code.get('failures'))}"
-    )
-    code_queue = (
-        f"Pending code tasks: {code_status.get('pending_code_tasks', 0)} | Pending review proposals: {code_status.get('pending_review_proposals', 0)}"
-    )
+    kb_added = _count_recent_rows("knowledge_base")
+    mistakes_added = _count_recent_rows("mistakes")
+    sessions_added = _count_recent_rows("sessions")
+    hot_added = _count_recent_rows("hot_reflections")
+    output_reflections_added = _count_recent_rows("output_reflections")
+    rules_added = _count_recent_rows("behavioral_rules")
 
-    integration_line = (
-        f"Processed: {_safe_int(integration.get('processed'))} | Proposed: {_safe_int(integration.get('proposed'))} | "
-        f"Duplicates: {_safe_int(integration.get('duplicates'))} | Deferred: {_safe_int(integration.get('deferred'))} | "
-        f"Failures: {_safe_int(integration.get('failures'))}"
-    )
-    integration_queue = (
-        f"Pending integration tasks: {integration_status.get('pending_integration_tasks', 0)} | Pending review proposals: {integration_status.get('pending_review_proposals', 0)}"
-    )
+    audit_report = audit_status.get("last_report", {}) or {}
+    audit_summary = audit_report.get("summary", {}) or {}
+    audit_gaps = _safe_int(audit_summary.get("gap_count"))
+    audit_critical = _safe_int(audit_summary.get("critical_count"))
+    audit_warning = _safe_int(audit_summary.get("warning_count"))
 
-    evolution_line = (
-        f"Processed: {_safe_int(evolution.get('processed'))} | Created: {_safe_int(evolution.get('queued'))} | "
-        f"Duplicates: {_safe_int(evolution.get('duplicates'))} | Failures: {_safe_int(evolution.get('failures'))}"
-    )
-    evolution_queue = (
-        f"Skipped total: {_safe_int(evolution.get('skipped'))} | Pending evolutions remaining: {evolution_status.get('pending_evolutions', 0)}"
-    )
-    evolution_task_queue = f"Task queue: pending {evolution_status.get('pending_improvement_tasks', 0)}"
+    worker_errors = [
+        label for label in [
+            _worker_error_label("task", task_status),
+            _worker_error_label("research", research_status),
+            _worker_error_label("code", code_status),
+            _worker_error_label("integration", integration_status),
+            _worker_error_label("evolution", evolution_status),
+            _worker_error_label("semantic", semantic_status),
+        ] if label
+    ]
 
-    approved = _count_rows(
-        "evolution_queue",
-        f"select=id&status=eq.applied&updated_at=gte.{_window_start(AUTONOMY_DIGEST_WINDOW_HOURS)}",
-    )
-    rejected = _count_rows(
-        "evolution_queue",
-        f"select=id&status=eq.rejected&updated_at=gte.{_window_start(AUTONOMY_DIGEST_WINDOW_HOURS)}",
-    )
-    owner_in_queue = int(proposal_status.get("pending_owner_only", 0) or 0)
+    working_ok = health.get("overall") == "ok" and bool(state_verification.get("verified")) and not component_errors and not blocking_flags
+    learning_active = any([
+        kb_added,
+        mistakes_added,
+        hot_added,
+        output_reflections_added,
+        rules_added,
+        _safe_int(task.get("completed")),
+        _safe_int(research.get("completed")),
+    ])
+    evolving_active = any([
+        _safe_int(code.get("proposed")),
+        _safe_int(integration.get("proposed")),
+        _safe_int(evolution.get("queued")),
+        approved,
+        rejected,
+        owner_in_queue,
+        _safe_int(code_status.get("pending_review_proposals")),
+        _safe_int(integration_status.get("pending_review_proposals")),
+    ])
+
+    blocking_items = []
+    heads_up_items = []
+    if component_errors:
+        blocking_items.append(f"External checks: {_render_flag_list(component_errors)}")
+    if blocking_flags:
+        blocking_items.append(f"Pipeline blockers: {_render_flag_list(blocking_flags)}")
+    if audit_critical:
+        blocking_items.append(f"Manual work audit critical gaps: {audit_critical}")
+    if worker_errors:
+        blocking_items.extend(worker_errors[:4])
+    if not state_verification.get("verified"):
+        blocking_items.append(
+            f"State continuity degraded: score {float(state_verification.get('verification_score') or 0):.2f}"
+        )
+    if owner_in_queue:
+        heads_up_items.append(
+            f"Owner review queue: {owner_in_queue} owner-only proposals ({review_ready_rows} review-ready rows)"
+        )
+    if informational_flags:
+        heads_up_items.append(f"Informational flags: {_render_flag_list(informational_flags)}")
+    if audit_gaps and not audit_critical:
+        heads_up_items.append(f"Manual work audit gaps: total {audit_gaps} | warning {audit_warning}")
+    state_warnings = list(state_verification.get("warnings") or [])
+    if state_warnings:
+        heads_up_items.append(f"State warnings: {_render_flag_list(state_warnings[:3])}")
+
+    trading_line = ""
+    readiness_counts = readiness.get("counts", {}) if isinstance(readiness, dict) else {}
+    if trading_specialization_enabled() and isinstance(readiness, dict):
+        trading_line = (
+            f"Trading readiness: {'ready' if readiness.get('ready') else 'blocked'} | "
+            f"rules {readiness_counts.get('rules', 0)} | KB {readiness_counts.get('knowledge_base', 0)} | "
+            f"seed sources {readiness_counts.get('seed_sources', 0)} | seed concepts {readiness_counts.get('seed_concepts', 0)}"
+        )
+
     activity_total = (
-        sum(_safe_int(v) for v in task.values())
-        + sum(_safe_int(v) for v in research.values())
-        + sum(_safe_int(v) for v in code.values())
-        + sum(_safe_int(v) for v in integration.values())
-        + sum(_safe_int(v) for v in evolution.values())
-        + _safe_int(task_status.get("pending", 0))
-        + _safe_int(task_status.get("in_progress", 0))
-        + _safe_int(research_status.get("pending", 0))
-        + _safe_int(research_status.get("follow_up_queued", 0))
-        + _safe_int(code_status.get("pending_code_tasks", 0))
-        + _safe_int(code_status.get("pending_review_proposals", 0))
-        + _safe_int(integration_status.get("pending_integration_tasks", 0))
-        + _safe_int(integration_status.get("pending_review_proposals", 0))
-        + _safe_int(evolution_status.get("pending_evolutions", 0))
-        + _safe_int(evolution_status.get("pending_improvement_tasks", 0))
+        kb_added
+        + mistakes_added
+        + sessions_added
+        + hot_added
+        + output_reflections_added
+        + rules_added
+        + _safe_int(task.get("completed"))
+        + _safe_int(research.get("completed"))
+        + _safe_int(code.get("proposed"))
+        + _safe_int(integration.get("proposed"))
+        + _safe_int(evolution.get("queued"))
         + approved
         + rejected
         + owner_in_queue
     )
 
-    message = "\n".join([
-        "AUTONOMY WORKER SUMMARY:",
+    lines = [
+        "<b>CORE Owner Summary</b>",
+        f"Window: last {AUTONOMY_DIGEST_WINDOW_HOURS}h | generated {_escape(_utcnow(), 32)}",
+        (
+            f"Overall: {'WORKING' if working_ok else 'DEGRADED'} | "
+            f"learning {'active' if learning_active else 'idle'} | "
+            f"evolving {'active' if evolving_active else 'idle'}"
+        ),
         "",
-        "TASK AUTONOMY",
-        "Cycle summary",
-        "Window: 24-Hours",
-        task_line,
-        task_queue,
+        "<b>Working Now</b>",
+        (
+            f"Health: {_escape(health.get('overall', 'unknown'), 24)} | "
+            f"components supabase={_escape(components.get('supabase', 'unknown'), 24)} "
+            f"groq={_escape(components.get('groq', 'unknown'), 24)} "
+            f"telegram={_escape(components.get('telegram', 'unknown'), 24)} "
+            f"github={_escape(components.get('github', 'unknown'), 24)}"
+        ),
+        f"Pipeline: {'ok' if not blocking_flags else 'degraded'} | blocking {_render_flag_list(blocking_flags)}",
+        (
+            f"State continuity: {'verified' if state_verification.get('verified') else 'degraded'} | "
+            f"score {float(state_verification.get('verification_score') or 0):.2f} | "
+            f"warnings {len(state_verification.get('warnings') or [])}"
+        ),
+    ]
+    if trading_line:
+        lines.append(trading_line)
+    lines.extend([
+        (
+            f"Repo and semantic: repo {'enabled' if repo_status.get('enabled', True) else 'disabled'} | "
+            f"components {counts.get('repo_components', 0)} | chunks {counts.get('repo_component_chunks', 0)} | "
+            f"edges {counts.get('repo_component_edges', 0)} | semantic last_run {_escape(semantic_status.get('last_run_at') or 'n/a', 40)}"
+        ),
         "",
-        "RESEARCH AUTONOMY CYCLE",
-        "Window: 24-Hours",
-        research_line,
-        research_queue,
+        "<b>Learning</b>",
+        (
+            f"New memory: KB +{kb_added} | mistakes +{mistakes_added} | sessions +{sessions_added} | "
+            f"hot reflections +{hot_added} | output reflections +{output_reflections_added} | rules +{rules_added}"
+        ),
+        (
+            f"Current memory: KB {counts.get('knowledge_base', 0)} | mistakes {counts.get('mistakes', 0)} | "
+            f"sessions {counts.get('sessions', 0)}"
+        ),
+        (
+            f"Worker output: task completed {_safe_int(task.get('completed'))} | "
+            f"research completed {_safe_int(research.get('completed'))} | "
+            f"follow-up {_safe_int(research.get('follow_up_queued'))}"
+        ),
         "",
-        "CODE AUTONOMY CYCLE",
-        "Window: 24-Hours",
-        code_line,
-        code_queue,
+        "<b>Evolving</b>",
+        (
+            f"Code: proposed {_safe_int(code.get('proposed'))} | pending code tasks {code_status.get('pending_code_tasks', 0)} | "
+            f"review backlog {code_status.get('pending_review_proposals', 0)}"
+        ),
+        (
+            f"Integration: proposed {_safe_int(integration.get('proposed'))} | pending integration tasks {integration_status.get('pending_integration_tasks', 0)} | "
+            f"review backlog {integration_status.get('pending_review_proposals', 0)}"
+        ),
+        (
+            f"Evolution: queued {_safe_int(evolution.get('queued'))} | pending {evolution_status.get('pending_evolutions', 0)} | "
+            f"approved {approved} | rejected {rejected}"
+        ),
+        (
+            f"Owner review: pending {owner_in_queue} | review-ready rows {review_ready_rows} | "
+            f"pending improvement tasks {evolution_status.get('pending_improvement_tasks', 0)}"
+        ),
         "",
-        "INTEGRATION AUTONOMY CYCLE",
-        "Window: 24-Hours",
-        integration_line,
-        integration_queue,
-        "",
-        "EVOLUTION AUTONOMY",
-        "Cycle summary",
-        "Window: 24-Hours",
-        evolution_line,
-        evolution_queue,
-        evolution_task_queue,
-        "",
-        "OWNER_REVIEW TASK SUMMARY",
-        f"In-Queue: {owner_in_queue} | Approved: {approved} | Rejected: {rejected}",
+        "<b>Attention</b>",
     ])
+    if blocking_items:
+        lines.extend(f"- {item}" for item in blocking_items[:5])
+    else:
+        lines.append("- No blocking issues detected.")
+    if heads_up_items:
+        lines.extend(f"- {item}" for item in heads_up_items[:5])
+    else:
+        lines.append("- No heads-up items right now.")
+
     summary = {
         "window_hours": AUTONOMY_DIGEST_WINDOW_HOURS,
         "activity_total": activity_total,
-        "task": {**task, **{k: _safe_int(v) for k, v in task.items()}},
-        "research": {**research, **{k: _safe_int(v) for k, v in research.items()}},
-        "code": {**code, **{k: _safe_int(v) for k, v in code.items()}},
-        "integration": {**integration, **{k: _safe_int(v) for k, v in integration.items()}},
-        "evolution": {**evolution, **{k: _safe_int(v) for k, v in evolution.items()}},
+        "overall": "WORKING" if working_ok else "DEGRADED",
+        "learning": "active" if learning_active else "idle",
+        "evolving": "active" if evolving_active else "idle",
+        "counts": {
+            "knowledge_base": counts.get("knowledge_base", 0),
+            "mistakes": counts.get("mistakes", 0),
+            "sessions": counts.get("sessions", 0),
+            "repo_components": counts.get("repo_components", 0),
+            "repo_component_chunks": counts.get("repo_component_chunks", 0),
+            "repo_component_edges": counts.get("repo_component_edges", 0),
+        },
+        "new_memory": {
+            "knowledge_base": kb_added,
+            "mistakes": mistakes_added,
+            "sessions": sessions_added,
+            "hot_reflections": hot_added,
+            "output_reflections": output_reflections_added,
+            "behavioral_rules": rules_added,
+        },
+        "task": {k: _safe_int(v) for k, v in task.items()},
+        "research": {k: _safe_int(v) for k, v in research.items()},
+        "code": {k: _safe_int(v) for k, v in code.items()},
+        "integration": {k: _safe_int(v) for k, v in integration.items()},
+        "evolution": {
+            **{k: _safe_int(v) for k, v in evolution.items()},
+            "approved_recent": approved,
+            "rejected_recent": rejected,
+        },
         "owner_review": {
             "in_queue": owner_in_queue,
-            "approved": approved,
-            "rejected": rejected,
+            "review_ready_rows": review_ready_rows,
         },
+        "health": {
+            "overall": health.get("overall", "unknown"),
+            "components": components,
+            "blocking_flags": blocking_flags,
+            "informational_flags": informational_flags,
+        },
+        "state_verification": {
+            "verified": bool(state_verification.get("verified")),
+            "verification_score": float(state_verification.get("verification_score") or 0),
+            "warnings": list(state_verification.get("warnings") or []),
+        },
+        "audit": {
+            "gap_count": audit_gaps,
+            "critical_count": audit_critical,
+            "warning_count": audit_warning,
+        },
+        "blocking_items": blocking_items,
+        "heads_up_items": heads_up_items,
+        "trading_readiness": readiness if isinstance(readiness, dict) else {},
     }
-    return message, summary
+    return "\n".join(lines), summary
+
+
+def build_owner_digest_message() -> tuple[str, dict]:
+    return _build_message(_aggregate_sessions())
 
 
 def run_autonomy_digest(force: bool = False) -> dict:
@@ -373,8 +535,7 @@ def run_autonomy_digest(force: bool = False) -> dict:
                 "last_digest_at": last_digest_at,
             }
 
-        agg = _aggregate_sessions()
-        message, summary = _build_message(agg)
+        message, summary = build_owner_digest_message()
         notify(message)
         try:
             sb_post(
@@ -404,6 +565,7 @@ def run_autonomy_digest(force: bool = False) -> dict:
             "sent": True,
             "finished_at": finished_at,
             "last_digest_at": last_digest_at,
+            "message": message,
             "summary": summary,
         }
     except Exception as e:

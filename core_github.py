@@ -111,7 +111,19 @@ def set_telegram_commands(commands, scope: str = "default"):
     if not TELEGRAM_TOKEN:
         print("[CORE] Telegram commands skipped: missing token")
         return False
-    payload = {"commands": commands}
+    sanitized = []
+    for item in commands or []:
+        if not isinstance(item, dict):
+            continue
+        cmd = str(item.get("command") or "").strip().lstrip("/")
+        desc = str(item.get("description") or "").strip()
+        if not cmd or not desc:
+            continue
+        sanitized.append({
+            "command": cmd,
+            "description": desc[:256],
+        })
+    payload = {"commands": sanitized}
     if scope and scope != "default":
         payload["scope"] = scope
     try:
@@ -125,6 +137,39 @@ def set_telegram_commands(commands, scope: str = "default"):
     except Exception as e:
         print(f"[CORE] Telegram commands error: {e}")
         return False
+
+
+def set_telegram_profile(short_description: str = "", description: str = "") -> bool:
+    """Set Telegram bot short and long descriptions."""
+    if not TELEGRAM_TOKEN:
+        print("[CORE] Telegram profile skipped: missing token")
+        return False
+
+    ok = True
+    updates = []
+    short_text = str(short_description or "").strip()
+    long_text = str(description or "").strip()
+    if short_text:
+        updates.append(("setMyShortDescription", {"short_description": short_text[:120]}))
+    if long_text:
+        updates.append(("setMyDescription", {"description": long_text[:512]}))
+    if not updates:
+        print("[CORE] Telegram profile skipped: empty description payload")
+        return False
+
+    for method, payload in updates:
+        try:
+            resp = httpx.post(
+                f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/{method}",
+                json=payload,
+                timeout=10,
+            )
+            print(f"[CORE] Telegram {method} response: {resp.text}")
+            ok = ok and resp.is_success
+        except Exception as e:
+            print(f"[CORE] Telegram {method} error: {e}")
+            ok = False
+    return ok
 
 
 def set_webhook():

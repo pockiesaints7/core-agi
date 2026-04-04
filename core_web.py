@@ -1154,13 +1154,31 @@ def t_list_tools(category: str = "", search: str = "") -> dict:
         cats = {k: v for k, v in cats.items() if v}
 
         cat = category.lower().strip() if category else ""
+        alias_keywords = {
+            "repo_code": [
+                "repo_map", "repo_component", "repo_graph", "code_read_packet",
+                "search_in_file", "read_file", "write_file", "gh_",
+                "multi_patch", "smart_patch", "shell", "run_python",
+                "run_script", "git", "file_read", "file_write", "file_list",
+            ],
+            "repo_map": ["repo_map", "repo_component", "repo_graph"],
+        }
         if cat:
-            if cats and cat not in cats:
+            if cat in alias_keywords:
+                candidate_names = [
+                    name for name in TOOLS.keys()
+                    if any(keyword in name for keyword in alias_keywords[cat])
+                ]
+            elif cats and cat not in cats:
                 return {
                     "ok": False,
-                    "error": f"unknown category '{cat}'. Available: {', '.join(sorted(cats.keys()))}",
+                    "error": (
+                        f"unknown category '{cat}'. Available: {', '.join(sorted(cats.keys()))}. "
+                        "Aliases: repo_code, repo_map."
+                    ),
                 }
-            candidate_names = cats.get(cat, list(TOOLS.keys())) if cats else list(TOOLS.keys())
+            else:
+                candidate_names = cats.get(cat, list(TOOLS.keys())) if cats else list(TOOLS.keys())
         else:
             candidate_names = list(TOOLS.keys())
 
@@ -1444,7 +1462,7 @@ def _register_web_tools(TOOLS: dict) -> None:
         "fn":   t_list_tools,
         "perm": "READ",
         "args": ["category", "search"],
-        "desc": "List all available tools with name, args, desc. Use when you need to discover what tools exist before acting. category= filter by: deploy/code/training/system/railway/knowledge/task/web/document/image/utils/agentic/crypto/project. search= keyword filter on name+desc. CALL ONCE per intent — result is cached in context, do not repeat same call. EXAMPLES: list_tools(search='supabase') to find DB tools | list_tools(category='training') for training tools | list_tools() for all 155 tools.",
+        "desc": "List all available tools with name, args, desc. Use when you need to discover what tools exist before acting. category= filter by: deploy/code/training/system/railway/knowledge/task/web/document/image/utils/agentic/crypto/project, plus aliases repo_code and repo_map. search= keyword filter on name+desc. CALL ONCE per intent - result is cached in context, do not repeat same call. EXAMPLES: list_tools(search='supabase') to find DB tools | list_tools(category='repo_code') to inspect repo-map and code tools | list_tools(category='training') for training tools | list_tools() for all tools.",
     }
     TOOLS["get_tool_info"] = {
         "fn":   t_get_tool_info,

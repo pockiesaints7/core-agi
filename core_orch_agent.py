@@ -31,6 +31,7 @@ AGENT_TOKEN_CONCLUDE  = _env_float("AGENT_TOKEN_CONCLUDE", 0.92) # force conclus
 AGENT_TIMEOUT_SEC     = _env_int("AGENT_TIMEOUT_SEC", 600)       # 10min wall clock
 AGENT_ERROR_THRESHOLD = _env_int("AGENT_ERROR_THRESHOLD", 4)     # consecutive failures
 AGENT_PROGRESS_EVERY  = _env_int("AGENT_PROGRESS_EVERY", 3)      # telegram update interval
+AGENT_PROGRESS_MIN_SEC = _env_int("AGENT_PROGRESS_MIN_SEC", 60)  # min seconds between telegram updates
 AGENT_DISCOVERY_STEP_LIMIT = _env_int("AGENT_DISCOVERY_STEP_LIMIT", 6)  # discovery budget
 
 # Ã¢â€â‚¬Ã¢â€â‚¬ Agentic trigger keywords Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
@@ -109,6 +110,7 @@ _DISCOVERY_TOOLS = frozenset({
     "file_list",
     "shell",
     "repo_map_status",
+    "repo_map_sync",
     "repo_component_packet",
     "repo_graph_packet",
     "search_kb",
@@ -321,6 +323,11 @@ async def _send_progress(msg: OrchestratorMessage, step: int, elapsed: float, pr
             f"Ã¢Å¡â„¢Ã¯Â¸Â <b>CORE working...</b> step {step} ({time_str} elapsed)\n"
             f"<code>{progress[:120]}</code>"
         )
+        progress_line = " ".join(str(progress or "Working on the request.").split())[:160]
+        text = (
+            f"<b>CORE working</b> | step {step} | elapsed {time_str}\n"
+            f"<code>{progress_line}</code>"
+        )
         notify(text, cid=str(msg.chat_id))
     except Exception as e:
         print(f"[AGENT] Progress notify failed: {e}")
@@ -338,7 +345,8 @@ def _get_tools_summary() -> str:
             "TIME/STATE":   ["get_time", "datetime_now", "get_state", "get_system_health", "get_state_key", "session_snapshot", "state_packet", "state_consistency_check"],
             "KNOWLEDGE":    ["search_kb", "add_knowledge", "kb_update", "get_mistakes", "log_mistake", "get_behavioral_rules"],
             "WEB":          ["web_search", "web_fetch", "summarize_url"],
-            "CODE/VM":      ["run_python", "shell", "file_list", "file_read", "file_write", "run_script", "install_package", "code_read_packet"],
+            "REPO MAP":     ["repo_map_status", "repo_map_sync", "repo_component_packet", "repo_graph_packet", "code_read_packet"],
+            "CODE/VM":      ["run_python", "shell", "file_list", "file_read", "file_write", "run_script", "install_package"],
             "GITHUB":       ["read_file", "write_file", "gh_read_lines", "gh_search_replace", "multi_patch", "smart_patch"],
             "DATABASE":     ["sb_query", "sb_insert", "sb_patch", "sb_upsert", "sb_delete", "get_table_schema"],
             "TASKS/GOALS":  ["task_add", "task_update", "checkpoint", "get_active_goals", "set_goal", "update_goal_progress"],
@@ -589,6 +597,7 @@ async def run_agent_loop(msg: OrchestratorMessage, goal: str) -> None:
     compressed_summary = ""
     start_time = time.monotonic()
     step = 0
+    last_progress_at = 0.0
     force_conclude = False  # set True when any budget is critical
     discovery_steps = 0
     verification_goal = any(k in goal.lower() for k in ("git", "commit", "clean", "synced", "status", "verify"))
@@ -731,7 +740,7 @@ async def run_agent_loop(msg: OrchestratorMessage, goal: str) -> None:
                 })
             if consecutive_errors >= AGENT_ERROR_THRESHOLD:
                 msg.styled_response = (
-                    f"Ã¢Å¡Â Ã¯Â¸Â CORE agent halted after {step} steps ({elapsed:.0f}s): "
+                    f"CORE agent halted after {step} steps ({elapsed:.0f}s): "
                     f"repeated LLM errors. Last: {e}"
                 )
                 break
@@ -752,7 +761,7 @@ async def run_agent_loop(msg: OrchestratorMessage, goal: str) -> None:
             reason = decision.get("reason", "Cannot proceed.")
             partial = decision.get("partial_answer", "")
             print(f"[AGENT] STUCK at step={step}: {reason[:80]}")
-            msg.styled_response = f"Ã¢Å¡Â Ã¯Â¸Â CORE stuck: {reason}"
+            msg.styled_response = f"CORE stuck: {reason}"
             if partial:
                 msg.styled_response += f"\n\nPartial findings:\n{partial}"
             msg.track_layer(f"AGENT-STUCK-step{step}")
@@ -767,8 +776,9 @@ async def run_agent_loop(msg: OrchestratorMessage, goal: str) -> None:
 
             print(f"[AGENT] step={step} Ã¢â€ â€™ {tool_name}({json.dumps(tool_args, default=str)[:80]})")
 
-            # Progress update every N steps
-            if step % AGENT_PROGRESS_EVERY == 0:
+            # Progress update every N steps, but never spam Telegram faster than the minimum interval.
+            if step % AGENT_PROGRESS_EVERY == 0 and (elapsed - last_progress_at) >= AGENT_PROGRESS_MIN_SEC:
+                last_progress_at = elapsed
                 asyncio.ensure_future(_send_progress(msg, step, elapsed, progress))
 
             # Repeat guard: same tool + same args called recently Ã¢â€ â€™ skip
@@ -845,7 +855,7 @@ async def run_agent_loop(msg: OrchestratorMessage, goal: str) -> None:
                 consecutive_errors += 1
                 if consecutive_errors >= AGENT_ERROR_THRESHOLD:
                     msg.styled_response = (
-                        f"Ã¢Å¡Â Ã¯Â¸Â CORE agent halted: {consecutive_errors} consecutive tool failures "
+                        f"CORE agent halted: {consecutive_errors} consecutive tool failures "
                         f"at step {step}. Last failed: {tool_name}"
                     )
                     break
@@ -921,7 +931,7 @@ async def run_agent_loop(msg: OrchestratorMessage, goal: str) -> None:
             print(f"[AGENT] step={step} unknown type: {dtype!r}")
             history.append({"type": "thought_only", "thought": f"Unknown response type: {dtype!r}", "step": step})
             if consecutive_errors >= AGENT_ERROR_THRESHOLD:
-                msg.styled_response = f"Ã¢Å¡Â Ã¯Â¸Â CORE agent halted: repeated invalid responses."
+                msg.styled_response = "CORE agent halted: repeated invalid responses."
                 break
 
     # Ã¢â€â‚¬Ã¢â€â‚¬ Deliver via L10 Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬

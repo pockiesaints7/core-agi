@@ -36,7 +36,14 @@ from core_config import (
     L, sb_get, sb_post, sb_patch, sb_upsert, sb_post_critical,
     _sbh, _sbh_count_svc, groq_chat,
 )
-from core_github import gh_read, gh_write, notify, set_telegram_commands, set_webhook
+from core_github import (
+    gh_read,
+    gh_write,
+    notify,
+    set_telegram_commands,
+    set_telegram_profile,
+    set_webhook,
+)
 from core_train import cold_processor_loop, background_researcher
 from core_tools import TOOLS, handle_jsonrpc
 from core_reflection_audit import (
@@ -76,6 +83,7 @@ from core_autonomy_digest import (
     AUTONOMY_DIGEST_ENABLED,
     autonomy_digest_loop,
     autonomy_digest_status,
+    build_owner_digest_message,
 )
 from core_proposal_router import (
     proposal_router_summary,
@@ -110,29 +118,36 @@ from core_supabase_bootstrap import bootstrap_supabase as bootstrap_core_supabas
 from core_orch_main import handle_telegram_message_v2, startup_v2
 
 CORE_TELEGRAM_COMMANDS = [
-    {"command": "start", "description": "Startup brief and quick actions"},
-    {"command": "help", "description": "Command catalog"},
-    {"command": "status", "description": "Live system and queue summary"},
-    {"command": "health", "description": "Component health check"},
-    {"command": "queues", "description": "Queue depths and backlog"},
-    {"command": "task", "description": "Task autonomy status"},
-    {"command": "tasks", "description": "Task autonomy status"},
-    {"command": "research", "description": "Research autonomy status"},
-    {"command": "code", "description": "Code autonomy status and code plan"},
-    {"command": "integration", "description": "Integration autonomy status and cross-repo contract plans"},
-    {"command": "evolutions", "description": "Evolution autonomy status"},
-    {"command": "review", "description": "Read-only owner-only proposal queue"},
-    {"command": "memory", "description": "Knowledge and semantic memory"},
-    {"command": "autonomy", "description": "Overall autonomy overview"},
-    {"command": "evolution", "description": "Evolution worker details or run"},
-    {"command": "semantic", "description": "Semantic projection status or run"},
-    {"command": "repo", "description": "Repository semantic map status or sync"},
-    {"command": "audit", "description": "CORE manual work audit and gap notifier"},
-    {"command": "deploycheck", "description": "Running commit and file hashes"},
-    {"command": "project", "description": "Project context tools"},
-    {"command": "restart", "description": "Restart CORE service"},
-    {"command": "kill", "description": "Abort active loop"},
+    {"command": "start", "description": "Owner startup brief and quick actions", "group": "Overview", "usage": "/start"},
+    {"command": "summary", "description": "Owner summary: working, learning, evolving", "group": "Overview", "usage": "/summary"},
+    {"command": "help", "description": "Full command catalog", "group": "Overview", "usage": "/help"},
+    {"command": "status", "description": "Live runtime flags, queues, and workers", "group": "Monitoring", "usage": "/status"},
+    {"command": "health", "description": "External health, blockers, and readiness", "group": "Monitoring", "usage": "/health"},
+    {"command": "queues", "description": "Queue depths and proposal backlog", "group": "Monitoring", "usage": "/queues"},
+    {"command": "autonomy", "description": "Overall autonomy overview", "group": "Monitoring", "usage": "/autonomy"},
+    {"command": "task", "description": "Task autonomy worker status", "group": "Workers", "usage": "/task", "aliases": ["/tasks"]},
+    {"command": "research", "description": "Research worker status or /research run N", "group": "Workers", "usage": "/research | /research run 2"},
+    {"command": "code", "description": "Code worker status or /code run N", "group": "Workers", "usage": "/code | /code run 1"},
+    {"command": "integration", "description": "Integration worker status or /integration run N", "group": "Workers", "usage": "/integration | /integration run 1"},
+    {"command": "evolution", "description": "Evolution worker status or /evolution run N", "group": "Workers", "usage": "/evolution | /evolution run 3", "aliases": ["/evolutions"]},
+    {"command": "review", "description": "Owner-only proposal queue", "group": "Review", "usage": "/review", "aliases": ["/proposals"]},
+    {"command": "memory", "description": "Knowledge and reflection memory counts", "group": "Memory", "usage": "/memory"},
+    {"command": "semantic", "description": "Semantic projection status or /semantic run N", "group": "Memory", "usage": "/semantic | /semantic run 20"},
+    {"command": "repo", "description": "Repo map status, sync, or query", "group": "Memory", "usage": "/repo | /repo sync | /repo QUERY"},
+    {"command": "audit", "description": "Manual work audit and gap summary", "group": "Ops", "usage": "/audit", "aliases": ["/gaps"]},
+    {"command": "deploycheck", "description": "Running commit and deployment manifest", "group": "Ops", "usage": "/deploycheck"},
+    {"command": "project", "description": "Project context tools", "group": "Ops", "usage": "/project list | /project <id>"},
+    {"command": "restart", "description": "Restart CORE service", "group": "Ops", "usage": "/restart"},
+    {"command": "kill", "description": "Abort active agentic sessions", "group": "Ops", "usage": "/kill"},
 ]
+
+CORE_TELEGRAM_SHORT_DESCRIPTION = "Owner console for CORE health, learning, evolution, and trading readiness."
+CORE_TELEGRAM_DESCRIPTION = (
+    "Owner control surface for CORE AGI. "
+    "Use /start for the live startup brief, /summary for the owner digest, "
+    "/status for runtime flags and queues, /health for blockers and readiness, "
+    "/review for owner-only proposals, and /help for the full command catalog."
+)
 
 # ---------------------------------------------------------------------------
 # Shared helpers (used by routes + tools â€” defined here, imported by core_tools)
@@ -250,39 +265,27 @@ def _render_section(title: str, lines: list[str], footer: str = "") -> str:
 
 
 def _render_command_catalog() -> str:
-    sections: dict[str, list[str]] = {}
+    grouped: dict[str, list[dict]] = {}
     for item in CORE_TELEGRAM_COMMANDS:
-        sections.setdefault(item["command"], [])
-    grouped: dict[str, list[dict]] = {
-        "Overview": [],
-        "Monitoring": [],
-        "Workers": [],
-        "Review": [],
-        "Memory": [],
-        "Ops": [],
-    }
-    for item in CORE_TELEGRAM_COMMANDS:
-        if item["command"] in {"start", "help"}:
-            grouped["Overview"].append(item)
-        elif item["command"] in {"status", "health", "queues"}:
-            grouped["Monitoring"].append(item)
-        elif item["command"] in {"tasks", "research", "code", "integration", "evolutions", "autonomy", "evolution", "semantic", "repo"}:
-            grouped["Workers"].append(item)
-        elif item["command"] in {"review"}:
-            grouped["Review"].append(item)
-        elif item["command"] in {"memory"}:
-            grouped["Memory"].append(item)
-        else:
-            grouped["Ops"].append(item)
+        grouped.setdefault(item.get("group", "Ops"), []).append(item)
 
     lines = ["<b>CORE Telegram Commands</b>"]
-    for group, items in grouped.items():
+    for group in ("Overview", "Monitoring", "Workers", "Review", "Memory", "Ops"):
+        items = grouped.get(group) or []
         if not items:
             continue
-        lines.append(f"\n<b>{group}</b>")
+        lines.append("")
+        lines.append(f"<b>{group}</b>")
         for item in items:
-            lines.append(f"/{item['command']} â€” {_tg_escape(item['description'], 120)}")
-    lines.append("\nUse /start for the current system snapshot.")
+            lines.append(f"/{item['command']} - {_tg_escape(item['description'], 140)}")
+            usage = item.get("usage") or f"/{item['command']}"
+            aliases = item.get("aliases") or []
+            if usage:
+                lines.append(f"  use: {_tg_escape(usage, 180)}")
+            if aliases:
+                lines.append(f"  aliases: {_tg_escape(', '.join(aliases), 120)}")
+    lines.append("")
+    lines.append("Use /start for the live startup brief and /summary for the owner digest.")
     return "\n".join(lines)
 
 
@@ -509,17 +512,18 @@ def _render_memory_report() -> str:
 
 def _render_queue_report(counts: dict, task_auto: dict, evo_auto: dict) -> str:
     review_rows = _fetch_pending_reviews(limit=3)
+    proposal = proposal_router_status(limit=3)
     code_auto = code_autonomy_status() if CODE_AUTONOMY_ENABLED else {}
     integration_auto = integration_autonomy_status() if INTEGRATION_AUTONOMY_ENABLED else {}
     lines = [
         f"Task queue: pending {counts.get('task_queue_pending', 0)} | in_progress {counts.get('task_queue_in_progress', 0)} | done {counts.get('task_queue_done', 0)} | failed {counts.get('task_queue_failed', 0)}",
         f"Evolution queue: pending {counts.get('evolution_pending', 0)} | applied {counts.get('evolution_applied', 0)} | rejected {counts.get('evolution_rejected', 0)}",
         f"Repo map: components {counts.get('repo_components', 0)} | chunks {counts.get('repo_component_chunks', 0)} | edges {counts.get('repo_component_edges', 0)} | scans {counts.get('repo_scan_runs', 0)}",
-        f"Repo map: components {counts.get('repo_components', 0)} | chunks {counts.get('repo_component_chunks', 0)} | edges {counts.get('repo_component_edges', 0)} | scans {counts.get('repo_scan_runs', 0)}",
         f"Task autonomy backlog: {task_auto.get('pending', 0)} pending | {task_auto.get('in_progress', 0)} in progress",
         f"Code autonomy backlog: {code_auto.get('pending_code_tasks', 0)} pending code tasks | {code_auto.get('pending_review_proposals', 0)} review proposals",
         f"Integration autonomy backlog: {integration_auto.get('pending_integration_tasks', 0)} pending integration tasks | {integration_auto.get('pending_review_proposals', 0)} review proposals",
         f"Evolution autonomy backlog: {evo_auto.get('pending_evolutions', counts.get('evolution_pending', 0))} pending",
+        f"Owner review backlog: total {proposal.get('pending', 0)} | owner_only {proposal.get('pending_owner_only', 0)} | review_ready_rows {proposal.get('cluster_review_ready_rows', 0)}",
     ]
     if review_rows:
         lines.append("")
@@ -575,10 +579,10 @@ def _render_autonomy_overview_report(counts: dict, task_auto: dict, evo_auto: di
         f"Semantic projection: {'enabled' if SEMANTIC_PROJECTION_ENABLED else 'disabled'} | last_run {_tg_escape(sem.get('last_run_at') or 'n/a', 40)}",
         "",
         "<b>Worker map</b>",
-        "research_autonomy â€” active: validates research proposals, writes knowledge, queues follow-up work",
-        "code_autonomy â€” active: generates code-change packets and queues owner review",
-        "integration_autonomy â€” active: generates integration packets for endpoint wiring, module plumbing, and cross-repo contracts",
-        "proposal_router â€” active: read-only owner-only proposal queue for manual review",
+        "research_autonomy - active: validates research proposals, writes knowledge, queues follow-up work",
+        "code_autonomy - active: generates code-change packets and queues owner review",
+        "integration_autonomy - active: generates integration packets for endpoint wiring, module plumbing, and cross-repo contracts",
+        "proposal_router - active: read-only owner-only proposal queue for manual review",
     ]
     if review_rows:
         lines.append("")
@@ -594,20 +598,87 @@ def _render_autonomy_overview_report(counts: dict, task_auto: dict, evo_auto: di
 
 
 def _render_health_report() -> str:
-    from core_tools import t_health
-    from core_tools import t_get_training_pipeline
-    h = t_health()
-    tp = t_get_training_pipeline()
+    from core_tools import t_ping_health, t_state_packet
+    h = t_ping_health()
     comps = h.get("components", {})
+    tp = h.get("training_pipeline", {}) or {}
+    readiness = h.get("trading_readiness") or {}
+    verification = (t_state_packet(session_id="default") or {}).get("verification") or {}
+    blocking = tp.get("blocking_flags") or []
+    informational = tp.get("informational_flags") or []
     lines = [
-        f"Supabase: {_tg_escape(comps.get('supabase', 'unknown'))}",
-        f"Groq: {_tg_escape(comps.get('groq', 'unknown'))}",
-        f"Telegram: {_tg_escape(comps.get('telegram', 'unknown'))}",
-        f"GitHub: {_tg_escape(comps.get('github', 'unknown'))}",
-        f"Pipeline: {_tg_escape((tp.get('pipeline_ok') and 'ok') or (tp.get('health_flags') and 'degraded') or 'unknown')}",
-        f"Pipeline flags: {_tg_escape(' | '.join(tp.get('health_flags') or []) or 'none')}",
+        f"Overall: {_tg_escape(h.get('overall', 'unknown'))}",
+        f"Components: supabase={_tg_escape(comps.get('supabase', 'unknown'))} | groq={_tg_escape(comps.get('groq', 'unknown'))} | telegram={_tg_escape(comps.get('telegram', 'unknown'))} | github={_tg_escape(comps.get('github', 'unknown'))}",
+        f"State continuity: {'verified' if verification.get('verified') else 'degraded'} | score {verification.get('verification_score', 0):.2f} | warnings {len(verification.get('warnings') or [])}",
+        f"Pipeline: {'ok' if tp.get('pipeline_ok') and not blocking else 'degraded'} | blocking {_tg_escape(' | '.join(blocking) or 'none')}",
     ]
+    if informational:
+        lines.append(f"Informational flags: {_tg_escape(' | '.join(informational), 220)}")
+    if readiness:
+        counts = readiness.get("counts", {}) or {}
+        lines.append(
+            f"Trading readiness: {'ready' if readiness.get('ready') else 'blocked'} | rules {counts.get('rules', 0)} | KB {counts.get('knowledge_base', 0)} | seed sources {counts.get('seed_sources', 0)} | seed concepts {counts.get('seed_concepts', 0)}"
+        )
+        if readiness.get("blockers"):
+            lines.append(f"Trading blockers: {_tg_escape(' | '.join(readiness.get('blockers') or []), 220)}")
     return _render_section("Health", lines)
+
+
+def _render_owner_summary_report() -> str:
+    message, _summary = build_owner_digest_message()
+    return message
+
+
+def _render_status_report() -> str:
+    from core_tools import t_state_packet
+
+    counts = get_system_counts()
+    task_auto = autonomy_status() if AUTONOMY_ENABLED else {}
+    research_auto = research_autonomy_status() if RESEARCH_AUTONOMY_ENABLED else {}
+    code_auto = code_autonomy_status() if CODE_AUTONOMY_ENABLED else {}
+    integration_auto = integration_autonomy_status() if INTEGRATION_AUTONOMY_ENABLED else {}
+    evo_auto = evolution_autonomy_status() if EVOLUTION_AUTONOMY_ENABLED else {}
+    sem = semantic_projection_status() if SEMANTIC_PROJECTION_ENABLED else {}
+    audit_status = core_gap_audit_status()
+    proposal = proposal_router_status(limit=3) or {}
+    state_packet = t_state_packet(session_id="default") or {}
+    state_verification = state_packet.get("verification") or {}
+
+    lines = [
+        f"Configured autonomy: task {'enabled' if AUTONOMY_ENABLED else 'disabled'} | code {'enabled' if CODE_AUTONOMY_ENABLED else 'disabled'} | integration {'enabled' if INTEGRATION_AUTONOMY_ENABLED else 'disabled'} | evolution {'enabled' if EVOLUTION_AUTONOMY_ENABLED else 'disabled'}",
+        f"Live queues: task pending {counts.get('task_queue_pending', 0)} | in_progress {counts.get('task_queue_in_progress', 0)} | done {counts.get('task_queue_done', 0)} | failed {counts.get('task_queue_failed', 0)} | evolution pending {counts.get('evolution_pending', 0)} | applied {counts.get('evolution_applied', 0)} | rejected {counts.get('evolution_rejected', 0)}",
+        f"Memory: KB {counts.get('knowledge_base', 0)} | mistakes {counts.get('mistakes', 0)} | sessions {counts.get('sessions', 0)} | repo map {counts.get('repo_components', 0)} comps / {counts.get('repo_component_chunks', 0)} chunks / {counts.get('repo_component_edges', 0)} edges",
+        f"Manual work audit: {format_core_gap_audit_status(audit_status)}",
+        f"State continuity: {'verified' if state_verification.get('verified') else 'degraded'} | score {state_verification.get('verification_score', 0):.2f} | warnings {len(state_verification.get('warnings') or [])}",
+        f"Workers: task {task_auto.get('pending', 0)} pending / {task_auto.get('in_progress', 0)} in progress | research {research_auto.get('pending', 0)} pending | code {code_auto.get('pending_code_tasks', 0)} pending / {code_auto.get('pending_review_proposals', 0)} review proposals | integration {integration_auto.get('pending_integration_tasks', 0)} pending / {integration_auto.get('pending_review_proposals', 0)} review proposals | evolution {evo_auto.get('pending_evolutions', 0)} pending",
+        f"Owner review: total {proposal.get('pending', 0)} | owner_only {proposal.get('pending_owner_only', 0)} | review_ready_rows {proposal.get('cluster_review_ready_rows', 0)}",
+        f"Semantic projection: {'enabled' if SEMANTIC_PROJECTION_ENABLED else 'disabled'} | running={sem.get('running', False)} | last_run {_tg_escape(sem.get('last_run_at') or 'n/a', 40)}",
+    ]
+    footer = "Configured autonomy shows what CORE is allowed to run, not proof that an agentic loop is active right now."
+    return _render_section("Status", lines, footer=footer)
+
+
+def _render_semantic_projection_report(sem: dict | None = None) -> str:
+    sem = sem or (semantic_projection_status() if SEMANTIC_PROJECTION_ENABLED else {})
+    domains = sem.get("projected_domains") or {}
+    lines = [
+        f"Status: {'enabled' if sem.get('enabled', SEMANTIC_PROJECTION_ENABLED) else 'disabled'} | running={sem.get('running', False)}",
+        f"Interval: {sem.get('interval_seconds', 'n/a')}s | batch {sem.get('batch_limit', 'n/a')}",
+        f"Last run: {_tg_escape(sem.get('last_run_at') or 'n/a', 40)}",
+    ]
+    if any(key in sem for key in ("processed", "projected", "skipped")):
+        lines.append(
+            f"Run result: processed {sem.get('processed', 0)} | projected {sem.get('projected', 0)} | skipped {sem.get('skipped', 0)}"
+        )
+    if domains:
+        lines.append("Projected rows: " + ", ".join(f"{_tg_escape(k)}={v}" for k, v in sorted(domains.items())))
+    if sem.get("message"):
+        lines.append(f"Message: {_tg_escape(sem.get('message'), 220)}")
+    if sem.get("error"):
+        lines.append(f"Error: {_tg_escape(sem.get('error'), 220)}")
+    if sem.get("last_error"):
+        lines.append(f"Last error: {_tg_escape(sem.get('last_error'), 220)}")
+    return _render_section("Semantic Projection", lines)
 
 
 def _render_code_status_report(code_auto: dict) -> str:
@@ -687,6 +758,47 @@ def _build_startup_brief(resume: str, counts: dict, orch: dict | None = None, ta
     except Exception as e:
         print(f"[CORE] startup brief research autonomy unavailable: {e}")
         research_pending = 0
+    try:
+        from core_tools import t_ping_health
+        health = t_ping_health() or {}
+    except Exception as e:
+        print(f"[CORE] startup brief health unavailable: {e}")
+        health = {}
+    digest = autonomy_digest_status() if AUTONOMY_DIGEST_ENABLED else {}
+    training = health.get("training_pipeline", {}) or {}
+    readiness = health.get("trading_readiness") or {}
+    blocking = " | ".join(training.get("blocking_flags") or []) or "none"
+    informational = " | ".join(training.get("informational_flags") or []) or "none"
+    digest_hours = max(1, int((digest.get("interval_seconds") or 0) / 3600)) if digest.get("interval_seconds") else 0
+    trading_line = ""
+    if readiness:
+        readiness_counts = readiness.get("counts", {}) or {}
+        trading_line = (
+            f"Trading readiness: {'ready' if readiness.get('ready') else 'blocked'} | "
+            f"rules {readiness_counts.get('rules', 0)} | KB {readiness_counts.get('knowledge_base', 0)} | "
+            f"seed sources {readiness_counts.get('seed_sources', 0)} | seed concepts {readiness_counts.get('seed_concepts', 0)}\n"
+        )
+    return (
+        f"<b>CORE Online</b>\n"
+        f"Orchestrator: <b>{orch.get('model', 'unknown')}</b> | {orch.get('layers', 'L0-L9 active')}\n\n"
+        f"<b>Now</b>\n"
+        f"Health: {_tg_escape(health.get('overall', 'unknown'))} | blocking {_tg_escape(blocking, 220)}\n"
+        f"Informational: {_tg_escape(informational, 220)}\n"
+        f"KB: {counts.get('knowledge_base', 0)} | Mistakes: {counts.get('mistakes', 0)} | Sessions: {counts.get('sessions', 0)}\n"
+        f"State continuity: {'verified' if state_verification.get('verified') else 'degraded'} | score {state_verification.get('verification_score', 0):.2f} | warnings {len(state_verification.get('warnings') or [])}\n"
+        f"{trading_line}"
+        f"Task queue: pending {task_pending} | in_progress {task_in_progress} | done {task_done} | failed {task_failed} | {task_summary}\n"
+        f"Evolutions: pending {evo_pending} | applied {evo_applied} | rejected {evo_rejected}\n"
+        f"Workers: task {task_auto.get('pending', 0)}/{task_auto.get('in_progress', 0)} | research {research_pending} pending | "
+        f"code {code_auto.get('pending_code_tasks', 0)} pending / {code_auto.get('pending_review_proposals', 0)} proposals | "
+        f"integration {integration_auto.get('pending_integration_tasks', 0)} pending / {integration_auto.get('pending_review_proposals', 0)} proposals | "
+        f"evolution {evo_pending_count} pending / {evo_synthesized} synthesized / {evo_task_pending} follow-up\n"
+        f"Semantic projection: {'enabled' if SEMANTIC_PROJECTION_ENABLED else 'disabled'} | last_run {sem_proj.get('last_run_at', 'n/a')}\n"
+        f"Owner digest cadence: every {digest_hours or '?'}h | last sent {_tg_escape(digest.get('last_digest_at') or 'n/a', 40)}\n"
+        f"Resume: {_tg_escape(resume, 220)}\n\n"
+        f"<b>Quick actions</b>\n"
+        f"/summary | /status | /health | /review | /help"
+    )
     return (
         f"🧠 <b>CORE Online</b>\n"
         f"Orchestrator: <b>{orch.get('model', 'unknown')}</b> | {orch.get('layers', 'L0-L9 active')}\n\n"
@@ -1940,30 +2052,14 @@ def handle_msg(msg, update_id: int | None = None):
         evo_auto = evolution_autonomy_status() if EVOLUTION_AUTONOMY_ENABLED else {}
         notify(_build_startup_brief(resume, counts, None, task_auto, evo_auto), cid)
 
+    elif cmd == "/summary":
+        notify(_render_owner_summary_report(), cid)
+
     elif cmd == "/help":
         notify(_render_command_catalog(), cid)
 
     elif cmd == "/status":
-        from core_tools import t_state_packet
-        counts = get_system_counts()
-        task_auto = autonomy_status() if AUTONOMY_ENABLED else {}
-        code_auto = code_autonomy_status() if CODE_AUTONOMY_ENABLED else {}
-        integration_auto = integration_autonomy_status() if INTEGRATION_AUTONOMY_ENABLED else {}
-        evo_auto = evolution_autonomy_status() if EVOLUTION_AUTONOMY_ENABLED else {}
-        sem = semantic_projection_status() if SEMANTIC_PROJECTION_ENABLED else {}
-        audit_status = core_gap_audit_status()
-        state_packet = t_state_packet(session_id="default")
-        state_verification = state_packet.get("verification") or {}
-        lines = [
-            f"Runtime: {'enabled' if AUTONOMY_ENABLED else 'disabled'} task autonomy | {'enabled' if CODE_AUTONOMY_ENABLED else 'disabled'} code autonomy | {'enabled' if INTEGRATION_AUTONOMY_ENABLED else 'disabled'} integration autonomy | {'enabled' if EVOLUTION_AUTONOMY_ENABLED else 'disabled'} evolution autonomy",
-            f"Queues: task pending {counts.get('task_queue_pending', 0)} | in_progress {counts.get('task_queue_in_progress', 0)} | done {counts.get('task_queue_done', 0)} | failed {counts.get('task_queue_failed', 0)} | evolution pending {counts.get('evolution_pending', 0)} | applied {counts.get('evolution_applied', 0)} | rejected {counts.get('evolution_rejected', 0)}",
-            f"Memory: KB {counts.get('knowledge_base', 0)} | Mistakes {counts.get('mistakes', 0)} | Sessions {counts.get('sessions', 0)} | Repo map {counts.get('repo_components', 0)} comps / {counts.get('repo_component_chunks', 0)} chunks / {counts.get('repo_component_edges', 0)} edges",
-        f"Manual work audit: {format_core_gap_audit_status(audit_status)}",
-            f"State continuity: {'verified' if state_verification.get('verified') else 'degraded'} | score {state_verification.get('verification_score', 0):.2f} | warnings {len(state_verification.get('warnings') or [])}",
-            f"Workers: task {task_auto.get('pending', 0)} pending / {task_auto.get('in_progress', 0)} in progress | code {code_auto.get('pending_code_tasks', 0)} pending / {code_auto.get('pending_review_proposals', 0)} review proposals | integration {integration_auto.get('pending_integration_tasks', 0)} pending / {integration_auto.get('pending_review_proposals', 0)} review proposals | evolution {evo_auto.get('pending_evolutions', 0)} pending",
-            f"Semantic projection: {'enabled' if SEMANTIC_PROJECTION_ENABLED else 'disabled'} | last_run {_tg_escape(sem.get('last_run_at') or 'n/a', 40)}",
-        ]
-        notify(_render_section("Status", lines), cid)
+        notify(_render_status_report(), cid)
 
     elif cmd == "/health":
         notify(_render_health_report(), cid)
@@ -2075,12 +2171,7 @@ def handle_msg(msg, update_id: int | None = None):
                     max_rows = 20
             result = run_semantic_projection_cycle(max_rows=max_rows)
             sem = result if isinstance(result, dict) else sem
-            lines = [
-            f"Status: {'enabled' if sem.get('enabled', SEMANTIC_PROJECTION_ENABLED) else 'disabled'} | running={sem.get('running', False)}",
-            f"Last run: {_tg_escape(sem.get('last_run_at', 'n/a'), 40)}",
-            f"Pending raw rows: {_tg_escape(sem.get('pending_rows', sem.get('pending', 'n/a')), 40)}",
-        ]
-        notify(_render_section("Semantic Projection", lines), cid)
+        notify(_render_semantic_projection_report(sem), cid)
 
     elif cmd == "/repo":
         parts = arg_str.split()
@@ -2098,7 +2189,7 @@ def handle_msg(msg, update_id: int | None = None):
                 lines.append(f"Error: {_tg_escape(result.get('error'), 220)}")
             notify(_render_section("Repo Map", lines), cid)
         else:
-            query = " ".join(parts[1:]).strip()
+            query = arg_str.strip()
             if not query:
                 notify(_render_repo_report(), cid)
             else:
@@ -2151,9 +2242,9 @@ def handle_msg(msg, update_id: int | None = None):
                 json={"status": "aborted"},
                 timeout=5
             )
-            notify("âœ… Active sessions marked aborted. Use /restart if CORE is still stuck.", cid)
+            notify("Active sessions marked aborted. Use /restart if CORE is still stuck.", cid)
         except Exception as e:
-            notify(f"âš ï¸ Kill failed: {e}", cid)
+            notify(f"Kill failed: {e}", cid)
 
     elif cmd == "/project":
         from core_tools import t_project_list, t_project_prepare
@@ -2162,7 +2253,7 @@ def handle_msg(msg, update_id: int | None = None):
             result = t_project_list()
             projects = result.get("projects", [])
             if projects:
-                lines = [f"- {_tg_escape(p['name'], 60)} ({_tg_escape(p['project_id'], 40)}) â€” {_tg_escape(p['status'], 40)}" for p in projects]
+                lines = [f"- {_tg_escape(p['name'], 60)} ({_tg_escape(p['project_id'], 40)}) - {_tg_escape(p['status'], 40)}" for p in projects]
                 notify(_render_section("Projects", lines), cid)
             else:
                 notify("No projects registered. Use Claude Desktop to register first.", cid)
@@ -2289,6 +2380,13 @@ def on_start():
         set_telegram_commands(CORE_TELEGRAM_COMMANDS)
     except Exception as e:
         print(f"[CORE] telegram command setup failed (non-fatal): {e}")
+    try:
+        set_telegram_profile(
+            short_description=CORE_TELEGRAM_SHORT_DESCRIPTION,
+            description=CORE_TELEGRAM_DESCRIPTION,
+        )
+    except Exception as e:
+        print(f"[CORE] telegram profile setup failed (non-fatal): {e}")
     orch = startup_v2() or {}
     print(f"[CORE] orchestrator online: {orch.get('model', 'unknown')} | {orch.get('layers', 'L0-L9 active')}")
     try:
