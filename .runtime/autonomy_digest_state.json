@@ -1,6 +1,20 @@
 {
   "last_activity_total": 0,
-  "last_checked_at": "2026-04-03T02:44:03.638156",
-  "last_digest_at": "2026-04-03T02:44:03.638156",
-  "last_empty_at": "2026-04-03T02:44:03.638156"
+  "last_checked_at": "2026-04-04T02:54:36.656902",
+  "last_digest_at": "2026-04-04T02:54:36.656902",
+  "last_empty_at": "",
+  "summary": {
+    "activity_total": 0,
+    "code": {},
+    "evolution": {},
+    "integration": {},
+    "owner_review": {
+      "approved": 0,
+      "in_queue": 0,
+      "rejected": 0
+    },
+    "research": {},
+    "task": {},
+    "window_hours": 24
+  }
 }
