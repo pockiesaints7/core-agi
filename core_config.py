@@ -5,11 +5,13 @@ Imported by all other core_* modules. Has NO imports from other core_* modules.
 Part of Task 2 architecture split. core.py remains the live entry point until
 smoke test passes on all modules.
 """
+import hashlib
 import json
 import os
 import time
 import threading
 from collections import defaultdict
+from pathlib import Path
 
 import httpx
 try:
@@ -52,7 +54,8 @@ except Exception:
         for candidate in roots:
             loaded_any = _apply(candidate) or loaded_any
         return loaded_any
-load_dotenv()
+_REPO_ENV = Path(__file__).resolve().parent / ".env"
+load_dotenv(_REPO_ENV)
 
 # -- Env vars ------------------------------------------------------------------
 GROQ_API_KEY   = os.environ["GROQ_API_KEY"]
@@ -94,6 +97,25 @@ def _env_float(name: str, default: str | float) -> float:
         return float(_env_clean(name, str(default)))
     except Exception:
         return float(default)
+
+
+def _token_fingerprint(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()[:12]
+
+
+def _validate_telegram_token_layout() -> None:
+    telegram_alias = _env_clean("TELEGRAM_TOKEN")
+    if telegram_alias and telegram_alias != TELEGRAM_TOKEN:
+        raise RuntimeError("core-agi: TELEGRAM_TOKEN conflicts with TELEGRAM_BOT_TOKEN")
+    if _env_clean("BOT_TOKEN"):
+        raise RuntimeError("core-agi: unexpected BOT_TOKEN present; use TELEGRAM_BOT_TOKEN only")
+    print(
+        f"[CONFIG] core-agi telegram token fingerprint={_token_fingerprint(TELEGRAM_TOKEN)} "
+        f"source=TELEGRAM_BOT_TOKEN"
+    )
+
+
+_validate_telegram_token_layout()
 SESSION_TTL_H  = 8
 
 MCP_PROTOCOL_VERSION = "2024-11-05"
@@ -759,7 +781,6 @@ TOOL_ALWAYS_INCLUDE: set = {
     "search_kb", "get_mistakes", "list_tools", "get_tool_info",
     "get_behavioral_rules", "get_table_schema",
 }
-
 
 
 

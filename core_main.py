@@ -1888,18 +1888,19 @@ async def webhook(req: Request):
             raise HTTPException(status_code=401, detail="Unauthorized")
         u = await req.json()
         keys = list(u.keys())
-        print(f"[WEBHOOK] update keys={keys} update_id={u.get('update_id','?')}")
+        update_id = u.get("update_id", "?")
+        print(f"[WEBHOOK] update keys={keys} update_id={update_id}")
         if "message" in u:
             msg = u["message"]
             text = msg.get("text", "")
             cid = msg.get("chat", {}).get("id", "?")
             uname = msg.get("from", {}).get("username", "?")
-            print(f"[WEBHOOK] message: chat_id={cid} user=@{uname} text={text!r:.80}")
+            print(f"[WEBHOOK] dispatch update_id={update_id} chat_id={cid} user=@{uname} text={text!r:.80}")
             # Fire-and-forget in a thread â€” webhook must return 200 immediately
-            threading.Thread(target=handle_msg, args=(msg,), daemon=True).start()
+            threading.Thread(target=handle_msg, args=(msg, update_id), daemon=True).start()
         else:
             # Non-message update (edited_message, callback_query, etc) â€” log and ignore
-            print(f"[WEBHOOK] non-message update ignored: keys={keys}")
+            print(f"[WEBHOOK] non-message update ignored: update_id={update_id} keys={keys}")
     except HTTPException:
         raise
     except Exception as e:
@@ -1910,7 +1911,7 @@ async def webhook(req: Request):
 # ---------------------------------------------------------------------------
 # Telegram message handler
 # ---------------------------------------------------------------------------
-def handle_msg(msg):
+def handle_msg(msg, update_id: int | None = None):
     cid  = str(msg.get("chat", {}).get("id", ""))
     text = msg.get("text", "").strip()
     if not text:
@@ -1924,6 +1925,7 @@ def handle_msg(msg):
     cmd, _, arg_str = text.partition(" ")
     cmd = cmd.lower()
     arg_str = arg_str.strip()
+    print(f"[WEBHOOK] handler update_id={update_id} chat_id={cid} cmd={cmd} text={text!r}")
 
     if cmd == "/start":
         counts = get_system_counts()
