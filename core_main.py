@@ -2326,7 +2326,11 @@ def on_start():
 
 
 if __name__ == "__main__":
+    import os as _os
+    import platform as _platform
     import uvicorn
+    if "microsoft" in _platform.uname().release.lower() or _os.environ.get("WSL_DISTRO_NAME"):
+        raise SystemExit("[CORE] Local WSL execution blocked. Run core-agi on the VM only.")
     # Tambahkan path sertifikat yang tadi sudah terdaftar di certbot
     uvicorn.run(
         "core_main:app", 
