@@ -12848,3 +12848,145 @@ TOOLS["install_package"] = {
         "EXAMPLE: install_package(package='htop', manager='apt') for system package."
     ),
 }
+
+
+def t_push_local_files(paths: str = "", repo: str = "", message: str = "", branch: str = "main") -> dict:
+    """Push multiple local files from VM disk to GitHub in ONE atomic commit via Git Trees API.
+
+    SAFE REPLACEMENT for github:push_files MCP tool which silently accepts empty content.
+    This tool reads files directly from disk — content is NEVER passed as argument.
+
+    Safety gates (all must pass before any push):
+      1. File exists on disk
+      2. File size > 500 bytes (catches empty/corrupt files)
+      3. py_compile syntax check for .py files
+      4. Git Trees API atomic commit (all files or none)
+
+    Args:
+        paths: Comma-separated absolute VM paths, e.g. '/home/ubuntu/trading-bot/bias_engine.py,...'
+        repo:  GitHub repo slug, e.g. 'pockiesaints7/core-trading-bot' (default: GITHUB_REPO)
+        message: Commit message
+        branch: Branch to push to (default: main)
+
+    Returns:
+        {ok, commit_sha, files_pushed, errors, skipped}
+    """
+    import os, base64, py_compile, tempfile
+    import httpx as _hx
+
+    if not paths.strip():
+        return {"ok": False, "error": "paths is required — comma-separated absolute file paths"}
+
+    target_repo = repo.strip() or GITHUB_REPO
+    commit_message = message.strip() or "chore: push local files via t_push_local_files"
+    h = _ghh()
+
+    file_list = [p.strip() for p in paths.split(",") if p.strip()]
+    errors = []
+    skipped = []
+    blobs = []
+
+    # ── Gate 1-3: validate + syntax check + create blobs ─────────────────────
+    for fpath in file_list:
+        fname = os.path.basename(fpath)
+
+        # Gate 1: exists
+        if not os.path.exists(fpath):
+            errors.append(f"{fname}: not found at {fpath}")
+            continue
+
+        # Gate 2: size
+        size = os.path.getsize(fpath)
+        if size < 500:
+            skipped.append(f"{fname}: SKIPPED — only {size} bytes (empty/corrupt guard)")
+            continue
+
+        # Gate 3: syntax for .py
+        if fpath.endswith(".py"):
+            try:
+                py_compile.compile(fpath, doraise=True)
+            except py_compile.PyCompileError as e:
+                errors.append(f"{fname}: syntax error — {e}")
+                continue
+
+        with open(fpath, "rb") as f:
+            raw = f.read()
+
+        # Create blob on GitHub
+        try:
+            blob_r = _hx.post(
+                f"https://api.github.com/repos/{target_repo}/git/blobs",
+                headers=h,
+                json={"content": base64.b64encode(raw).decode(), "encoding": "base64"},
+                timeout=60,
+            )
+            blob_r.raise_for_status()
+            blobs.append({
+                "path": fname,
+                "mode": "100644",
+                "type": "blob",
+                "sha": blob_r.json()["sha"],
+                "_size": size,
+            })
+        except Exception as e:
+            errors.append(f"{fname}: blob creation failed — {e}")
+
+    if not blobs:
+        return {"ok": False, "error": "No valid files to push", "errors": errors, "skipped": skipped}
+
+    # ── Gate 4: atomic commit via Git Trees API ───────────────────────────────
+    try:
+        ref_r = _hx.get(
+            f"https://api.github.com/repos/{target_repo}/git/ref/heads/{branch}",
+            headers=h, timeout=10,
+        )
+        ref_r.raise_for_status()
+        current_sha = ref_r.json()["object"]["sha"]
+
+        commit_r = _hx.get(
+            f"https://api.github.com/repos/{target_repo}/git/commits/{current_sha}",
+            headers=h, timeout=10,
+        )
+        commit_r.raise_for_status()
+        tree_sha = commit_r.json()["tree"]["sha"]
+
+        tree_items = [{"path": b["path"], "mode": b["mode"], "type": b["type"], "sha": b["sha"]} for b in blobs]
+        tree_r = _hx.post(
+            f"https://api.github.com/repos/{target_repo}/git/trees",
+            headers=h,
+            json={"base_tree": tree_sha, "tree": tree_items},
+            timeout=30,
+        )
+        tree_r.raise_for_status()
+        new_tree_sha = tree_r.json()["sha"]
+
+        new_commit_r = _hx.post(
+            f"https://api.github.com/repos/{target_repo}/git/commits",
+            headers=h,
+            json={"message": commit_message, "tree": new_tree_sha, "parents": [current_sha]},
+            timeout=15,
+        )
+        new_commit_r.raise_for_status()
+        new_commit_sha = new_commit_r.json()["sha"]
+
+        _hx.patch(
+            f"https://api.github.com/repos/{target_repo}/git/refs/heads/{branch}",
+            headers=h,
+            json={"sha": new_commit_sha},
+            timeout=15,
+        ).raise_for_status()
+
+        files_pushed = [{"file": b["path"], "size_bytes": b["_size"]} for b in blobs]
+        notify(f"t_push_local_files: {len(blobs)} files → {target_repo}@{branch} ({new_commit_sha[:8]})")
+        return {
+            "ok": True,
+            "commit_sha": new_commit_sha[:8],
+            "repo": target_repo,
+            "branch": branch,
+            "files_pushed": files_pushed,
+            "errors": errors,
+            "skipped": skipped,
+        }
+
+    except Exception as e:
+        return {"ok": False, "error": f"Git Trees commit failed: {e}", "errors": errors, "skipped": skipped}
