@@ -2398,13 +2398,14 @@ def on_start():
         print("[CORE] startup notify sent")
     except Exception as e:
         print(f"[CORE] startup notify failed (non-fatal): {e}")
-    # Auto-embed sync — patches sb_post to embed all semantic table inserts
-    try:
-        from core_embed_sync import install, install_critical
-        install()
-        install_critical()
-    except Exception as _es_e:
-        print(f"[EMBED_SYNC] install failed (non-fatal): {_es_e}")
+    # Auto-embed sync — DISABLED (manual toggle, re-enable when needed)
+    # try:
+    #     from core_embed_sync import install, install_critical
+    #     install()
+    #     install_critical()
+    # except Exception as _es_e:
+    #     print(f"[EMBED_SYNC] install failed (non-fatal): {_es_e}")
+    print("[EMBED_SYNC] auto-embed DISABLED by config")
     threading.Thread(target=queue_poller, daemon=True).start()
     threading.Thread(target=cold_processor_loop, daemon=True).start()
     # self_sync_check disabled -- CORE_SELF.md is tombstoned, superseded by system_map
