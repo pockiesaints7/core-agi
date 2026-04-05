@@ -2305,7 +2305,7 @@ def queue_poller():
                     )
         except Exception as e:
             print(f"[QUEUE] {e}")
-        time.sleep(60)
+        time.sleep(300)  # egress-guard: was 60s
 
 
 # ---------------------------------------------------------------------------
@@ -2406,6 +2406,12 @@ def on_start():
     # except Exception as _es_e:
     #     print(f"[EMBED_SYNC] install failed (non-fatal): {_es_e}")
     print("[EMBED_SYNC] auto-embed DISABLED by config")
+    # Egress guard — rate-limit all Supabase calls globally
+    try:
+        from core_egress_guard import install as _eg_install
+        _eg_install()
+    except Exception as _eg_e:
+        print(f"[EGRESS_GUARD] install failed (non-fatal): {_eg_e}")
     threading.Thread(target=queue_poller, daemon=True).start()
     threading.Thread(target=cold_processor_loop, daemon=True).start()
     # self_sync_check disabled -- CORE_SELF.md is tombstoned, superseded by system_map

@@ -1,4 +1,4 @@
-﻿"""core_train.py â€” CORE AGI Training Pipeline
+"""core_train.py â€” CORE AGI Training Pipeline
 Extracted from core.py. Contains:
   - auto_hot_reflection
   - run_cold_processor
@@ -140,7 +140,7 @@ def _phase_signal_packet(limit: int = 16) -> dict | None:
 _last_cold_run: float = 0.0
 _last_cold_kb_count: int = 0
 _last_research_run: float = -1.0
-_IMPROVEMENT_INTERVAL = 3600  # 60 min
+_IMPROVEMENT_INTERVAL = int(os.getenv("RESEARCH_INTERVAL_S", "14400"))  # default 4h, was 60min
 _last_public_source_run: float = -1.0
 _PUBLIC_SOURCE_INTERVAL = 21600  # 6 hours
 _last_meta_learning_run: float = -1.0
@@ -5259,7 +5259,7 @@ def background_researcher():
 
         except Exception as e:
             print(f"[RESEARCH] loop error: {e}")
-        time.sleep(60)
+        time.sleep(300)  # egress-guard: was 60s
 
 
 # -- Pattern semantic clustering -----------------------------------------------
@@ -6184,7 +6184,7 @@ def _run_self_diagnosis():
 
 # â”€â”€ P2-04: Proactive Intelligence Surface â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-_PROACTIVE_INTERVAL = 7200       # 2 hours between surface checks
+_PROACTIVE_INTERVAL = int(os.getenv("PROACTIVE_INTERVAL_S", "14400"))  # default 4h, was 2h
 _proactive_last_run: float = 0.0
 
 # Dedup: map alert_key -> last_sent_ts (in-memory, resets on redeploy â€” fine)
@@ -6330,8 +6330,8 @@ def proactive_surface_loop():
     """P2-04: Background thread â€” checks every 2h for proactive alerts."""
     global _proactive_last_run
     print("[PROACTIVE] Surface loop started")
-    # Stagger start by 10 min to avoid all loops hitting Supabase at once on boot
-    time.sleep(600)
+    # Stagger start — extended to reduce boot egress
+    time.sleep(1800)  # egress-guard: was 600s
     while True:
         try:
             _run_proactive_surface()
