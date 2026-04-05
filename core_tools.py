@@ -7994,6 +7994,8 @@ TOOLS = {
                                "desc": "Fetch a .py file from GitHub and run py_compile server-side. Returns ok/error with line number. Use before any deploy."},
     "append_to_file":         {"fn": t_append_to_file,         "perm": "EXECUTE", "args": ["path", "content_to_append", "message", "repo"],
                                "desc": "Append content to a GitHub file server-side. Runs py_compile before push for .py files. Use to add new functions without fetching file into Claude context."},
+    "push_local_files":       {"fn": t_push_local_files,       "perm": "EXECUTE", "args": ["paths", "repo", "message", "branch"],
+                               "desc": "SAFE multi-file push from VM disk to GitHub. Reads files directly from disk — never accepts content as argument. Guards: size>500B, py_compile syntax gate, atomic Git Trees commit. Use this instead of write_file when pushing existing local files. paths=comma-separated absolute VM paths."},
     "verify_live":            {"fn": t_verify_live,            "perm": "READ",    "args": ["expected_text", "timeout"],
                                "desc": "Poll /state until expected_text appears."},
     "sb_patch":               {"fn": t_sb_patch,               "perm": "WRITE",   "args": ["table", "filters", "data"],
