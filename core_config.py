@@ -206,6 +206,30 @@ def _sbh_count_svc():
             "Prefer": "count=exact"}
 
 
+def _sb_count_total(response) -> int | None:
+    try:
+        cr = response.headers.get("content-range") or response.headers.get("Content-Range") or ""
+        if "/" not in cr:
+            return None
+        return int(cr.split("/")[-1])
+    except Exception:
+        return None
+
+
+def _sb_count_qs(qs: str = "") -> str:
+    parts = []
+    for raw_part in str(qs or "").split("&"):
+        part = raw_part.strip().lstrip("?")
+        if not part:
+            continue
+        key = part.split("=", 1)[0]
+        if key in {"select", "limit", "offset", "order"}:
+            continue
+        parts.append(part)
+    base = "select=id&limit=1"
+    return base if not parts else f"{base}&{'&'.join(parts)}"
+
+
 def _sb_circuit_open() -> bool:
     return time.time() < _SUPABASE_CIRCUIT_UNTIL
 
@@ -339,6 +363,58 @@ def sb_get(t, qs="", svc=True):
             print(f"[SB GET] {t} error: {e}")
             _sb_circuit_note()
             return []
+
+
+def sb_count(t, qs="", svc=True):
+    if _sb_circuit_open() or _sb_schema_cache_cooldown_open():
+        return 0
+    count_qs = _sb_count_qs(qs)
+    url = f"{SUPABASE_URL}/rest/v1/{t}?{count_qs}"
+    with _SB_SCHEMA_CACHE_LOCK:
+        if _sb_circuit_open() or _sb_schema_cache_cooldown_open():
+            return 0
+        try:
+            last_response = None
+            for attempt in range(5):
+                r = httpx.head(url, headers=_sbh_count_svc(), timeout=15)
+                last_response = r
+                total = _sb_count_total(r)
+                if r.is_success and total is not None:
+                    _sb_circuit_reset()
+                    return total
+                if _sb_schema_missing_response(r):
+                    print(f"[SB COUNT] {t} missing schema: {r.status_code} {r.text[:200]}")
+                    _sb_bootstrap_schema_once(f"count:{t}")
+                    r = httpx.head(url, headers=_sbh_count_svc(), timeout=15)
+                    last_response = r
+                    total = _sb_count_total(r)
+                    if r.is_success and total is not None:
+                        _sb_circuit_reset()
+                        return total
+                if r.is_success:
+                    r = httpx.get(url, headers=_sbh_count_svc(), timeout=15)
+                    last_response = r
+                    total = _sb_count_total(r)
+                    if r.is_success and total is not None:
+                        _sb_circuit_reset()
+                        return total
+                if _sb_schema_cache_response(last_response):
+                    if attempt < 4:
+                        delay = _sb_retry_delay(attempt)
+                        _sb_schema_cache_cooldown(delay, t)
+                        time.sleep(delay)
+                        continue
+                    _sb_schema_cache_cooldown(_sb_retry_delay(attempt), t)
+                    return 0
+                break
+            if last_response is not None:
+                print(f"[SB COUNT] {t} failed: {last_response.status_code} {last_response.text[:200]}")
+                _sb_circuit_note(last_response)
+            return 0
+        except Exception as e:
+            print(f"[SB COUNT] {t} error: {e}")
+            _sb_circuit_note()
+            return 0
 
 def sb_post(t, d):
     if not L.sbw() or _sb_circuit_open(): return False

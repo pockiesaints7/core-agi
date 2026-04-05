@@ -18,6 +18,7 @@ import time
 import threading as _threading
 from collections import Counter
 from datetime import datetime, timedelta, timezone
+from urllib.parse import quote
 
 import httpx
 
@@ -26,7 +27,7 @@ from core_config import (
     COLD_HOT_THRESHOLD, COLD_TIME_THRESHOLD, COLD_KB_GROWTH_THRESHOLD,
     PATTERN_EVO_THRESHOLD, KNOWLEDGE_AUTO_CONFIDENCE,
     KB_MINE_BATCH_SIZE, KB_MINE_RATIO_THRESHOLD,
-    sb_get, sb_post, sb_post_critical, sb_patch, sb_upsert, _sbh_count_svc, _env_int, _env_float,
+    sb_get, sb_count, sb_post, sb_post_critical, sb_patch, sb_upsert, _sbh_count_svc, _env_int, _env_float,
     gemini_chat, groq_chat, GROQ_MODEL, GROQ_FAST,
 )
 from core_github import notify, gh_write
@@ -56,6 +57,31 @@ def _sel_force(table: str, cols: list) -> str:
     except Exception:
         pass
     return ",".join(cols)
+
+
+def _sb_eq_value(value: object, max_len: int | None = None) -> str:
+    text = "" if value is None else str(value)
+    if max_len is not None:
+        text = text[:max_len]
+    return quote(text, safe="")
+
+
+def _pattern_frequency_lookup(keys) -> dict[str, dict]:
+    rows_by_key: dict[str, dict] = {}
+    seen: set[str] = set()
+    for raw_key in keys:
+        key = str(raw_key or "")[:500]
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        rows = sb_get(
+            "pattern_frequency",
+            f"select=id,pattern_key,frequency,auto_applied&pattern_key=eq.{_sb_eq_value(key, 500)}&id=gt.1&limit=1",
+            svc=True,
+        ) or []
+        if rows and rows[0].get("pattern_key"):
+            rows_by_key[str(rows[0]["pattern_key"])] = rows[0]
+    return rows_by_key
 
 
 def _normalize_utc_timestamp(value: str, *, clamp_future: bool = True) -> tuple[str | None, bool, bool]:
@@ -3031,9 +3057,7 @@ def run_cold_processor():
                 batch_counts, batch_domain, batch_sources
             )
 
-        all_pf = {r["pattern_key"]: r for r in sb_get(
-            "pattern_frequency", "select=id,pattern_key,frequency,auto_applied&limit=2000", svc=True
-        ) if r.get("id") != 1 and r.get("pattern_key")}
+        all_pf = _pattern_frequency_lookup(batch_counts.keys())
 
         for key, batch_count in batch_counts.items():
             existing = all_pf.get(key)
@@ -3070,7 +3094,7 @@ def run_cold_processor():
                 final_conf = round(base_conf * src_mult, 3)
                 kb_content = _groq_kb_content(key, domain, total_freq, src_key)
                 _already_active = sb_get("evolution_queue",
-                    f"select=id,status&pattern_key=eq.{key[:200]}&status=in.(pending,rejected)&limit=1",
+                    f"select=id,status&pattern_key=eq.{_sb_eq_value(key, 200)}&status=in.(pending,rejected)&limit=1",
                     svc=True)
                 if _already_active:
                     _existing_status = _already_active[0].get("status", "pending")
@@ -3117,7 +3141,7 @@ def run_cold_processor():
                     _safety = os.getenv("EVOLUTION_AUTO_TIER", "").strip().lower()
                     if _tier == "auto" and _safety not in ("notify_only", "disabled"):
                         new_evo = sb_get("evolution_queue",
-                            f"select=id&pattern_key=eq.{key[:100]}&status=eq.pending&order=id.desc&limit=1",
+                            f"select=id&pattern_key=eq.{_sb_eq_value(key, 100)}&status=eq.pending&order=id.desc&limit=1",
                             svc=True)
                         if new_evo:
                             result = apply_evolution(new_evo[0]["id"])
@@ -3129,7 +3153,7 @@ def run_cold_processor():
                     elif _tier == "notify" and final_conf >= 0.65 and src_key == "real" and _safety not in ("notify_only", "disabled"):
                         # Legacy backward-compat: high-confidence notify-tier still auto-applies in cold processor
                         new_evo = sb_get("evolution_queue",
-                            f"select=id&pattern_key=eq.{key[:100]}&status=eq.pending&order=id.desc&limit=1",
+                            f"select=id&pattern_key=eq.{_sb_eq_value(key, 100)}&status=eq.pending&order=id.desc&limit=1",
                             svc=True)
                         if new_evo:
                             result = apply_evolution(new_evo[0]["id"])
@@ -3486,8 +3510,7 @@ def cold_processor_loop():
     _restore_diag_timestamp()  # AGI-02: seed from Supabase before first loop tick
     while True:
         try:
-            hots        = sb_get("hot_reflections", "select=id&processed_by_cold=eq.0&id=gt.1", svc=True)
-            unprocessed = len(hots)
+            unprocessed = sb_count("hot_reflections", "processed_by_cold=eq.0&id=gt.1")
             time_since  = time.time() - _last_cold_run
 
             current_kb_count = 0

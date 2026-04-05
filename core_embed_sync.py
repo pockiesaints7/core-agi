@@ -23,6 +23,7 @@ How it works:
 import sys
 import threading
 from datetime import datetime
+from urllib.parse import quote
 
 # ── Text extractors per table (same as core_semantic SEMANTIC_TABLES) ─────────
 _TEXT_FN = {
@@ -47,6 +48,17 @@ _TEXT_FN = {
     "conversation_episodes": lambda r: " | ".join(
         p for p in [r.get("summary",""), r.get("chat_id",""), " ".join(r.get("topic_tags", []) if isinstance(r.get("topic_tags"), list) else [])] if p
     ),
+}
+
+_TEXT_COLUMNS = {
+    "knowledge_base": ["topic", "instruction", "content"],
+    "mistakes": ["what_failed", "context", "root_cause", "how_to_avoid"],
+    "behavioral_rules": ["full_rule", "trigger"],
+    "pattern_frequency": ["pattern_key", "description"],
+    "hot_reflections": ["reflection_text", "task_summary"],
+    "output_reflections": ["gap", "new_behavior", "gap_domain"],
+    "evolution_queue": ["change_summary", "pattern_key"],
+    "conversation_episodes": ["summary", "chat_id", "topic_tags"],
 }
 
 # ── ID fetch queries per table ─────────────────────────────────────────────────
@@ -109,58 +121,108 @@ def _rebind_module_globals(name: str, wrapper) -> None:
         except Exception:
             continue
 
+
+def _sb_eq_value(value: object, max_len: int | None = None) -> str:
+    text = "" if value is None else str(value)
+    if max_len is not None:
+        text = text[:max_len]
+    return quote(text, safe="")
+
+
+def _select_for_table(table: str) -> str:
+    cols = ["id"] + list(_TEXT_COLUMNS.get(table, []))
+    seen = []
+    for col in cols:
+        if col and col not in seen:
+            seen.append(col)
+    return ",".join(seen) if seen else "id"
+
+
+def _embed_row(table: str, row: dict, row_id: str | None = None) -> None:
+    from core_config import sb_patch
+    from core_embeddings import _embed_text_safe
+
+    text_fn = _TEXT_FN.get(table)
+    if not text_fn:
+        return
+    rid = str(row_id or row.get("id") or "").strip()
+    if not rid:
+        return
+    text = text_fn(row).strip()
+    if not text or len(text) < 5:
+        return
+    vec = _embed_text_safe(text)
+    if not vec:
+        return
+    sb_patch(table, f"id=eq.{rid}", {"embedding": vec})
+    print(f"[EMBED_SYNC] {table}:{rid} embedded ({len(vec)} dims)")
+
+
+def _find_row_id(table: str, row: dict) -> str:
+    from core_config import sb_get
+
+    qs = _ID_QUERY.get(table, "select=id&order=id.desc&limit=1")
+    if table == "knowledge_base" and row.get("topic") and row.get("domain"):
+        qs = (
+            "select=id"
+            f"&domain=eq.{_sb_eq_value(row.get('domain'), 120)}"
+            f"&topic=eq.{_sb_eq_value(row.get('topic'), 200)}"
+            "&order=id.desc&limit=1"
+        )
+    elif table == "mistakes" and row.get("what_failed"):
+        needle = _sb_eq_value(f"*{str(row.get('what_failed', ''))[:20]}*")
+        qs = f"select=id&what_failed=ilike.{needle}&order=id.desc&limit=1"
+    elif table == "behavioral_rules" and row.get("trigger"):
+        qs = f"select=id&trigger=eq.{_sb_eq_value(row.get('trigger'), 120)}&order=id.desc&limit=1"
+    elif table == "hot_reflections" and row.get("task_summary"):
+        needle = _sb_eq_value(f"*{str(row.get('task_summary', ''))[:20]}*")
+        qs = f"select=id&task_summary=ilike.{needle}&order=id.desc&limit=1"
+    elif table == "conversation_episodes" and row.get("chat_id") and row.get("summary"):
+        qs = (
+            "select=id"
+            f"&chat_id=eq.{_sb_eq_value(row.get('chat_id'), 120)}"
+            f"&summary=ilike.{_sb_eq_value(f'*{str(row.get('summary', ''))[:20]}*')}"
+            "&order=id.desc&limit=1"
+        )
+    rows = sb_get(table, qs, svc=True) or []
+    if not rows:
+        return ""
+    return str(rows[0].get("id") or "").strip()
+
 def _embed_new_row(table: str, row: dict) -> None:
     """
     Background thread: get new row id + embed it.
     Fires after sb_post() succeeds. Never raises.
     """
     try:
-        from core_config import sb_get, sb_patch
-        from core_embeddings import _embed_text_safe
-
-        # Extract text to embed
-        text_fn = _TEXT_FN.get(table)
-        if not text_fn:
+        rid = _find_row_id(table, row)
+        if not rid:
             return
-        text = text_fn(row).strip()
-        if not text or len(text) < 5:
-            return
-
-        # Get the id of the just-inserted row
-        # Use a unique field combo to find it if possible, else order desc
-        qs = _ID_QUERY.get(table, "select=id&order=id.desc&limit=1")
-
-        # Try to narrow by a unique field to avoid race conditions
-        if table == "knowledge_base" and row.get("topic") and row.get("domain"):
-            topic = row["topic"].replace("'","")[:80]
-            domain = row.get("domain","")
-            qs = f"select=id&domain=eq.{domain}&topic=eq.{topic}&order=id.desc&limit=1"
-        elif table == "mistakes" and row.get("what_failed"):
-            wf = row["what_failed"].replace("'","")[:40]
-            qs = f"select=id&what_failed=ilike.*{wf[:20]}*&order=id.desc&limit=1"
-        elif table == "behavioral_rules" and row.get("trigger"):
-            tr = row["trigger"].replace("'","")[:40]
-            qs = f"select=id&trigger=eq.{tr}&order=id.desc&limit=1"
-        elif table == "hot_reflections" and row.get("task_summary"):
-            ts = row["task_summary"].replace("'","")[:40]
-            qs = f"select=id&task_summary=ilike.*{ts[:20]}*&order=id.desc&limit=1"
-
-        rows = sb_get(table, qs, svc=True) or []
-        if not rows:
-            return
-        rid = rows[0]["id"]
-
-        # Embed
-        vec = _embed_text_safe(text)
-        if not vec:
-            return
-
-        # Patch embedding
-        sb_patch(table, f"id=eq.{rid}", {"embedding": vec})
-        print(f"[EMBED_SYNC] {table}:{rid} embedded ({len(vec)} dims)")
-
+        _embed_row(table, row, rid)
     except Exception as e:
         print(f"[EMBED_SYNC] {table} auto-embed failed (non-fatal): {e}")
+
+
+def _fire_embed_row_async(table: str, row: dict, row_id: str) -> None:
+    if not row_id:
+        return
+    threading.Thread(target=_embed_row, args=(table, row, row_id), daemon=True).start()
+
+
+def _refetch_and_embed_by_id_async(table: str, row_id: str) -> None:
+    if not row_id:
+        return
+
+    def _task():
+        try:
+            from core_config import sb_get
+            rows = sb_get(table, f"select={_select_for_table(table)}&id=eq.{row_id}&limit=1", svc=True) or []
+            if rows:
+                _embed_row(table, rows[0], row_id)
+        except Exception as e:
+            print(f"[EMBED_SYNC] {table}:{row_id} refetch embed failed (non-fatal): {e}")
+
+    threading.Thread(target=_task, daemon=True).start()
 
 
 def _fire_embed_async(table: str, row: dict) -> None:
@@ -176,17 +238,9 @@ def _fire_embed_for_id_async(table: str, row_id: str) -> None:
     def _task():
         try:
             from core_config import sb_get
-            row = None
-            if table == "knowledge_base":
-                rows = sb_get(table, f"select=id,domain,topic,instruction,content,source_type,source_ref&id=eq.{row_id}&limit=1", svc=True) or []
-            elif table == "conversation_episodes":
-                rows = sb_get(table, f"select=id,chat_id,summary,topic_tags&id=eq.{row_id}&limit=1", svc=True) or []
-            else:
-                rows = sb_get(table, f"select=*&id=eq.{row_id}&limit=1", svc=True) or []
+            rows = sb_get(table, f"select={_select_for_table(table)}&id=eq.{row_id}&limit=1", svc=True) or []
             if rows:
-                row = rows[0]
-            if row:
-                _embed_new_row(table, row)
+                _embed_row(table, rows[0], row_id)
         except Exception as e:
             print(f"[EMBED_SYNC] {table}:{row_id} refetch embed failed (non-fatal): {e}")
 
@@ -216,13 +270,21 @@ def install():
     def sb_post_with_embed(table: str, data: dict, *args, **kwargs):
         result = originals["sb_post"](table, data, *args, **kwargs)
         if result and table in _TEXT_FN:
-            _fire_embed_async(table, data)
+            row_id = str((data or {}).get("id") or "").strip()
+            if row_id:
+                _fire_embed_row_async(table, data, row_id)
+            else:
+                _fire_embed_async(table, data)
         return result
 
     def sb_upsert_with_embed(table: str, data: dict, on_conflict: str, *args, **kwargs):
         result = originals["sb_upsert"](table, data, on_conflict, *args, **kwargs)
         if result and table in _TEXT_FN:
-            _fire_embed_async(table, data)
+            row_id = str((data or {}).get("id") or "").strip()
+            if row_id:
+                _fire_embed_row_async(table, data, row_id)
+            else:
+                _fire_embed_async(table, data)
         return result
 
     def sb_patch_with_embed(table: str, filters: str, data: dict, *args, **kwargs):
@@ -230,7 +292,7 @@ def install():
         if result and _relevant_patch(table, data):
             row_id = _parse_id_from_filters(filters)
             if row_id:
-                _fire_embed_for_id_async(table, row_id)
+                _refetch_and_embed_by_id_async(table, row_id)
         return result
 
     _cc.sb_post = sb_post_with_embed
@@ -276,7 +338,11 @@ def install_critical():
         def sb_post_critical_with_embed(table: str, data: dict, *args, **kwargs):
             result = _original_critical(table, data, *args, **kwargs)
             if result and table in _TEXT_FN:
-                _fire_embed_async(table, data)
+                row_id = str((data or {}).get("id") or "").strip()
+                if row_id:
+                    _fire_embed_row_async(table, data, row_id)
+                else:
+                    _fire_embed_async(table, data)
             return result
 
         _cc.sb_post_critical = sb_post_critical_with_embed

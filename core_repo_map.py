@@ -34,6 +34,7 @@ REPO_NAME = os.getenv("CORE_REPO_MAP_NAME", "core-agi")
 REPO_MAP_ENABLED = os.getenv("CORE_REPO_MAP_ENABLED", "true").strip().lower() not in {"0", "false", "no", "off"}
 REPO_MAP_INTERVAL_S = max(300, _env_int("CORE_REPO_MAP_INTERVAL_S", 1800))
 REPO_MAP_BATCH_LIMIT = max(1, _env_int("CORE_REPO_MAP_BATCH_LIMIT", 400))
+REPO_MAP_DEEP_RECONCILE_S = max(REPO_MAP_INTERVAL_S, _env_int("CORE_REPO_MAP_DEEP_RECONCILE_S", REPO_MAP_INTERVAL_S * 4))
 REPO_MAP_PROJECT_TO_KB = os.getenv("CORE_REPO_MAP_PROJECT_TO_KB", "false").strip().lower() in {"1", "true", "yes", "on"}
 _MANAGED_TABLES = ("repo_components", "repo_component_chunks", "repo_component_edges", "repo_scan_runs")
 _EXCLUDED_DIRS = {
@@ -55,6 +56,7 @@ _state = {
     "last_error": "",
     "last_summary": {},
     "last_run_id": None,
+    "last_deep_reconcile_at": "",
     "root_path": str(REPO_ROOT),
     "bootstrapped": False,
 }
@@ -664,18 +666,34 @@ def _ensure_repo_map_schema() -> dict:
 
 
 def _existing_components_map() -> dict[str, dict]:
+    rows = []
     try:
-        rows = sb_get(
-            "repo_components",
-            "select=id,path,file_hash,content_hash,active,updated_at&order=path.asc&limit=2000",
-            svc=True,
-        ) or []
+        limit = 500
+        offset = 0
+        while True:
+            batch = sb_get(
+                "repo_components",
+                (
+                    "select=id,path,file_hash,content_hash,active"
+                    "&active=eq.true"
+                    "&order=path.asc"
+                    f"&limit={limit}&offset={offset}"
+                ),
+                svc=True,
+            ) or []
+            if not batch:
+                break
+            rows.extend(batch)
+            if len(batch) < limit:
+                break
+            offset += limit
     except Exception:
         rows = []
     return {str(r.get("path") or ""): r for r in rows if r.get("path")}
 
 
 def _existing_children_map(table: str, field: str, value: str) -> list[dict]:
+    rows: list[dict] = []
     try:
         if table == "repo_component_chunks":
             select = "select=id,component_path,chunk_index,active,chunk_hash"
@@ -683,13 +701,37 @@ def _existing_children_map(table: str, field: str, value: str) -> list[dict]:
             select = "select=id,source_path,target_path,relation,source_symbol,target_symbol,active"
         else:
             select = "select=id"
-        return sb_get(
-            table,
-            f"{select}&{field}=eq.{value}&order=id.asc&limit=2000",
-            svc=True,
-        ) or []
+        limit = 500
+        offset = 0
+        while True:
+            batch = sb_get(
+                table,
+                f"{select}&{field}=eq.{value}&active=eq.true&order=id.asc&limit={limit}&offset={offset}",
+                svc=True,
+            ) or []
+            if not batch:
+                break
+            rows.extend(batch)
+            if len(batch) < limit:
+                break
+            offset += limit
     except Exception:
         return []
+    return rows
+
+
+def _deep_reconcile_due(trigger: str) -> bool:
+    if trigger != "loop":
+        return True
+    with _lock:
+        last = str(_state.get("last_deep_reconcile_at") or "").strip()
+    if not last:
+        return True
+    try:
+        last_dt = datetime.fromisoformat(last)
+    except Exception:
+        return True
+    return (datetime.utcnow() - last_dt).total_seconds() >= REPO_MAP_DEEP_RECONCILE_S
 
 
 def _upsert_component(row: dict, text: str) -> dict:
@@ -907,19 +949,19 @@ def sync_repo_map(trigger: str = "manual", root_path: str = "", project_to_kb: s
         _state["last_error"] = ""
     try:
         files = _scan_files(root)
+        all_local_paths = {_rel_path(path) for path in files}
         existing = _existing_components_map()
-        current_paths = set()
         components_upserted = 0
         chunks_upserted = 0
         edges_upserted = 0
         changed_files = 0
         errors: list[str] = []
+        deep_reconcile = _deep_reconcile_due(trigger)
 
         for idx, path in enumerate(files):
             if idx >= REPO_MAP_BATCH_LIMIT:
                 break
             rel = _rel_path(path)
-            current_paths.add(rel)
             text = _read_text(path)
             if not text:
                 continue
@@ -940,77 +982,78 @@ def sync_repo_map(trigger: str = "manual", root_path: str = "", project_to_kb: s
                 continue
             components_upserted += 1 if changed or not prev else 0
             comp_id = comp_res.get("id")
-            chunk_rows = _chunk_text(text)
-            existing_chunks = _existing_children_map("repo_component_chunks", "component_path", rel)
-            current_chunk_indexes = set()
-            for chunk in chunk_rows:
-                current_chunk_indexes.add(chunk["chunk_index"])
-                chunk_text = chunk["content"]
-                chunk_row = {
-                    "repo": REPO_NAME,
-                    "component_path": rel,
-                    "chunk_index": chunk["chunk_index"],
-                    "chunk_type": _component_type(path),
-                    "start_line": chunk["start_line"],
-                    "end_line": chunk["end_line"],
-                    "summary": chunk_text.splitlines()[0][:220] if chunk_text.splitlines() else rel,
-                    "content": chunk_text,
-                    "chunk_hash": _file_hash(chunk_text),
-                    "token_estimate": max(1, len(chunk_text) // 4),
-                    "active": True,
-                    "last_scanned_at": _utcnow(),
-                    "updated_at": _utcnow(),
-                }
-                if changed or not existing_chunks:
-                    chunk_res = _upsert_chunk(chunk_row, chunk_text)
-                    if chunk_res.get("ok"):
-                        chunks_upserted += 1
+            if changed or deep_reconcile:
+                chunk_rows = _chunk_text(text)
+                existing_chunks = _existing_children_map("repo_component_chunks", "component_path", rel)
+                current_chunk_indexes = set()
+                for chunk in chunk_rows:
+                    current_chunk_indexes.add(chunk["chunk_index"])
+                    chunk_text = chunk["content"]
+                    chunk_row = {
+                        "repo": REPO_NAME,
+                        "component_path": rel,
+                        "chunk_index": chunk["chunk_index"],
+                        "chunk_type": _component_type(path),
+                        "start_line": chunk["start_line"],
+                        "end_line": chunk["end_line"],
+                        "summary": chunk_text.splitlines()[0][:220] if chunk_text.splitlines() else rel,
+                        "content": chunk_text,
+                        "chunk_hash": _file_hash(chunk_text),
+                        "token_estimate": max(1, len(chunk_text) // 4),
+                        "active": True,
+                        "last_scanned_at": _utcnow(),
+                        "updated_at": _utcnow(),
+                    }
+                    if changed or not existing_chunks:
+                        chunk_res = _upsert_chunk(chunk_row, chunk_text)
+                        if chunk_res.get("ok"):
+                            chunks_upserted += 1
+                        else:
+                            errors.append(chunk_res.get("error") or f"{rel}#{chunk_row['chunk_index']}")
+
+                for existing_chunk in existing_chunks:
+                    try:
+                        chunk_index = int(existing_chunk.get("chunk_index", -1))
+                    except Exception:
+                        chunk_index = -1
+                    if chunk_index not in current_chunk_indexes and existing_chunk.get("active", True):
+                        sb_patch(
+                            "repo_component_chunks",
+                            f"id=eq.{existing_chunk['id']}",
+                            {"active": False, "updated_at": _utcnow(), "last_scanned_at": _utcnow()},
+                        )
+
+                edge_rows = _build_edges(path, text, meta)
+                existing_edges = _existing_children_map("repo_component_edges", "source_path", rel)
+                current_edge_keys = set()
+                for edge in edge_rows:
+                    current_edge_keys.add((
+                        edge["source_path"],
+                        edge["target_path"],
+                        edge["relation"],
+                        edge.get("source_symbol", ""),
+                        edge.get("target_symbol", ""),
+                    ))
+                    edge_res = _upsert_edge(edge, f"{edge['source_path']}->{edge['target_path']}|{edge['relation']}|{edge.get('evidence','')}")
+                    if edge_res.get("ok"):
+                        edges_upserted += 1
                     else:
-                        errors.append(chunk_res.get("error") or f"{rel}#{chunk_row['chunk_index']}")
+                        errors.append(edge_res.get("error") or f"{edge['source_path']}->{edge['target_path']}")
 
-            for existing_chunk in existing_chunks:
-                try:
-                    chunk_index = int(existing_chunk.get("chunk_index", -1))
-                except Exception:
-                    chunk_index = -1
-                if chunk_index not in current_chunk_indexes and existing_chunk.get("active", True):
-                    sb_patch(
-                        "repo_component_chunks",
-                        f"id=eq.{existing_chunk['id']}",
-                        {"active": False, "updated_at": _utcnow(), "last_scanned_at": _utcnow()},
+                for existing_edge in existing_edges:
+                    key = (
+                        existing_edge.get("source_path", ""),
+                        existing_edge.get("target_path", ""),
+                        existing_edge.get("relation", ""),
+                        existing_edge.get("source_symbol", ""),
+                        existing_edge.get("target_symbol", ""),
                     )
-
-            edge_rows = _build_edges(path, text, meta)
-            existing_edges = _existing_children_map("repo_component_edges", "source_path", rel)
-            current_edge_keys = set()
-            for edge in edge_rows:
-                current_edge_keys.add((
-                    edge["source_path"],
-                    edge["target_path"],
-                    edge["relation"],
-                    edge.get("source_symbol", ""),
-                    edge.get("target_symbol", ""),
-                ))
-                edge_res = _upsert_edge(edge, f"{edge['source_path']}->{edge['target_path']}|{edge['relation']}|{edge.get('evidence','')}")
-                if edge_res.get("ok"):
-                    edges_upserted += 1
-                else:
-                    errors.append(edge_res.get("error") or f"{edge['source_path']}->{edge['target_path']}")
-
-            for existing_edge in existing_edges:
-                key = (
-                    existing_edge.get("source_path", ""),
-                    existing_edge.get("target_path", ""),
-                    existing_edge.get("relation", ""),
-                    existing_edge.get("source_symbol", ""),
-                    existing_edge.get("target_symbol", ""),
-                )
-                if key not in current_edge_keys and existing_edge.get("active", True):
-                    sb_patch(
-                        "repo_component_edges",
-                        f"id=eq.{existing_edge['id']}",
-                        {"active": False, "updated_at": _utcnow(), "last_scanned_at": _utcnow()},
-                    )
+                    if key not in current_edge_keys and existing_edge.get("active", True):
+                        sb_patch(
+                            "repo_component_edges",
+                            f"id=eq.{existing_edge['id']}",
+                            {"active": False, "updated_at": _utcnow(), "last_scanned_at": _utcnow()},
+                        )
 
             if REPO_MAP_PROJECT_TO_KB and comp_id and embed_on_insert:
                 try:
@@ -1018,7 +1061,7 @@ def sync_repo_map(trigger: str = "manual", root_path: str = "", project_to_kb: s
                 except Exception:
                     pass
 
-        removed = [p for p in existing.keys() if p not in current_paths]
+        removed = [p for p in existing.keys() if p not in all_local_paths]
         for rel in removed:
             row = existing.get(rel) or {}
             if row and row.get("active", True):
@@ -1058,6 +1101,7 @@ def sync_repo_map(trigger: str = "manual", root_path: str = "", project_to_kb: s
             _state.update({
                 "running": False,
                 "last_run_at": _utcnow(),
+                "last_deep_reconcile_at": _utcnow() if deep_reconcile else _state.get("last_deep_reconcile_at", ""),
                 "last_error": "; ".join(errors[:8]),
                 "last_summary": summary,
                 "last_run_id": None,

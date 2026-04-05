@@ -26,7 +26,7 @@ from core_config import (
     GITHUB_REPO, KB_MINE_BATCH_SIZE, KB_MINE_RATIO_THRESHOLD,
     COLD_HOT_THRESHOLD, COLD_KB_GROWTH_THRESHOLD, PATTERN_EVO_THRESHOLD,
     KNOWLEDGE_AUTO_CONFIDENCE, MCP_PROTOCOL_VERSION, SUPABASE_URL, SUPABASE_REF, SUPABASE_PAT,
-    L, gemini_chat, groq_chat, sb_get, sb_post, sb_post_critical, sb_patch, sb_upsert, sb_delete,
+    L, gemini_chat, groq_chat, sb_get, sb_count, sb_post, sb_post_critical, sb_patch, sb_upsert, sb_delete,
 )
 from core_config import _sbh, _sbh_count_svc
 from core_github import _ghh, _gh_blob_read, _gh_blob_write, gh_read, gh_write, notify
@@ -2155,7 +2155,7 @@ def t_debug_fn(fn_name: str, dry_run: str = "true", extra_args: str = None) -> d
         # Stage 1 -- preflight data fetch (for pipeline functions)
         def do_preflight():
             mistakes = sb_get("mistakes", "select=domain,what_failed&order=id.desc&limit=5", svc=True)
-            hots_count = len(sb_get("hot_reflections", "select=id&processed_by_cold=eq.0", svc=True) or [])
+            hots_count = sb_count("hot_reflections", "processed_by_cold=eq.0")
             return {"mistakes_count": len(mistakes), "unprocessed_hots": hots_count}
         ok, preflight = stage("1_preflight", do_preflight)
         if not ok:
@@ -2208,11 +2208,10 @@ def t_get_training_pipeline() -> dict:
         last_rarl = next((h for h in all_hots if h.get("source") == "rarl"), None)
 
         # Total counts
-        total_hots_rows = sb_get("hot_reflections", "select=id&order=id.desc&limit=1", svc=True) or []
-        total_hots = total_hots_rows[0]["id"] if total_hots_rows else 0
-        total_sim  = len(sb_get("hot_reflections", "select=id&source=eq.simulation", svc=True) or [])
-        total_real = len(sb_get("hot_reflections", f"select=id&source=eq.real&domain=eq.{TRADING_DOMAIN}", svc=True) or [])
-        total_rarl = len(sb_get("hot_reflections", f"select=id&source=eq.rarl&domain=eq.{TRADING_META_DOMAIN}", svc=True) or [])
+        total_hots = sb_count("hot_reflections")
+        total_sim = sb_count("hot_reflections", "source=eq.simulation")
+        total_real = sb_count("hot_reflections", f"source=eq.real&domain=eq.{TRADING_DOMAIN}")
+        total_rarl = sb_count("hot_reflections", f"source=eq.rarl&domain=eq.{TRADING_META_DOMAIN}")
         trading_seed = build_trading_readiness(limit=8) if trading_specialization_enabled() else {}
         trading_seed_counts = trading_seed.get("counts", {}) if isinstance(trading_seed, dict) else {}
         total_seed_sources = int(trading_seed_counts.get("seed_sources", 0) or 0)
@@ -2252,8 +2251,7 @@ def t_get_training_pipeline() -> dict:
             health_flags.append(f"cold_stale_{cold_mins_ago}min")
 
         # Unprocessed backlog flag
-        unprocessed_count = len(sb_get("hot_reflections",
-            "select=id&processed_by_cold=eq.0", svc=True) or [])
+        unprocessed_count = sb_count("hot_reflections", "processed_by_cold=eq.0")
         if unprocessed_count >= COLD_HOT_THRESHOLD:
             health_flags.append(f"unprocessed_backlog_{unprocessed_count}_threshold_{COLD_HOT_THRESHOLD}")
 
@@ -2265,15 +2263,13 @@ def t_get_training_pipeline() -> dict:
         active_patterns = sb_get("pattern_frequency",
             "select=pattern_key,domain,frequency,auto_applied,last_seen"
             "&stale=eq.false&frequency=gte.2&order=frequency.desc&limit=1", svc=True) or []
-        all_active = sb_get("pattern_frequency", "select=id&stale=eq.false", svc=True) or []
-        stale_count = len(sb_get("pattern_frequency", "select=id&stale=eq.true", svc=True) or [])
+        active_pattern_count = sb_count("pattern_frequency", "stale=eq.false")
+        stale_count = sb_count("pattern_frequency", "stale=eq.true")
         top_pattern = active_patterns[0] if active_patterns else None
 
         # --- Evolution queue ---
-        pending_evo = sb_get("evolution_queue",
-            "select=id&status=eq.pending", svc=True) or []
-        applied_evo = sb_get("evolution_queue",
-            "select=id&status=eq.applied&order=id.desc&limit=1", svc=True) or []
+        pending_evo_count = sb_count("evolution_queue", "status=eq.pending")
+        applied_evo_count = sb_count("evolution_queue", "status=eq.applied")
 
         # --- Quality trend (last 7d) ---
         cutoff = (now - timedelta(days=7)).isoformat()
@@ -2330,7 +2326,7 @@ def t_get_training_pipeline() -> dict:
                 "recent_5_summaries": [r.get("summary_text","")[:80] for r in cold_rows[:5]],
             },
             "patterns": {
-                "active_count": len(all_active),
+                "active_count": active_pattern_count,
                 "stale_count": stale_count,
                 "top": {
                     "key": top_pattern["pattern_key"][:80],
@@ -2339,9 +2335,8 @@ def t_get_training_pipeline() -> dict:
                 } if top_pattern else None,
             },
             "evolutions": {
-                "pending": len(pending_evo),
-                "applied": int(sb_get("evolution_queue", "select=id&status=eq.applied&order=id.desc&limit=1",
-                    svc=True)[0]["id"]) if applied_evo else 0,
+                "pending": pending_evo_count,
+                "applied": applied_evo_count,
             },
             "quality": {
                 "7d_avg": quality_avg,
@@ -2998,6 +2993,23 @@ def t_core_py_fn(fn_name: str, file: str = "core_tools.py") -> dict:
 
 # -- system_map scan ----------------------------------------------------------
 
+def _system_map_rows(select_fields: str, active_only: bool = True, page_size: int = 500) -> list[dict]:
+    rows = []
+    offset = 0
+    while True:
+        qs = f"select={select_fields}"
+        if active_only:
+            qs += "&status=neq.tombstone"
+        qs += f"&order=layer,component,name&limit={page_size}&offset={offset}"
+        batch = sb_get("system_map", qs, svc=True) or []
+        if not isinstance(batch, list) or not batch:
+            break
+        rows.extend(batch)
+        if len(batch) < page_size:
+            break
+        offset += page_size
+    return rows
+
 def t_system_map_scan(trigger: str = "manual") -> dict:
     """Scan system_map table - snapshot at session_start, drift-fix at session_end.
     session_start: read-only, returns full wiring for Claude context.
@@ -3005,15 +3017,6 @@ def t_system_map_scan(trigger: str = "manual") -> dict:
     manual: same as session_start (read-only snapshot).
     """
     try:
-        rows = sb_get(
-            "system_map",
-            "select=id,layer,component,item_type,name,role,responsibility,key_facts,is_volatile,status,notes"
-            "&order=layer,component,name&limit=2000",
-            svc=True
-        )
-        if not isinstance(rows, list):
-            return {"ok": False, "error": "system_map query failed", "rows": []}
-
         updates = []
         inserted_tools = []
         tombstoned_tools = []
@@ -3024,11 +3027,13 @@ def t_system_map_scan(trigger: str = "manual") -> dict:
             inserted_tools  = sync_result.get("drift", {}).get("inserted", [])
             tombstoned_tools = sync_result.get("drift", {}).get("tombstoned", [])
             updates = sync_result.get("drift", {}).get("kf_updated", [])
+        rows = _system_map_rows(
+            "id,layer,component,item_type,name,role,responsibility",
+            active_only=True,
+        )
 
         wiring = {}
         for row in rows:
-            if row.get("status") == "tombstone":
-                continue  # exclude tombstoned components from live wiring snapshot
             layer = row["layer"]
             if layer not in wiring:
                 wiring[layer] = []
@@ -3040,11 +3045,10 @@ def t_system_map_scan(trigger: str = "manual") -> dict:
                 "responsibility": row["responsibility"],
             })
 
-        active_rows = [r for r in rows if r.get("status") != "tombstone"]
         return {
             "ok": True,
             "trigger": trigger,
-            "total_components": len(active_rows),
+            "total_components": len(rows),
             "updates_applied": len(updates),
             "updates": updates,
             "inserted_tools": inserted_tools,
@@ -3058,8 +3062,7 @@ def t_system_map_scan(trigger: str = "manual") -> dict:
 def _get_stale_pattern_count() -> int:
     """Count patterns with stale=true. Used in session_start to surface dead patterns."""
     try:
-        rows = sb_get("pattern_frequency", "select=id&stale=eq.true", svc=True) or []
-        return len(rows)
+        return sb_count("pattern_frequency", "stale=eq.true")
     except Exception:
         return 0
 
@@ -4282,11 +4285,9 @@ def t_stats():
         counts = get_system_counts()
         
         # A.10: fix evolution counts -- select=count without Prefer header returns wrong shape.
-        # Use slim select + len() which works correctly with existing sb_get implementation.
         def _evo_count(status):
             try:
-                return len(sb_get("evolution_queue",
-                    f"select=id&status=eq.{status}", svc=True) or [])
+                return sb_count("evolution_queue", f"status=eq.{status}")
             except Exception:
                 return 0
         evo_counts = {
@@ -11036,14 +11037,10 @@ def t_sync_system_map(trigger: str = "manual", notify_on_changes: str = "true") 
         preflight = _require_external_service_preflight("supabase,github", "sync_system_map")
         if preflight:
             return preflight
-        rows = sb_get(
-            "system_map",
-            "select=id,layer,component,item_type,name,role,responsibility,key_facts,is_volatile,status,notes"
-            "&order=layer,component,name&limit=2000",
-            svc=True
+        rows = _system_map_rows(
+            "id,layer,component,item_type,name,role,responsibility,key_facts,is_volatile,status,notes",
+            active_only=True,
         )
-        if not isinstance(rows, list):
-            return {"ok": False, "error": "system_map query failed"}
 
         inserted = []
         tombstoned = []
@@ -11055,7 +11052,6 @@ def t_sync_system_map(trigger: str = "manual", notify_on_changes: str = "true") 
             row["name"]: row for row in rows
             if row.get("component") == "railway"
             and row.get("item_type") == "tool"
-            and row.get("status") != "tombstone"
         }
         # Tools: insert missing
         for tool_name in sorted(live_tool_names - set(registered_tools.keys())):
@@ -11116,7 +11112,7 @@ def t_sync_system_map(trigger: str = "manual", notify_on_changes: str = "true") 
         print(f"[SMAP] sync({trigger}): inserted={len(inserted)} tombstoned={len(tombstoned)} kf_updated={len(kf_updated)}")
         return {
             "ok": True, "trigger": trigger,
-            "total_components": len([r for r in rows if r.get("status") != "tombstone"]),
+            "total_components": len(rows),
             "has_changes": has_changes,
             "drift": drift,
         }
