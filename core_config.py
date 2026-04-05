@@ -1,4 +1,4 @@
-﻿"""core_config.py Ã¢â‚¬â€ CORE AGI shared configuration
+"""core_config.py Ã¢â‚¬â€ CORE AGI shared configuration
 All env vars, constants, RateLimiter, and Supabase helpers.
 Imported by all other core_* modules. Has NO imports from other core_* modules.
 
@@ -86,7 +86,7 @@ GITHUB_REPO    = os.environ.get("GITHUB_USERNAME", "pockiesaints7") + "/core-agi
 MCP_SECRET     = os.environ["MCP_SECRET"]
 TELEGRAM_WEBHOOK_SECRET = os.environ.get("TELEGRAM_WEBHOOK_SECRET", MCP_SECRET)
 SUPABASE_PAT   = os.environ.get("SUPABASE_PAT", "")  # Management API PAT for DB introspection
-SUPABASE_REF   = os.environ.get("SUPABASE_REF", "lwoddulnzpzkfgifsekl")  # Project ref
+SUPABASE_REF   = os.environ.get("SUPABASE_REF", "")  # Project ref — set via .env, no hardcoded default
 PORT           = int(os.environ.get("PORT", 8081))
 # -- Env parsing helpers ------------------------------------------------------
 
