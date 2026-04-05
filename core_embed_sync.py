@@ -181,7 +181,7 @@ def _find_row_id(table: str, row: dict) -> str:
         qs = (
             "select=id"
             f"&chat_id=eq.{_sb_eq_value(row.get('chat_id'), 120)}"
-            f"&summary=ilike.{_sb_eq_value(f'*{str(row.get('summary', ''))[:20]}*')}"
+            f"&summary=ilike.{_sb_eq_value('*' + str(row.get('summary', ''))[:20] + '*')}"
             "&order=id.desc&limit=1"
         )
     rows = sb_get(table, qs, svc=True) or []
