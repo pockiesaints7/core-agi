@@ -808,13 +808,13 @@ def _reconcile_gaps(hots: list) -> int:
                 "recommendation": f"Gap identified in hot_reflections (priority={priority}). Requires architectural review.",
                 "diff_content": json.dumps({
                     "gap": gap_text,
-                    "source": gap.get("source", ""),
+                    "source": item.get("source", ""),
                     "domain": domain,
                     "priority": priority,
                     "autonomy": {
-                        "kind": "kb_expand" if gap.get("source") == "kb_coverage" else "behavioral_remediation" if gap.get("source") == "stale_tasks" else "architecture_proposal",
+                        "kind": "kb_expand" if item.get("source") == "kb_coverage" else "behavioral_remediation" if item.get("source") == "stale_tasks" else "architecture_proposal",
                         "origin": "cold_processor",
-                        "source": gap.get("source", ""),
+                        "source": item.get("source", ""),
                         "domain": domain,
                         "priority": priority,
                         "expected_artifact": "task_queue",

@@ -8288,7 +8288,7 @@ def _reconcile_skeleton_docs(rows: list, inserted: list, tombstoned: list) -> No
         missing = live_docs - registered_names
         for dname in sorted(missing):
             try:
-                sb_post_critical("system_map", {
+                sb_upsert("system_map", {
                     "layer": "skeleton",
                     "component": "github",
                     "item_type": "file",
@@ -8298,7 +8298,7 @@ def _reconcile_skeleton_docs(rows: list, inserted: list, tombstoned: list) -> No
                     "status": "active",
                     "updated_by": "session_end_auto",
                     "last_updated": datetime.utcnow().isoformat(),
-                })
+                }, on_conflict="name,component,item_type")
                 inserted.append(f"skeleton:{dname}")
             except Exception as _ie:
                 print(f"[SMAP] skeleton insert {dname} failed: {_ie}")
