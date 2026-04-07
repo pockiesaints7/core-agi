@@ -4020,7 +4020,7 @@ def _run_trading_rarl_epoch() -> bool:
     try:
         last = sb_get(
             "rarl_epochs",
-            "select=epoch_number&id=gt.1&order=epoch_number.desc&limit=1",
+            "select=epoch_number&order=epoch_number.desc&limit=1",
             svc=True
         )
         epoch_number = (last[0]["epoch_number"] + 1) if last else 1
@@ -4261,7 +4261,7 @@ def _run_trading_rarl_epoch() -> bool:
         print(f"[RARL/TRADING] rarl_architectures error (non-fatal): {e}")
 
     try:
-        sb_post("rarl_epochs", {
+        sb_upsert("rarl_epochs", {
             "epoch_number": epoch_number,
             "research_goal": research_goal[:300],
             "research_domain": research_domain,
@@ -4276,7 +4276,7 @@ def _run_trading_rarl_epoch() -> bool:
             "branch": "main",
             "groq_model_used": GROQ_MODEL,
             "duration_seconds": duration,
-        })
+        }, on_conflict="epoch_number")
     except Exception as e:
         print(f"[RARL/TRADING] rarl_epochs error (non-fatal): {e}")
 
