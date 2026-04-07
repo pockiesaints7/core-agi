@@ -12,7 +12,9 @@ from __future__ import annotations
 import argparse
 import logging
 import os
+import shutil
 import subprocess
+import tempfile
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -24,6 +26,39 @@ DEFAULT_REPOS = [
     Path("/home/ubuntu/trading-bot"),
     Path("/home/ubuntu/specter-alpha"),
 ]
+
+REPO_CLEAN_EXCLUDES: dict[Path, tuple[str, ...]] = {
+    Path("/home/ubuntu/core-agi"): (
+        ".env",
+        ".runtime",
+        ".state",
+        "supabase_export.json",
+    ),
+    Path("/home/ubuntu/trading-bot"): (
+        ".env",
+        ".env.bak*",
+        ".runtime",
+        ".state",
+        "data",
+        ".cutover",
+        ".cutover-backups",
+    ),
+    Path("/home/ubuntu/specter-alpha"): (
+        ".env",
+        ".runtime",
+    ),
+}
+
+REPO_RESTORE_PATHS: dict[Path, tuple[str, ...]] = {
+    Path("/home/ubuntu/trading-bot"): (
+        ".runtime/trading_runtime_state.json",
+    ),
+}
+
+REPO_RESTART_SERVICES: dict[Path, tuple[str, ...]] = {
+    Path("/home/ubuntu/trading-bot"): ("core-trading-bot",),
+    Path("/home/ubuntu/specter-alpha"): ("specter-alpha",),
+}
 
 
 @dataclass
@@ -41,6 +76,10 @@ class WatchState:
     def __post_init__(self) -> None:
         for repo in self.repos:
             self.states.setdefault(repo, RepoState())
+
+
+def repo_key(repo: Path) -> Path:
+    return Path(repo).resolve()
 
 
 def run_git(args: Sequence[str], cwd: Path, check: bool = True) -> subprocess.CompletedProcess[str]:
@@ -76,6 +115,71 @@ def head_sha(repo: Path, ref: str = "HEAD") -> str:
     return proc.stdout.strip()
 
 
+def backup_restore_paths(repo: Path) -> Path | None:
+    restore_paths = REPO_RESTORE_PATHS.get(repo_key(repo), ())
+    if not restore_paths:
+        return None
+
+    backup_root = Path(tempfile.mkdtemp(prefix="vm-autosync-"))
+    copied_any = False
+    for rel_path in restore_paths:
+        source = repo / rel_path
+        if not source.exists():
+            continue
+        target = backup_root / rel_path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, target)
+        copied_any = True
+
+    if copied_any:
+        return backup_root
+
+    shutil.rmtree(backup_root, ignore_errors=True)
+    return None
+
+
+def restore_paths(repo: Path, backup_root: Path | None) -> None:
+    if not backup_root or not backup_root.exists():
+        return
+
+    for source in backup_root.rglob("*"):
+        if not source.is_file():
+            continue
+        relative = source.relative_to(backup_root)
+        target = repo / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, target)
+
+    shutil.rmtree(backup_root, ignore_errors=True)
+
+
+def clean_repo(repo: Path) -> None:
+    clean_args = ["clean", "-fd"]
+    for pattern in REPO_CLEAN_EXCLUDES.get(repo_key(repo), ()):
+        clean_args.extend(["-e", pattern])
+    run_git(clean_args, cwd=repo)
+
+
+def restart_repo_services(repo: Path) -> None:
+    services = REPO_RESTART_SERVICES.get(repo_key(repo), ())
+    if not services:
+        return
+
+    logging.info("restarting services for %s: %s", repo, ", ".join(services))
+    proc = subprocess.run(
+        ["systemctl", "restart", *services],
+        text=True,
+        capture_output=True,
+        env=os.environ.copy(),
+    )
+    if proc.returncode != 0:
+        raise RuntimeError(
+            f"systemctl restart {' '.join(services)} failed for {repo}: {proc.returncode}\n"
+            f"stdout:\n{proc.stdout}\n"
+            f"stderr:\n{proc.stderr}"
+        )
+
+
 def mirror_repo(repo: Path, repo_state: RepoState) -> bool:
     run_git(["fetch", "origin", "--prune"], cwd=repo)
     branch = current_branch(repo)
@@ -93,11 +197,19 @@ def mirror_repo(repo: Path, repo_state: RepoState) -> bool:
         local_head[:7],
         remote_head[:7],
     )
-    run_git(["reset", "--hard", remote_ref], cwd=repo)
-    run_git(["clean", "-fd"], cwd=repo)
-    repo_state.last_synced_remote = remote_head
-    repo_state.last_synced_at = time.time()
-    return True
+    backup_root = backup_restore_paths(repo)
+    try:
+        run_git(["reset", "--hard", remote_ref], cwd=repo)
+        clean_repo(repo)
+        restore_paths(repo, backup_root)
+        restart_repo_services(repo)
+        repo_state.last_synced_remote = remote_head
+        repo_state.last_synced_at = time.time()
+        return True
+    except Exception:
+        if backup_root and backup_root.exists():
+            restore_paths(repo, backup_root)
+        raise
 
 
 def parse_args() -> argparse.Namespace:

@@ -7,6 +7,7 @@ import os
 import subprocess
 import sys
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 import httpx
@@ -14,6 +15,8 @@ import httpx
 ROOT = Path(__file__).resolve().parent
 ENV_CANDIDATES = [ROOT / '.env', ROOT.parent / 'core-trading-bot' / '.env', ROOT.parent / 'specter-alpha' / '.env']
 FULL_SCHEMA_MANIFEST = ROOT.parent / 'supabase_sync' / 'migrations' / '20260329_235818_schema.json'
+BOOTSTRAP_FORCE_ENV = 'BOOTSTRAP_SUPABASE_FORCE'
+BOOTSTRAP_STATE_DIR = ROOT / '.runtime' / 'bootstrap'
 
 CORE_EXTRA_DDL = [
     """
@@ -207,6 +210,41 @@ def _management_pat(env: dict[str, str]) -> str:
     raise RuntimeError('Missing Supabase management PAT in .env')
 
 
+def _bootstrap_force_enabled(env: dict[str, str]) -> bool:
+    return (env.get(BOOTSTRAP_FORCE_ENV) or '').strip().lower() in {'1', 'true', 'yes', 'on'}
+
+
+def _bootstrap_marker_path(ref: str) -> Path:
+    safe_ref = ''.join(ch if ch.isalnum() or ch in ('-', '_') else '_' for ch in ref)
+    return BOOTSTRAP_STATE_DIR / f'supabase_bootstrap.{safe_ref}.json'
+
+
+def _load_bootstrap_marker(path: Path) -> dict[str, object] | None:
+    if not path.exists():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding='utf-8'))
+    except Exception as exc:
+        print(f'[bootstrap] ignoring unreadable marker {path}: {exc}')
+        return None
+    return data if isinstance(data, dict) else {'raw': data}
+
+
+def _write_bootstrap_marker(path: Path, ref: str, result: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        'status': 'ok',
+        'ref': ref,
+        'completed_at': datetime.now(timezone.utc).isoformat(),
+        'script': str(Path(__file__).resolve()),
+        'result_summary': {
+            'ok': bool(result.get('ok')),
+            'error_count': len(result.get('errors') or []),
+        },
+    }
+    path.write_text(json.dumps(payload, indent=2), encoding='utf-8')
+
+
 def _query(ref: str, pat: str, sql: str, timeout: int = 120) -> list[dict]:
     resp = httpx.post(
         f'https://api.supabase.com/v1/projects/{ref}/database/query',
@@ -284,6 +322,20 @@ def bootstrap_supabase() -> dict:
     if not supabase_url:
         return {'ok': False, 'error': 'SUPABASE_URL is missing'}
     ref = _project_ref(supabase_url)
+    marker_path = _bootstrap_marker_path(ref)
+    marker = _load_bootstrap_marker(marker_path)
+    force = _bootstrap_force_enabled(env)
+    if marker and not force:
+        return {
+            'ok': True,
+            'skipped': True,
+            'reason': 'already_bootstrapped',
+            'ref': ref,
+            'marker': str(marker_path),
+            'completed_at': marker.get('completed_at'),
+        }
+    if marker and force:
+        print(f'[bootstrap] forcing rerun despite existing marker {marker_path}')
     pat = _management_pat(env)
 
     table_count = _table_count(ref, pat)
@@ -320,12 +372,16 @@ def bootstrap_supabase() -> dict:
         errors.append(f'reload_schema: {exc}')
         print(f'[BOOTSTRAP] schema reload failed: {exc}')
 
-    return {
+    result = {
         'ok': not errors,
         'ref': ref,
         'results': results[:20],
         'errors': errors[:20],
     }
+    if result['ok']:
+        _write_bootstrap_marker(marker_path, ref, result)
+        result['marker'] = str(marker_path)
+    return result
 
 
 def main() -> int:

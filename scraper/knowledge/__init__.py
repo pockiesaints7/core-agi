@@ -24,7 +24,7 @@ async def ingest_knowledge(
 
     raw = await route(topic, sources, max_per_source, since_days)
     deduped = deduplicate(raw)
-    inserted, updated = await write_sources(deduped, topic)
+    storage_report = await write_sources(deduped, topic)
     concepts = await extract_concepts(deduped, topic)
 
     return {
@@ -32,7 +32,14 @@ async def ingest_knowledge(
         "sources_used": sources,
         "raw_count": len(raw),
         "deduped_count": len(deduped),
-        "records_inserted": inserted,
-        "records_updated": updated,
+        "records_inserted": storage_report.get("source_inserted", 0),
+        "records_updated": storage_report.get("source_updated", 0),
+        "article_rows_inserted": storage_report.get("article_inserted", 0),
+        "article_rows_updated": storage_report.get("article_updated", 0),
+        "article_rows_skipped": storage_report.get("article_skipped", 0),
+        "storage_errors": (
+            storage_report.get("source_errors", [])
+            + storage_report.get("article_errors", [])
+        )[:10],
         "concepts_found": len(concepts),
     }

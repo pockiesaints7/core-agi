@@ -48,7 +48,7 @@ def startup_v2():
     # Log active model OPENROUTER_MODEL="google/gemini-2.5-flash"
     model = os.environ.get("OPENROUTER_MODEL", "google/gemini-2.5-flash")
     print(f"[ORCH-V2] Started. Primary model: {model}")
-    print("[ORCH-V2] Layer chain: L0→L1→L2→L3→L4→L5→L6→L7→L8→L9→L10→L11")
+    print("[ORCH-V2] Layer chain: L0->L1->L2->L3->L4->L5->L6->L7->L8->L9->L10->L11")
 
     return {
         "model": model,
@@ -98,5 +98,5 @@ def handle_telegram_message(msg: dict):
 
 
 if __name__ == "__main__":
-    print("🛰️ Orchestrator v2 Entry Point — Online.")
+    print("Orchestrator v2 Entry Point - Online.")
     print("Mount via: from core_orch_main import handle_telegram_message, startup_v2")

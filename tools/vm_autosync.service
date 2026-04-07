@@ -2,12 +2,13 @@
 Description=CORE VM git mirror
 Wants=network-online.target
 After=network-online.target
+RefuseManualStop=yes
 
 [Service]
 Type=simple
 User=root
 WorkingDirectory=/home/ubuntu/core-agi
-ExecStart=/usr/bin/python3 /home/ubuntu/core-agi/tools/vm_autosync.py
+ExecStart=/usr/bin/python3 /home/ubuntu/core-agi/tools/vm_autosync.py --repo /home/ubuntu/trading-bot --repo /home/ubuntu/specter-alpha
 Restart=always
 RestartSec=5
 Environment=PYTHONUNBUFFERED=1

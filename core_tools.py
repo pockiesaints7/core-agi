@@ -1707,7 +1707,6 @@ def t_set_simulation(instruction: str) -> dict:
 def t_log_mistake(context="", what_failed="", correct_approach="", domain="general", root_cause="", how_to_avoid="", severity="medium"):
     # A.2: dedup guard -- skip if identical what_failed+domain logged in last 24h
     try:
-        cutoff = (datetime.utcnow() - timedelta(hours=24)).isoformat()
         _wf = (what_failed or "")[:40].replace("'", "")
         from core_semantic import search as _sem
         existing = _sem("mistakes", _wf, limit=1, threshold=0.92,
@@ -1719,10 +1718,65 @@ def t_log_mistake(context="", what_failed="", correct_approach="", domain="gener
     preflight = _require_external_service_preflight("supabase", "log_mistake")
     if preflight:
         return preflight
-    ok = sb_post("mistakes", {"domain": domain, "context": context, "what_failed": what_failed,
-                              "correct_approach": correct_approach, "root_cause": root_cause or what_failed,
-                              "how_to_avoid": how_to_avoid or correct_approach, "severity": severity, "tags": []})
-    return {"ok": ok}
+    domain = (domain or "general").strip()
+    severity = (severity or "medium").strip().lower()
+    if severity not in {"low", "medium", "high", "critical"}:
+        severity = "medium"
+    payload = {
+        "domain": domain,
+        "context": context,
+        "what_failed": what_failed,
+        "correct_approach": correct_approach,
+        "root_cause": root_cause or what_failed,
+        "how_to_avoid": how_to_avoid or correct_approach,
+        "severity": severity,
+        "tags": [],
+    }
+    ok = sb_post("mistakes", payload)
+    from urllib.parse import quote as _urlquote
+    verify_rows = sb_get(
+        "mistakes",
+        f"select={_sel_force('mistakes', ['id','domain','what_failed','correct_approach','severity'])}"
+        f"&domain=eq.{_urlquote(domain, safe='')}"
+        f"&what_failed=eq.{_urlquote(what_failed or '', safe='')}"
+        f"&correct_approach=eq.{_urlquote(correct_approach or '', safe='')}"
+        f"&order=id.desc&limit=3",
+        svc=True,
+    ) or []
+    matched = next(
+        (
+            row for row in verify_rows
+            if (row.get("domain") or "").strip() == domain
+            and (row.get("what_failed") or "").strip() == (what_failed or "").strip()
+            and (row.get("correct_approach") or "").strip() == (correct_approach or "").strip()
+        ),
+        None,
+    )
+    if ok and matched:
+        return {
+            "ok": True,
+            "action": "inserted_verified",
+            "mistake_id": matched.get("id"),
+            "domain": domain,
+            "severity": severity,
+        }
+    if not ok and matched:
+        return {
+            "ok": True,
+            "action": "recovered_partial",
+            "message": "Insert reported failure, but verification found the mistake row.",
+            "mistake_id": matched.get("id"),
+            "domain": domain,
+            "severity": severity,
+            "retry_hint": False,
+        }
+    return {
+        "ok": bool(ok),
+        "action": "insert_failed" if not ok else "insert_unverified",
+        "domain": domain,
+        "severity": severity,
+        "retry_hint": not bool(ok),
+    }
 
 def t_read_file(path, repo="", start_line="", end_line=""):
     """Read a GitHub file. Optional start_line/end_line for range. Cap 8000 chars with truncated flag. Use gh_read_lines for large files."""
@@ -4548,37 +4602,73 @@ def t_redeploy(reason: str = "") -> dict:
     Calls /deploy-webhook on the VM. Replaces old Railway empty-commit approach.
     reason: optional description logged to Telegram and Supabase."""
     try:
+        def _schedule_post_deploy_sync():
+            import threading as _t
+            def _post_deploy_sync():
+                import time as _time
+                _time.sleep(15)
+                try:
+                    t_sync_system_map(trigger="post_deploy", notify_on_changes="true")
+                except Exception as _se:
+                    print(f"[SMAP] post-deploy sync error: {_se}")
+            _t.Thread(target=_post_deploy_sync, daemon=True).start()
+
         preflight = t_external_service_preflight("github,telegram")
         if not preflight.get("ok"):
             return {"ok": False, "error": "deploy preflight failed", "preflight": preflight}
-        r = httpx.post(
-            f"{BASE_URL}/deploy-webhook",
-            headers={"X-MCP-Secret": MCP_SECRET, "Content-Type": "application/json"},
-            timeout=15,
-        )
-        r.raise_for_status()
-        notify(f"\U0001f680 CORE redeploy triggered\nReason: {reason or 'manual trigger'}\nHost: oracle_vm")
         try:
-            t_changelog_add(
-                version=datetime.utcnow().strftime("v%Y%m%d"),
-                component="deploy",
-                summary=f"Oracle VM redeploy triggered. Reason: {reason or 'manual trigger'}",
-                before="deploy state pending",
-                after="deploy webhook accepted and restart scheduled",
-                change_type="config",
+            r = httpx.post(
+                f"{BASE_URL}/deploy-webhook",
+                headers={"X-MCP-Secret": MCP_SECRET, "Content-Type": "application/json"},
+                json={"reason": reason or "manual trigger"},
+                timeout=httpx.Timeout(connect=5.0, read=45.0, write=10.0, pool=5.0),
             )
-        except Exception as _changelog_e:
-            print(f"[CHANGELOG] deploy log error: {_changelog_e}")
-        import threading as _t
-        def _post_deploy_sync():
-            import time as _time
-            _time.sleep(15)
+            r.raise_for_status()
+            notify(f"\U0001f680 CORE redeploy triggered\nReason: {reason or 'manual trigger'}\nHost: oracle_vm")
             try:
-                t_sync_system_map(trigger="post_deploy", notify_on_changes="true")
-            except Exception as _se:
-                print(f"[SMAP] post-deploy sync error: {_se}")
-        _t.Thread(target=_post_deploy_sync, daemon=True).start()
-        return {"ok": True, "reason": reason, "status": "deploy_started", "host": "oracle_vm"}
+                t_changelog_add(
+                    version=datetime.utcnow().strftime("v%Y%m%d"),
+                    component="deploy",
+                    summary=f"Oracle VM redeploy triggered. Reason: {reason or 'manual trigger'}",
+                    before="deploy state pending",
+                    after="deploy webhook accepted and restart scheduled",
+                    change_type="config",
+                )
+            except Exception as _changelog_e:
+                print(f"[CHANGELOG] deploy log error: {_changelog_e}")
+            _schedule_post_deploy_sync()
+            return {
+                "ok": True,
+                "reason": reason,
+                "status": "deploy_started",
+                "host": "oracle_vm",
+                "webhook_status": r.status_code,
+            }
+        except httpx.ReadTimeout:
+            build_status = t_build_status()
+            ping = t_ping_health()
+            notify(f"CORE redeploy webhook timed out waiting for response\nReason: {reason or 'manual trigger'}\nHost: oracle_vm\nTreating request as accepted-unconfirmed.")
+            try:
+                t_changelog_add(
+                    version=datetime.utcnow().strftime("v%Y%m%d"),
+                    component="deploy",
+                    summary=f"Oracle VM redeploy requested but webhook timed out. Reason: {reason or 'manual trigger'}",
+                    before="deploy state pending",
+                    after="deploy request sent; webhook response timed out, verification required",
+                    change_type="config",
+                )
+            except Exception as _changelog_e:
+                print(f"[CHANGELOG] deploy log error: {_changelog_e}")
+            _schedule_post_deploy_sync()
+            return {
+                "ok": True,
+                "reason": reason,
+                "status": "deploy_requested_unconfirmed",
+                "host": "oracle_vm",
+                "warning": "deploy-webhook timed out waiting for response; verify with build_status or ping_health",
+                "build_status": build_status,
+                "ping_health": ping,
+            }
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
@@ -8819,17 +8909,42 @@ def t_add_behavioral_rule(trigger: str = "", pointer: str = "", full_rule: str =
         "universal","postgres","railway","github","supabase","groq","powershell","zapier",
         "project","auth","code","reasoning","failure_recovery","local_pc","telegram","trading","trading_meta",
     }
+    TRIGGER_ALIASES = {
+        "strategy_selection": "reasoning_preflight",
+        "before_entry": "reasoning_preflight",
+        "execution_planning": "reasoning_preflight",
+        "pre_entry": "reasoning_preflight",
+        "pre_trade": "reasoning_preflight",
+        "trade_entry": "reasoning_preflight",
+        "position_management": "during_action",
+        "managing_open_trade": "during_action",
+        "open_trade_management": "during_action",
+        "post_trade": "post_action",
+        "after_trade": "post_action",
+        "signal_evaluation": "before_domain_work",
+        "before_signal_evaluation": "before_domain_work",
+    }
     try:
         preflight = _require_external_service_preflight("supabase", "add_behavioral_rule")
         if preflight:
             return preflight
-        trigger = (trigger or "").strip()
+        raw_trigger = (trigger or "").strip()
+        trigger = raw_trigger.lower()
         pointer = (pointer or "").strip()
         full_rule = (full_rule or "").strip()
-        domain = (domain or "").strip()
+        domain = (domain or "").strip().lower()
         source = (source or "").strip()
+        normalized_trigger = TRIGGER_ALIASES.get(trigger, trigger)
+        trigger_alias_applied = normalized_trigger != trigger
+        trigger = normalized_trigger
         if trigger not in VALID_TRIGGERS:
-            return {"ok": False, "error_code": "invalid_trigger", "message": f"Invalid trigger '{trigger}'. Valid: {sorted(VALID_TRIGGERS)}", "retry_hint": False, "domain": "behavioral_rules"}
+            return {
+                "ok": False,
+                "error_code": "invalid_trigger",
+                "message": f"Invalid trigger '{raw_trigger}'. Valid: {sorted(VALID_TRIGGERS)}. Legacy aliases: {sorted(TRIGGER_ALIASES)}",
+                "retry_hint": False,
+                "domain": "behavioral_rules",
+            }
         if domain not in VALID_DOMAINS:
             return {"ok": False, "error_code": "invalid_domain", "message": f"Invalid domain '{domain}'. Valid: {sorted(VALID_DOMAINS)}", "retry_hint": False, "domain": "behavioral_rules"}
         try:
@@ -8854,6 +8969,8 @@ def t_add_behavioral_rule(trigger: str = "", pointer: str = "", full_rule: str =
                     "action": "skipped_duplicate",
                     "message": "Rule with same trigger+domain+pointer already exists",
                     "existing_id": ex.get("id"),
+                    "normalized_trigger": trigger,
+                    "trigger_alias_applied": trigger_alias_applied,
                     "trigger": trigger,
                     "domain": domain,
                 }
@@ -8883,6 +9000,8 @@ def t_add_behavioral_rule(trigger: str = "", pointer: str = "", full_rule: str =
                 "ok": True,
                 "action": "inserted_verified",
                 "trigger": trigger,
+                "normalized_trigger": trigger,
+                "trigger_alias_applied": trigger_alias_applied,
                 "domain": domain,
                 "rule_id": matched.get("id"),
                 "session_inserts": getattr(t_add_behavioral_rule, "_session_insert_count", 0),
@@ -8894,6 +9013,8 @@ def t_add_behavioral_rule(trigger: str = "", pointer: str = "", full_rule: str =
                 "action": "recovered_partial",
                 "message": "Insert reported failure, but verification found the row in behavioral_rules.",
                 "trigger": trigger,
+                "normalized_trigger": trigger,
+                "trigger_alias_applied": trigger_alias_applied,
                 "domain": domain,
                 "rule_id": matched.get("id"),
                 "session_inserts": getattr(t_add_behavioral_rule, "_session_insert_count", 0),

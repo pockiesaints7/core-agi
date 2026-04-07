@@ -20,7 +20,7 @@ try:
 except Exception:  # pragma: no cover - optional local dependency
     pdf_extract_text = None
 
-from core_config import sb_post, sb_upsert
+from core_config import sb_get, sb_post, sb_upsert
 from core_trading_specialization import TRADING_DOMAIN, TRADING_META_DOMAIN
 from scraper.knowledge.deduplicator import deduplicate
 from scraper.knowledge.sources import arxiv as arxiv_source
@@ -154,28 +154,7 @@ CURATED_WEB_SOURCES: tuple[CuratedSource, ...] = (
     ),
 )
 
-CURATED_PDF_SOURCES: tuple[CuratedSource, ...] = (
-    CuratedSource(
-        url="https://www.cmegroup.com/content/dam/cmegroup/education/files/a-traders-guide-to-futures.pdf",
-        title="A Trader's Guide to Futures",
-        source_platform="cme_education",
-        source_type="docs",
-        trust_level=5,
-        author="CME Group",
-        authority=94.0,
-        topics=("trading", "futures", "risk"),
-    ),
-    CuratedSource(
-        url="https://www.cmegroup.com/content/dam/cmegroup/education/files/deconstructing-futures-returns-the-role-of-roll-yield.pdf",
-        title="Deconstructing Futures Returns: The Role of Roll Yield",
-        source_platform="cme_research",
-        source_type="docs",
-        trust_level=5,
-        author="CME Group",
-        authority=92.0,
-        topics=("trading", "futures", "roll_yield"),
-    ),
-)
+CURATED_PDF_SOURCES: tuple[CuratedSource, ...] = ()
 
 ARXIV_QUERY_PLAN: tuple[tuple[str, str], ...] = (
     ("algorithmic trading order book market microstructure", "market_microstructure"),
@@ -516,6 +495,7 @@ async def _fetch_pdf_source(source: CuratedSource, client: httpx.AsyncClient) ->
 
 async def _fetch_curated_sources() -> list[dict]:
     results: list[dict] = []
+    source_plan = list(CURATED_WEB_SOURCES) + list(CURATED_PDF_SOURCES)
     async with httpx.AsyncClient(
         timeout=45,
         follow_redirects=True,
@@ -529,9 +509,10 @@ async def _fetch_curated_sources() -> list[dict]:
             for source in CURATED_PDF_SOURCES
         ]
         gathered = await asyncio.gather(*tasks, return_exceptions=True)
-    for item in gathered:
+    for idx, item in enumerate(gathered):
         if isinstance(item, Exception):
-            print(f"[TRADING-SEED] curated source fetch failed: {item}")
+            source = source_plan[idx]
+            print(f"[TRADING-SEED] curated source fetch failed: {source.url} :: {item}")
             continue
         if item:
             results.append(item)
@@ -540,6 +521,8 @@ async def _fetch_curated_sources() -> list[dict]:
 
 async def _fetch_arxiv_sources(max_per_query: int, since_days: int) -> list[dict]:
     results: list[dict] = []
+    if max_per_query <= 0:
+        return results
     for query, category in ARXIV_QUERY_PLAN:
         papers = await arxiv_source.fetch(query, max_results=max_per_query, since_days=since_days)
         for paper in papers:
@@ -697,17 +680,24 @@ def _write_seed_overview(summary: dict, concept_names: list[str]) -> None:
         },
         on_conflict="domain,topic",
     )
-    sb_post("hot_reflections", {
-        "task_summary": f"Trading external seed imported {summary['deduped_count']} sources",
-        "domain": TRADING_META_DOMAIN,
-        "new_patterns": concept_names[:5],
-        "new_mistakes": [],
-        "quality_score": 0.92,
-        "gaps_identified": [],
-        "reflection_text": overview,
-        "processed_by_cold": 0,
-        "source": "external_seed",
-    })
+    reflection_key = "Trading external seed corpus refreshed"
+    existing_reflections = sb_get(
+        "hot_reflections",
+        "select=task_summary&domain=eq.trading_meta&source=eq.external_seed&order=id.desc&limit=20",
+        svc=True,
+    ) or []
+    if reflection_key not in {str(row.get("task_summary") or "") for row in existing_reflections}:
+        sb_post("hot_reflections", {
+            "task_summary": reflection_key,
+            "domain": TRADING_META_DOMAIN,
+            "new_patterns": concept_names[:5],
+            "new_mistakes": [],
+            "quality_score": 0.92,
+            "gaps_identified": [],
+            "reflection_text": overview,
+            "processed_by_cold": 0,
+            "source": "external_seed",
+        })
     sb_post("sessions", {
         "summary": f"[state_update] last_trading_seed_ts: {summary['seeded_at']}",
         "actions": [f"trading external seed sources={summary['deduped_count']} concepts={summary['concepts_found']}"],
@@ -716,14 +706,14 @@ def _write_seed_overview(summary: dict, concept_names: list[str]) -> None:
 
 
 async def ingest_trading_knowledge(
-    max_arxiv_per_query: int = 3,
+    max_arxiv_per_query: int = 0,
     since_days: int = 3650,
 ) -> dict:
     curated = await _fetch_curated_sources()
-    research = await _fetch_arxiv_sources(max_per_query=max(1, int(max_arxiv_per_query)), since_days=max(30, int(since_days)))
+    research = await _fetch_arxiv_sources(max_per_query=max(0, int(max_arxiv_per_query)), since_days=max(30, int(since_days)))
     raw_sources = curated + research
     deduped_sources = deduplicate(raw_sources)
-    inserted, updated = await write_sources(deduped_sources, topic="trading")
+    storage_report = await write_sources(deduped_sources, topic="trading")
     hits = _concept_hits(deduped_sources)
     concept_rows = _upsert_concept_rows(hits)
     kb_entries = _upsert_knowledge_entries(hits)
@@ -733,8 +723,15 @@ async def ingest_trading_knowledge(
         "seeded_at": _now_iso(),
         "raw_count": len(raw_sources),
         "deduped_count": len(deduped_sources),
-        "records_inserted": inserted,
-        "records_updated": updated,
+        "records_inserted": storage_report.get("source_inserted", 0),
+        "records_updated": storage_report.get("source_updated", 0),
+        "article_rows_inserted": storage_report.get("article_inserted", 0),
+        "article_rows_updated": storage_report.get("article_updated", 0),
+        "article_rows_skipped": storage_report.get("article_skipped", 0),
+        "storage_errors": (
+            storage_report.get("source_errors", [])
+            + storage_report.get("article_errors", [])
+        )[:10],
         "concept_rows_upserted": concept_rows,
         "concepts_found": len(concept_names),
         "knowledge_entries": kb_entries,
